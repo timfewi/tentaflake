@@ -19,6 +19,10 @@
   # The actual ISO filename — must force because iso-image module sets it in its config block
   image.baseName = lib.mkForce "nixos-agent-orchestration";
 
+  # Enable UEFI boot (required for modern PCs) and USB hybrid mode (required for dd to USB)
+  isoImage.makeEfiBootable = true;
+  isoImage.makeUsbBootable = true;
+
   # ── Embed the full repo source ──
   environment.etc."nixos-agent-orchestration".source = repoRoot;
 
