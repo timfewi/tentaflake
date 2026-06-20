@@ -28,6 +28,9 @@
       pkgs = nixpkgs.legacyPackages.${system};
       lib = nixpkgs.lib;
 
+      # Root of the repo — used by installer ISO to embed source
+      repoRoot = ./.;
+
       # ── Configurable parameters — override when forking ──
       params = {
         hostName = "agent-host";
@@ -50,6 +53,7 @@
           self
           params
           mkHermesAgent
+          repoRoot
           ;
       };
     in
@@ -69,5 +73,19 @@
           ./configuration.nix
         ];
       };
+
+      # ── Bootable installer ISO ──
+      # Build with: nix build .#installer-iso
+      # Embeds entire repo at /etc/nixos-agent-orchestration/ on the ISO
+      nixosConfigurations.installer-iso = nixpkgs.lib.nixosSystem {
+        inherit system specialArgs;
+        modules = [
+          ./installer/iso.nix
+        ];
+      };
+
+      # ── Convenience package: point to the ISO image file ──
+      packages.${system}.installer-iso =
+        self.nixosConfigurations.installer-iso.config.system.build.isoImage;
     };
 }
