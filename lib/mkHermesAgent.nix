@@ -67,6 +67,11 @@
 
   # Extra OCI container config options (merged into the container attrset)
   extraContainerConfig ? { },
+
+  # Hermes YAML/JSON configuration — serialized to config.yaml at build time
+  # and mounted read-only at $HERMES_HOME/config.yaml inside the container.
+  # Set to `null` (default) to skip and use Hermes' built-in defaults.
+  settings ? null,
 }:
 
 { config, ... }:
@@ -84,6 +89,14 @@ let
   agenixEnv = lib.optionalAttrs (agenixFile != null) {
     OPENROUTER_API_KEY = "__from_agenix__";
   };
+
+  # Generate config.yaml derivation when settings are provided
+  yamlFormat = pkgs.formats.yaml { };
+  configYaml =
+    if (settings != null && settings != { }) then
+      yamlFormat.generate "hermes-${name}-config.yaml" settings
+    else
+      null;
 
 in
 {
@@ -119,6 +132,7 @@ in
     volumes = [
       "${stateDir}:${stateDir}:rw"
     ]
+    ++ lib.optional (configYaml != null) "${configYaml}:${stateDir}/config.yaml:ro"
     ++ extraVolumes;
 
     environment = {

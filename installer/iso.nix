@@ -16,7 +16,8 @@
 {
   imports = [ "${modulesPath}/installer/cd-dvd/iso-image.nix" ];
 
-  image.fileName = "nixos-agent-orchestration.iso";
+  # The actual ISO filename — must force because iso-image module sets it in its config block
+  image.baseName = lib.mkForce "nixos-agent-orchestration";
 
   # ── Embed the full repo source ──
   environment.etc."nixos-agent-orchestration".source = repoRoot;

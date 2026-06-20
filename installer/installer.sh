@@ -294,8 +294,10 @@ echo "root:$PASSWORD" | chpasswd --root /mnt 2>>"$INSTALL_LOG" || true
 # ════════════════════════════════════════════════════════════
 # STEP 12: Copy agent examples
 # ════════════════════════════════════════════════════════════
-cp "$REPO_DIR/hermes.env.example" /mnt/etc/nixos/hermes.env.example 2>/dev/null || true
-cp -r "$REPO_DIR/agents" /mnt/etc/nixos/agents 2>/dev/null || true
+cp "$REPO_DIR/hermes.env.example" "$TARGET_NIXOS/hermes.env.example" 2>/dev/null || true
+cp "$REPO_DIR/my-agents.nix.example" "$TARGET_NIXOS/my-agents.nix.example" 2>/dev/null || true
+cp -r "$REPO_DIR/docs" "$TARGET_NIXOS/docs" 2>/dev/null || true
+cp -r "$REPO_DIR/skills" "$TARGET_NIXOS/skills" 2>/dev/null || true
 
 # ════════════════════════════════════════════════════════════
 # DONE
@@ -308,10 +310,11 @@ dialog --title "Installation Complete" --msgbox \
 
 AFTER REBOOT:
   1. Log in as '$USERNAME'
-  2. Edit /etc/nixos/my-agents.nix to define your agents
-  3. Set Hermes API keys:
+  2. Read /etc/nixos/docs/01-quickstart.md to get started
+  3. Look at /etc/nixos/my-agents.nix.example for agent examples
+  4. Set Hermes API keys:
      sudo -u hermes hermes config set OPENROUTER_API_KEY sk-or-...
-  4. Rebuild: sudo nixos-rebuild switch --flake /etc/nixos#$HOSTNAME
+  5. Rebuild: sudo nixos-rebuild switch --flake /etc/nixos#$HOSTNAME
 
 The system will now reboot." 16 65
 
