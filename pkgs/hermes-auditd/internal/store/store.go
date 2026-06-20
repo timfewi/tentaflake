@@ -100,26 +100,9 @@ func (s *Store) Query(ctx context.Context, agent, since, until string, limit int
 		limit = 100
 	}
 
-	base := `SELECT id, agent, file, op, size, timestamp FROM events WHERE 1=1`
-	args := make([]any, 0)
+	query, args := buildQuery(agent, since, until, limit)
 
-	if agent != "" {
-		base += ` AND agent = ?`
-		args = append(args, agent)
-	}
-	if since != "" {
-		base += ` AND timestamp >= ?`
-		args = append(args, since)
-	}
-	if until != "" {
-		base += ` AND timestamp <= ?`
-		args = append(args, until)
-	}
-
-	base += ` ORDER BY id DESC LIMIT ?`
-	args = append(args, limit)
-
-	rows, err := s.db.QueryContext(ctx, base, args...)
+	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("query events: %w", err)
 	}
@@ -132,16 +115,10 @@ func (s *Store) Query(ctx context.Context, agent, since, until string, limit int
 		if err := rows.Scan(&evt.ID, &evt.Agent, &evt.File, &evt.Op, &evt.Size, &ts); err != nil {
 			return nil, fmt.Errorf("scan event: %w", err)
 		}
-		parsed, err := time.Parse(time.RFC3339, ts)
+		parsed, err := parseTimestamp(ts)
 		if err != nil {
-			// Try SQLite default format
-			parsed, err = time.Parse("2006-01-02 15:04:05", ts)
-			if err != nil {
-				slog.Warn("parse timestamp", "raw", ts, "error", err)
-				evt.Timestamp = time.Now().UTC()
-			} else {
-				evt.Timestamp = parsed.UTC()
-			}
+			slog.Warn("parse timestamp", "raw", ts, "error", err)
+			evt.Timestamp = time.Now().UTC()
 		} else {
 			evt.Timestamp = parsed
 		}
@@ -152,6 +129,42 @@ func (s *Store) Query(ctx context.Context, agent, since, until string, limit int
 	}
 
 	return events, nil
+}
+
+// buildQuery constructs the SQL query and argument list for filtering events.
+func buildQuery(agent, since, until string, limit int) (string, []any) {
+	query := `SELECT id, agent, file, op, size, timestamp FROM events WHERE 1=1`
+	args := make([]any, 0, 4)
+
+	if agent != "" {
+		query += ` AND agent = ?`
+		args = append(args, agent)
+	}
+	if since != "" {
+		query += ` AND timestamp >= ?`
+		args = append(args, since)
+	}
+	if until != "" {
+		query += ` AND timestamp <= ?`
+		args = append(args, until)
+	}
+
+	query += ` ORDER BY id DESC LIMIT ?`
+	args = append(args, limit)
+	return query, args
+}
+
+// parseTimestamp tries RFC3339 first, then SQLite default format.
+func parseTimestamp(ts string) (time.Time, error) {
+	t, err := time.Parse(time.RFC3339, ts)
+	if err == nil {
+		return t, nil
+	}
+	t, err = time.Parse("2006-01-02 15:04:05", ts)
+	if err == nil {
+		return t.UTC(), nil
+	}
+	return time.Time{}, err
 }
 
 // Stats returns event counts per agent in the given time window.

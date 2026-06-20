@@ -85,45 +85,79 @@ type debounceEntry struct {
 
 const debounceWindow = 100 * time.Millisecond
 
+// debounceMap manages pending debounced events with a mutex.
+type debounceMap struct {
+	mu      sync.Mutex
+	pending map[string]*debounceEntry
+}
+
+func newDebounceMap() *debounceMap {
+	return &debounceMap{
+		pending: make(map[string]*debounceEntry),
+	}
+}
+
+// Add stores or updates a debounce entry for path.
+// When the timer fires, after is called.
+func (dm *debounceMap) Add(path string, evt hermes.Event, after func()) {
+	dm.mu.Lock()
+	defer dm.mu.Unlock()
+
+	entry, exists := dm.pending[path]
+	if exists {
+		entry.timer.Stop()
+		entry.event = evt
+		entry.timer.Reset(debounceWindow)
+	} else {
+		timer := time.AfterFunc(debounceWindow, after)
+		dm.pending[path] = &debounceEntry{
+			event: evt,
+			timer: timer,
+		}
+	}
+}
+
+// Flush sends the pending event for path (if any) and removes it.
+func (dm *debounceMap) Flush(path string, out chan<- hermes.Event, ctx context.Context) bool {
+	dm.mu.Lock()
+	entry, ok := dm.pending[path]
+	if ok {
+		entry.timer.Stop()
+		delete(dm.pending, path)
+	}
+	dm.mu.Unlock()
+	if ok {
+		select {
+		case out <- entry.event:
+		case <-ctx.Done():
+		}
+	}
+	return ok
+}
+
+// FlushAll sends all pending events (non-blocking) and clears the map.
+func (dm *debounceMap) FlushAll(out chan<- hermes.Event) {
+	dm.mu.Lock()
+	for path, entry := range dm.pending {
+		entry.timer.Stop()
+		delete(dm.pending, path)
+		select {
+		case out <- entry.event:
+		default:
+		}
+	}
+	dm.mu.Unlock()
+}
+
 func (watcher *Watcher) loop(ctx context.Context, out chan<- hermes.Event) {
 	defer close(out)
 
-	var (
-		mu     sync.Mutex
-		pending = make(map[string]*debounceEntry)
-	)
-
-	flush := func(path string) {
-		mu.Lock()
-		entry, ok := pending[path]
-		if ok {
-			entry.timer.Stop()
-			delete(pending, path)
-		}
-		mu.Unlock()
-		if ok {
-			select {
-			case out <- entry.event:
-			case <-ctx.Done():
-			}
-		}
-	}
+	dm := newDebounceMap()
 
 	for {
 		select {
 		case <-ctx.Done():
-			// Flush all pending events on shutdown
-			mu.Lock()
-			for path, entry := range pending {
-				entry.timer.Stop()
-				delete(pending, path)
-				select {
-				case out <- entry.event:
-				default:
-				}
-				_ = path
-			}
-			mu.Unlock()
+			dm.FlushAll(out)
 			return
 
 		case fsEvent, ok := <-watcher.w.Events:
@@ -140,30 +174,11 @@ func (watcher *Watcher) loop(ctx context.Context, out chan<- hermes.Event) {
 				continue
 			}
 
-			mu.Lock()
-			entry, exists := pending[fsEvent.Name]
-			if exists {
-				entry.timer.Stop()
-				entry.event = *evt
-				entry.timer.Reset(debounceWindow)
-			} else {
-				timer := time.AfterFunc(debounceWindow, func() {
-					flush(fsEvent.Name)
-				})
-				pending[fsEvent.Name] = &debounceEntry{
-					event: *evt,
-					timer: timer,
-				}
-			}
-			mu.Unlock()
+			path := fsEvent.Name
+			dm.Add(path, *evt, func() { dm.Flush(path, out, ctx) })
 
-			// If a new directory is created, start watching it recursively.
 			if fsEvent.Has(fsnotify.Create) {
-				if info, err := os.Stat(fsEvent.Name); err == nil && info.IsDir() {
-					if err := watcher.addRecursive(fsEvent.Name); err != nil {
-						slog.Error("add new directory", "path", fsEvent.Name, "error", err)
-					}
-				}
+				watcher.watchNewDirectory(path)
 			}
 
 		case err, ok := <-watcher.w.Errors:
@@ -172,6 +187,17 @@ func (watcher *Watcher) loop(ctx context.Context, out chan<- hermes.Event) {
 			}
 			slog.Error("fsnotify error", "error", err)
 		}
+	}
+}
+
+// watchNewDirectory starts watching a newly created directory recursively.
+func (watcher *Watcher) watchNewDirectory(path string) {
+	info, err := os.Stat(path)
+	if err != nil || !info.IsDir() {
+		return
+	}
+	if err := watcher.addRecursive(path); err != nil {
+		slog.Error("add new directory", "path", path, "error", err)
 	}
 }
 
