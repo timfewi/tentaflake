@@ -61,7 +61,7 @@
 ### 1. Clone
 
 ```bash
-git clone https://github.com/your-org/nixos-agent-orchestration
+git clone https://github.com/timfewi/nixos-agent-orchestration
 cd nixos-agent-orchestration
 ```
 
