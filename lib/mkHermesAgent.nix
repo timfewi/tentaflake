@@ -146,28 +146,39 @@ in
   };
 
   # ── OCI container ──
-  virtualisation.oci-containers.containers."hermes-${name}" = lib.recursiveUpdate {
-    inherit image autoStart cmd;
+  # Build base config, then merge caller overrides, then append env-file options
+  # (extraOptions from extraContainerConfig is preserved; --env-file is appended after merge)
+  virtualisation.oci-containers.containers."hermes-${name}" =
+    let
+      baseConfig = {
+        inherit image autoStart cmd;
 
-    volumes = [
-      "${stateDir}:${stateDir}:rw"
-    ]
-    ++ lib.optional (configYaml != null) "${configYaml}:${stateDir}/config.yaml:ro"
-    ++ extraVolumes;
+        volumes = [
+          "${stateDir}:${stateDir}:rw"
+        ]
+        ++ lib.optional (configYaml != null) "${configYaml}:${stateDir}/config.yaml:ro"
+        ++ extraVolumes;
 
-    environment = {
-      HERMES_HOME = stateDir;
-      HERMES_AGENT_NAME = name;
-    }
-    // extraEnvironment;
+        environment = {
+          HERMES_HOME = stateDir;
+          HERMES_AGENT_NAME = name;
+        }
+        // extraEnvironment;
 
-    # Environment files (plain .env or agenix) — injected as KEY=VALUE
-    # agenixFile gets mounted at runtime, survives reboots
-    environmentFiles =
-      lib.optional (envFile != null) envFile ++ lib.optional (agenixFile != null) agenixFile;
+        extraOptions = [
+          "--network=host"
+        ];
+      };
 
-    extraOptions = [
-      "--network=host"
-    ];
-  } extraContainerConfig;
+      # Merge caller's extraContainerConfig on top
+      merged = lib.recursiveUpdate baseConfig extraContainerConfig;
+    in
+    merged
+    // {
+      # Append --env-file AFTER the merge so it's never lost
+      extraOptions =
+        merged.extraOptions
+        ++ lib.optional (envFile != null) "--env-file=${envFile}"
+        ++ lib.optional (agenixFile != null) "--env-file=${agenixFile}";
+    };
 }
