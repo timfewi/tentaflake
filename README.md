@@ -1,23 +1,16 @@
 <p align="center">
   <br/>
   <pre align="center">
-                 ╭─────────────────────╮
-                ╱       🐙  AGENT       ╲
-               │     Octopus Network     │
-               ╲   Multi-Agent System   ╱
-                ╰─────────────────────╯
-   ──╮     ╭──   ──╮     ╭──   ──╮     ╭──
-  ╱  ╰─────╯  ╲ ╱  ╰─────╯  ╲ ╱  ╰─────╯  ╲
- │   🧠 NixOS   ││   🐳 Docker  ││   🔐 Agenix │
- │  Orchestrator││  Containers  ││   Secrets   │
-  ╲  ╭─────╮  ╱ ╲  ╭─────╮  ╱ ╲  ╭─────╮  ╱
-   ──╯     ╰──   ──╯     ╰──   ──╯     ╰──
-     🎤 Piper       🔗 Tailscale      📡 Firecrawl
-     TTS Server       Network        Web Research
+                 █████╗  ██████╗ ███████╗███╗   ██╗████████╗
+                ██╔══██╗██╔════╝ ██╔════╝████╗  ██║╚══██╔══╝
+                ███████║██║  ███╗█████╗  ██╔██╗ ██║   ██║
+                ██╔══██║██║   ██║██╔══╝  ██║╚██╗██║   ██║
+                ██║  ██║╚██████╔╝███████╗██║ ╚████║   ██║
+                ╚═╝  ╚═╝ ╚═════╝ ╚══════╝╚═╝  ╚═══╝   ╚═╝
+
+              🐙  One NixOS brain · Many Hermes tentacles
   </pre>
   <p align="center">
-    <strong>🐙 One NixOS brain · Many Hermes tentacles</strong>
-    <br/>
     Declaratively deploy & manage multiple isolated Hermes AI agents
     <br/>
     on a single NixOS machine — each with its own secrets, skills, and personality.
@@ -133,8 +126,15 @@ sudo nixos-rebuild switch --flake .#agent-host
               └────────────┘   └────────────┘
 
      ───────────────── Shared Services ─────────────────
-    🎤 Piper TTS    🔗 Tailscale    🗄️ Docker    🔐 Agenix
-    (port 5001)     (mesh VPN)      (runtime)    (secrets)
+    🎤 Piper TTS   🔗 Tailscale   🗄️ Docker   🔐 Agenix
+    (port 5001)    (mesh VPN)     (runtime)    (secrets)
+
+          ,---.
+         ( @ @ )
+          ).-.(
+         '/|||\\`
+           '|`
+     🐙 little helper
 ```
 
 ### Key Design Decisions
@@ -211,6 +211,7 @@ Both patterns keep secrets **out of the Nix store** and **never in Nix evaluatio
 
 | Module | What it configures |
 |---|---|
+| `modules/default.nix` | Module aggregator (imports all others) |
 | `boot.nix` | systemd-boot, EFI, kernel params |
 | `locale.nix` | Timezone, locale, console keymap |
 | `networking.nix` | Hostname, nftables firewall, NetworkManager |
