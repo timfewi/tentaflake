@@ -46,6 +46,11 @@
   envFile ? null,
   agenixFile ? null,
 
+  # Optional: path to a directory of base reference files (SOUL.md, AGENTS.md, BRAND.md, skills/)
+  # On first boot, contents are copied into stateDir (no-clobber — Hermes' runtime modifications
+  # are preserved across rebuilds). Set to null (default) to skip.
+  seedDir ? null,
+
   # Extra volumes to mount into the container
   extraVolumes ? [ ],
 
@@ -105,7 +110,7 @@ in
       home = stateDir;
       createHome = false;
       uid = uid;
-      description = "Hermes agent: ${name}";
+      description = "Hermes agent ${name}";
       shell = "${pkgs.bash}/bin/bash";
     };
   };
@@ -121,6 +126,24 @@ in
     "d ${stateDir}/skills 0700 ${user} ${group} -"
     "d ${stateDir}/cron 0700 ${user} ${group} -"
   ];
+
+  # ── Seed base files (SOUL.md, AGENTS.md, BRAND.md, skills/) from seedDir ──
+  # Copies once on first boot — never overwrites Hermes' runtime modifications.
+  systemd.services = lib.mkIf (seedDir != null) {
+    "seed-hermes-${name}" = {
+      description = "Seed base files for Hermes agent ${name}";
+      requires = [ "local-fs.target" ];
+      after = [ "tmpfiles-setup.service" ];
+      before = [ "docker-hermes-${name}.service" ];
+      wantedBy = [ "docker-hermes-${name}.service" ];
+      serviceConfig = {
+        Type = "oneshot";
+        RemainAfterExit = true;
+        ExecStart = "${pkgs.bash}/bin/bash -c 'cp -rn ${seedDir}/* ${stateDir}/ 2>/dev/null || true'";
+        User = "root";
+      };
+    };
+  };
 
   # ── OCI container ──
   virtualisation.oci-containers.containers."hermes-${name}" = lib.recursiveUpdate {
