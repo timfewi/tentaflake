@@ -196,3 +196,4 @@ sudo nft list ruleset
 
 - [02-agent-tips.md](02-agent-tips.md) — Day-to-day agent management
 - [03-skill-index.md](03-skill-index.md) — Bundled skills reference
+- [04-agenix-secrets.md](04-agenix-secrets.md) — Encrypt agent credentials with agenix

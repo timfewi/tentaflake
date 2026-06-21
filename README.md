@@ -188,7 +188,7 @@ sudo nixos-rebuild switch --flake .#agent-host
 
 Two patterns — choose what fits your workflow:
 
-### 1. `.env` file (simpler)
+### 1. `.env` file (simpler, local-only)
 
 ```nix
 mkHermesAgent {
@@ -197,25 +197,29 @@ mkHermesAgent {
 }
 ```
 
-```bash
-# Contents of /run/secrets/my-agent.env:
-OPENROUTER_API_KEY=sk-or-...
-TELEGRAM_BOT_TOKEN=...
-```
+Place a plaintext `.env` file at the runtime path. **Never commit it to Git.**
 
 ### 2. Agenix (encrypted in Git)
 
+Encrypt secrets as `.age` files — safe to commit, decrypted only at NixOS activation.
+
 ```nix
 mkHermesAgent {
-  name        = "my-agent";
-  agenixFile  = "/run/agenix/my-agent-env";
+  name       = "my-agent";
+  agenixFile = "/run/agenix/my-agent-env";
 }
 ```
 
 ```bash
-# Edit encrypted secrets:
-agenix -e secrets/my-agent.env.age
+# Create encrypted secret
+echo "OPENROUTER_API_KEY=sk-or-..." | agenix -e secrets/my-agent.env.age --stdin
+
+# Rebuild — secrets never touch the Nix store
+sudo nixos-rebuild switch --flake .#agent-host
 ```
+
+📖 **Full guide:** [`docs/04-agenix-secrets.md`](docs/04-agenix-secrets.md) — setup, architecture, troubleshooting  
+📋 **Template:** [`secrets.nix.example`](secrets.nix.example) — copy to `secrets.nix` to start
 
 Both patterns keep secrets **out of the Nix store** and **never in Nix evaluation**.
 
