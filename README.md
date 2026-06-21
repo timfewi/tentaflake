@@ -1,14 +1,23 @@
 <p align="center">
   <br/>
   <pre align="center">
-                 █████╗  ██████╗ ███████╗███╗   ██╗████████╗
-                ██╔══██╗██╔════╝ ██╔════╝████╗  ██║╚══██╔══╝
-                ███████║██║  ███╗█████╗  ██╔██╗ ██║   ██║
-                ██╔══██║██║   ██║██╔══╝  ██║╚██╗██║   ██║
-                ██║  ██║╚██████╔╝███████╗██║ ╚████║   ██║
-                ╚═╝  ╚═╝ ╚═════╝ ╚══════╝╚═╝  ╚═══╝   ╚═╝
-
-              🐙  One NixOS brain · Many Hermes tentacles
+                                                                         
+                                                                         
+                        ___      ___            _                ____    
+                        `MM\     `M'           dM.              6MMMMb   
+                         MMM\     M           ,MMb             8P    Y8  
+                         M\MM\    M           d'YM.           6M      Mb 
+                         M \MM\   M          ,P `Mb           MM      MM 
+                         M  \MM\  M          d'  YM.          MM      MM 
+                         M   \MM\ M         ,P   `Mb          MM      MM 
+                         M    \MM\M MMMMMMM d'    YM. MMMMMMM MM      MM 
+                         M     \MMM        ,MMMMMMMMb         YM      M9 
+                         M      \MM        d'      YM.         8b    d8  
+                        _M_      \M      _dM_     _dMM_         YMMMM9   
+                                                                         
+                                                                         
+                                                                         
+                          🐙  One NixOS brain · Many Hermes tentacles
   </pre>
   <p align="center">
     Declaratively deploy & manage multiple isolated Hermes AI agents

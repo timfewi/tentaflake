@@ -59,7 +59,7 @@
       };
 
       # ── Shared mkHermesAgent helper ──
-      mkHermesAgent = import ./lib { inherit pkgs lib; };
+      mkHermesAgent = (import ./lib { inherit pkgs lib; }).mkHermesAgent;
 
       # Passed to all NixOS modules via specialArgs
       specialArgs = {

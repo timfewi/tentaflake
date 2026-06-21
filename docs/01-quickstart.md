@@ -183,7 +183,7 @@ timedatectl status
 
 ### Firewall
 
-The `hardening.nix` module enables nftables. Default allows SSH (port 22)
+The `networking.nix` module enables nftables. Default allows SSH (port 22)
 and Hermes gateway ports. Check rules:
 
 ```bash

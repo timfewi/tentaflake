@@ -16,6 +16,6 @@ secrets/*.env
 # Nix
 .direnv/
 .envrc
-
+.planning
 # Private keys — never commit unencrypted credentials
 # .age files (encrypted by agenix) ARE safe to commit — they go in git

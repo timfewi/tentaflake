@@ -20,3 +20,6 @@ jobs:
 
       - name: nix flake check
         run: nix flake check --no-build
+
+      - name: go test
+        run: cd pkgs/hermes-auditd && go test ./...

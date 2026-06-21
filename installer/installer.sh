@@ -37,14 +37,6 @@ if ! command -v dialog &>/dev/null; then
 	exit 1
 fi
 
-# ── Helper: run with spinner ──
-spinner() {
-	local msg="$1" cmd="$2" rc=0
-	dialog --infobox "$msg" 4 50
-	eval "$cmd" >>"$INSTALL_LOG" 2>&1 || rc=$?
-	return $rc
-}
-
 # ════════════════════════════════════════════════════════════
 # STEP 1: Welcome
 # ════════════════════════════════════════════════════════════

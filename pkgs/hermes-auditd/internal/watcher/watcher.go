@@ -46,6 +46,11 @@ func NewWatcher(dirs []string) (*Watcher, error) {
 	return watcher, nil
 }
 
+// Close releases the underlying fsnotify watcher resources.
+func (watcher *Watcher) Close() error {
+	return watcher.w.Close()
+}
+
 // addRecursive walks dir and adds every directory to the watcher.
 func (watcher *Watcher) addRecursive(dir string) error {
 	return filepath.WalkDir(dir, func(path string, d os.DirEntry, err error) error {
@@ -140,6 +145,7 @@ func (dm *debounceMap) FlushAll(out chan<- hermes.Event) {
 	dm.mu.Lock()
 	for path, entry := range dm.pending {
 		entry.timer.Stop()
+		entry.timer = nil
 		delete(dm.pending, path)
 		select {
 		case out <- entry.event:
@@ -158,6 +164,7 @@ func (watcher *Watcher) loop(ctx context.Context, out chan<- hermes.Event) {
 		select {
 		case <-ctx.Done():
 			dm.FlushAll(out)
+			_ = watcher.w.Close()
 			return
 
 		case fsEvent, ok := <-watcher.w.Events:

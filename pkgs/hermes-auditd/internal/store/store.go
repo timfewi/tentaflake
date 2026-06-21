@@ -22,7 +22,6 @@ import (
 type Store struct {
 	db             *sql.DB
 	retentionHours int
-	done           chan struct{}
 	once           sync.Once
 }
 
@@ -47,7 +46,6 @@ func New(dbPath string, retentionHours int) (*Store, error) {
 	return &Store{
 		db:             db,
 		retentionHours: retentionHours,
-		done:           make(chan struct{}),
 	}, nil
 }
 
@@ -226,8 +224,5 @@ func (s *Store) PruneLoop(ctx context.Context) {
 
 // Close shuts down the store and releases the database file.
 func (s *Store) Close() error {
-	s.once.Do(func() {
-		close(s.done)
-	})
 	return s.db.Close()
 }

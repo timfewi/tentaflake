@@ -20,6 +20,7 @@
   adminUser = "admin";
 
   # Default shell
+  # NOTE: Override in your flake.nix params to ${pkgs.bash}/bin/bash for portability
   adminShell = "/run/current-system/sw/bin/bash";
 
   # Default user description
