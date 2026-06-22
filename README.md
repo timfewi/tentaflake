@@ -68,14 +68,14 @@
 
 | Capability | Description |
 |---|---|
-| ** Multi-Agent** | Run any number of isolated Hermes agents on one machine |
-| ** Per-Agent Secrets** | Each agent gets its own API keys — no cross-contamination |
-| ** Docker Ephemeral** | Containers are stateless; personality + state live on mounted volumes |
-| ** NixOS Declarative** | Everything defined in one flake — `nixos-rebuild switch` applies changes |
-| ** Agenix Support** | Encrypt secrets in-repo with age/agenix — decrypted at build time |
-| ** TTS Ready** | Built-in Piper TTS server (OpenAI-compatible `/v1/audio/speech`) |
-| ** Live ISO** | Boot a USB with agents + TTS running out of the box — `nix build .#live-agent-iso` |
-| ** Tailscale** | Pre-configured Tailscale module for secure networking |
+| **Multi-Agent** | Run any number of isolated Hermes agents on one machine |
+| **Per-Agent Secrets** | Each agent gets its own API keys — no cross-contamination |
+| **Docker Ephemeral** | Containers are stateless; personality + state live on mounted volumes |
+| **NixOS Declarative** | Everything defined in one flake — `nixos-rebuild switch` applies changes |
+| **Agenix Support** | Encrypt secrets in-repo with age/agenix — decrypted at build time |
+| **TTS Ready** | Built-in Piper TTS server (OpenAI-compatible `/v1/audio/speech`) |
+| **Live ISO** | Boot a USB with agents + TTS running out of the box — `nix build .#live-agent-iso` |
+| **Tailscale** | Pre-configured Tailscale module for secure networking |
 
 ---
 
@@ -135,43 +135,36 @@ sudo nixos-rebuild switch --flake .#agent-host
 ## 🏗 Architecture
 
 ```
-                    🐙 Agent Orchestration
+                   𜷶 𜱛 𜷷  Agent Orchestration
                 One NixOS brain · Many tentacles
 
-                          ╭─────────╮
-                         ╱  🧠 NixOS ╲
-                        │   Flake     │
-                        │  (config)   │
-                         ╲           ╱
-                          ╰─────────╯
-                    ┌───────┴────────┐
-                    │                │
-              ┌─────▼──────┐   ┌─────▼──────┐
-              │  Tentacle  │   │  Tentacle  │    ...
-              │  Agent A   │   │  Agent B   │
-              │  (coding)  │   │ (research) │
-              │            │   │            │
-              │  📦 Docker │   │  📦 Docker │
-              │  User:     │   │  User:     │
-              │  hermes-A  │   │  hermes-B  │
-              │  State:    │   │  State:    │
-              │  /var/lib/ │   │  /var/lib/ │
-              │  hermes-A  │   │  hermes-B  │
-              │            │   │            │
-              │  🔑 Key: A │   │  🔑 Key: B │
-              │  📚 Skills │   │  📚 Skills │
-              └────────────┘   └────────────┘
+                          ,---------.
+                        ,'  NixOS    `.
+                       (    Flake      )
+                ┌───────`. (Config)  ,' ──────┐
+                │         `---------'         │
+                │              │              │
+                │              │              │
+          /=====▼====\   /=====▼====\   /=====▼====\
+          │ Tentacle │   │ Tentacle │   │ Tentalce │
+          │ Agent A  │   │ Agent B  │   │ Agent C  │
+          │ (coding) │   │(research)│   │(personal)│
+          │          │   │          │   │          │
+          │📦 Docker │   │📦 Docker │   │📦 Docker │
+          │User:     │   │User:     │   │User:     │
+          │hermes-A  │   │hermes-B  │   │hermes-C  │
+          │State:    │   │State:    │   │State:    │
+          │/var/lib/ │   │/var/lib/ │   │/var/lib/ │
+          │hermes-A  │   │hermes-B  │   │hermes-C  │
+          │          │   │          │   │          │
+          │🔑 Key: A │   │🔑 Key: B │   │🔑 Key: C │
+          │📚 Skills │   │📚 Skills │   │📚 Skills │
+          │          │   │          │   │          │
+          \==========/   \==========/   \==========/
 
-     ───────────────── Shared Services ─────────────────
-    🎤 Piper TTS   🔗 Tailscale   🗄️ Docker   🔐 Agenix
-    (port 5001)    (mesh VPN)     (runtime)    (secrets)
-
-          ,---.
-         ( @ @ )
-          ).-.(
-         '/|||\\`
-           '|`
-     🐙 little helper
+      ───────────────── Shared Services ─────────────────
+     🎤 Piper TTS   🔗 Tailscale   🗄️ Docker   🔐 Agenix
+     (port 5001)    (mesh VPN)     (runtime)    (secrets)
 ```
 
 ### Key Design Decisions
@@ -266,7 +259,7 @@ Both patterns keep secrets **out of the Nix store** and **never in Nix evaluatio
 
 ---
 
-## 🎯 Examples
+## Examples
 
 ### Two agents — coding assistant + web researcher
 
@@ -312,7 +305,7 @@ sudo cp result/iso/nixos-agent-orchestration-live.iso /dev/sdX
 
 ---
 
-## 🛠 Commands
+## Commands
 
 ```bash
 # Validate flake
@@ -342,7 +335,7 @@ docker exec -it hermes-coding hermes chat
 
 ---
 
-## 🤝 Contributing
+## Contributing
 
 This is a community template — contributions welcome!
 
@@ -356,7 +349,7 @@ Please keep the template **generic** — no domain-specific code belongs here. T
 
 ---
 
-## 📄 License
+## License
 
 <p align="center">
   MIT — see <a href="https://github.com/timfewi/nixos-agent-orchestration/blob/main/LICENSE">LICENSE</a><br/>
