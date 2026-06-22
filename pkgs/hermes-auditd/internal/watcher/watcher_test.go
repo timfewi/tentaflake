@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/timfewi/tentaflake/hermes-auditd/internal/hermes"
+	"tentaflake/hermes-auditd/internal/hermes"
 )
 
 func newTempDir(t *testing.T) string {
@@ -260,8 +260,8 @@ func TestAgentNameFromPath(t *testing.T) {
 
 func TestIsIgnored(t *testing.T) {
 	tests := []struct {
-		path     string
-		ignored  bool
+		path    string
+		ignored bool
 	}{
 		{"/var/lib/hermes-coding/events.db", true},
 		{"/var/lib/hermes-coding/events.db-wal", true},

@@ -1,9 +1,15 @@
-{ pkgs, ... }:
 {
+  config,
+  lib,
+  pkgs,
+  ...
+}:
+let
+  cfg = config.tentaflake;
+in
+lib.mkIf cfg.packages.enable {
   environment.systemPackages = with pkgs; [
     curl
     git
-    # jq       # Uncomment for JSON processing
-    # tmux     # Uncomment for terminal multiplexer
   ];
 }

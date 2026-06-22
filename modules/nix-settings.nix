@@ -7,8 +7,8 @@
 let
   cfg = config.tentaflake;
 in
-{
-  nixpkgs.config.allowUnfree = true;
+lib.mkIf cfg.nixSettings.enable {
+  nixpkgs.config.allowUnfree = cfg.allowUnfree;
 
   nix.settings = {
     experimental-features = [

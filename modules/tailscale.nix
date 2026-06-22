@@ -7,7 +7,7 @@
 let
   cfg = config.tentaflake;
 in
-{
+lib.mkIf cfg.tailscale.enable {
   services.tailscale = {
     enable = true;
     openFirewall = true;

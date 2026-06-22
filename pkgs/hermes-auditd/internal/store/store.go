@@ -10,19 +10,18 @@ import (
 	"database/sql"
 	"fmt"
 	"log/slog"
-	"sync"
+	"strings"
 	"time"
 
 	_ "modernc.org/sqlite"
 
-	"github.com/timfewi/tentaflake/hermes-auditd/internal/hermes"
+	"tentaflake/hermes-auditd/internal/hermes"
 )
 
 // Store persists events to SQLite and provides query methods.
 type Store struct {
 	db             *sql.DB
 	retentionHours int
-	once           sync.Once
 }
 
 // New opens the SQLite database, sets connection pragmas, and
@@ -115,11 +114,10 @@ func (s *Store) Query(ctx context.Context, agent, since, until string, limit int
 		}
 		parsed, err := parseTimestamp(ts)
 		if err != nil {
-			slog.Warn("parse timestamp", "raw", ts, "error", err)
-			evt.Timestamp = time.Now().UTC()
-		} else {
-			evt.Timestamp = parsed
+			slog.Warn("parse timestamp, skipping event", "raw", ts, "error", err)
+			continue
 		}
+		evt.Timestamp = parsed
 		events = append(events, evt)
 	}
 	if err := rows.Err(); err != nil {
@@ -168,6 +166,11 @@ func parseTimestamp(ts string) (time.Time, error) {
 // Stats returns event counts per agent in the given time window.
 // Window is a SQL expression like '-24 hours' or '-7 days'.
 func (s *Store) Stats(ctx context.Context, window string) (map[string]int, error) {
+	// Validate window parameter to prevent SQL injection
+	window = strings.TrimSpace(window)
+	if !strings.HasPrefix(window, "-") {
+		return nil, fmt.Errorf("invalid window %q: must start with '-'", window)
+	}
 	query := `SELECT agent, COUNT(*) as cnt FROM events WHERE timestamp >= datetime('now', ?) GROUP BY agent`
 	rows, err := s.db.QueryContext(ctx, query, window)
 	if err != nil {
@@ -199,7 +202,10 @@ func (s *Store) Prune(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("prune events: %w", err)
 	}
-	n, _ := result.RowsAffected()
+	n, err := result.RowsAffected()
+	if err != nil {
+		slog.Warn("rows affected after prune", "error", err)
+	}
 	if n > 0 {
 		slog.Info("pruned old events", "count", n, "retention_hours", s.retentionHours)
 	}

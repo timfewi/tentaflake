@@ -1,0 +1,18 @@
+# Default: maintainers
+* @timfewi
+
+# NixOS core
+/modules/ @timfewi
+/flake.nix @timfewi
+/lib/ @timfewi
+/configuration.nix @timfewi
+
+# Go daemon
+/pkgs/hermes-auditd/ @timfewi
+
+# Installer
+/installer/ @timfewi
+
+# Docs
+/docs/ @timfewi
+/README.md @timfewi

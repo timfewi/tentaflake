@@ -26,7 +26,7 @@
     };
 
     agenix = {
-      url = "github:ryntm/agenix";
+      url = "github:ryantm/agenix";
       inputs.nixpkgs.follows = "nixpkgs";
     };
   };
@@ -105,7 +105,7 @@
         # ── First machine ──
         agent-box = mkHost {
           hostName = "agent-box";
-          adminUser = "tim";
+          adminUser = "alice";
           modules = [
             ./machines/agent-box/default.nix
             ./machines/agent-box/hardware-configuration.nix
@@ -117,7 +117,7 @@
         # ── Future machines: just add a new mkHost call ──
         # another-host = mkHost {
         #   hostName = "another-host";
-        #   adminUser = "tim";
+        #   adminUser = "alice";
         #   modules = [ ... ];
         # };
       };

@@ -7,7 +7,7 @@
 let
   cfg = config.tentaflake;
 in
-{
+lib.mkIf cfg.users.enable {
   users.users.${cfg.adminUser} = {
     isNormalUser = true;
     description = cfg.adminDescription;
@@ -16,8 +16,6 @@ in
       "wheel"
     ];
     shell = cfg.adminShell;
+    openssh.authorizedKeys.keys = cfg.adminAuthorizedKeys;
   };
-
-  # Enable a solid default shell
-  programs.bash.enable = true;
 }

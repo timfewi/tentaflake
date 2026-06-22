@@ -3,17 +3,17 @@
   pkgs,
   lib,
   modulesPath,
+  mkHermesAgent,
   ...
 }:
 
 let
-  mkHermesAgent = import ../lib/mkHermesAgent.nix { inherit pkgs lib; };
   liveAgents = import ./live-agents.nix { inherit mkHermesAgent; };
   piperVoices = pkgs.callPackage ../pkgs/piper-voices { };
 in
 {
   imports = liveAgents ++ [
-    ../modules/hermes-firstboot.nix
+    ./hermes-firstboot.nix
     ../modules/piper-tts-server.nix
   ];
 

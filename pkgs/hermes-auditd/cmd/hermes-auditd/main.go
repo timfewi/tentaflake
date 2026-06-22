@@ -5,12 +5,12 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
-	"time"
 
-	"github.com/timfewi/tentaflake/hermes-auditd/internal/config"
-	"github.com/timfewi/tentaflake/hermes-auditd/internal/store"
-	"github.com/timfewi/tentaflake/hermes-auditd/internal/watcher"
+	"tentaflake/hermes-auditd/internal/config"
+	"tentaflake/hermes-auditd/internal/store"
+	"tentaflake/hermes-auditd/internal/watcher"
 )
 
 func main() {
@@ -54,7 +54,7 @@ func main() {
 	// Start watcher
 	eventCh := watch.Start(ctx)
 
-	// Start store consumer — returns notify channel for future broadcast
+	// Start store consumer
 	notifyCh, err := st.Start(ctx, eventCh)
 	if err != nil {
 		slog.Error("store start failed", "error", err)
@@ -62,10 +62,17 @@ func main() {
 	}
 
 	// Start periodic prune loop
-	go st.PruneLoop(ctx)
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		st.PruneLoop(ctx)
+	}()
 
-	// Discard notify channel until server package is implemented
+	// Start HTTP/WebSocket server in background
+	// TODO: Implement server package and wire notifyCh
 	_ = notifyCh
+	slog.Warn("HTTP/WebSocket server not implemented — notify channel discarded")
 
 	slog.Info("hermes-auditd running",
 		"watch_count", len(cfg.WatchDirs),
@@ -79,7 +86,7 @@ func main() {
 	slog.Info("shutting down", "signal", sig.String())
 	cancel()
 
-	// Allow brief cleanup
-	time.Sleep(200 * time.Millisecond)
+	// Wait for background goroutines to finish
+	wg.Wait()
 	slog.Info("shutdown complete")
 }

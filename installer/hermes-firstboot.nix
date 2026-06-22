@@ -8,7 +8,7 @@
 let
   # The interactive TUI wizard (runs via .bashrc on TTY1)
   firstbootScript = pkgs.writeShellScriptBin "hermes-firstboot" ''
-    ${builtins.readFile ../installer/firstboot.sh}
+    ${builtins.readFile ./firstboot.sh}
   '';
 
   # USB HERMES_ENV auto-detector (runs as systemd service before Docker)

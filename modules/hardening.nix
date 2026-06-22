@@ -1,5 +1,13 @@
-{ pkgs, ... }:
 {
+  config,
+  lib,
+  pkgs,
+  ...
+}:
+let
+  cfg = config.tentaflake.hardening;
+in
+lib.mkIf cfg.enable {
   boot.kernel.sysctl = {
     "kernel.kptr_restrict" = 2;
     "kernel.dmesg_restrict" = 1;

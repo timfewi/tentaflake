@@ -6,7 +6,8 @@
 # ────────────────────────────────────────────────────────────
 
 {
-  # NixOS release this template targets
+  # NixOS state version for stateful data compatibility. Set once at first install
+  # and normally left unchanged across upgrades.
   stateVersion = "26.05";
 
   # Locale defaults

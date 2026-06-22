@@ -85,6 +85,7 @@
 | **TTS Ready** | Built-in Piper TTS server (OpenAI-compatible `/v1/audio/speech`) |
 | **Live ISO** | Bootable installer USB with interactive setup wizard — `nix build .#installer-iso` |
 | **Tailscale** | Pre-configured Tailscale module for secure networking |
+| **Filesystem Audit** | Optional audit daemon tracks agent state changes — `tentaflake.hermes-auditd.enable = true` |
 
 ### The Tentaflake Ethos
 
@@ -143,6 +144,7 @@ sudo vi /run/secrets/hermes-coding.env
 ### 5. Build & deploy
 
 ```bash
+git add my-agents.nix      # flakes only evaluate git-tracked files
 nix flake check
 sudo nixos-rebuild switch --flake .#agent-host
 ```
@@ -173,8 +175,9 @@ Consume tentaflake as a reusable module library in your own flake:
           tentaflake.timeZone = "Europe/Vienna";
         }
         ./hardware-configuration.nix
-        ./my-agents.nix
-      ];
+      ]
+      # my-agents.nix is `{ mkHermesAgent }: [ ... ]` — build the agents and append them:
+      ++ import ./my-agents.nix { inherit mkHermesAgent; };
     };
   };
 }
@@ -253,6 +256,8 @@ See [`examples/consumer-flake.nix`](examples/consumer-flake.nix) for a full work
 | `extraEnvironment` | `attrset` | `{}` | Extra env vars for the container |
 | `extraContainerConfig` | `attrset` | `{}` | Extra Docker options (merged deep) |
 | `autoStart` | `bool` | `true` | Auto-start with systemd |
+| `networkMode` | `string` | `"host"` | Container network mode (`"host"` or `"bridge"`) |
+| `createUser` | `bool` | `true` | Create the `hermes-<name>` system user/group |
 | `cmd` | `list` | `["gateway" "run" "--replace"]` | Container entrypoint |
 
 ---
@@ -312,6 +317,7 @@ Both patterns keep secrets **out of the Nix store** and **never in Nix evaluatio
 | `hardening.nix` | Sysctl hardening, AppArmor, journald limits |
 | `tailscale.nix` | Tailscale with SSH + tag:auto (optional) |
 | `piper-tts-server.nix` | Local TTS via Piper (OpenAI-compatible API) |
+| `hermes-auditd.nix` | Filesystem audit daemon for Hermes state dirs (optional) |
 | `hermes-firstboot.nix` | USB env detection + first-boot TUI wizard (live ISO) |
 
 ---
@@ -400,6 +406,43 @@ Uses **fsnotify** for recursive directory watching, debounces rapid events (100 
 
 Agent names extracted from path convention: `/var/lib/hermes-<name>/...` → `<name>`.
 
+### NixOS Module (Declarative)
+
+Enable via the optional `tentaflake.hermes-auditd` module:
+
+```nix
+{
+  tentaflake.hermes-auditd = {
+    enable = true;
+    watchDirs = [
+      "/var/lib/hermes-coding"
+      "/var/lib/hermes-research"
+    ];
+  };
+}
+```
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `enable` | `bool` | `false` | Enable the audit daemon as a systemd service |
+| `watchDirs` | `list of str` | `[]` | Directories to monitor for filesystem changes |
+| `port` | `port` | `9090` | HTTP/WebSocket listen port |
+| `dbPath` | `str` | `/var/lib/hermes-audit/events.db` | Path to SQLite database |
+| `retentionHours` | `int` | `24` | Event retention window before pruning |
+
+When enabled, the module:
+
+- Adds `hermes-auditd` to your system packages
+- Creates a **hardened systemd service** (`NoNewPrivileges`, `ProtectSystem=strict`, `PrivateTmp`, `DynamicUser`)
+- Maps NixOS options to the daemon's environment variables automatically
+- Sets up the SQLite state directory under `/var/lib/hermes-audit/`
+
+After changing options, rebuild:
+
+```bash
+sudo nixos-rebuild switch --flake .#<hostname>
+```
+
 ### Data Flow
 
 ```
@@ -426,9 +469,9 @@ type Event struct {
 }
 ```
 
-### Configuration
+### Environment Variables (Standalone Mode)
 
-All via environment variables:
+When running outside the NixOS module (e.g. manual Go build), configure via env vars:
 
 | Variable | Default | Description |
 |---|---|---|
@@ -454,10 +497,10 @@ All via environment variables:
 - Stats: per-agent event counts over any time window
 - Pruning: automatic, runs every 10 minutes, deletes events older than retention period
 
-### Build & Run
+### Build & Run (Standalone)
 
 ```bash
-# Build
+# Build from source
 cd pkgs/hermes-auditd
 go build -o hermes-auditd ./cmd/hermes-auditd
 
@@ -467,18 +510,26 @@ export AUDIT_DB_PATH="/var/lib/hermes-audit/events.db"
 ./hermes-auditd
 ```
 
+Or build directly from the flake:
+
+```bash
+nix build .#hermes-auditd
+```
+
 ### Package Structure
 
 ```
 pkgs/hermes-auditd/
-├── cmd/hermes-auditd/main.go     # Entrypoint, lifecycle
+├── default.nix                 # Nix derivation (buildGoModule)
+├── go.mod                      # Go module (tentaflake/hermes-auditd)
+├── cmd/hermes-auditd/main.go   # Entrypoint, lifecycle
 ├── internal/
-│   ├── config/config.go          # Environment variable config
-│   ├── hermes/event.go           # Shared Event type (only cross-package type)
-│   ├── watcher/watcher.go        # fsnotify watcher + debounce
+│   ├── config/config.go        # Environment variable config
+│   ├── hermes/event.go         # Shared Event type (only cross-package type)
+│   ├── watcher/watcher.go      # fsnotify watcher + debounce
 │   └── store/
-│       ├── schema.go             # SQLite DDL + pragmas
-│       └── store.go              # Insert, Query, Stats, Prune
+│       ├── schema.go           # SQLite DDL + pragmas
+│       └── store.go            # Insert, Query, Stats, Prune
 ```
 
 ---

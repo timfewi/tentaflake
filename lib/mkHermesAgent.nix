@@ -65,6 +65,10 @@
     "--replace"
   ],
 
+  # Network mode for the container. "host" shares host networking.
+  # "bridge" isolates the container (requires port mappings in extraContainerConfig).
+  networkMode ? "host",
+
   # Auto-start container with system
   autoStart ? true,
 
@@ -167,7 +171,7 @@ in
         // extraEnvironment;
 
         extraOptions = [
-          "--network=host"
+          "--network=${networkMode}"
         ];
       };
 

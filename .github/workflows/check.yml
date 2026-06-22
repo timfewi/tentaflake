@@ -19,7 +19,27 @@ jobs:
       - uses: DeterminateSystems/magic-nix-cache-action@v4
 
       - name: nix flake check
-        run: nix flake check --no-build
+        run: nix flake check
+
+      - name: nix build (agent-host toplevel)
+        run: nix build .#nixosConfigurations.agent-host.config.system.build.toplevel --no-link
+
+      - name: nix fmt check
+        run: nix fmt -- --ci
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: pkgs/hermes-auditd/go.mod
+          cache-dependency-path: pkgs/hermes-auditd/go.sum
+
+      - name: go build
+        run: cd pkgs/hermes-auditd && go build ./...
+
+      - name: go vet
+        run: cd pkgs/hermes-auditd && go vet ./...
 
       - name: go test
         run: cd pkgs/hermes-auditd && go test ./...
+
+      - name: shellcheck
+        run: shellcheck installer/*.sh scripts/*.sh

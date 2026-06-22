@@ -3,8 +3,9 @@ result-*
 *.tmp
 *.bak
 
-# Local overrides — user-defined agents and secrets
-my-agents.nix
+# Local overrides — user secrets and home-manager config.
+# Note: my-agents.nix is intentionally NOT ignored — the flake must evaluate it,
+# and flakes only see git-tracked files (run `git add my-agents.nix`).
 home.nix
 secrets/*.env
 !secrets/hermes.env.example

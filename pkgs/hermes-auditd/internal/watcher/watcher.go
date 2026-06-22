@@ -16,7 +16,7 @@ import (
 	"time"
 
 	"github.com/fsnotify/fsnotify"
-	"github.com/timfewi/tentaflake/hermes-auditd/internal/hermes"
+	"tentaflake/hermes-auditd/internal/hermes"
 )
 
 // Watcher monitors directories for filesystem events and emits
@@ -150,6 +150,7 @@ func (dm *debounceMap) FlushAll(out chan<- hermes.Event) {
 		select {
 		case out <- entry.event:
 		default:
+			slog.Warn("dropping event on flush (channel full)", "file", entry.event.File)
 		}
 	}
 	dm.mu.Unlock()
@@ -245,8 +246,11 @@ func (watcher *Watcher) toEvent(fsEvent fsnotify.Event) *hermes.Event {
 // agentNameFromPath extracts the agent name from a file path.
 // Convention: /var/lib/hermes-<name>/... → "name"
 // Unknown paths return "unknown".
+// DefaultAgentPrefix is the default state directory prefix for agent paths.
+const DefaultAgentPrefix = "/var/lib/hermes-"
+
 func agentNameFromPath(path string) string {
-	const prefix = "/var/lib/hermes-"
+	const prefix = DefaultAgentPrefix
 	if !strings.HasPrefix(path, prefix) {
 		return "unknown"
 	}

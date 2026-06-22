@@ -2,32 +2,36 @@
   config,
   lib,
   pkgs,
-  isLiveISO ? false,
+  mkHermesAgent,
+  profile ? "installed",
   ...
 }:
 let
   cfg = config.tentaflake;
-  # ── Import your agent definitions ──
-  # In a fork, replace with: myAgents = import ./my-agents.nix { inherit mkHermesAgent; };
-  # On the template, agents are empty — user provides their own my-agents.nix
-  myAgents = [ ];
+  # ── Agent modules ──
+  # Define agents in my-agents.nix (see my-agents.nix.example). Auto-imported when
+  # present; git-track it (`git add my-agents.nix`) so the flake can evaluate it.
+  myAgents = lib.optionals (builtins.pathExists ./my-agents.nix) (
+    import ./my-agents.nix { inherit mkHermesAgent; }
+  );
 in
 {
   imports =
     myAgents
-    ++ lib.optionals (!isLiveISO) [
+    ++ lib.optionals (profile == "installed") [
       ./hardware-configuration.nix
     ];
 
   # ── OCI container backend (required for agent containers) ──
-  virtualisation.oci-containers.backend = "docker";
-  virtualisation.docker = {
+  virtualisation.oci-containers.backend = cfg.containerBackend;
+  virtualisation.docker = lib.mkIf (cfg.containerBackend == "docker") {
     enable = true;
     autoPrune.enable = true;
   };
 
-  # ── Admin user in docker group for container management ──
-  users.users.${cfg.adminUser}.extraGroups = [ "docker" ];
+  # ── Admin user in the docker group for CLI container management ──
+  # (podman is rootless/daemonless and needs no group)
+  users.users.${cfg.adminUser}.extraGroups = lib.optional (cfg.containerBackend == "docker") "docker";
 
   system.stateVersion = cfg.stateVersion;
 }

@@ -28,6 +28,11 @@ type Config struct {
 	RetentionHours int
 }
 
+var (
+	ErrPortOutOfRange   = fmt.Errorf("port out of range [1,65535]")
+	ErrRetentionInvalid = fmt.Errorf("retention hours must be >= 1")
+)
+
 // Load reads configuration from environment variables, applies defaults,
 // and returns a validated Config.
 func Load() (*Config, error) {
@@ -36,7 +41,7 @@ func Load() (*Config, error) {
 		return nil, fmt.Errorf("AUDIT_PORT: %w", err)
 	}
 	if port < 1 || port > 65535 {
-		return nil, fmt.Errorf("AUDIT_PORT %d out of range [1,65535]", port)
+		return nil, fmt.Errorf("AUDIT_PORT %d: %w", port, ErrPortOutOfRange)
 	}
 
 	dbPath := envStr("AUDIT_DB_PATH", "/var/lib/hermes-audit/events.db")
@@ -55,7 +60,7 @@ func Load() (*Config, error) {
 		return nil, fmt.Errorf("AUDIT_RETENTION_HOURS: %w", err)
 	}
 	if retention < 1 {
-		return nil, fmt.Errorf("AUDIT_RETENTION_HOURS %d must be >= 1", retention)
+		return nil, fmt.Errorf("AUDIT_RETENTION_HOURS %d: %w", retention, ErrRetentionInvalid)
 	}
 
 	return &Config{

@@ -7,7 +7,7 @@
 let
   cfg = config.tentaflake;
 in
-{
+lib.mkIf cfg.networking.enable {
   networking = {
     hostName = cfg.hostName;
     networkmanager.enable = true;

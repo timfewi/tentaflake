@@ -1,4 +1,4 @@
-module github.com/timfewi/tentaflake/hermes-auditd
+module tentaflake/hermes-auditd
 
 go 1.25.0
 

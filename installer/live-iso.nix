@@ -41,5 +41,5 @@
   networking.networkmanager.enable = true;
 
   # ── System state version ──
-  system.stateVersion = "26.05";
+  system.stateVersion = config.tentaflake.stateVersion;
 }
