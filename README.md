@@ -158,26 +158,26 @@ sudo nixos-rebuild switch --flake .#agent-host
                           ,---------.
                         ,'  NixOS    `.
                        (    Flake      )
-                ┌───────`. (Config)  ,' ──────┐
-                │         `---------'         │
-                │              │              │
-                │              │              │
-          /=====▼====\   /=====▼====\   /=====▼====\
-          │ Tentacle │   │ Tentacle │   │ Tentacle │
-          │ Agent A  │   │ Agent B  │   │ Agent C  │
-          │ (coding) │   │(research)│   │(personal)│
-          │          │   │          │   │          │
-          │📦 Docker │   │📦 Docker │   │📦 Docker │
-          │User:     │   │User:     │   │User:     │
-          │hermes-A  │   │hermes-B  │   │hermes-C  │
-          │State:    │   │State:    │   │State:    │
-          │/var/lib/ │   │/var/lib/ │   │/var/lib/ │
-          │hermes-A  │   │hermes-B  │   │hermes-C  │
-          │          │   │          │   │          │
-          │🔑 Key: A │   │🔑 Key: B │   │🔑 Key: C │
-          │📚 Skills │   │📚 Skills │   │📚 Skills │
-          │          │   │          │   │          │
-          \==========/   \==========/   \==========/
+                ┌───────`. (Config)  ,' ──────┐──────────────┐
+                │         `---------'         │              │
+                │              │              │              │
+                │              │              │              │
+          /=====▼====\   /=====▼====\   /=====▼====\   /=====▼====\
+          │ Tentacle │   │ Tentacle │   │ Tentacle │   │ Tentacle │
+          │ Agent A  │   │ Agent B  │   │ Agent C  │   │ Agent N  │
+          │ (coding) │   │(research)│   │(personal)│   │   (...)  │
+          │          │   │          │   │          │   │          │
+          │📦 Docker │   │📦 Docker │   │📦 Docker │   │📦 Docker │
+          │User:     │   │User:     │   │User:     │   │User:     │
+          │hermes-A  │   │hermes-B  │   │hermes-C  │   │hermes-N  │
+          │State:    │   │State:    │   │State:    │   │State:    │
+          │/var/lib/ │   │/var/lib/ │   │/var/lib/ │   │/var/lib/ │
+          │hermes-A  │   │hermes-B  │   │hermes-C  │   │hermes-N  │
+          │          │   │          │   │          │   │          │
+          │🔑 Key: A │   │🔑 Key: B │   │🔑 Key: C │   │🔑 Key: N │
+          │📚 Skills │   │📚 Skills │   │📚 Skills │   │📚 Skills │
+          │          │   │          │   │          │   │          │
+          \==========/   \==========/   \==========/   \==========/
 
       ───────────────── Shared Services ─────────────────
      🎤 Piper TTS   🔗 Tailscale   🗄️ Docker   🔐 Agenix
