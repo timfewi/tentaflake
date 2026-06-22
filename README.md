@@ -1,3 +1,8 @@
+# 🪼 Tentaflake — NixOS Flake Template for Hermes Multi-Agent
+
+> **NixOS multi-agent orchestration** — deploy isolated Hermes AI agents on a single headless machine.
+> One NixOS brain · Many Hermes tentacles.
+
 <p align="center">
   <br/>
   <pre align="center">
@@ -17,17 +22,17 @@
               ÆÆ¶Æ¶æÆÆ  ïƒ ààÖÆ                 ï::ªÆÆï::µÆÆÆà::(                  2ÆóÐï:µ  ÐÆµÆÆóÆæ                
               ÆÆ¶ÐÆ¶ÆÆÆàÆÆÐÆæÆÆà                  ƒæÆÆÆæÐÐÆÆÆÆªª                  :ÆÆæÆææÆÐÆÆÆàÆæ¶ÆÆæ               
               ÆÆÆÆÆÆÆÆÆÆÆÆï 2¶ÆÆÖ:                àÆÆÆÆÆÆÆÆÆÆÆÖ                  2ÆÆæÐ  2¶ÆÆÆÆÆÆÆÆÆæ                
-                    ï2:      ÖÆÆÆæ2(            ªàÆÆÆÆÆÆÆÆÆÆÆÆÆæó              óÐÆÆÆæ:     ƒÐ¶2                     
+                    ï2:      ÖÆÆÆæ2(            ªàÆÆÆÆÆÆÆÆÆÆÆÆÆæó              óÐÆÆæ:     ƒÐ¶2                     
             :                 2ÖÆÆÆÆæ2ƒƒ(: ªƒóóÐÆÆÖÆÆÆÆÆÆÆÆÆÆÆæÆÆæÖï2ï:  :ïóïÐÆÆÆÆæà                   :            
             µ                   2µÆÆÆÆÆÆÆÆÆÆÆÆÆÆæÖÆÆÆ¶ÆÆÆÆÆÐÆÆÆæÖÆÆÆÆÆÆÆÆÆÆÆÆÆÆÆ¶Ö                     µ            
-         :     ï                  :àÆÖ¶ÆÆÆÆÆÆÆÆóæÆÆÆÆ¶ÆÆÆÆÆÆÐÆÆÆÆÐ¶ÆÆÆÆÆÆÆÆÆàÐæï                    ª     :         
-        :ÖÆ¶ÆÆÆ ï        ó2æÆÆÆÆæ2µ(    ó(ƒÆƒ¶ÆÆÆÆÆÆàÆÆÆÆÆÆÆÆàÆÆÆÆÆæ2àà ªï      ƒµµæÆÆÆÆæó2        ((ÆæÆÆÆó         
-       ï(ÆÆÆ2ÆÆµµª     µÆÆÆæææÆÐÐÆÆÆÆÆÆÆÆÆÆÆÆÆÆÆÆÆÆµÆÆÆÆµÐÆÆÆæƒÆÆÆÆÆÆÆÆÆÆæÐÐÆÆÆÆÆÆÆæÐÆÆæÐÆÆæï     ïÖÆÆÆóÆÆÆï(       
-        ::æÆÆÆó:      µÆÆÖÖƒ   ƒµÐÐÆÆÆÆÆÆÆÆÆÆÆÆÆà(ÖÆÆÆÆÖ  ÐÆÆÆÆÖóÖÆæÆÆÆÆÆÆÆÆÆÆÆæÆæÆµª  :ïàÆÆÆó       µÆÆÆ¶::        
-         ªƒÆÆ¶Ö(     æÆÆà           ªà¶ÖÐ¶¶Ð2ï µ¶ÆÆÆÆæÐ   :ÆæÆÆÆÆæ2: à¶ÖÐÆÐ¶ÖÐó(          (ÆÆÆ:     (ó¶Ææï(         
-        :¶ƒ:ï(ÆÆÆÐÐÆÆÆÆ2                  22ÖÆÆÆÆÆÆÐÐï      2ÆÖÆÆÆÆÆÆà2:                    2ÆÆÆÆÐµÆÆÆ:::ïÖ:        
-         ÆÆ µæÆÆ2àÖµÆÆï               :óÐÆÆÆÆÆÆÐæÖÖª          :2ÐÐæÐÆÆÆÆæó:                  :ÆÆ(ÆÆ:ÆÆÆÐ ÆÆ         
-          Ö¶æÐÆÆÆÖÖÆÆÆª              àÆÆÆ¶ÆÐæÐƒ(                  :óÐàµæÆÆÆ2                 ªÆÆÆÖµÐÆÆÆÆÆæ          
+        :     ï                  :àÆÖ¶ÆÆÆÆÆÆÆÆóæÆÆÆÆ¶ÆÆÆÆÆÆÐÆÆÆÆÐ¶ÆÆÆÆÆÆÆÆÆàÐæï                    ª     :         
+       :ÖÆ¶ÆÆÆ ï        ó2æÆÆÆÆæ2µ(    ó(ƒÆƒ¶ÆÆÆÆÆÆàÆÆÆÆÆÆÆÆàÆÆÆÆÆæ2àà ªï      ƒµµæÆÆÆÆæó2        ((ÆæÆÆÆó         
+      ï(ÆÆÆ2ÆÆµµª     µÆÆÆæææÆÐÐÆÆÆÆÆÆÆÆÆÆÆÆÆÆÆÆÆÆµÆÆÆÆµÐÆÆÆæƒÆÆÆÆÆÆÆÆÆÆæÐÐÆÆÆÆÆÆÆæÐÆÆæÐÆÆæï     ïÖÆÆÆóÆÆÆï(       
+       ::æÆÆÆó:      µÆÆÖÖƒ   ƒµÐÐÆÆÆÆÆÆÆÆÆÆÆÆÆà(ÖÆÆÆÆÖ  ÐÆÆÆÆÖóÖÆæÆÆÆÆÆÆÆÆÆÆÆæÆæÆµª  :ïàÆÆÆó       µÆÆÆ¶::        
+        ªƒÆÆ¶Ö(     æÆÆà           ªà¶ÖÐ¶¶Ð2ï µ¶ÆÆÆÆæÐ   :ÆæÆÆÆÆæ2: à¶ÖÐÆÐ¶ÖÐó(          (ÆÆÆ:     (ó¶Ææï(         
+       :¶ƒ:ï(ÆÆÆÐÐÆÆÆÆ2                  22ÖÆÆÆÆÆÆÐÐï      2ÆÖÆÆÆÆÆÆà2:                    2ÆÆÆÆÐµÆÆÆ:::ïÖ:        
+        ÆÆ µæÆÆ2àÖµÆÆï               :óÐÆÆÆÆÆÆÐæÖÖª          :2ÐÐæÐÆÆÆÆæó:                  :ÆÆ(ÆÆ:ÆÆÆÐ ÆÆ         
+         Ö¶æÐÆÆÆÖÖÆÆÆª              àÆÆÆ¶ÆÐæÐƒ(                  :óÐàµæÆÆÆ2                 ªÆÆÆÖµÐÆÆÆÆÆæ          
               :ƒïƒƒƒï      ï        ÖÆÆÐÐï      :                 :    ï¶ÆÆÆµ          :       ª(((ªª:              
                            ï       ÖÆÆÆó        ó                 ª      Ö¶ÆÆ2         ï                            
                           (ƒï:     ¶Æ¶Ö      :  ::               ::  :    ¶æÆÐ     :  ::  :                         
@@ -39,20 +44,21 @@
                   ÆÆÖ2óó2ÆÆÆÆÆÆÆÆÆÐ¶:     ¶ÆÖÆÆµÆÆÆÆÐÆª     ªÆæÆÐ2µ2ÆÆÐÆ    :ÐæÆÆÆÆÆææÆÆÆÆÆÆ¶ÆµæÆÆµ                 
                    ÆÆÆÆÆÆÆÆ               2ÆÆÆÆÆÆÆÆÆÆÆ       ÆÆÆÆÆæÆÆÆÆÐ       ª:ï:       ªÆÆÆÆÆÆÆ                  
 
-                                       One NixOS brain · Many Hermes tentacles
-
+                                                tentaflake.dev
   </pre>
   <p align="center">
-    Declaratively deploy & manage multiple isolated Hermes AI agents
+    <i>Declaratively deploy & manage multiple isolated Hermes AI agents
+    on a single NixOS machine — each with its own secrets, skills, and personality.</i>
     <br/>
-    on a single NixOS machine — each with its own secrets, skills, and personality.
+    <sub>Clone → configure → rebuild. Your swarm, your NixOS, your rules.</sub>
   </p>
 </p>
 
 <p align="center">
-  <a href="https://github.com/timfewi/tentaflake/actions"><img src="https://img.shields.io/github/actions/workflow/status/timfewi/tentaflake/check.yml?branch=main&style=flat-square" alt="CI status"/></a>
-  <a href="https://github.com/timfewi/tentaflake/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-MIT-green?style=flat-square" alt="License: MIT"/></a>
-  <a href="https://github.com/timfewi/tentaflake/blob/main/CONTRIBUTING.md"><img src="https://img.shields.io/badge/PRs-welcome-brightgreen?style=flat-square" alt="PRs welcome"/></a>
+  <a href="https://tentaflake.dev/?utm_source=github&utm_medium=readme&utm_campaign=readme-link"><img src="https://img.shields.io/badge/tentaflake.dev-00d4ff?style=flat-square&labelColor=0a1628" alt="tentaflake.dev"/></a>
+  <a href="https://github.com/timfewi/tentaflake/actions"><img src="https://img.shields.io/github/actions/workflow/status/timfewi/tentaflake/check.yml?branch=main&style=flat-square" alt="NixOS flake CI build status"/></a>
+  <a href="https://github.com/timfewi/tentaflake/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-MIT-green?style=flat-square" alt="MIT license"/></a>
+  <a href="https://github.com/timfewi/tentaflake/blob/main/CONTRIBUTING.md"><img src="https://img.shields.io/badge/PRs-welcome-brightgreen?style=flat-square" alt="Pull requests welcome"/></a>
   <a href="#"><img src="https://img.shields.io/badge/nixos-unstable-blue?style=flat-square&logo=nixos" alt="NixOS unstable"/></a>
   <a href="#"><img src="https://img.shields.io/badge/go-1.21+-00ADD8?style=flat-square&logo=go" alt="Go 1.21+"/></a>
   <br/>
@@ -76,6 +82,14 @@
 | **TTS Ready** | Built-in Piper TTS server (OpenAI-compatible `/v1/audio/speech`) |
 | **Live ISO** | Bootable installer USB with interactive setup wizard — `nix build .#installer-iso` |
 | **Tailscale** | Pre-configured Tailscale module for secure networking |
+
+### The Tentaflake Ethos
+
+| **Declarative Swarm** | One flake defines every agent. `nixos-rebuild switch` grows or prunes tentacles. |
+|---|---|
+| **Hard Isolation** | Every tentacle is its own container, user, state dir, API key. Secrets never cross. |
+| **Reproducible by Nature** | Git clone → configure → rebuild. Same flake, same system. NixOS guarantee. |
+| **Your Keys, Your Rules** | You host. You encrypt. You control. No SaaS, no vendor, no third-party agent router. Self-sovereign AI infrastructure. |
 
 ---
 
@@ -132,7 +146,7 @@ sudo nixos-rebuild switch --flake .#agent-host
 
 ---
 
-## 🏗 Architecture
+## 🏗 Architecture — How Tentaflake Works
 
 ```
                    𜷶 𜱛 𜷷  Agent Orchestration
@@ -146,7 +160,7 @@ sudo nixos-rebuild switch --flake .#agent-host
                 │              │              │
                 │              │              │
           /=====▼====\   /=====▼====\   /=====▼====\
-          │ Tentacle │   │ Tentacle │   │ Tentalce │
+          │ Tentacle │   │ Tentacle │   │ Tentacle │
           │ Agent A  │   │ Agent B  │   │ Agent C  │
           │ (coding) │   │(research)│   │(personal)│
           │          │   │          │   │          │
