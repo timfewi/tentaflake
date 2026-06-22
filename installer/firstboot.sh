@@ -52,7 +52,7 @@ exec </dev/tty1 >/dev/tty1 2>&1
 clear
 cat <<"EOF"
 ╔══════════════════════════════════════════════════╗
-║     NixOS Agent Orchestration — Live ISO        ║
+║     Tentaflake — Live ISO        ║
 ╠══════════════════════════════════════════════════╣
 ║  Enter API keys to activate your agents.        ║
 ║  (Press Cancel to skip — agents won't start)    ║
@@ -107,7 +107,7 @@ cat <<"EOF"
 ║  • Tailscale: sudo tailscale up                  ║
 ║                                                  ║
 ║  To install to disk:                             ║
-║    /etc/nixos-agent-orchestration/install.sh     ║
+║    /etc/tentaflake/install.sh     ║
 ║                                                  ║
 ║  To re-enter setup: rm /run/hermes/.configured   ║
 ╚══════════════════════════════════════════════════╝

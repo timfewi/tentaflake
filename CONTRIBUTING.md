@@ -1,4 +1,4 @@
-# Contributing to nixos-agent-orchestration
+# Contributing to tentaflake
 
 Thanks for contributing! This is a **generic template** — keep it that way.
 
@@ -18,8 +18,8 @@ All such content belongs in a **fork** or a private project repo.
 
 ```bash
 # Clone
-git clone https://github.com/timfewi/nixos-agent-orchestration
-cd nixos-agent-orchestration
+git clone https://github.com/timfewi/tentaflake
+cd tentaflake
 ```
 
 ### Nix/NixOS (flake checks, ISO builds)
@@ -102,4 +102,4 @@ Skills live under `skills/<name>/SKILL.md`. Follow the [skill authoring guide](d
 
 ## Questions?
 
-Open a [discussion](https://github.com/timfewi/nixos-agent-orchestration/discussions) or an issue with the `question` label.
+Open a [discussion](https://github.com/timfewi/tentaflake/discussions) or an issue with the `question` label.

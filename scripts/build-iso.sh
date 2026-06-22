@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ────────────────────────────────────────────────────────────
-# Build the NixOS Agent Orchestration live agent ISO
+# Build the Tentaflake live agent ISO
 # ────────────────────────────────────────────────────────────
 set -euo pipefail
 
@@ -14,12 +14,12 @@ TARGET="${1:-live}"
 case "$TARGET" in
 live)
 	FLAKE_REF=".#live-agent-iso"
-	ISO_PREFIX="nixos-agent-orchestration-live"
+	ISO_PREFIX="tentaflake-live"
 	DESC="Live agent ISO (Hermes + Piper TTS out of the box)"
 	;;
 installer)
 	FLAKE_REF=".#installer-iso"
-	ISO_PREFIX="nixos-agent-orchestration"
+	ISO_PREFIX="tentaflake"
 	DESC="Installer ISO (minimal, for installing to disk)"
 	;;
 *)

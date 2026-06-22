@@ -8,9 +8,9 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/timfewi/nixos-agent-orchestration/hermes-auditd/internal/config"
-	"github.com/timfewi/nixos-agent-orchestration/hermes-auditd/internal/store"
-	"github.com/timfewi/nixos-agent-orchestration/hermes-auditd/internal/watcher"
+	"github.com/timfewi/tentaflake/hermes-auditd/internal/config"
+	"github.com/timfewi/tentaflake/hermes-auditd/internal/store"
+	"github.com/timfewi/tentaflake/hermes-auditd/internal/watcher"
 )
 
 func main() {

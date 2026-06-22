@@ -98,7 +98,7 @@
 
       # ── Bootable installer ISO ──
       # Build with: nix build .#installer-iso
-      # Embeds entire repo at /etc/nixos-agent-orchestration/ on the ISO
+      # Embeds entire repo at /etc/tentaflake/ on the ISO
       nixosConfigurations.installer-iso = nixpkgs.lib.nixosSystem {
         inherit system;
         specialArgs = specialArgs // {

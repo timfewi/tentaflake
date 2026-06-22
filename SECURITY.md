@@ -16,7 +16,7 @@ for the latest commit on `main`.
 
 Instead, report them privately:
 
-1. **GitHub Security Advisories:** Go to the [Security tab](https://github.com/timfewi/nixos-agent-orchestration/security/advisories) and click "Report a vulnerability".
+1. **GitHub Security Advisories:** Go to the [Security tab](https://github.com/timfewi/tentaflake/security/advisories) and click "Report a vulnerability".
 
 2. **What to include:**
    - Description of the vulnerability

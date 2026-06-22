@@ -16,7 +16,7 @@ import (
 	"time"
 
 	"github.com/fsnotify/fsnotify"
-	"github.com/timfewi/nixos-agent-orchestration/hermes-auditd/internal/hermes"
+	"github.com/timfewi/tentaflake/hermes-auditd/internal/hermes"
 )
 
 // Watcher monitors directories for filesystem events and emits

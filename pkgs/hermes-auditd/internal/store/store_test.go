@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/timfewi/nixos-agent-orchestration/hermes-auditd/internal/hermes"
+	"github.com/timfewi/tentaflake/hermes-auditd/internal/hermes"
 )
 
 func newTempDB(t *testing.T) string {

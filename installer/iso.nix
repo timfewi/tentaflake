@@ -8,23 +8,23 @@
 }:
 
 # ────────────────────────────────────────────────────────────
-# NixOS Agent Orchestration — Installer ISO
+# Tentaflake — Installer ISO
 # Bootable live ISO that auto-launches installer.sh on TTY1.
-# Embeds the full repo at /etc/nixos-agent-orchestration/
+# Embeds the full repo at /etc/tentaflake/
 # ────────────────────────────────────────────────────────────
 
 {
   imports = [ "${modulesPath}/installer/cd-dvd/iso-image.nix" ];
 
   # The actual ISO filename — must force because iso-image module sets it in its config block
-  image.baseName = lib.mkForce "nixos-agent-orchestration";
+  image.baseName = lib.mkForce "tentaflake";
 
   # Enable UEFI boot (required for modern PCs) and USB hybrid mode (required for dd to USB)
   isoImage.makeEfiBootable = true;
   isoImage.makeUsbBootable = true;
 
   # ── Embed the full repo source ──
-  environment.etc."nixos-agent-orchestration".source = repoRoot;
+  environment.etc."tentaflake".source = repoRoot;
 
   # ── Packages needed by the installer ──
   environment.systemPackages = with pkgs; [
@@ -53,9 +53,9 @@
     if [ -z "$INSTALLER_RUN" ] && [ "$(tty 2>/dev/null)" = "/dev/tty1" ]; then
       export INSTALLER_RUN=1
       echo ""
-      echo "=== NixOS Agent Orchestration Installer ==="
+      echo "=== Tentaflake Installer ==="
       echo ""
-      /etc/nixos-agent-orchestration/installer/installer.sh
+      /etc/tentaflake/installer/installer.sh
       exit
     fi
   '';

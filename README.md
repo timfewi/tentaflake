@@ -50,9 +50,9 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/timfewi/nixos-agent-orchestration/actions"><img src="https://img.shields.io/github/actions/workflow/status/timfewi/nixos-agent-orchestration/check.yml?branch=main&style=flat-square" alt="CI status"/></a>
-  <a href="https://github.com/timfewi/nixos-agent-orchestration/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-MIT-green?style=flat-square" alt="License: MIT"/></a>
-  <a href="https://github.com/timfewi/nixos-agent-orchestration/blob/main/CONTRIBUTING.md"><img src="https://img.shields.io/badge/PRs-welcome-brightgreen?style=flat-square" alt="PRs welcome"/></a>
+  <a href="https://github.com/timfewi/tentaflake/actions"><img src="https://img.shields.io/github/actions/workflow/status/timfewi/tentaflake/check.yml?branch=main&style=flat-square" alt="CI status"/></a>
+  <a href="https://github.com/timfewi/tentaflake/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-MIT-green?style=flat-square" alt="License: MIT"/></a>
+  <a href="https://github.com/timfewi/tentaflake/blob/main/CONTRIBUTING.md"><img src="https://img.shields.io/badge/PRs-welcome-brightgreen?style=flat-square" alt="PRs welcome"/></a>
   <a href="#"><img src="https://img.shields.io/badge/nixos-unstable-blue?style=flat-square&logo=nixos" alt="NixOS unstable"/></a>
   <a href="#"><img src="https://img.shields.io/badge/go-1.21+-00ADD8?style=flat-square&logo=go" alt="Go 1.21+"/></a>
   <br/>
@@ -84,8 +84,8 @@
 ### 1. Clone
 
 ```bash
-git clone https://github.com/timfewi/nixos-agent-orchestration
-cd nixos-agent-orchestration
+git clone https://github.com/timfewi/tentaflake
+cd tentaflake
 ```
 
 ### 2. Customize
@@ -297,7 +297,7 @@ Both patterns keep secrets **out of the Nix store** and **never in Nix evaluatio
 nix build .#installer-iso
 
 # Write to USB (replace /dev/sdX with your device)
-sudo cp result/iso/nixos-agent-orchestration.iso /dev/sdX
+sudo cp result/iso/tentaflake.iso /dev/sdX
 
 # Boot it — the interactive TUI wizard will guide you through
 # partitioning and installing NixOS with this orchestration framework.
@@ -442,7 +442,7 @@ nix build .#installer-iso
 
 ISO configured in [`installer/iso.nix`](installer/iso.nix). Features:
 - **UEFI + USB hybrid boot** — works with modern firmware and `dd` to USB
-- **Full repo embedded** at `/etc/nixos-agent-orchestration/` — self-contained, no network fetch for sources
+- **Full repo embedded** at `/etc/tentaflake/` — self-contained, no network fetch for sources
 - **NetworkManager** active for install-time internet
 - **SSH access** with password auth for remote debugging during installation
 - **TTY1 auto-launch** — root auto-login, installer starts immediately
@@ -480,7 +480,7 @@ Works with NVMe (`nvme0n1p1/p2`), mmcblk, and SATA (`sda1/sda2`) naming.
 
 1. Boot ISO → systemd starts → root auto-login on TTY1
 2. Bash `interactiveShellInit` detects TTY1, sets `INSTALLER_RUN=1`
-3. Launches `/etc/nixos-agent-orchestration/installer/installer.sh`
+3. Launches `/etc/tentaflake/installer/installer.sh`
 4. After installation completes, system unmounts and reboots
 
 ### Flake Configuration
@@ -519,6 +519,6 @@ Please keep the template **generic** — no domain-specific code belongs here. T
 ## License
 
 <p align="center">
-  MIT — see <a href="https://github.com/timfewi/nixos-agent-orchestration/blob/main/LICENSE">LICENSE</a><br/>
+  MIT — see <a href="https://github.com/timfewi/tentaflake/blob/main/LICENSE">LICENSE</a><br/>
   <sub>Piper voice models distributed under their respective MIT licenses.</sub>
 </p>

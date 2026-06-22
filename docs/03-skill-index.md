@@ -1,4 +1,4 @@
-# NixOS Agent Orchestration — Skill Index
+# Tentaflake — Skill Index
 
 Hermes skills are procedural knowledge packs that extend the agent's
 capabilities. Unlike memory (facts), skills are **how-to** — multi-step

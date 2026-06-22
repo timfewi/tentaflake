@@ -1,4 +1,4 @@
-# NixOS Agent Orchestration — Quickstart Guide
+# Tentaflake — Quickstart Guide
 
 Welcome to your new headless agent machine. NixOS installed, Docker ready,
 Hermes containers configured. This guide walks the first 10 minutes after boot.

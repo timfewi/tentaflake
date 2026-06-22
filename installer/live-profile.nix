@@ -33,7 +33,7 @@ in
     enable = true;
     openFirewall = true;
     extraUpFlags = [
-      "--hostname=nixos-agent-live"
+      "--hostname=tentaflake-live"
       "--ssh"
     ];
   };

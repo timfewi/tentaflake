@@ -1,5 +1,5 @@
 # ─────────────────────────────────────────────────────────────────────
-# my-agents.nix.example — Hermes agent definitions for NixOS Agent Orchestration
+# my-agents.nix.example — Hermes agent definitions for Tentaflake
 #
 # Define your agents here. Each call to mkHermesAgent creates one
 # fully isolated agent with:

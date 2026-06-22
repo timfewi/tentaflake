@@ -1,6 +1,6 @@
 # Changelog
 
-All notable changes to nixos-agent-orchestration are documented here.
+All notable changes to tentaflake are documented here.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
@@ -33,5 +33,5 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `docs/` — quickstart guide, agent tips, skill index, and 4 bundled Hermes skills
 - GitHub Actions CI: `nix flake check` on PR and push to main
 
-[Unreleased]: https://github.com/timfewi/nixos-agent-orchestration/compare/v0.1.0...main
-[0.1.0]: https://github.com/timfewi/nixos-agent-orchestration/releases/tag/v0.1.0
+[Unreleased]: https://github.com/timfewi/tentaflake/compare/v0.1.0...main
+[0.1.0]: https://github.com/timfewi/tentaflake/releases/tag/v0.1.0

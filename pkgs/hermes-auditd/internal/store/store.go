@@ -15,7 +15,7 @@ import (
 
 	_ "modernc.org/sqlite"
 
-	"github.com/timfewi/nixos-agent-orchestration/hermes-auditd/internal/hermes"
+	"github.com/timfewi/tentaflake/hermes-auditd/internal/hermes"
 )
 
 // Store persists events to SQLite and provides query methods.

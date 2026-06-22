@@ -1,4 +1,4 @@
-# NixOS Agent Orchestration — Agent Management Guide
+# Tentaflake — Agent Management Guide
 
 Day-to-day operations for your Hermes agents: state, logs, secrets,
 updates, security.

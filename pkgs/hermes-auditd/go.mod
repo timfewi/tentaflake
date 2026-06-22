@@ -1,4 +1,4 @@
-module github.com/timfewi/nixos-agent-orchestration/hermes-auditd
+module github.com/timfewi/tentaflake/hermes-auditd
 
 go 1.25.0
 
