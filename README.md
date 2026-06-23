@@ -1,7 +1,16 @@
 # 🪼 Tentaflake — NixOS Flake Template for Hermes Multi-Agent
 
-> **NixOS multi-agent orchestration** — deploy isolated Hermes AI agents on a single headless machine.
+> Deploy isolated Hermes AI agents on a single headless machine.
 > One NixOS brain · Many Hermes tentacles.
+
+> **What is Hermes?** [Hermes](https://github.com/NousResearch/hermes-agent) is an open-source AI agent daemon from Nous Research — like a personal AI assistant that runs on your own hardware. It connects to LLM providers (OpenRouter, Anthropic, OpenAI), runs tools (terminal, web search, file access), and can be customized with skills and personality. Tentaflake gives you a turnkey way to run one or many Hermes agents on a dedicated machine.
+
+<p align="center">
+  <a href="https://tentaflake.dev"><img src="https://img.shields.io/badge/tentaflake.dev-00d4ff?style=flat-square&labelColor=0a1628" alt="tentaflake.dev"/></a>
+  <a href="https://github.com/timfewi/tentaflake/actions"><img src="https://img.shields.io/github/actions/workflow/status/timfewi/tentaflake/check.yml?branch=main&style=flat-square" alt="CI"/></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-green?style=flat-square" alt="MIT"/></a>
+  <img src="https://img.shields.io/badge/nixos-unstable-blue?style=flat-square&logo=nixos" alt="NixOS"/>
+</p>
 
 <p align="center">
   <br/>
@@ -57,402 +66,214 @@
   </p>
 </p>
 
-<p align="center">
-  <a href="https://tentaflake.dev/?utm_source=github&utm_medium=readme&utm_campaign=readme-link"><img src="https://img.shields.io/badge/tentaflake.dev-00d4ff?style=flat-square&labelColor=0a1628" alt="tentaflake.dev"/></a>
-  <a href="https://github.com/timfewi/tentaflake/actions"><img src="https://img.shields.io/github/actions/workflow/status/timfewi/tentaflake/check.yml?branch=main&style=flat-square" alt="NixOS flake CI build status"/></a>
-  <a href="https://github.com/timfewi/tentaflake/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-MIT-green?style=flat-square" alt="MIT license"/></a>
-  <a href="https://github.com/timfewi/tentaflake/blob/main/CONTRIBUTING.md"><img src="https://img.shields.io/badge/PRs-welcome-brightgreen?style=flat-square" alt="Pull requests welcome"/></a>
-  <a href="#"><img src="https://img.shields.io/badge/nixos-unstable-blue?style=flat-square&logo=nixos" alt="NixOS unstable"/></a>
-  <a href="#"><img src="https://img.shields.io/badge/go-1.21+-00ADD8?style=flat-square&logo=go" alt="Go 1.21+"/></a>
-  <br/>
-  <a href="#-quick-start"><img src="https://img.shields.io/badge/_Quickstart-%23262626?style=for-the-badge"/></a>
-  <a href="#-features"><img src="https://img.shields.io/badge/_Features-%23262626?style=for-the-badge"/></a>
-  <a href="#-examples"><img src="https://img.shields.io/badge/_Examples-%23262626?style=for-the-badge"/></a>
-  <a href="#-architecture"><img src="https://img.shields.io/badge/_Architecture-%23262626?style=for-the-badge"/></a>
-</p>
+---
+
+## What Is Tentaflake?
+
+**Tentaflake** is a **NixOS** (Linux distro configured entirely in code) template for running multiple isolated **Hermes AI agents** on one machine. Each agent lives in its own Docker container with its own secrets, skills, and personality — and the whole system is defined in a single Git-tracked config file.
+
+No SaaS, no third-party agent router — you host, you control. Clone → configure → rebuild.
 
 ---
 
-## Features
+## Quick Comparison — Choose Your Path
 
-| Capability | Description |
-|---|---|
-| **Multi-Agent** | Run any number of isolated Hermes agents on one machine |
-| **Per-Agent Secrets** | Each agent gets its own API keys — no cross-contamination |
-| **Docker Ephemeral** | Containers are stateless; personality + state live on mounted volumes |
-| **NixOS Declarative** | Everything defined in one flake — `nixos-rebuild switch` applies changes |
-| **Agenix Support** | Encrypt secrets in-repo with age/agenix — decrypted at build time |
-| **TTS Ready** | Built-in Piper TTS server (OpenAI-compatible `/v1/audio/speech`) |
-| **Installer ISO** | Bootable USB that installs Tentaflake to disk — `nix build .#installer-iso` |
-| **Live Agent ISO** | Bootable USB that runs agents + TTS entirely in RAM, no install — `nix build .#live-agent-iso` ([guide](#-live-agent-iso--run-in-ram-no-install)) |
-| **Tailscale** | Pre-configured Tailscale module for secure networking |
-| **Filesystem Audit** | Optional audit daemon tracks agent state changes — `tentaflake.hermes-auditd.enable = true` |
-
-### The Tentaflake Ethos
-
-| **Declarative Swarm** | One flake defines every agent. `nixos-rebuild switch` grows or prunes tentacles. |
-|---|---|
-| **Hard Isolation** | Every tentacle is its own container, user, state dir, API key. Secrets never cross. |
-| **Reproducible by Nature** | Git clone → configure → rebuild. Same flake, same system. NixOS guarantee. |
-| **Your Keys, Your Rules** | You host. You encrypt. You control. No SaaS, no vendor, no third-party agent router. Self-sovereign AI infrastructure. |
+| You want to… | Start here | What you get |
+|---|---|---|
+| **Try it with zero commitment** | [⚡ Path 1: Live USB](#⚡-path-1-try-it-now--live-usb) | Boot from USB, agents run in RAM, nothing touches disk |
+| **Install NixOS permanently** | [💾 Path 2: Installer ISO](#💾-path-2-install-permanently--installer-iso) | Boot from USB, TUI wizard installs NixOS + agents to disk |
+| **Already use NixOS, want agents** | [🛠️ Path 3: Customize Agents](#🛠️-path-3-customize-your-agents) or [🔧 Flake Input](#🔧-for-nixos-experts-consume-as-flake-input) | Add `tentaflake` module to your existing config |
 
 ---
 
-##  Quick Start
+## ⚡ Path 1: Try It Now — Live USB
 
-### 1. Clone
+Boot any x86_64 machine from a USB stick. Agents run entirely in **RAM** — pull the USB and every trace is gone. Requires no NixOS install, no existing Nix setup.
+
+> **You need some way to build the ISO.** The build machine is separate from the target — any Linux, macOS, or Windows box can do it. You have three options:
+
+<details>
+<summary><b>Option A: Install Nix on any Linux/macOS (recommended, 5 minutes)</b></summary>
+
+Nix is a **package manager** — NOT NixOS the operating system. It runs on Ubuntu, Fedora, Debian, macOS, Arch, and most other Linux distros, sitting happily alongside `apt`/`dnf`/`brew`.
 
 ```bash
+# Install Nix on any Linux or macOS — works alongside your existing tools
+curl --proto '=https' --tlsv1.2 -sSf https://nix.dev/install-nix | sh
+
+# Restart your shell or source the profile
+. "$HOME/.nix-profile/etc/profile.d/nix.sh"
+```
+
+Then follow the build steps below.
+</details>
+
+<details>
+<summary><b>Option B: Use Docker to build (no Nix install needed)</b></summary>
+
+Don't want to install Nix? Run it in a container instead. Works on any machine with Docker (Linux, macOS, Windows):
+
+```bash
+# Clone the repo
 git clone https://github.com/timfewi/tentaflake
 cd tentaflake
+
+# Use the official Nix Docker image to build the ISO
+docker run --rm -v "$PWD:/build" -w /build nixos/nix \
+  sh -c "nix build .#live-agent-iso --extra-experimental-features 'nix-command flakes'"
+
+# ISO appears at result/iso/tentaflake-live.iso
 ```
+</details>
 
-### 2. Customize
+<details>
+<summary><b>Option C: Download a pre-built ISO (if available)</b></summary>
 
-Edit `flake.nix` — set your hostname, admin user, timezone via `tentaflake.*` options:
+Check the [GitHub Releases](https://github.com/timfewi/tentaflake/releases) page — pre-built ISOs may be available for download. No build step needed, just download and write to USB.
+</details>
 
-```nix
-{
-  tentaflake.hostName = "my-agent-box";
-  tentaflake.adminUser = "alice";
-  tentaflake.timeZone = "Europe/Vienna";
-}
-```
+### What You Need
 
-### 3. Define an agent
+- A machine with **8 GB+ RAM** (the target machine — Docker image ~2 GB lives in RAM)
+- A USB stick (8 GB+)
+- A build machine (any Linux, macOS, or Windows box — see options above)
 
-Create `my-agents.nix`:
+### Build the ISO
 
-```nix
-{ mkHermesAgent }:
-[
-  (mkHermesAgent {
-    name    = "coding";
-    envFile = "/run/secrets/hermes-coding.env";
-  })
-]
-```
-
-### 4. Set up secrets
+If going with Option A (install Nix) or Option B (Docker), clone and build:
 
 ```bash
-sudo mkdir -p /run/secrets
-sudo cp hermes.env.example /run/secrets/hermes-coding.env
-sudo chmod 600 /run/secrets/hermes-coding.env
-sudo vi /run/secrets/hermes-coding.env
-```
+# Get the code
+git clone https://github.com/timfewi/tentaflake
+cd tentaflake
 
-### 5. Build & deploy
-
-```bash
-git add my-agents.nix      # flakes only evaluate git-tracked files
-nix flake check
-sudo nixos-rebuild switch --flake .#agent-host
-```
-
-##  Usage as Flake Input
-
-Consume tentaflake as a reusable module library in your own flake:
-
-```nix
-# your-flake.nix
-{
-  inputs.tentaflake.url = "github:timfewi/tentaflake";
-
-  outputs = { self, nixpkgs, tentaflake, ... }:
-  let
-    system = "x86_64-linux";
-    pkgs = nixpkgs.legacyPackages.${system};
-    mkHermesAgent = tentaflake.lib.${system}.mkHermesAgent;
-  in {
-    nixosConfigurations.my-host = nixpkgs.lib.nixosSystem {
-      inherit system;
-      specialArgs = { inherit mkHermesAgent; };
-      modules = [
-        tentaflake.nixosModules.default
-        {
-          tentaflake.hostName = "my-machine";
-          tentaflake.adminUser = "alice";
-          tentaflake.timeZone = "Europe/Vienna";
-        }
-        ./hardware-configuration.nix
-      ]
-      # my-agents.nix is `{ mkHermesAgent }: [ ... ]` — build the agents and append them:
-      ++ import ./my-agents.nix { inherit mkHermesAgent; };
-    };
-  };
-}
-```
-
-You get:
-- **`tentaflake.nixosModules.default`** — all base NixOS modules with configurable `tentaflake.*` options
-- **`tentaflake.lib.x86_64-linux.mkHermesAgent`** — agent creation helper (import and use in `my-agents.nix`)
-- **`tentaflake.lib.x86_64-linux.constants`** — default values (hostName, stateVersion, locale, etc.)
-
-See [`examples/consumer-flake.nix`](examples/consumer-flake.nix) for a full worked example.
-
----
-
-## 💿 Live Agent ISO — Run in RAM, No Install
-
-The **live agent ISO** boots a machine straight into a running swarm — agents, Piper
-TTS, Tailscale — **without touching the host's disk**. Power off (or pull the USB) and
-every trace is gone. Use it for demos, evaluation, recovery, or a throwaway agent box.
-
-This is distinct from the **installer ISO** (`#installer-iso`), which formats a disk and
-installs Tentaflake permanently.
-
-### How "runs in RAM" actually works
-
-A live ISO is **read-only** — you can't write to a pressed CD or a `dd`-imaged USB while
-booting from it. NixOS solves this the same way every live distro does, and that's what
-gives you the no-trace property:
-
-1. The ISO carries a **read-only squashfs** holding the entire Nix store (`/nix/store`).
-2. At boot, NixOS mounts a **tmpfs** (a RAM-backed filesystem) and stacks it over the
-   squashfs as an **overlay**. Reads fall through to the squashfs; **every write lands in
-   the tmpfs — i.e. in RAM**.
-3. So `/`, `/var`, `/run`, `/home` are all writable, but writes exist **only in memory**.
-   Nothing is written to the USB stick or to any internal disk.
-4. On shutdown the RAM is cleared. The host's own disks were never mounted or modified —
-   the machine boots back into whatever OS it had before, untouched.
-
-```
-┌─────────────────────────── RAM ───────────────────────────┐
-│  tmpfs overlay (writable)  ← all writes go here, vanish    │
-│        on top of                  on power-off             │
-│  ╔══════════════════════════════════════════════════════╗ │
-│  ║  squashfs  /nix/store  (read-only, from the USB)      ║ │
-│  ╚══════════════════════════════════════════════════════╝ │
-└────────────────────────────────────────────────────────────┘
-        the USB stick itself is never written to
-```
-
-### Docker vs Podman — which is it?
-
-**Docker.** Agents run as Docker containers (`tentaflake.containerBackend` defaults to
-`"docker"`). Podman is a supported alternative — set `tentaflake.containerBackend =
-"podman"` — but the live ISO ships with Docker.
-
-The important consequence for a live system: **Docker's data dir (`/var/lib/docker`) lives
-on the tmpfs overlay, so the Hermes container image is pulled into RAM.** That image is
-**~2 GB**. Plan memory accordingly:
-
-| Machine RAM | Live ISO experience |
-|---|---|
-| **< 4 GB** | Not enough — the image pull will fill the overlay and stall |
-| **4–8 GB** | Works, but tight; one or two agents |
-| **8 GB+** | Comfortable for the default `default` + `research` agents |
-
-The image is pulled from Docker Hub on first agent start, so the **first boot needs
-network** (Ethernet/Wi-Fi via NetworkManager). After the pull, agents start within a
-minute or two.
-
-### Build it
-
-```bash
+# Build the live ISO (takes a few mins first time)
 nix build .#live-agent-iso
-# → result/iso/tentaflake-live.iso
+#     ^^^^   ^^^^^^^^^^^^^^^^
+#     |      output named "live-agent-iso" from this flake
+#     "nix build" builds an output (package, ISO, config)
+#     .# means "from the flake in the current directory"
 ```
 
-### Write it to a USB stick
+When done, the ISO is at `result/iso/tentaflake-live.iso`.
+(`nix build` creates a `result` symlink pointing to the build output.)
 
-> ⚠️ `dd` is destructive — triple-check `of=` is your USB device, not your disk.
+### Write to USB
+
+> ⚠️ **Destructive.** Triple-check `of=` is your USB device, not your disk.
 
 ```bash
-lsblk                                   # identify the USB, e.g. /dev/sdX
+lsblk                           # identify your USB, e.g. /dev/sdX
 sudo dd if=result/iso/tentaflake-live.iso of=/dev/sdX bs=4M status=progress oflag=sync
 ```
 
-The image is a UEFI + legacy-BIOS hybrid, so it boots on both modern and older machines.
+The ISO is a **UEFI + legacy-BIOS hybrid** — boots on modern and older machines.
 
-### Boot and configure
+### Boot and Set Up
 
-1. Boot the target machine from the USB (UEFI/BIOS boot menu).
-2. It auto-logs into TTY1 and launches the **firstboot wizard**.
-3. Enter your keys when prompted:
-   - **OpenRouter API key** — required (model access)
-   - **Telegram bot token** — optional (chat interface)
-   - **Firecrawl API key** — optional (web search)
-   - **Groq API key** — optional (speech-to-text)
-4. The wizard writes the keys to `/run/hermes/<agent>.env` (tmpfs → RAM) and restarts the
-   agent containers. Piper TTS is already serving on **http://localhost:5001/v1**.
-5. To re-run the wizard: `rm /run/hermes/.configured` and re-login on TTY1.
+1. Boot target machine from the USB (boot menu: usually F10/F12/Esc).
+2. A text-mode login screen appears (TTY1) — the **firstboot wizard** starts automatically.
+3. Enter at minimum an **OpenRouter API key**. Optional: Telegram bot token, Firecrawl key, Groq key.
+4. The wizard writes keys to RAM and starts the agent containers. **Piper TTS** (text-to-speech, for voice interactions) is already serving at `http://localhost:5001/v1`.
+5. Start chatting: `docker exec -it hermes-default hermes chat`
 
-### Skip the wizard with a `HERMES_ENV` USB
+### Skip the Wizard (Unattended Boot)
 
-For unattended boots, put your `.env` files on a **second** USB stick labeled
-`HERMES_ENV`, one per agent (`default.env`, `research.env`):
+Put `.env` files on a **second** USB labeled `HERMES_ENV`:
 
 ```bash
 sudo mkfs.ext4 -L HERMES_ENV /dev/sdY1     # label is what matters
 # copy default.env, research.env onto it
 ```
 
-On boot the system auto-detects the label, copies the env files in, and starts the agents
-**without prompting**.
+On boot the system auto-detects the label, copies env files in, starts agents **without prompting**.
 
-### Optional: persist state across reboots
+### Persist Data Across Reboots
 
-By design nothing survives a reboot. If you *want* persistence (agent memory, learned
-skills), attach a USB labeled `HERMES_DATA`:
+By design nothing survives a reboot. To keep agent memory and learned skills, attach a USB labeled `HERMES_DATA`:
 
 ```bash
 sudo mkfs.ext4 -L HERMES_DATA /dev/sdZ1
 ```
 
-At boot, each agent's state dir (`/var/lib/hermes-<name>`) is redirected onto that USB, so
-memory and skills carry over between sessions. Without it, the system stays fully
-ephemeral.
+At boot, each agent's state dir redirects onto that USB. Without it, the system stays fully ephemeral.
 
-### What's where
+### RAM Requirements
 
-| File | Role |
+| Machine RAM | Experience |
 |---|---|
-| `installer/live-iso.nix` | ISO entry point (UEFI/USB boot, hostname, embedded repo) |
-| `installer/live-profile.nix` | Live system: auto-login, Piper TTS, Tailscale, SSH, agents |
-| `installer/live-agents.nix` | The two default live agents (`default`, `research`) |
-| `installer/hermes-firstboot.nix` | `HERMES_ENV`/`HERMES_DATA` USB detection + wizard wiring |
-| `installer/firstboot.sh` | The interactive API-key TUI wizard |
+| **< 4 GB** | Not enough — Docker image pull fills the overlay |
+| **4–8 GB** | Tight; one or two agents |
+| **8 GB+** | Comfortable for default agents |
 
 ---
 
-## 🏗 Architecture — How Tentaflake Works
+## 💾 Path 2: Install Permanently — Installer ISO
 
-```
-                   𜷶 𜱛 𜷷  Agent Orchestration
-                One NixOS brain · Many tentacles
+Build a bootable USB that installs NixOS + Tentaflake to disk via an interactive TUI wizard.
 
-                          ,---------.
-                        ,'  NixOS    `.
-                       (    Flake      )
-                ┌───────`. (Config)  ,' ──────┐──────────────┐
-                │         `---------'         │              │
-                │              │              │              │
-                │              │              │              │
-          /=====▼====\   /=====▼====\   /=====▼====\   /=====▼====\
-          │ Tentacle │   │ Tentacle │   │ Tentacle │   │ Tentacle │
-          │ Agent A  │   │ Agent B  │   │ Agent C  │   │ Agent N  │
-          │ (coding) │   │(research)│   │(personal)│   │   (...)  │
-          │          │   │          │   │          │   │          │
-          │📦 Docker │   │📦 Docker │   │📦 Docker │   │📦 Docker │
-          │User:     │   │User:     │   │User:     │   │User:     │
-          │hermes-A  │   │hermes-B  │   │hermes-C  │   │hermes-N  │
-          │State:    │   │State:    │   │State:    │   │State:    │
-          │/var/lib/ │   │/var/lib/ │   │/var/lib/ │   │/var/lib/ │
-          │hermes-A  │   │hermes-B  │   │hermes-C  │   │hermes-N  │
-          │          │   │          │   │          │   │          │
-          │🔑 Key: A │   │🔑 Key: B │   │🔑 Key: C │   │🔑 Key: N │
-          │📚 Skills │   │📚 Skills │   │📚 Skills │   │📚 Skills │
-          │          │   │          │   │          │   │          │
-          \==========/   \==========/   \==========/   \==========/
+### Prerequisites
 
-      ───────────────── Shared Services ─────────────────
-     🎤 Piper TTS   🔗 Tailscale   🗄️ Docker   🔐 Agenix
-     (port 5001)    (mesh VPN)     (runtime)    (secrets)
-```
+- A machine to build the ISO (see [build options](#-path-1-try-it-now--live-usb) in Path 1 — install Nix, use Docker, or download a pre-built release)
+- A USB stick (8 GB+)
+- A target machine (x86_64) with a blank disk or one you're willing to wipe
 
-### Key Design Decisions
-
-| Decision | Rationale |
-|---|---|
-| **One container per agent** | Full isolation — no shared context, separate filesystems |
-| **Host networking** | Agents reach local services (Piper, tailscale) via `localhost` |
-| **SeedDir over :ro volumes** | Hermes can write learned skills; base files seed once, never overwrite |
-| **Agenix or envFile** | Choose between encrypted-in-repo or plain-file secrets |
-| **Template stays generic** | This repo is a template. Fork it, add your agents, keep your secrets. |
-
----
-
-## Agent Configuration
-
-### `mkHermesAgent` options
-
-| Option | Type | Default | Description |
-|---|---|---|---|
-| `name` | `string` | *(required)* | Agent identifier (user, group, container, state dir) |
-| `stateDir` | `string` | `/var/lib/hermes-<name>` | Isolated state directory |
-| `image` | `string` | `nousresearch/hermes-agent:latest` | OCI container image |
-| `envFile` | `path` | `null` | Path to `.env` file (injected via `--env-file`) |
-| `agenixFile` | `path` | `null` | Path to agenix-decrypted env file |
-| `seedDir` | `path` | `null` | Directory with SOUL.md, AGENTS.md, skills/ (seeded on first boot) |
-| `settings` | `attrset` | `null` | Hermes `config.yaml` (model routing, TTS, STT, toolsets) |
-| `extraVolumes` | `list` | `[]` | Extra `host:container:mode` mounts |
-| `extraEnvironment` | `attrset` | `{}` | Extra env vars for the container |
-| `extraContainerConfig` | `attrset` | `{}` | Extra Docker options (merged deep) |
-| `autoStart` | `bool` | `true` | Auto-start with systemd |
-| `networkMode` | `string` | `"host"` | Container network mode (`"host"` or `"bridge"`) |
-| `createUser` | `bool` | `true` | Create the `hermes-<name>` system user/group |
-| `cmd` | `list` | `["gateway" "run" "--replace"]` | Container entrypoint |
-
----
-
-## Secret Management
-
-Two patterns — choose what fits your workflow:
-
-### 1. `.env` file (simpler, local-only)
-
-```nix
-mkHermesAgent {
-  name    = "my-agent";
-  envFile = "/run/secrets/my-agent.env";
-}
-```
-
-Place a plaintext `.env` file at the runtime path. **Never commit it to Git.**
-
-### 2. Agenix (encrypted in Git)
-
-Encrypt secrets as `.age` files — safe to commit, decrypted only at NixOS activation.
-
-```nix
-mkHermesAgent {
-  name       = "my-agent";
-  agenixFile = "/run/agenix/my-agent-env";
-}
-```
+### Build the ISO
 
 ```bash
-# Create encrypted secret
-echo "OPENROUTER_API_KEY=sk-or-..." | agenix -e secrets/my-agent.env.age --stdin
-
-# Rebuild — secrets never touch the Nix store
-sudo nixos-rebuild switch --flake .#agent-host
+git clone https://github.com/timfewi/tentaflake
+cd tentaflake
+nix build .#installer-iso
+# ISO at result/iso/tentaflake.iso
 ```
 
- **Full guide:** [`docs/04-agenix-secrets.md`](docs/04-agenix-secrets.md) — setup, architecture, troubleshooting  
- **Template:** [`secrets.nix.example`](secrets.nix.example) — copy to `secrets.nix` to start
+Or use the convenience script: `./scripts/build-iso.sh installer`
 
-Both patterns keep secrets **out of the Nix store** and **never in Nix evaluation**.
+> 💡 **No Nix installed?** See Path 1 for [Docker build](#-path-1-try-it-now--live-usb) or [pre-built ISO](#-path-1-try-it-now--live-usb) options — same methods work for the installer ISO.
+
+### Write to USB
+
+```bash
+sudo dd if=result/iso/tentaflake.iso of=/dev/sdX bs=4M status=progress oflag=sync
+```
+
+### Boot and Install
+
+1. Boot from USB on target machine.
+2. The **TUI installer** launches automatically on TTY1.
+3. Walk through the wizard (dialog-based):
+   - Set hostname, username, password
+   - Select target disk (**ALL DATA WILL BE WIPED**)
+   - Set timezone
+   - Confirm — then installer partitions (1 GB EFI + ext4 root), generates hardware config (auto-detects disks, GPU, network), runs `nixos-install` (10–15 min — NixOS compiles your system from config, downloading and building all packages)
+4. After completion, system reboots into your new NixOS machine with Hermes ready.
+
+### After Install
+
+Follow the [quickstart guide](docs/01-quickstart.md) to set up agent providers and start chatting.
 
 ---
 
-## Available Modules
+## 🛠️ Path 3: Customize Your Agents
 
-| Module | What it configures |
-|---|---|
-| `modules/default.nix` | Module aggregator (imports all others) |
-| `boot.nix` | systemd-boot, EFI, kernel params |
-| `locale.nix` | Timezone, locale, console keymap |
-| `networking.nix` | Hostname, nftables firewall, NetworkManager |
-| `users.nix` | Admin user (wheel + networkmanager groups) |
-| `nix-settings.nix` | Flakes, auto-GC, trusted-users, substituters |
-| `packages.nix` | curl, git, jq, tmux, vim, and more |
-| `hardening.nix` | Sysctl hardening, AppArmor, journald limits |
-| `tailscale.nix` | Tailscale with SSH + tag:auto (optional) |
-| `piper-tts-server.nix` | Local TTS via Piper (OpenAI-compatible API) |
-| `hermes-auditd.nix` | Filesystem audit daemon for Hermes state dirs (optional) |
-| `hermes-firstboot.nix` | USB env detection + first-boot TUI wizard (live ISO) |
+If you already have NixOS running (or just finished Path 2), define your agents with a **my-agents.nix** file and rebuild.
 
----
+### Agent Definition File
 
-## Examples
+Create `my-agents.nix` in the repo root. Here's a quick Nix syntax primer (it's simpler than it looks):
 
-### Two agents — coding assistant + web researcher
+```
+# Nix crash course (enough to edit this file):
+#   { key }: expr       = function that takes an object with key "key"
+#   { a = 1; b = 2; }  = object ("attrset"), semicolons NOT commas
+#   [ x y z ]          = list (space-separated)
+#   mkF ({...})        = function call
+```
 
 ```nix
-{ mkHermesAgent }:
+# my-agents.nix — each item in this list becomes one isolated agent container
+{ mkHermesAgent }:   # mkHermesAgent is a helper that creates agent modules
+
 [
   (mkHermesAgent {
     name    = "coding";
@@ -461,16 +282,15 @@ Both patterns keep secrets **out of the Nix store** and **never in Nix evaluatio
       model.default = "openrouter/anthropic/claude-sonnet-4";
       model.provider = "openrouter";
       terminal.backend = "docker";
-      web.backend = "disabled";
       toolsets = [ "terminal" "memory" "file" "skills" ];
     };
   })
+
   (mkHermesAgent {
     name    = "research";
     envFile = "/run/secrets/hermes-research.env";
     settings = {
       model.default = "openrouter/deepseek/deepseek-v4-flash";
-      model.provider = "openrouter";
       web.backend = "firecrawl";
       toolsets = [ "terminal" "web" "memory" "file" "skills" ];
     };
@@ -478,280 +298,238 @@ Both patterns keep secrets **out of the Nix store** and **never in Nix evaluatio
 ]
 ```
 
-### Installer ISO (bare-metal deployment)
+Each agent gets:
+- System user `hermes-<name>`
+- State dir `/var/lib/hermes-<name>` (0700, owned by agent user)
+- Docker container `hermes-<name>` (host networking, auto-start)
+- `HERMES_HOME` pointing to its state dir
 
-```bash
-# Build the bootable installer ISO
-nix build .#installer-iso
+### Common `mkHermesAgent` Options
 
-# Write to USB (replace /dev/sdX with your device)
-sudo cp result/iso/tentaflake.iso /dev/sdX
+| Option | Type | Default | Description |
+|---|---|---|---|
+| `name` | `string` | *(required)* | Agent identifier |
+| `envFile` | `path` | `null` | Path to `.env` file with API keys |
+| `agenixFile` | `path` | `null` | Path to agenix-decrypted env file |
+| `image` | `string` | `nousresearch/hermes-agent:latest` | OCI container image |
+| `seedDir` | `path` | `null` | Dir with SOUL.md, AGENTS.md, skills/ (skills are reusable capabilities — like plugins — that extend what an agent can do, e.g. web search, file operations) |
+| `settings` | `attrset` | `null` | Hermes config.yaml (model routing, toolsets, etc.) |
+| `autoStart` | `bool` | `true` | Auto-start with systemd |
+| `networkMode` | `string` | `"host"` | `"host"` or `"bridge"` |
+| `extraVolumes` | `list` | `[]` | Extra `host:container:mode` mounts |
 
-# Boot it — the interactive TUI wizard will guide you through
-# partitioning and installing NixOS with this orchestration framework.
-```
+Full option reference: [`docs/options-reference.md`](docs/options-reference.md)
 
----
+### Secrets: Two Patterns
 
-## Commands
-
-```bash
-# Validate flake
-nix flake check
-
-# Build installer ISO
-nix build .#installer-iso
-
-# Dry-run activation
-sudo nixos-rebuild dry-activate --flake .#agent-host
-
-# Build and deploy
-sudo nixos-rebuild switch --flake .#agent-host
-
-# Rollback
-sudo nixos-rebuild switch --rollback
-
-# List running agents
-docker ps --filter "name=hermes-"
-
-# View agent logs
-docker logs hermes-coding
-
-# Chat with an agent
-docker exec -it hermes-coding hermes chat
-```
-
----
-
-## `hermes-auditd` — Filesystem Audit Daemon
-
-Go-based daemon that monitors Hermes agent state directories for filesystem changes. Lives at [`pkgs/hermes-auditd/`](pkgs/hermes-auditd/).
-
-Uses **fsnotify** for recursive directory watching, debounces rapid events (100 ms coalescing window per file), and persists events to **SQLite** (pure Go via `modernc.org/sqlite` — no CGo).
-
-Agent names extracted from path convention: `/var/lib/hermes-<name>/...` → `<name>`.
-
-### NixOS Module (Declarative)
-
-Enable via the optional `tentaflake.hermes-auditd` module:
+**1. `.env` file (simpler, local-only)**
 
 ```nix
+mkHermesAgent {
+  name    = "my-agent";
+  envFile = "/run/secrets/my-agent.env";
+}
+```
+
+```bash
+sudo mkdir -p /run/secrets
+sudo cp hermes.env.example /run/secrets/my-agent.env
+sudo chmod 600 /run/secrets/my-agent.env
+sudo vi /run/secrets/my-agent.env   # add OPENROUTER_API_KEY=sk-or-...
+```
+
+Never commit `.env` files to Git.
+
+**2. Agenix (encrypted in Git)**
+
+**Agenix** is a tool that encrypts secrets as `.age` files — safe to commit, decrypted only at NixOS activation time (runtime, not evaluation).
+
+```nix
+mkHermesAgent {
+  name       = "my-agent";
+  agenixFile = "/run/agenix/my-agent-env";
+}
+```
+
+Full guide: [`docs/04-agenix-secrets.md`](docs/04-agenix-secrets.md)
+
+### Rebuild to Apply
+
+```bash
+git add my-agents.nix          # flakes only evaluate Git-tracked files
+nix flake check                # validates syntax + evaluation (like tsc --noEmit)
+sudo nixos-rebuild switch --flake .#agent-host
+#     ^^^^^^^^^^^^^^^^       ^^^^^^^^^^^^^^^^^
+#     build + apply config   use host config named "agent-host" from flake
+#     "switch" activates it  (defined in flake.nix, change via tentaflake.hostName)
+```
+
+New agents appear as Docker containers. Remove an agent from the list, rebuild — container is pruned.
+
+---
+
+## 🏗️ Architecture
+
+```
+                      Agent Orchestration
+                   One NixOS brain · Many tentacles
+
+                           ,---------.
+                         ,'  NixOS    `.
+                        (    Flake      )
+                 ┌───────`. (Config)  ,' ──────┐──────────────┐
+                 │         `---------'         │              │
+                 │              │              │              │
+           /=====▼====\   /=====▼====\   /=====▼====\   /=====▼====\
+           │ Tentacle │   │ Tentacle │   │ Tentacle │   │ Tentacle │
+           │ Agent A  │   │ Agent B  │   │ Agent C  │   │ Agent N  │
+           │ (coding) │   │(research)│   │(personal)│   │   (...)  │
+           │          │   │          │   │          │   │          │
+           │📦 Docker │   │📦 Docker │   │📦 Docker │   │📦 Docker │
+           │User:     │   │User:     │   │User:     │   │User:     │
+           │hermes-A  │   │hermes-B  │   │hermes-C  │   │hermes-N  │
+           │State:    │   │State:    │   │State:    │   │State:    │
+           │/var/lib/ │   │/var/lib/ │   │/var/lib/ │   │/var/lib/ │
+           │hermes-A  │   │hermes-B  │   │hermes-C  │   │hermes-N  │
+           │          │   │          │   │          │   │          │
+           │🔑 Key: A │   │🔑 Key: B │   │🔑 Key: C │   │🔑 Key: N │
+           │📚 Skills │   │📚 Skills │   │📚 Skills │   │📚 Skills │
+           │          │   │          │   │          │   │          │
+           \==========/   \==========/   \==========/   \==========/
+
+       ───────────────── Shared Services ─────────────────
+      🎤 Piper TTS   🔗 Tailscale   🗄️ Docker   🔐 Agenix
+      (port 5001)    (mesh VPN)     (runtime)    (secrets)
+```
+
+### Key Design Decisions
+
+| Decision | Rationale |
+|---|---|
+| **One container per agent** | Full isolation — no shared context, separate filesystems |
+| **Host networking** | Containers use the host's network stack directly — agents reach Piper, Tailscale, etc. on `localhost` without port mapping |
+| **SeedDir over :ro volumes** | Hermes can write learned skills; base files seed once, never overwrite |
+| **Agenix or envFile** | Choose between encrypted-in-repo or plain-file secrets |
+| **Template stays generic** | This repo is a template. Fork it, add your agents, keep your secrets. |
+
+### Available Modules
+
+| Module | What it configures |
+|---|---|
+| `boot.nix` | systemd-boot, EFI, kernel params |
+| `hardening.nix` | Sysctl hardening, AppArmor, journald limits |
+| `locale.nix` | Timezone, locale, console keymap |
+| `networking.nix` | Hostname, nftables firewall, NetworkManager |
+| `nix-settings.nix` | Flakes, auto-GC, trusted-users, substituters |
+| `packages.nix` | curl, git, jq, tmux, vim, and more |
+| `users.nix` | Admin user (wheel + networkmanager groups) |
+| `tailscale.nix` | Tailscale with SSH + tag:auto (optional) |
+| `piper-tts-server.nix` | Local TTS via Piper (OpenAI-compatible API) |
+| `hermes-auditd.nix` | Optional filesystem audit daemon — [docs](pkgs/hermes-auditd/) |
+
+### Available ISOs
+
+| ISO | Build | Purpose |
+|---|---|---|
+| **Live Agent ISO** | `nix build .#live-agent-iso` | Run agents + TTS in RAM, no disk write ([Path 1](#⚡-path-1-try-it-now--live-usb)) |
+| **Installer ISO** | `nix build .#installer-iso` | Bootable TUI wizard, installs to disk ([Path 2](#💾-path-2-install-permanently--installer-iso)) |
+
+### Common Commands
+
+```bash
+nix flake check                          # validate everything builds
+nix build .#installer-iso                # build installer ISO
+nix build .#live-agent-iso               # build live ISO
+nix build .#hermes-auditd                # build audit daemon package
+sudo nixos-rebuild switch --flake .#agent-host  # deploy config
+sudo nixos-rebuild dry-activate --flake .#agent-host  # dry-run
+sudo nixos-rebuild switch --rollback     # undo last deploy
+docker ps --filter "name=hermes-"        # list running agents
+docker logs hermes-coding                # view agent logs
+docker exec -it hermes-coding hermes chat  # chat with an agent
+```
+
+---
+
+## 📚 Learning Nix
+
+New to NixOS? These resources will get you up to speed:
+
+| Resource | What it covers |
+|---|---|
+| [Zero to Nix](https://zero-to-nix.dev) | The fastest intro — Nix language, flakes, dev shells |
+| [nix.dev](https://nix.dev) | Official Nix tutorials and guides |
+| [NixOS Manual](https://nixos.org/manual/nixos/stable/) | Official NixOS reference |
+| [Nix Pills](https://nixos.org/guides/nix-pills/) | Deep-dive into Nix internals |
+| [NixOS Flakes Book](https://nixos-and-flakes.thiscute.world) | Practical flake guide |
+
+Key concepts used in this project:
+
+- **Flake** — a Git-tracked Nix project with a `flake.nix` entry point and `flake.lock` lockfile that pins every dependency version. `nix build .#foo` builds output `foo`.
+- **`nixos-rebuild switch --flake .#host`** — builds and activates the NixOS configuration named `host` from the flake in the current directory.
+- **Derivation** — a build recipe (any `.drv` file). `nix build` turns derivations into build results (packages, ISOs, etc.).
+- **`nix flake check`** — validates the flake: syntax, evaluation, and builds all checks.
+
+---
+
+## 🔧 For NixOS Experts: Consume as Flake Input
+
+Add tentaflake as a dependency to your own flake — useful when you already have a NixOS config and just want the agent modules:
+
+```nix
+# your-flake.nix
 {
-  tentaflake.hermes-auditd = {
-    enable = true;
-    watchDirs = [
-      "/var/lib/hermes-coding"
-      "/var/lib/hermes-research"
-    ];
+  inputs.tentaflake = {
+    url = "github:timfewi/tentaflake";
+    inputs.nixpkgs.follows = "nixpkgs";  # align nixpkgs version
+  };
+
+  outputs = { self, nixpkgs, tentaflake, ... }:
+  let
+    system = "x86_64-linux";
+    mkHermesAgent = tentaflake.lib.${system}.mkHermesAgent;
+  in {
+    nixosConfigurations.my-host = nixpkgs.lib.nixosSystem {
+      inherit system;
+      specialArgs = { inherit mkHermesAgent; };
+      modules = [
+        tentaflake.nixosModules.default    # all base modules
+        {
+          tentaflake.hostName = "my-machine";
+          tentaflake.adminUser = "alice";
+          tentaflake.timeZone = "Europe/Vienna";
+        }
+        ./hardware-configuration.nix
+      ] ++ import ./my-agents.nix { inherit mkHermesAgent; };
+    };
   };
 }
 ```
 
-| Option | Type | Default | Description |
-|--------|------|---------|-------------|
-| `enable` | `bool` | `false` | Enable the audit daemon as a systemd service |
-| `watchDirs` | `list of str` | `[]` | Directories to monitor for filesystem changes |
-| `port` | `port` | `9090` | HTTP/WebSocket listen port |
-| `dbPath` | `str` | `/var/lib/hermes-audit/events.db` | Path to SQLite database |
-| `retentionHours` | `int` | `24` | Event retention window before pruning |
+You get:
+- **`tentaflake.nixosModules.default`** — all NixOS modules with `tentaflake.*` options
+- **`tentaflake.lib.x86_64-linux.mkHermesAgent`** — agent builder helper
+- **`tentaflake.lib.x86_64-linux.constants`** — default values (hostname, stateVersion, locale)
 
-When enabled, the module:
-
-- Adds `hermes-auditd` to your system packages
-- Creates a **hardened systemd service** (`NoNewPrivileges`, `ProtectSystem=strict`, `PrivateTmp`, `DynamicUser`)
-- Maps NixOS options to the daemon's environment variables automatically
-- Sets up the SQLite state directory under `/var/lib/hermes-audit/`
-
-After changing options, rebuild:
-
-```bash
-sudo nixos-rebuild switch --flake .#<hostname>
-```
-
-### Data Flow
-
-```
-fsnotify event → isIgnored? (filter .git, node_modules, .db files)
-               → toEvent() (stat file for size, extract agent from path)
-               → debounceMap (100ms per-file coalesce)
-               → hermes.Event channel (buffered 100)
-               → store.Start() consumer goroutine
-                   ├── INSERT INTO events (SQLite, WAL mode)
-                   └── non-blocking forward to notifyCh (broadcast, future use)
-               → PruneLoop (every 10 min, delete older than retention)
-```
-
-### Event Model
-
-```go
-type Event struct {
-    ID        int64     `json:"id"`
-    Agent     string    `json:"agent"`       // extracted from /var/lib/hermes-<name>/...
-    File      string    `json:"file"`        // absolute path to changed file
-    Op        string    `json:"op"`          // create|write|remove|rename|chmod
-    Timestamp time.Time `json:"timestamp"`
-    Size      int64     `json:"size,omitempty"`
-}
-```
-
-### Environment Variables (Standalone Mode)
-
-When running outside the NixOS module (e.g. manual Go build), configure via env vars:
-
-| Variable | Default | Description |
-|---|---|---|
-| `AUDIT_PORT` | `9090` | HTTP/WebSocket listen port (future use) |
-| `AUDIT_DB_PATH` | `/var/lib/hermes-audit/events.db` | Path to SQLite database |
-| `AUDIT_WATCH_DIRS` | *(required)* | Comma-separated directories to monitor |
-| `AUDIT_RETENTION_HOURS` | `24` | Event retention window before pruning |
-
-### Watcher Features
-
-- **Recursive** — walks directory tree on startup, adds every subdirectory to fsnotify
-- **Noise filter** — skips `.git`, `node_modules`, SQLite auxiliary files (`.db`, `.db-wal`, `.db-shm`)
-- **New directories** — on `Create` events, automatically watches new subdirectories
-- **Agent extraction** — parses `/var/lib/hermes-<name>/...` → `<name>`, falls back to `"unknown"`
-- **Graceful shutdown** — flushes pending events on SIGINT/SIGTERM
-
-### Store Features
-
-- Built with `modernc.org/sqlite` — pure Go, no CGo dependency
-- WAL journal mode with `synchronous=NORMAL` for read concurrency
-- Schema auto-migrated on startup, no migration tooling needed
-- Query: filter by agent name, time range, with limit
-- Stats: per-agent event counts over any time window
-- Pruning: automatic, runs every 10 minutes, deletes events older than retention period
-
-### Build & Run (Standalone)
-
-```bash
-# Build from source
-cd pkgs/hermes-auditd
-go build -o hermes-auditd ./cmd/hermes-auditd
-
-# Run (example)
-export AUDIT_WATCH_DIRS="/var/lib/hermes-coding,/var/lib/hermes-research"
-export AUDIT_DB_PATH="/var/lib/hermes-audit/events.db"
-./hermes-auditd
-```
-
-Or build directly from the flake:
-
-```bash
-nix build .#hermes-auditd
-```
-
-### Package Structure
-
-```
-pkgs/hermes-auditd/
-├── default.nix                 # Nix derivation (buildGoModule)
-├── go.mod                      # Go module (tentaflake/hermes-auditd)
-├── cmd/hermes-auditd/main.go   # Entrypoint, lifecycle
-├── internal/
-│   ├── config/config.go        # Environment variable config
-│   ├── hermes/event.go         # Shared Event type (only cross-package type)
-│   ├── watcher/watcher.go      # fsnotify watcher + debounce
-│   └── store/
-│       ├── schema.go           # SQLite DDL + pragmas
-│       └── store.go            # Insert, Query, Stats, Prune
-```
+See [`examples/consumer-flake.nix`](examples/consumer-flake.nix) for a full worked example including agenix and home-manager.
 
 ---
 
-## Installer ISO — Bootable USB Deployment
+## 🤝 Contributing
 
-Bootable NixOS installer ISO with an interactive installation wizard. Designed for deploying this orchestration framework onto bare metal.
-
-### Build
-
-```bash
-# Using the convenience script
-./scripts/build-iso.sh
-
-# Or directly with nix
-nix build .#installer-iso
-```
-
-ISO configured in [`installer/iso.nix`](installer/iso.nix). Features:
-- **UEFI + USB hybrid boot** — works with modern firmware and `dd` to USB
-- **Full repo embedded** at `/etc/tentaflake/` — self-contained, no network fetch for sources
-- **NetworkManager** active for install-time internet
-- **SSH access** with password auth for remote debugging during installation
-- **TTY1 auto-launch** — root auto-login, installer starts immediately
-
-### Interactive Installer (`installer.sh`)
-
-`dialog`-based TUI wizard that guides through full NixOS installation:
-
-| Step | What happens |
-|------|-------------|
-| **1. Welcome** | Explains the installer, requirements, confirms intent |
-| **2. Hostname** | Prompts for system hostname (default: `agent-machine`) |
-| **3. Username** | Prompts for primary admin username (default: `agent`) |
-| **4. Password** | Password entry with confirmation loop |
-| **5. Disk** | Menu of detected disks via `lsblk` — ALL DATA WILL BE WIPED |
-| **6. Timezone** | Timezone input (default: `UTC`) |
-| **7. Confirm** | Summary review with final confirmation |
-| **8. Partition** | Creates GPT layout: 1 GB EFI (FAT32) + rest as ext4 root |
-| **9. Hardware** | Runs `nixos-generate-config` on target |
-| **10. Config** | Copies modules, generates `user-config.nix` + `flake.nix` |
-| **11. Install** | Runs `nixos-install --flake` (10–15 min build) |
-| **12. Done** | Sets passwords, copies examples, unmounts, reboots |
-
-### Partition Layout
-
-```
-GPT:
-  1: 1 MiB – 1025 MiB   FAT32   BOOT   esp
-  2: 1025 MiB – 100%    ext4    nixos
-```
-
-Works with NVMe (`nvme0n1p1/p2`), mmcblk, and SATA (`sda1/sda2`) naming.
-
-### Boot Flow
-
-1. Boot ISO → systemd starts → root auto-login on TTY1
-2. Bash `interactiveShellInit` detects TTY1, sets `INSTALLER_RUN=1`
-3. Launches `/etc/tentaflake/installer/installer.sh`
-4. After installation completes, system unmounts and reboots
-
-### Flake Configuration
-
-ISO exposed as NixOS configuration in `flake.nix`:
-
-```nix
-nixosConfigurations.installer-iso = nixpkgs.lib.nixosSystem {
-  inherit system specialArgs;
-  modules = [ ./installer/iso.nix ];
-};
-```
-
-Convenience package:
-
-```bash
-nix build .#installer-iso
-```
-
----
-
-## Contributing
-
-This is a community template — contributions welcome!
+This is a **generic template** — keep it that way. No domain-specific code, real hostnames, API keys, or company config.
 
 1. Fork the repo
 2. Create a feature branch (`git checkout -b feat/amazing`)
-3. Commit your changes (`git commit -m "feat: add amazing thing"`)
-4. Push (`git push origin feat/amazing`)
+3. Commit using [Conventional Commits](https://www.conventionalcommits.org/) (`feat:`, `fix:`, `docs:`)
+4. Run `nix flake check` and `go test ./...` in `pkgs/hermes-auditd/`
 5. Open a Pull Request
 
-Please keep the template **generic** — no domain-specific code belongs here. That goes in your fork.
+See [`CONTRIBUTING.md`](CONTRIBUTING.md) for full details.
 
 ---
 
-## License
+## 📄 License
 
-<p align="center">
-  MIT — see <a href="https://github.com/timfewi/tentaflake/blob/main/LICENSE">LICENSE</a><br/>
-  <sub>Piper voice models distributed under their respective MIT licenses.</sub>
-</p>
+MIT — see [LICENSE](LICENSE).
+Piper voice models distributed under their respective MIT licenses.
