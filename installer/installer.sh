@@ -145,7 +145,16 @@ Proceed?" 14 60 || die "Installation cancelled."
 # ════════════════════════════════════════════════════════════
 dialog --infobox "Partitioning $DISK ..." 4 50
 
-# Wipe existing partition table
+# Release and wipe the target first, so a previously-used disk can't block
+# partitioning (busy) or confuse mount later with stale signatures.
+umount -R /mnt 2>/dev/null || true
+swapoff -a 2>/dev/null || true
+for part in "${DISK}"*[0-9]; do umount "$part" 2>/dev/null || true; done
+wipefs -a "$DISK" >>"$INSTALL_LOG" 2>&1 || true
+sgdisk --zap-all "$DISK" >>"$INSTALL_LOG" 2>&1 || true
+udevadm settle 2>/dev/null || true
+
+# Create a fresh GPT partition table
 parted -s "$DISK" mklabel gpt >>"$INSTALL_LOG" 2>&1 ||
   die "Failed to create partition table on $DISK"
 
@@ -158,9 +167,10 @@ parted -s "$DISK" set 1 esp on >>"$INSTALL_LOG" 2>&1
 parted -s "$DISK" mkpart primary ext4 1025MiB 100% >>"$INSTALL_LOG" 2>&1 ||
   die "Failed to create root partition"
 
-# Wait for kernel to see new partitions
-sleep 2
+# Wait for the kernel + udev to register the new partition nodes
 partprobe "$DISK" 2>/dev/null || true
+udevadm settle 2>/dev/null || true
+sleep 1
 
 # Determine partition names (handle NVMe: /dev/nvme0n1p1 vs /dev/sda1)
 if echo "$DISK" | grep -q nvme; then
@@ -178,12 +188,24 @@ fi
 dialog --infobox "Formatting partitions ..." 4 50
 mkfs.fat -F 32 -n BOOT "$EFI_PART" >>"$INSTALL_LOG" 2>&1 ||
   die "Failed to format EFI partition"
-mkfs.ext4 -L nixos "$ROOT_PART" >>"$INSTALL_LOG" 2>&1 ||
+mkfs.ext4 -F -L nixos "$ROOT_PART" >>"$INSTALL_LOG" 2>&1 ||
   die "Failed to format root partition"
 
-# Mount
+# Mount — settle first and retry. Right after partprobe/mkfs the kernel can
+# briefly drop and recreate the partition node, so a single mount can race
+# device creation and fail even though the filesystem is fine.
 dialog --infobox "Mounting partitions ..." 4 50
-mount "$ROOT_PART" /mnt || die "Failed to mount root partition"
+udevadm settle 2>/dev/null || true
+mounted=0
+for _ in 1 2 3 4 5; do
+  mount "$ROOT_PART" /mnt 2>>"$INSTALL_LOG" && {
+    mounted=1
+    break
+  }
+  sleep 1
+  udevadm settle 2>/dev/null || true
+done
+[ "$mounted" -eq 1 ] || die "Failed to mount root partition ($ROOT_PART)"
 mkdir -p /mnt/boot
 mount "$EFI_PART" /mnt/boot || die "Failed to mount boot partition"
 
