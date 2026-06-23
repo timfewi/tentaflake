@@ -151,28 +151,8 @@ umount -R /mnt 2>/dev/null || true
 swapoff -a 2>/dev/null || true
 for part in "${DISK}"*[0-9]; do umount "$part" 2>/dev/null || true; done
 wipefs -a "$DISK" >>"$INSTALL_LOG" 2>&1 || true
-sgdisk --zap-all "$DISK" >>"$INSTALL_LOG" 2>&1 || true
-udevadm settle 2>/dev/null || true
 
-# Create a fresh GPT partition table
-parted -s "$DISK" mklabel gpt >>"$INSTALL_LOG" 2>&1 ||
-  die "Failed to create partition table on $DISK"
-
-# EFI partition: 1GB
-parted -s "$DISK" mkpart primary fat32 1MiB 1025MiB >>"$INSTALL_LOG" 2>&1 ||
-  die "Failed to create EFI partition"
-parted -s "$DISK" set 1 esp on >>"$INSTALL_LOG" 2>&1
-
-# Root partition: rest
-parted -s "$DISK" mkpart primary ext4 1025MiB 100% >>"$INSTALL_LOG" 2>&1 ||
-  die "Failed to create root partition"
-
-# Wait for the kernel + udev to register the new partition nodes
-partprobe "$DISK" 2>/dev/null || true
-udevadm settle 2>/dev/null || true
-sleep 1
-
-# Determine partition names (handle NVMe: /dev/nvme0n1p1 vs /dev/sda1)
+# Determine partition names early (handle NVMe: /dev/nvme0n1p1 vs /dev/sda1)
 if echo "$DISK" | grep -q nvme; then
   EFI_PART="${DISK}p1"
   ROOT_PART="${DISK}p2"
@@ -184,30 +164,65 @@ else
   ROOT_PART="${DISK}2"
 fi
 
-# Format
+# ── Partition using pure sgdisk ──
+# sgdisk is more reliable than mixing sgdisk + parted:
+#   • Uses BLKRRPART ioctl (full table re-read) not BLKPG (per-partition add)
+#   • partprobe is known to silently no-op on NVMe
+#   • singe tool, single notification mechanism → no kernel confusion
+
+sgdisk --zap-all "$DISK" >>"$INSTALL_LOG" 2>&1 ||
+  die "Failed to zap partition table on $DISK"
+sgdisk -o "$DISK" >>"$INSTALL_LOG" 2>&1 ||
+  die "Failed to create fresh GPT on $DISK"
+
+# EFI partition: 1GB (type ef00 = ESP)
+sgdisk -n 1:1MiB:1025MiB -t 1:ef00 -c 1:"EFI" "$DISK" >>"$INSTALL_LOG" 2>&1 ||
+  die "Failed to create EFI partition"
+
+# Root partition: rest (type 8300 = Linux filesystem)
+sgdisk -n 2:1025MiB:0 -t 2:8300 -c 2:"NixOS" "$DISK" >>"$INSTALL_LOG" 2>&1 ||
+  die "Failed to create root partition"
+
+# Force kernel to re-read the partition table — more reliable than partprobe
+blockdev --rereadpt "$DISK" >>"$INSTALL_LOG" 2>&1 ||
+  die "Failed to re-read partition table"
+
+# Wait for partition device nodes to appear
+for _ in 1 2 3 4 5 6 7 8 9 10; do
+  [ -b "$ROOT_PART" ] && [ -b "$EFI_PART" ] && break
+  sleep 1
+  udevadm settle 2>/dev/null || true
+done
+[ -b "$ROOT_PART" ] || die "Root partition $ROOT_PART never appeared after partitioning"
+[ -b "$EFI_PART" ] || die "EFI partition $EFI_PART never appeared after partitioning"
+
+# ── Format ──
 dialog --infobox "Formatting partitions ..." 4 50
 mkfs.fat -F 32 -n BOOT "$EFI_PART" >>"$INSTALL_LOG" 2>&1 ||
   die "Failed to format EFI partition"
 mkfs.ext4 -F -L nixos "$ROOT_PART" >>"$INSTALL_LOG" 2>&1 ||
   die "Failed to format root partition"
 
-# Mount — settle first and retry. Right after partprobe/mkfs the kernel can
-# briefly drop and recreate the partition node, so a single mount can race
-# device creation and fail even though the filesystem is fine.
-dialog --infobox "Mounting partitions ..." 4 50
+# ── Wait after mkfs ──
+# mkfs.ext4 writes a new filesystem, which can trigger a udev change event
+# that briefly removes and re-creates the partition node.  If we try to
+# mount during that window the mount will fail even though the filesystem
+# is perfectly valid.
 udevadm settle 2>/dev/null || true
-mounted=0
-for _ in 1 2 3 4 5; do
-  mount "$ROOT_PART" /mnt 2>>"$INSTALL_LOG" && {
-    mounted=1
-    break
-  }
+for _ in 1 2 3 4 5 6 7 8 9 10; do
+  [ -b "$ROOT_PART" ] && [ -b "$EFI_PART" ] && break
   sleep 1
   udevadm settle 2>/dev/null || true
 done
-[ "$mounted" -eq 1 ] || die "Failed to mount root partition ($ROOT_PART)"
+[ -b "$ROOT_PART" ] || die "Root partition $ROOT_PART disappeared after mkfs"
+
+# ── Mount ──
+dialog --infobox "Mounting partitions ..." 4 50
+mount "$ROOT_PART" /mnt >>"$INSTALL_LOG" 2>&1 ||
+  die "Failed to mount root partition ($ROOT_PART)"
 mkdir -p /mnt/boot
-mount "$EFI_PART" /mnt/boot || die "Failed to mount boot partition"
+mount "$EFI_PART" /mnt/boot >>"$INSTALL_LOG" 2>&1 ||
+  die "Failed to mount boot partition ($EFI_PART)"
 
 # ════════════════════════════════════════════════════════════
 # STEP 9: Generate hardware config
