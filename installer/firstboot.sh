@@ -45,6 +45,13 @@ if [ -n "$USB_DEV" ]; then
     for agent in "${AGENTS[@]}"; do
       systemctl restart "docker-hermes-${agent}" 2>/dev/null || true
     done
+    echo ""
+    echo "  ── PERMANENT INSTALL ──"
+    echo "  To install Tentaflake permanently to disk:"
+    echo "    bash /etc/tentaflake/installer/installer.sh"
+    echo ""
+    echo "  This will WIPE the target disk and install NixOS."
+    echo ""
     exit 0
   fi
 fi
@@ -111,8 +118,12 @@ cat <<"EOF"
 ║  • Piper TTS at http://localhost:5001/v1         ║
 ║  • Tailscale: sudo tailscale up                  ║
 ║                                                  ║
-║  To install to disk:                             ║
-║    /etc/tentaflake/install.sh     ║
+║  ── PERMANENT INSTALL ──                         ║
+║  To install Tentaflake permanently to disk:      ║
+║    bash /etc/tentaflake/installer/installer.sh   ║
+║                                                  ║
+║  This will WIPE the target disk and install      ║
+║  NixOS with the agent orchestration framework.   ║
 ║                                                  ║
 ║  To re-enter setup: rm /run/hermes/.configured   ║
 ╚══════════════════════════════════════════════════╝

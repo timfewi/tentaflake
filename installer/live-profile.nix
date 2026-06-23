@@ -68,6 +68,23 @@ in
     };
   });
 
+  # ── Message of the day: installation instructions for every login ──
+  users.motd = ''
+    ╔══════════════════════════════════════════════════════════╗
+    ║              Tentaflake Live Agent ISO                   ║
+    ║                                                          ║
+    ║  Hermes agents are running in Docker containers.          ║
+    ║  Connect via:  sudo tailscale up                         ║
+    ║                                                          ║
+    ║  ── PERMANENT INSTALL ──                                  ║
+    ║  To install Tentaflake permanently to a local disk:       ║
+    ║    bash /etc/tentaflake/installer/installer.sh           ║
+    ║                                                          ║
+    ║  This will WIPE the target disk and install NixOS         ║
+    ║  with the agent orchestration framework.                  ║
+    ╚══════════════════════════════════════════════════════════╝
+  '';
+
   # ── ISO-specific packages ──
   # The live ISO embeds the full repo and can also install to disk via
   # /etc/tentaflake/installer/installer.sh, so it must ship the same disk
