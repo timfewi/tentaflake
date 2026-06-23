@@ -212,6 +212,7 @@ mount "$EFI_PART" /mnt/boot || die "Failed to mount boot partition"
 # ════════════════════════════════════════════════════════════
 # STEP 9: Generate hardware config
 # ════════════════════════════════════════════════════════════
+mkdir -p /mnt/etc/nixos
 dialog --infobox "Generating hardware configuration ..." 4 50
 nixos-generate-config --root /mnt --show-hardware-config >/mnt/etc/nixos/hardware-configuration.nix 2>>"$INSTALL_LOG" ||
   die "Failed to generate hardware config"
@@ -228,7 +229,7 @@ cp -r "$REPO_DIR/modules" "$TARGET_NIXOS/modules"
 cp -r "$REPO_DIR/lib" "$TARGET_NIXOS/lib"
 cp -r "$REPO_DIR/pkgs" "$TARGET_NIXOS/pkgs"
 cp "$REPO_DIR/configuration.nix" "$TARGET_NIXOS/configuration.nix"
-cp "$REPO_DIR/my-agents.nix" "$TARGET_NIXOS/my-agents.nix" 2>/dev/null || touch "$TARGET_NIXOS/my-agents.nix"
+cp "$REPO_DIR/my-agents.nix" "$TARGET_NIXOS/my-agents.nix" 2>/dev/null || echo '{ mkHermesAgent }: [ ]' >"$TARGET_NIXOS/my-agents.nix"
 
 # Generate user-config.nix
 cat >"$TARGET_NIXOS/user-config.nix" <<EOF
@@ -245,7 +246,7 @@ cat >"$TARGET_NIXOS/flake.nix" <<FLAKEEOF
 {
   description = "NixOS Agent Machine — ${HOSTNAME}";
   inputs = {
-    nixpkgs.url = "github:NixOS/nixpkgs/nixos-25.11";
+    nixpkgs.url = "github:NixOS/nixpkgs/nixos-26.11";
   };
   outputs = { self, nixpkgs, ... }@inputs:
     let
