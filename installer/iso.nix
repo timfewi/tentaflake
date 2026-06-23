@@ -31,21 +31,23 @@
     dialog # TUI wizard (whiptail-compatible)
     jq # JSON utils (future use)
     parted # Partitioning
-    gptfdisk # GPT disk tools
+    gptfdisk # GPT disk tools (sgdisk)
     dosfstools # mkfs.fat
     e2fsprogs # mkfs.ext4
     nixos-install-tools # nixos-install, nixos-generate-config
     git # For potential flake operations
+    cryptsetup # luksClose for previously-encrypted disks
+    lvm2 # dmsetup, vgchange for LVM on previously-used disks
   ];
 
   # ── NetworkManager for install-time connectivity ──
   networking.networkmanager.enable = true;
 
-  # ── SSH access for debugging (optional) ──
-  services.openssh.enable = true;
-  services.openssh.settings.PasswordAuthentication = true;
-
   # ── Auto-login root on TTY1 ──
+  # Root has no password (locked account) and there is no SSH or network
+  # login: the only entry point is the autologin console on TTY1, which runs
+  # the installer. If an install fails, its real cause is shown in the error
+  # dialog (which includes the tail of /tmp/installer.log); no shell needed.
   services.getty.autologinUser = "root";
 
   # ── Run installer on TTY1 login ──
