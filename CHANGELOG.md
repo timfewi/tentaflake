@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- `my-agents.nix.example`: rewritten around an `agentDefs` list (`map mkHermesAgent agentDefs`) with a fully-commented generic reference agent documenting every `settings` option (model + fallbacks, auxiliary routing, compression, memory, toolsets, approvals, web/terminal backends, provider timeouts, TTS/STT) plus seed/volume/env/container fields. Active agent renamed `default` → `coding` to match the docs. Quickstart and agent-tips docs updated to the new structure.
 - `modules/shell.nix`: optional **zsh** (`tentaflake.shell.zsh.enable`) — Oh My Zsh + autosuggestions + syntax-highlighting + fzf-tab, with Starship as the prompt; becomes the admin login shell when enabled. Plus `tentaflake.shell.zoxide.enable` (smart-cd, cross-shell, default on) and `tentaflake.shell.lazygit.enable` (+ `lg` alias). Aliases moved to `environment.shellAliases` so they apply to bash and zsh.
 - `modules/shell.nix`: **tmux** (`tentaflake.shell.tmux.enable`, configured). Convenience aliases `rebuild` (→ `nixos-rebuild switch --flake /etc/nixos#<host>`), `reload` (`exec $SHELL`) and `cls`. tmux moved out of the `tools` package set into its own toggle.
 - `modules/editor.nix` + `nixosModules.editor`: optional **Neovim via nvf** (`tentaflake.editor.nvf.enable`) — LSP, treesitter, telescope, gitsigns, blink-cmp; lean language set (nix/bash/lua/markdown/yaml). Added the `nvf` flake input (kept out of `nixosModules.default` so external consumers aren't forced to have it).

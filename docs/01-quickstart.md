@@ -28,7 +28,10 @@ sudo systemctl status docker
 cp /etc/nixos/my-agents.nix.example /etc/nixos/my-agents.nix
 ```
 
-This activates a single "coding" agent. Edit later to add more.
+This activates a single "coding" agent. The example file also carries a
+fully-commented reference agent showing every `settings` option — uncomment
+it (or copy fields onto your own agent) to declare model, toolsets, memory,
+compression, TTS/STT, and more in Nix. Edit later to add more.
 
 If `/etc/nixos/my-agents.nix` doesn't exist on your system, copy the example:
 
