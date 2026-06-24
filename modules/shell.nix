@@ -336,6 +336,21 @@ lib.mkIf cfg.enable {
     '';
   };
 
+  # ── zsh-newuser-install guard ──
+  # Create a minimal ~/.zshrc for the admin user so zsh doesn't fire the
+  # interactive zsh-newuser-install wizard on first login. The real config
+  # lives in the NixOS-managed /etc/zshrc (programs.zsh).
+  system.activationScripts.tentaflake-zshrc = lib.mkIf cfg.zsh.enable {
+    text = ''
+      ZSHRC="${config.users.users.${config.tentaflake.adminUser}.home}/.zshrc"
+      if [ ! -f "$ZSHRC" ]; then
+        touch "$ZSHRC"
+        chown ${config.tentaflake.adminUser}:users "$ZSHRC"
+      fi
+    '';
+    deps = [ "users" ];
+  };
+
   # ── zsh (optional): Oh My Zsh + autosuggestions + syntax highlight + fzf-tab ──
   programs.zsh = lib.mkIf cfg.zsh.enable {
     enable = true;
