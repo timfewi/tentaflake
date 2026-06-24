@@ -24,15 +24,6 @@ let
   backend = config.tentaflake.containerBackend; # "docker" | "podman"
   hostName = config.tentaflake.hostName;
 
-  # Auto-start tmux inside locally-launched kitty windows. kitty exports
-  # KITTY_WINDOW_ID for shells it spawns; we skip it over SSH and when already
-  # inside tmux. Sourced from both bash and zsh init when kitty is enabled.
-  kittyTmuxAutostart = ''
-    if [ -n "''${KITTY_WINDOW_ID:-}" ] && [ -z "''${TMUX:-}" ] && [ -z "''${SSH_CONNECTION:-}" ]; then
-      exec tmux new-session -A -s main
-    fi
-  '';
-
   # ── hermes: operator CLI for the agent containers ──
   # Enumerates the generated `<backend>-hermes-<name>.service` units, so it
   # works for any agent set and either container backend without hardcoding.
@@ -283,7 +274,6 @@ lib.mkIf cfg.enable {
     lib.optional cfg.hermesCli.enable hermesCli
     ++ lib.optional cfg.motd.enable statusBanner
     ++ lib.optional cfg.lazygit.enable pkgs.lazygit
-    ++ lib.optional cfg.kitty.enable pkgs.kitty
     ++ lib.optionals cfg.tools.enable (
       with pkgs;
       [
@@ -332,9 +322,6 @@ lib.mkIf cfg.enable {
   };
 
   # ── tmux ──
-  # Enabling kitty implies tmux (kitty auto-starts a tmux session), but tmux is
-  # also useful on its own over SSH. mkDefault lets an explicit tmux toggle win.
-  tentaflake.shell.tmux.enable = lib.mkIf cfg.kitty.enable (lib.mkDefault true);
 
   programs.tmux = lib.mkIf cfg.tmux.enable {
     enable = true;
@@ -373,46 +360,42 @@ lib.mkIf cfg.enable {
       ++ lib.optional (backend == "docker") "docker"
       ++ lib.optional (backend == "podman") "podman";
     };
-    interactiveShellInit =
-      lib.optionalString cfg.kitty.enable kittyTmuxAutostart
-      + ''
-        export EDITOR="''${EDITOR:-nano}"
-      ''
-      + lib.optionalString cfg.tools.enable ''
-        # fzf + fzf-tab (NixOS has no programs.fzf module to lean on, so source it).
-        [ -f ${pkgs.fzf}/share/fzf/completion.zsh ] && source ${pkgs.fzf}/share/fzf/completion.zsh
-        [ -f ${pkgs.fzf}/share/fzf/key-bindings.zsh ] && source ${pkgs.fzf}/share/fzf/key-bindings.zsh
-        source ${pkgs.zsh-fzf-tab}/share/fzf-tab/fzf-tab.plugin.zsh
-        zstyle ':completion:*' menu no
-        zstyle ':fzf-tab:complete:cd:*' fzf-preview 'eza -1 --color=always $realpath'
-      ''
-      + lib.optionalString cfg.motd.enable zshMotd;
+    interactiveShellInit = ''
+      export EDITOR="''${EDITOR:-nano}"
+    ''
+    + lib.optionalString cfg.tools.enable ''
+      # fzf + fzf-tab (NixOS has no programs.fzf module to lean on, so source it).
+      [ -f ${pkgs.fzf}/share/fzf/completion.zsh ] && source ${pkgs.fzf}/share/fzf/completion.zsh
+      [ -f ${pkgs.fzf}/share/fzf/key-bindings.zsh ] && source ${pkgs.fzf}/share/fzf/key-bindings.zsh
+      source ${pkgs.zsh-fzf-tab}/share/fzf-tab/fzf-tab.plugin.zsh
+      zstyle ':completion:*' menu no
+      zstyle ':fzf-tab:complete:cd:*' fzf-preview 'eza -1 --color=always $realpath'
+    ''
+    + lib.optionalString cfg.motd.enable zshMotd;
   };
 
   # ── Bash quality-of-life (always present — the fallback when zsh is off) ──
   programs.bash = {
     completion.enable = true;
-    interactiveShellInit =
-      lib.optionalString cfg.kitty.enable kittyTmuxAutostart
-      + ''
-        # History: large, deduped, appended (not clobbered) across sessions.
-        export HISTSIZE=100000
-        export HISTFILESIZE=200000
-        export HISTCONTROL=ignoreboth
-        export HISTTIMEFORMAT='%F %T  '
-        shopt -s histappend checkwinsize 2>/dev/null || true
-        export EDITOR="''${EDITOR:-nano}"
-      ''
-      + lib.optionalString (!cfg.starship.enable) ''
-        # Hand-rolled prompt: user@host:cwd (git branch) — red user when root.
-        __tf_git_branch() {
-          local b
-          b=$(git rev-parse --abbrev-ref HEAD 2>/dev/null) || return
-          printf ' (%s)' "$b"
-        }
-        if [ "$(id -u)" -eq 0 ]; then __tf_uc='\[\033[1;31m\]'; else __tf_uc='\[\033[1;32m\]'; fi
-        PS1="''${__tf_uc}\u@\h\[\033[0m\]:\[\033[1;34m\]\w\[\033[0;33m\]\$(__tf_git_branch)\[\033[0m\]\$ "
-      ''
-      + lib.optionalString cfg.motd.enable bashMotd;
+    interactiveShellInit = ''
+      # History: large, deduped, appended (not clobbered) across sessions.
+      export HISTSIZE=100000
+      export HISTFILESIZE=200000
+      export HISTCONTROL=ignoreboth
+      export HISTTIMEFORMAT='%F %T  '
+      shopt -s histappend checkwinsize 2>/dev/null || true
+      export EDITOR="''${EDITOR:-nano}"
+    ''
+    + lib.optionalString (!cfg.starship.enable) ''
+      # Hand-rolled prompt: user@host:cwd (git branch) — red user when root.
+      __tf_git_branch() {
+        local b
+        b=$(git rev-parse --abbrev-ref HEAD 2>/dev/null) || return
+        printf ' (%s)' "$b"
+      }
+      if [ "$(id -u)" -eq 0 ]; then __tf_uc='\[\033[1;31m\]'; else __tf_uc='\[\033[1;32m\]'; fi
+      PS1="''${__tf_uc}\u@\h\[\033[0m\]:\[\033[1;34m\]\w\[\033[0;33m\]\$(__tf_git_branch)\[\033[0m\]\$ "
+    ''
+    + lib.optionalString cfg.motd.enable bashMotd;
   };
 }
