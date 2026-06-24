@@ -62,6 +62,11 @@
     fi
   '';
 
+  # ── No operator shell extras on the bare installer ──
+  # TTY1 only ever runs installer.sh; a login banner / prompt / agent CLI would
+  # just clutter the one-shot install flow (and there are no agents yet).
+  tentaflake.shell.enable = false;
+
   # ── System state version ──
   system.stateVersion = config.tentaflake.stateVersion;
 }

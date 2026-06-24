@@ -10,6 +10,7 @@
     ./nix-settings.nix
     ./packages.nix
     ./piper-tts-server.nix
+    ./shell.nix
     ./tailscale.nix
     ./users.nix
   ];

@@ -8,6 +8,22 @@
 let
   cfg = config.tentaflake.hermes-auditd;
   auditPkg = pkgs.callPackage ../pkgs/hermes-auditd { };
+
+  # Dedicated unprivileged identity for the daemon and a group through which the
+  # admin reads the audit DB (and runs `hermes top`) without sudo.
+  auditUser = "hermes-audit";
+  auditGroup = "hermes-audit";
+
+  # Auto-discover agent state dirs from the generated OCI containers when the
+  # operator hasn't set watchDirs explicitly. mkHermesAgent names each container
+  # `hermes-<name>` with state dir `/var/lib/hermes-<name>`, so we map the former
+  # to the latter. Agents with a custom stateDir must list watchDirs by hand.
+  discoveredDirs = lib.mapAttrsToList (name: _: "/var/lib/${name}") (
+    lib.filterAttrs (
+      name: _: lib.hasPrefix "hermes-" name
+    ) config.virtualisation.oci-containers.containers
+  );
+  effectiveWatchDirs = if cfg.watchDirs != [ ] then cfg.watchDirs else discoveredDirs;
 in
 {
   options.tentaflake.hermes-auditd = {
@@ -45,6 +61,21 @@ in
   config = lib.mkIf cfg.enable {
     environment.systemPackages = [ auditPkg ];
 
+    # ── Identity ──
+    users.groups.${auditGroup} = { };
+    users.users.${auditUser} = {
+      isSystemUser = true;
+      group = auditGroup;
+      description = "Hermes audit daemon";
+    };
+
+    # ── Let the admin read the audit DB (and run `hermes top`) without sudo ──
+    # The DB lives in the daemon's StateDirectory (group hermes-audit, group-rw);
+    # adding the admin to that group is the whole access grant.
+    users.users.${config.tentaflake.adminUser}.extraGroups = lib.mkIf config.tentaflake.users.enable [
+      auditGroup
+    ];
+
     systemd.services.hermes-auditd = {
       description = "Hermes agent filesystem audit daemon";
       wantedBy = [ "multi-user.target" ];
@@ -56,25 +87,34 @@ in
         RestartSec = "5s";
         Type = "simple";
 
+        User = auditUser;
+        Group = auditGroup;
+
         Environment = [
           "AUDIT_PORT=${toString cfg.port}"
           "AUDIT_DB_PATH=${cfg.dbPath}"
-          "AUDIT_WATCH_DIRS=${lib.concatStringsSep "," cfg.watchDirs}"
+          "AUDIT_WATCH_DIRS=${lib.concatStringsSep "," effectiveWatchDirs}"
           "AUDIT_RETENTION_HOURS=${toString cfg.retentionHours}"
         ];
 
-        # Hardening
+        # Hardening. The daemon runs unprivileged; CAP_DAC_READ_SEARCH is the
+        # one privilege it needs — a *read-only* DAC bypass to inotify-watch the
+        # agents' 0700 state dirs (owned by their own hermes-<name> users). It
+        # can read everywhere but write nowhere outside its StateDirectory.
         NoNewPrivileges = true;
         ProtectSystem = "strict";
         ProtectHome = true;
         PrivateTmp = true;
-        CapabilityBoundingSet = [ "" ];
+        AmbientCapabilities = [ "CAP_DAC_READ_SEARCH" ];
+        CapabilityBoundingSet = [ "CAP_DAC_READ_SEARCH" ];
         SystemCallFilter = [ "@system-service" ];
         LockPersonality = true;
 
-        # State directory for SQLite DB
+        # SQLite DB dir: group-accessible so admins in the hermes-audit group can
+        # read it (and open the WAL files) without sudo. UMask 0007 → files 0660.
         StateDirectory = "hermes-audit";
-        StateDirectoryMode = "0700";
+        StateDirectoryMode = "0770";
+        UMask = "0007";
       };
     };
   };

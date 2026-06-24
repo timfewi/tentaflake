@@ -190,13 +190,27 @@ sudo docker exec hermes-coding cat $HERMES_HOME/logs/errors.log
 sudo docker exec hermes-coding cat $HERMES_HOME/logs/gateway.log
 ```
 
-### Audit daemon (if installed)
+### Audit daemon (if enabled)
 
-The `hermes-auditd` service logs all commands executed by agents:
+The `hermes-auditd` service records **filesystem changes** inside each agent's
+state dir (`/var/lib/hermes-<name>/`) — which files an agent creates, writes,
+removes, renames, or chmods, with a timestamp and size. (It does *not* capture
+the agent's conversation or commands — for that, use `hermes logs <name>`.)
+
+The fastest way to see this is the live dashboard:
+
+```bash
+hermes top        # live TUI: per-agent activity + scrolling event log
+```
+
+The daemon's own service log:
 
 ```bash
 sudo journalctl -u hermes-auditd
 ```
+
+Enable it with `tentaflake.hermes-auditd.enable = true;` (on by default for the
+`agent-host` config). See [`docs/06-shell.md`](06-shell.md#hermes-top--live-activity-dashboard).
 
 ---
 
@@ -316,8 +330,9 @@ Each agent has its own system user `hermes-<name>` with:
 
 ### Audit trail
 
-If `hermes-auditd` is enabled, all terminal commands are logged to
-journald. Review:
+If `hermes-auditd` is enabled, every filesystem change in the agents' state
+dirs is recorded to a SQLite database (24h retention by default). Review it
+live with `hermes top`, or inspect the daemon's own log:
 
 ```bash
 sudo journalctl -u hermes-auditd --since today

@@ -69,10 +69,14 @@ func main() {
 		st.PruneLoop(ctx)
 	}()
 
-	// Start HTTP/WebSocket server in background
-	// TODO: Implement server package and wire notifyCh
-	_ = notifyCh
-	slog.Warn("HTTP/WebSocket server not implemented — notify channel discarded")
+	// Events are read back out of SQLite directly by the `hermes-top` TUI
+	// (run over Tailscale SSH), so the daemon intentionally exposes no network
+	// surface. The live notify channel is therefore unused here; drain it so a
+	// full buffer never blocks the store's non-blocking send.
+	go func() {
+		for range notifyCh {
+		}
+	}()
 
 	slog.Info("hermes-auditd running",
 		"watch_count", len(cfg.WatchDirs),

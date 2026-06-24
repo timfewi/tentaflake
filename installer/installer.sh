@@ -170,6 +170,65 @@ TIMEZONE=$(dialog --stdout --title "Timezone" \
 [ -z "$TIMEZONE" ] && TIMEZONE="UTC"
 
 # ════════════════════════════════════════════════════════════
+# STEP 6b: Optional shell / editor features
+# ════════════════════════════════════════════════════════════
+# A checklist of opt-in extras; each maps to a tentaflake.* toggle written into
+# the generated flake further down. Defaults are all "on" — uncheck to skip.
+# `|| FEATURES=""` keeps `set -e` from aborting if the user cancels the dialog.
+FEATURES=$(dialog --stdout --title "Optional Features" --checklist \
+  "Choose extras to install.\nSPACE toggles an item, ENTER confirms." 18 78 6 \
+  zsh "Zsh + Oh My Zsh (autosuggestions, syntax highlight, fzf-tab)" on \
+  zoxide "zoxide — smart 'cd' that learns your frequent directories" on \
+  nvf "Neovim (nvf) — LSP, treesitter, telescope, git, completion" on \
+  lazygit "lazygit — a fast terminal UI for git" on \
+  tmux "tmux — terminal multiplexer (persistent sessions over SSH)" on \
+  tools "Modern CLI tools (eza, bat, fd, ripgrep, fzf, htop, btop)" on) || FEATURES=""
+# Some dialog builds wrap each tag in quotes; strip them so matching is simple.
+FEATURES=${FEATURES//\"/}
+
+has_feature() { case " $FEATURES " in *" $1 "*) return 0 ;; *) return 1 ;; esac }
+
+# ── Translate selections into fragments injected into the generated flake ──
+# ADMIN_SHELL/TF_TOGGLES hold literal Nix; the heredoc expands the bash var once
+# and does NOT re-scan the result, so embedded ${pkgs...} survive verbatim.
+# shellcheck disable=SC2016  # ${pkgs...} is literal Nix, must NOT expand in bash
+ADMIN_SHELL='"${pkgs.bash}/bin/bash"'
+TF_TOGGLES=""
+NVF_INPUT=""
+NVF_MODULE_LINE=""
+
+if has_feature zsh; then
+  # shellcheck disable=SC2016  # literal Nix interpolation, not bash
+  ADMIN_SHELL='"${pkgs.zsh}/bin/zsh"'
+  TF_TOGGLES+="            tentaflake.shell.zsh.enable = true;"$'\n'
+fi
+if ! has_feature zoxide; then
+  TF_TOGGLES+="            tentaflake.shell.zoxide.enable = false;"$'\n'
+fi
+if has_feature lazygit; then
+  TF_TOGGLES+="            tentaflake.shell.lazygit.enable = true;"$'\n'
+fi
+if has_feature tmux; then
+  TF_TOGGLES+="            tentaflake.shell.tmux.enable = true;"$'\n'
+fi
+if ! has_feature tools; then
+  TF_TOGGLES+="            tentaflake.shell.tools.enable = false;"$'\n'
+fi
+if has_feature nvf; then
+  TF_TOGGLES+="            tentaflake.editor.nvf.enable = true;"$'\n'
+  # Pin nvf to the rev this ISO was built from (guaranteed to exist + cached).
+  NVF_REV=$(jq -r '.nodes.nvf.locked.rev' "$REPO_DIR/flake.lock" 2>/dev/null)
+  if [ -n "$NVF_REV" ] && [ "$NVF_REV" != "null" ]; then
+    NVF_INPUT="    nvf = { url = \"github:NotAShelf/nvf/${NVF_REV}\"; inputs.nixpkgs.follows = \"nixpkgs\"; };"$'\n'
+  else
+    NVF_INPUT="    nvf = { url = \"github:NotAShelf/nvf\"; inputs.nixpkgs.follows = \"nixpkgs\"; };"$'\n'
+  fi
+  NVF_MODULE_LINE=$'\n          ./modules/editor.nix'
+fi
+
+FEATURE_SUMMARY="${FEATURES:-(none)}"
+
+# ════════════════════════════════════════════════════════════
 # STEP 7: Summary + confirm
 # ════════════════════════════════════════════════════════════
 dialog --title "Confirm Installation" --yesno \
@@ -179,10 +238,11 @@ dialog --title "Confirm Installation" --yesno \
   Username:   $USERNAME
   Disk:       $DISK
   Timezone:   $TIMEZONE
+  Features:   $FEATURE_SUMMARY
 
 WARNING: ALL DATA on $DISK will be destroyed!
 
-Proceed?" 14 60 || die "Installation cancelled."
+Proceed?" 16 64 || die "Installation cancelled."
 
 # ════════════════════════════════════════════════════════════
 # STEP 8: Partition and mount
@@ -438,7 +498,7 @@ cat >"$TARGET_NIXOS/flake.nix" <<FLAKEEOF
   description = "NixOS Agent Machine — ${HOSTNAME}";
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/${NIXPKGS_REV}";
-  };
+${NVF_INPUT}  };
   outputs = { self, nixpkgs, ... }@inputs:
     let
       system    = "x86_64-linux";
@@ -458,11 +518,11 @@ cat >"$TARGET_NIXOS/flake.nix" <<FLAKEEOF
           {
             tentaflake.hostName   = uc.hostName;
             tentaflake.adminUser  = uc.userName;
-            tentaflake.adminShell = "\${pkgs.bash}/bin/bash";
+            tentaflake.adminShell = ${ADMIN_SHELL};
             tentaflake.timeZone   = uc.timeZone;
-          }
+${TF_TOGGLES}          }
           ./modules
-          ./configuration.nix
+          ./configuration.nix${NVF_MODULE_LINE}
         ];
       };
     };

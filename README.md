@@ -250,7 +250,12 @@ sudo dd if=result/iso/tentaflake.iso of=/dev/sdX bs=4M status=progress oflag=syn
 
 ### After Install
 
-Follow the [quickstart guide](docs/01-quickstart.md) to set up agent providers and start chatting.
+SSH in over Tailscale (`ssh admin@<hostname>`) and you land in a ready-to-operate
+shell: a login banner shows host + agent health, and the `hermes` command drives the
+agent containers (`hermes status`, `hermes logs <name>`, `hermes restart <name>`,
+`hermes shell <name>`). See [`docs/06-shell.md`](docs/06-shell.md).
+
+Then follow the [quickstart guide](docs/01-quickstart.md) to set up agent providers and start chatting.
 
 ---
 
@@ -423,9 +428,11 @@ New agents appear as Docker containers. Remove an agent from the list, rebuild �
 | `nix-settings.nix` | Flakes, auto-GC, trusted-users, substituters |
 | `packages.nix` | curl, git, jq, tmux, vim, and more |
 | `users.nix` | Admin user (wheel + networkmanager groups) |
+| `shell.nix` | SSH/console operator experience — `hermes` CLI, login banner, prompt, zsh/oh-my-zsh, zoxide, lazygit, modern CLI tools ([docs](docs/06-shell.md)) |
+| `editor.nix` | Optional Neovim via nvf (LSP, treesitter, telescope) — `tentaflake.editor.nvf.enable`, exported as `nixosModules.editor` ([docs](docs/06-shell.md#zsh-zoxide-lazygit-neovim)) |
 | `tailscale.nix` | Tailscale with SSH + tag:auto (optional) |
 | `piper-tts-server.nix` | Local TTS via Piper (OpenAI-compatible API) |
-| `hermes-auditd.nix` | Optional filesystem audit daemon — [docs](pkgs/hermes-auditd/) |
+| `hermes-auditd.nix` | Filesystem audit daemon + `hermes top` live activity dashboard — [docs](docs/06-shell.md#hermes-top--live-activity-dashboard) |
 
 ### Available ISOs
 

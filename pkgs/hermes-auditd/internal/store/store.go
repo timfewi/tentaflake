@@ -127,6 +127,93 @@ func (s *Store) Query(ctx context.Context, agent, since, until string, limit int
 	return events, nil
 }
 
+// Since returns events with an ID greater than afterID, in ascending ID order.
+// It is the incremental tail used by readers (e.g. the hermes-top TUI) to fetch
+// only events they have not yet seen. Limit caps results (default 1000).
+func (s *Store) Since(ctx context.Context, afterID int64, limit int) ([]hermes.Event, error) {
+	if limit <= 0 {
+		limit = 1000
+	}
+	query := `SELECT id, agent, file, op, size, timestamp FROM events WHERE id > ? ORDER BY id ASC LIMIT ?`
+	rows, err := s.db.QueryContext(ctx, query, afterID, limit)
+	if err != nil {
+		return nil, fmt.Errorf("since query: %w", err)
+	}
+	defer rows.Close()
+
+	var events []hermes.Event
+	for rows.Next() {
+		var evt hermes.Event
+		var ts string
+		if err := rows.Scan(&evt.ID, &evt.Agent, &evt.File, &evt.Op, &evt.Size, &ts); err != nil {
+			return nil, fmt.Errorf("scan event: %w", err)
+		}
+		parsed, err := parseTimestamp(ts)
+		if err != nil {
+			slog.Warn("parse timestamp, skipping event", "raw", ts, "error", err)
+			continue
+		}
+		evt.Timestamp = parsed
+		events = append(events, evt)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("rows iteration: %w", err)
+	}
+	return events, nil
+}
+
+// AgentRow is a per-agent activity summary for dashboards: how many events fell
+// inside the recent window, the all-time total retained in the DB, and the most
+// recent event's op/file/timestamp.
+type AgentRow struct {
+	Agent    string    `json:"agent"`
+	Recent   int       `json:"recent"`
+	Total    int       `json:"total"`
+	LastOp   string    `json:"last_op"`
+	LastFile string    `json:"last_file"`
+	LastTime time.Time `json:"last_time"`
+}
+
+// AgentRows returns one AgentRow per agent present in the DB. `window` is a
+// SQLite datetime modifier like "-5 minutes" (must start with "-") used for the
+// Recent count; Total counts every retained row for the agent.
+func (s *Store) AgentRows(ctx context.Context, window string) ([]AgentRow, error) {
+	recent, err := s.Stats(ctx, window)
+	if err != nil {
+		return nil, fmt.Errorf("agent rows recent: %w", err)
+	}
+
+	// Total count + last event (row with the max id) per agent in one pass.
+	const q = `
+SELECT e.agent, c.cnt, e.op, e.file, e.timestamp
+FROM events e
+JOIN (SELECT agent, COUNT(*) AS cnt, MAX(id) AS mid FROM events GROUP BY agent) c
+  ON e.id = c.mid`
+	rows, err := s.db.QueryContext(ctx, q)
+	if err != nil {
+		return nil, fmt.Errorf("agent rows query: %w", err)
+	}
+	defer rows.Close()
+
+	var out []AgentRow
+	for rows.Next() {
+		var r AgentRow
+		var ts string
+		if err := rows.Scan(&r.Agent, &r.Total, &r.LastOp, &r.LastFile, &ts); err != nil {
+			return nil, fmt.Errorf("scan agent row: %w", err)
+		}
+		if parsed, perr := parseTimestamp(ts); perr == nil {
+			r.LastTime = parsed
+		}
+		r.Recent = recent[r.Agent]
+		out = append(out, r)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("agent rows iteration: %w", err)
+	}
+	return out, nil
+}
+
 // buildQuery constructs the SQL query and argument list for filtering events.
 func buildQuery(agent, since, until string, limit int) (string, []any) {
 	query := `SELECT id, agent, file, op, size, timestamp FROM events WHERE 1=1`
@@ -171,7 +258,11 @@ func (s *Store) Stats(ctx context.Context, window string) (map[string]int, error
 	if !strings.HasPrefix(window, "-") {
 		return nil, fmt.Errorf("invalid window %q: must start with '-'", window)
 	}
-	query := `SELECT agent, COUNT(*) as cnt FROM events WHERE timestamp >= datetime('now', ?) GROUP BY agent`
+	// Wrap the stored column in datetime() so the comparison is format-agnostic:
+	// events are stored as RFC3339 ("…T…Z") but datetime('now', …) yields the
+	// space-separated form, and a raw string compare only agrees when the date
+	// differs. datetime() normalizes both sides to the same canonical format.
+	query := `SELECT agent, COUNT(*) as cnt FROM events WHERE datetime(timestamp) >= datetime('now', ?) GROUP BY agent`
 	rows, err := s.db.QueryContext(ctx, query, window)
 	if err != nil {
 		return nil, fmt.Errorf("stats query: %w", err)
@@ -196,7 +287,9 @@ func (s *Store) Stats(ctx context.Context, window string) (map[string]int, error
 
 // Prune deletes events older than the configured retention period.
 func (s *Store) Prune(ctx context.Context) error {
-	query := `DELETE FROM events WHERE timestamp < datetime('now', ?)`
+	// datetime(timestamp) normalizes the stored RFC3339 value before comparison —
+	// see the note in Stats for why a raw string compare is unreliable here.
+	query := `DELETE FROM events WHERE datetime(timestamp) < datetime('now', ?)`
 	hours := fmt.Sprintf("-%d hours", s.retentionHours)
 	result, err := s.db.ExecContext(ctx, query, hours)
 	if err != nil {

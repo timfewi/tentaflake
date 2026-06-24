@@ -15,6 +15,12 @@
       inputs.nixpkgs.follows = "nixpkgs";
     };
 
+    # Neovim distribution (consumed by modules/editor.nix → tentaflake.editor.nvf)
+    nvf = {
+      url = "github:NotAShelf/nvf";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
+
     # Optional: uncomment for home-manager support
     # home-manager = {
     #   url = "github:nix-community/home-manager";
@@ -86,6 +92,10 @@
       nixosModules.installer = import ./installer/iso.nix;
       nixosModules.live = import ./installer/live-iso.nix;
 
+      # Optional Neovim (nvf) module. Kept out of nixosModules.default because it
+      # needs the `nvf` flake input; consumers add that input and import this.
+      nixosModules.editor = import ./modules/editor.nix;
+
       # ── Exported helpers ──
       lib.${system} = { inherit mkHermesAgent constants; };
 
@@ -122,7 +132,7 @@
             tentaflake.hostName = hostName;
             tentaflake.adminUser = adminUser;
             tentaflake.adminDescription = adminDescription;
-            tentaflake.adminShell = "${pkgs.bash}/bin/bash";
+            tentaflake.adminShell = "${pkgs.zsh}/bin/zsh";
             tentaflake.timeZone = "UTC";
             tentaflake.defaultLocale = defaultLocale;
             tentaflake.consoleKeyMap = consoleKeyMap;
@@ -136,8 +146,19 @@
             tentaflake.packages.enable = true;
             tentaflake.users.enable = true;
             tentaflake.tailscale.enable = true;
+            tentaflake.shell.enable = true;
+            # Interactive extras (all opt-in; on here for the built-in host).
+            tentaflake.shell.zsh.enable = true;
+            tentaflake.shell.zoxide.enable = true;
+            tentaflake.shell.lazygit.enable = true;
+            tentaflake.shell.tmux.enable = true;
+            tentaflake.editor.nvf.enable = true;
+            # Audit daemon: records agent filesystem activity for `hermes top`.
+            # watchDirs auto-derives from the agents defined in my-agents.nix.
+            tentaflake.hermes-auditd.enable = true;
           }
           self.nixosModules.default
+          self.nixosModules.editor
           ./configuration.nix
         ];
       };
@@ -180,6 +201,15 @@
             tentaflake.packages.enable = true;
             tentaflake.users.enable = true;
             tentaflake.tailscale.enable = true;
+            # Shell extras are useful on the live ISO too, but the live profile
+            # ships its own static users.motd — disable the dynamic banner so
+            # operators don't see two banners stacked on every login.
+            tentaflake.shell.enable = true;
+            tentaflake.shell.motd.enable = false;
+            tentaflake.shell.tmux.enable = true;
+            # Audit daemon on too, so `hermes top` works on the live appliance —
+            # watchDirs auto-derives from the live agents (default + research).
+            tentaflake.hermes-auditd.enable = true;
           }
           self.nixosModules.default
           ./configuration.nix

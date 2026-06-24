@@ -4,8 +4,11 @@ buildGoModule {
   pname = "hermes-auditd";
   version = "0.1.0";
   src = ./.;
-  vendorHash = "sha256-hnELFvds9dzMHi6lo4MHzn+ayu1sWh+aKDeTaVUScEk=";
-  subPackages = [ "cmd/hermes-auditd" ];
+  vendorHash = "sha256-+b+JmOmyut/bhwQSsmv49fpRfi4cW1qxrQoDbs9CMBE=";
+  subPackages = [
+    "cmd/hermes-auditd"
+    "cmd/hermes-top"
+  ];
 
   meta = {
     description = "Filesystem audit daemon for Hermes agent state directories";
