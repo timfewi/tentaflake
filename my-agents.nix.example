@@ -1,16 +1,184 @@
 { mkHermesAgent }:
 
-# ── Your agent definitions ──
-# Copy this to my-agents.nix and customize.
+# ════════════════════════════════════════════════════════════════════
+# my-agents.nix — define every Hermes agent that runs on THIS host.
 #
-# Usage in configuration.nix:
-#   myAgents = import ./my-agents.nix { inherit mkHermesAgent; };
-#   imports = myAgents;
+# Setup:
+#   cp my-agents.nix.example my-agents.nix
+#   $EDITOR my-agents.nix
+#   git add my-agents.nix        # auto-imported by configuration.nix when present
+#
+# How it works:
+#   Each entry in `agentDefs` is one argument set passed to mkHermesAgent,
+#   which turns it into a NixOS module (system user + isolated state dir at
+#   /var/lib/hermes-<name> + auto-starting Docker container).
+#   `map mkHermesAgent agentDefs` returns the list of modules that
+#   configuration.nix splices into its `imports`.
+#
+#   To add an agent: append another attrset to `agentDefs` and rebuild.
+#   Adding it here is enough — the audit daemon's watchDirs auto-derive
+#   from these names too.
+#
+# Reference: docs/02-agent-tips.md (settings deep-dive),
+#            docs/04-agenix-secrets.md (encrypted credentials).
+# ════════════════════════════════════════════════════════════════════
 
-[
-  (mkHermesAgent {
-    name = "default";
-    # Path to env file with API keys (OPENROUTER_API_KEY, etc.)
-    envFile = "/run/secrets/hermes-default.env";
-  })
-]
+let
+  agentDefs = [
+
+    # ──────────────────────────────────────────────────────────
+    # Minimal agent — all you NEED to get started.
+    # A name + an env file holding the API key. Everything else
+    # uses Hermes' built-in defaults; the LLM provider is set up
+    # interactively (`hermes setup --portal`) inside the container.
+    # ──────────────────────────────────────────────────────────
+    {
+      name = "coding";
+      # Plaintext .env on tmpfs (simplest). Prefer `agenixFile` for
+      # encrypted secrets — see the reference agent below.
+      envFile = "/run/secrets/hermes-coding.env";
+    }
+
+    # ══════════════════════════════════════════════════════════
+    # Fully-configured reference agent (COMMENTED OUT).
+    # Uncomment, rename, and trim to taste to add a second agent
+    # that is fully declared in Nix instead of configured by hand.
+    #
+    # Everything under `settings` is serialized to a config.yaml that
+    # is mounted read-only into the container — so these are exactly
+    # the keys you would otherwise set with `hermes config set ...`.
+    # ══════════════════════════════════════════════════════════
+    # {
+    #   name = "assistant";
+    #
+    #   # ── Secrets: use exactly ONE of envFile / agenixFile ──
+    #   #   envFile    = "/run/secrets/hermes-assistant.env"  # plaintext on tmpfs
+    #   #   agenixFile = "/run/agenix/hermes-assistant-env"   # agenix-decrypted (recommended)
+    #   agenixFile = "/run/agenix/hermes-assistant-env";
+    #
+    #   # ── Seed files (optional) ──
+    #   # Copied into the state dir on FIRST boot only (no-clobber):
+    #   # SOUL.md, AGENTS.md, BRAND.md, skills/. Runtime edits survive rebuilds.
+    #   # seedDir = "/etc/nixos/seeds/assistant";
+    #
+    #   # ── Hermes configuration (becomes config.yaml) ──
+    #   settings = {
+    #     # Primary model. `provider` is REQUIRED — it is NOT inferred from the name.
+    #     model = {
+    #       default = "anthropic/claude-haiku-4.5";
+    #       provider = "openrouter";
+    #       # Tried in order if the default errors/times out:
+    #       fallbacks = [
+    #         {
+    #           provider = "openrouter";
+    #           model = "google/gemini-2.5-flash-lite";
+    #         }
+    #       ];
+    #     };
+    #
+    #     # Auxiliary models — route specific internal tasks to cheaper/specialized
+    #     # models. Omit any entry to fall back to `model.default`.
+    #     auxiliary = {
+    #       vision.model = "anthropic/claude-haiku-4.5";
+    #       vision.provider = "openrouter";
+    #       web_extract.model = "anthropic/claude-haiku-4.5";
+    #       web_extract.provider = "openrouter";
+    #       compression.model = "anthropic/claude-haiku-4.5";
+    #       compression.provider = "openrouter";
+    #       approval.model = "anthropic/claude-haiku-4.5";
+    #       approval.provider = "openrouter";
+    #     };
+    #
+    #     # Context compression. protect_* keep the system prompt and recent turns
+    #     # verbatim — without them the agent loses its identity and continuity.
+    #     compression = {
+    #       enabled = true;
+    #       threshold = 0.50; # start compressing at 50% context fill
+    #       target_ratio = 0.20; # compress down to ~20% of original size
+    #       protect_last_n = 20; # keep the last 20 messages uncompressed
+    #       protect_first_n = 3; # keep the first 3 (system prompt) uncompressed
+    #     };
+    #
+    #     # Long-term memory + per-user profiles.
+    #     memory = {
+    #       memory_enabled = true;
+    #       user_profile_enabled = true;
+    #     };
+    #
+    #     # Max agentic turns per task before the agent stops on its own.
+    #     agent.max_turns = 50;
+    #
+    #     display = {
+    #       tool_progress = "off";
+    #       busy_input_mode = "queue"; # queue input while the agent is working
+    #     };
+    #
+    #     # Terminal backend. "none" locks the agent out of shell access (MCP-only);
+    #     # otherwise it can run commands inside its container.
+    #     terminal.backend = "none";
+    #
+    #     # Web backend: "firecrawl" (needs FIRECRAWL_API_KEY) or "disabled".
+    #     web.backend = "firecrawl";
+    #
+    #     # Approval policy for risky tool calls: "smart" | "always" | "never".
+    #     approvals.mode = "smart";
+    #
+    #     # Explicit toolsets — prefer this over ["all"], which also enables risky
+    #     # tools (Docker, package management, system operations).
+    #     toolsets = [
+    #       "terminal"
+    #       "web"
+    #       "memory"
+    #       "file"
+    #       "skills"
+    #     ];
+    #
+    #     # Caps so a huge file/tool result can't blow the context window.
+    #     file_read_max_chars = 100000;
+    #     tool_output = {
+    #       max_bytes = 150000;
+    #       max_lines = 5000;
+    #     };
+    #
+    #     # Provider timeouts (raise for slow / long-generation models).
+    #     providers.openrouter = {
+    #       request_timeout_seconds = 1800;
+    #       stale_timeout_seconds = 300;
+    #     };
+    #
+    #     # Timezone for cron / scheduled tasks.
+    #     cron.timezone = "UTC";
+    #
+    #     # Text-to-speech (optional). Local Piper via OpenAI-compatible endpoint —
+    #     # see modules/piper-tts-server.nix. Set tts.provider = "edge" for online, no files.
+    #     # tts = {
+    #     #   provider = "openai";
+    #     #   openai = {
+    #     #     base_url = "http://localhost:5001/v1";
+    #     #     model = "piper";
+    #     #     voice = "en_US-amy-medium";
+    #     #   };
+    #     # };
+    #
+    #     # Speech-to-text (optional). Groq Whisper needs GROQ_API_KEY.
+    #     # stt = {
+    #     #   enabled = true;
+    #     #   provider = "groq";
+    #     #   groq.model = "whisper-large-v3-turbo";
+    #     # };
+    #   };
+    #
+    #   # ── Extra Docker volumes (host:container:mode) ──
+    #   # e.g. mount Piper voice files, or Node for npx-based MCP servers.
+    #   # extraVolumes = [ "/usr/share/piper-voices:/usr/share/piper-voices:ro" ];
+    #
+    #   # ── Extra environment variables inside the container ──
+    #   # extraEnvironment = { HERMES_TIMEZONE = "UTC"; };
+    #
+    #   # ── Extra OCI/Docker options (resource limits, etc.) ──
+    #   # extraContainerConfig = { extraOptions = [ "--memory=4g" ]; };
+    # }
+
+  ];
+in
+map mkHermesAgent agentDefs

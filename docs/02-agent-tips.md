@@ -90,14 +90,17 @@ sudo docker inspect hermes-coding | jq '.[0].Mounts'
 
 **Add an agent:**
 
-1. Edit `my-agents.nix`:
+1. Edit `my-agents.nix` — append an attrset to the `agentDefs` list:
 
    ```nix
-   (mkHermesAgent {
+   {
      name    = "personal";
      envFile = "/run/secrets/hermes-personal.env";
-   })
+   }
    ```
+
+   See the commented reference agent in `my-agents.nix.example` for every
+   available `settings` / volume / container option.
 
 2. Create env file:
 
