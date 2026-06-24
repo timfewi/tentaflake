@@ -12,6 +12,13 @@ metadata:
 
 # Hermes Memory & Personality
 
+> **Tentaflake context:** This skill describes Hermes' built-in memory system
+> — it works the same inside tentaflake agent containers. The memory settings
+> (`memory.memory_enabled`, `memory.user_profile_enabled`, etc.) can be
+> configured declaratively via the `settings` attrset in `my-agents.nix`.
+> See `my-agents.nix.example` for examples. Agent state (including memory)
+> persists in `/var/lib/hermes-<name>/` on the host.
+
 ## When to Use
 
 - Manage what the agent remembers across sessions

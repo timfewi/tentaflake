@@ -323,7 +323,7 @@ Each agent gets:
 | `networkMode` | `string` | `"host"` | `"host"` or `"bridge"` |
 | `extraVolumes` | `list` | `[]` | Extra `host:container:mode` mounts |
 
-Full option reference: [`docs/options-reference.md`](docs/options-reference.md)
+Full option reference: [`.agents/skills/tentaflake-repo-guidance/SKILL.md`](.agents/skills/tentaflake-repo-guidance/SKILL.md)
 
 ### Secrets: Two Patterns
 

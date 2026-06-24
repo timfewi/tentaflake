@@ -12,6 +12,14 @@ metadata:
 
 # Hermes Provider Setup
 
+> **Tentaflake context:** Inside a tentaflake agent container, you can run
+> `hermes config set` interactively — but if your agent was defined with a
+> `settings` attrset in `my-agents.nix`, the `config.yaml` inside the
+> container is **read-only** (mounted `:ro`). Interactive changes are lost
+> on restart. For a persistent configuration, put settings in `my-agents.nix`
+> instead and rebuild. API keys always go in `/run/secrets/hermes-<name>.env`
+> (or agenix), not via `hermes config set`.
+
 ## When to Use
 
 - Configure LLM provider for Hermes (first-time setup)
@@ -177,7 +185,7 @@ model:
     - provider: nous
       model: anthropic/claude-sonnet-4.6
     - provider: anthropic
-      model: claude-sonnet-4-20250514
+      model: claude-sonnet-4-6
 ```
 
 Fallback chain engages on errors (rate limits, 5xx, connection drops). `agent.api_max_retries` controls retries before fallback:

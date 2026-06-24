@@ -98,7 +98,7 @@ When adding a new NixOS module under `modules/`:
 
 ## Adding a Hermes Skill
 
-Skills live under `skills/<name>/SKILL.md`. Follow the [skill authoring guide](docs/03-skill-index.md) for format.
+Skills live under `.agents/skills/<name>/SKILL.md`. Follow the [skill authoring guide](docs/03-skill-index.md) for format.
 
 ## Questions?
 

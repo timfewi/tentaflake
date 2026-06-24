@@ -12,6 +12,13 @@ metadata:
 
 # Hermes Tools Configuration
 
+> **Tentaflake context:** This skill describes Hermes' tool/toolset
+> configuration — it works the same inside tentaflake agent containers.
+> Toolset selection, output limits, and backend choices can be set
+> declaratively via the `settings` attrset in `my-agents.nix`.
+> See `my-agents.nix.example` for the `toolsets`, `tool_output`,
+> `web.backend`, and `terminal.backend` options.
+
 ## When to Use
 
 - Enable/disable specific tools per platform

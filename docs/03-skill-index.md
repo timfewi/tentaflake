@@ -29,18 +29,45 @@ hermes skills load skill-name
 
 ## Bundled Skills
 
-These skills ship with the installed system at
-`/etc/nixos/skills/` (copied to each agent's `$HERMES_HOME/skills/` during
-install).
+These skills are in `.agents/skills/` at the repo root. They serve two
+purposes:
 
-| Skill | Purpose | Category |
-|-------|---------|----------|
-| **hermes-config-manager** | Config structure, profiles, env vars, `hermes config set` | devops |
-| **hermes-provider-setup** | LLM provider setup, model selection, OpenRouter/Nous/Anthropic | devops |
-| **hermes-memory-personality** | MEMORY.md, USER.md, SOUL.md — identity and persistence | productivity |
-| **hermes-tools-config** | Tool/toolset enable/disable, backends, truncation | devops |
+1. **Development-agent skills** — instructions for AI agents working on this repo
+2. **Hermes container skills** — reference docs available inside running agent
+   containers (when `seedDir` points to them or they're installed via
+   `hermes skills install`)
+
+| Skill | Purpose | Type |
+|-------|---------|------|
+| **handle-the-host** | Tailscale SSH, NixOS rebuilds, container ops on deployed machines | tentaflake-specific |
+| **tentaflake-repo-guidance** | Full repo reference: all modules, options, lib, ISOs, build targets | tentaflake-specific |
+| **hermes-config-manager** | Config structure, profiles, env vars, `hermes config set` | Hermes generic |
+| **hermes-provider-setup** | LLM provider setup, model selection, OpenRouter/Nous/Anthropic | Hermes generic |
+| **hermes-memory-personality** | MEMORY.md, USER.md, SOUL.md — identity and persistence | Hermes generic |
+| **hermes-tools-config** | Tool/toolset enable/disable, backends, truncation | Hermes generic |
+
+**Note about Hermes-generic skills:** These describe the interactive
+`hermes config set` workflow used inside a running agent container. If you
+defined your agent with a `settings` attrset in `my-agents.nix`, the
+`config.yaml` inside the container is **read-only** — interactive changes
+are lost on restart. Use `my-agents.nix.example` for the declarative
+approach instead.
 
 ### Skill details
+
+**handle-the-host**
+- Tailscale SSH connection to deployed tentaflake machines
+- NixOS rebuild and rollback commands
+- Docker container management (logs, restart, exec)
+- Passwordless sudo setup for remote operations
+- Tailscale Serve for exposing services
+
+**tentaflake-repo-guidance**
+- Full repo layout, file tree, and module structure
+- Complete `tentaflake.*` options reference with defaults
+- `mkHermesAgent` parameter reference
+- ISO build targets and commands
+- How to consume as a flake input
 
 **hermes-config-manager**
 - Config directory layout (`~/.hermes/`)
