@@ -70,7 +70,7 @@
 
 ## What Is Tentaflake?
 
-**Tentaflake** is a **NixOS** (Linux distro configured entirely in code) template for running multiple isolated **Hermes AI agents** on one machine. Each agent lives in its own Docker container with its own secrets, skills, and personality — and the whole system is defined in a single Git-tracked config file.
+**Tentaflake** is a **NixOS** (Linux distro configured entirely in code) template for running multiple isolated **Hermes AI agents** on one machine. Each agent lives in its own Docker container with its own secrets, skills, and personality. Define all your agents in one file — the template handles servers, secrets, networking, and shells.
 
 No SaaS, no third-party agent router — you host, you control. Clone → configure → rebuild.
 
