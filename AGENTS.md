@@ -31,6 +31,6 @@ Domain-specific work belongs in FORKS, not here.
 - `installer/` — ISO installer and firstboot scripts
 - `examples/` — consumer-flake reference
 - `docs/` — user-facing documentation
-- `skills/` — bundled Hermes skills
+- `.agents/skills/` — bundled Hermes skills (also development agent instructions for this repo)
 
 See CONTRIBUTING.md for PR process.
