@@ -161,6 +161,12 @@ let
   ownUid = toString containerUid;
   ownGid = toString containerGid;
 
+  # `docker exec` defaults to UID 0. Anything it writes into $HERMES_HOME then
+  # lands root-owned and the agent (uid ${ownUid}) can no longer read/write it —
+  # e.g. a root-owned cron/jobs.json or a 0555 profile dir breaks the scheduler.
+  # Always exec as the agent uid so in-container writes stay agent-owned.
+  ctrExec = "${ctrBin} exec -u ${ownUid}:${ownGid}";
+
   ctrService = "${backend}-hermes-${name}.service";
 
   # Generate config.yaml derivation when settings are provided
@@ -241,7 +247,7 @@ let
         RemainAfterExit = true;
       };
       script = ''
-        ${ctrBin} exec hermes-${name} sh -c '
+        ${ctrExec} hermes-${name} sh -c '
           git config --global user.name "${gitIdentity.name}"
           git config --global user.email "${gitIdentity.email}"
           git config --global init.defaultBranch main
@@ -300,7 +306,7 @@ let
         Type = "simple";
         Restart = "always";
         RestartSec = 10;
-        ExecStart = "${ctrBin} exec hermes-${name} sh -c 'exec hermes dashboard --host 0.0.0.0 --port ${toString dashboard.port} --no-open --skip-build'";
+        ExecStart = "${ctrExec} hermes-${name} sh -c 'exec hermes dashboard --host 0.0.0.0 --port ${toString dashboard.port} --no-open --skip-build'";
       };
     };
   };
@@ -317,7 +323,7 @@ let
         Type = "simple";
         Restart = "always";
         RestartSec = 10;
-        ExecStart = "${ctrBin} exec hermes-${name} sh -c ${lib.escapeShellArg def.startCommand}";
+        ExecStart = "${ctrExec} hermes-${name} sh -c ${lib.escapeShellArg def.startCommand}";
       };
     }
   ) services;
@@ -333,7 +339,7 @@ let
         RemainAfterExit = true;
       };
       script = ''
-        ${ctrBin} exec hermes-${name} sh -c '
+        ${ctrExec} hermes-${name} sh -c '
           code=$(curl -s -o /dev/null -w "%{http_code}" \
             -X POST "${providerHealthcheck.url}/chat/completions" \
             -H "Authorization: Bearer ''$${providerHealthcheck.apiKeyEnv}" \

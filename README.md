@@ -27,7 +27,7 @@
 
 ## What Is Tentaflake?
 
-**Tentaflake** is a **NixOS** (Linux distro configured entirely in code) template for running multiple isolated **Hermes AI agents** on one machine. Each agent lives in its own Docker container with its own secrets, skills, and personality. Define all your agents in one file — the template handles servers, secrets, networking, and shells.
+**Tentaflake** is a **NixOS** (Linux distro configured entirely in code) template for running multiple isolated **Hermes AI agents** on one machine. Each agent lives in its own Docker container with its own secrets, skills, and personality. Or run teams of agents in one container using **Hermes Profiles** — multiple personas, different skills, shared resources, all in a single container. Define all your agents in one file — the template handles servers, secrets, networking, and shells.
 
 No SaaS, no third-party agent router — you host, you control. Clone → configure → rebuild.
 
@@ -377,13 +377,18 @@ New agents appear as Docker containers. Remove an agent from the list, rebuild �
        ───────────────── Shared Services ─────────────────
       🎤 Piper TTS   🔗 Tailscale   🗄️ Docker   🔐 Agenix
       (port 5001)    (mesh VPN)     (runtime)    (secrets)
+
+   📝 Hermes Profiles: multiple agent personas can share one container
+   (e.g. "coding" + "personal" as different profiles in the same Docker
+   container) — ideal for collaborative teams. Security-critical agents
+   still get their own container.
 ```
 
 ### Key Design Decisions
 
 | Decision | Rationale |
 |---|---|
-| **One container per agent** | Full isolation — no shared context, separate filesystems |
+| **One container per agent** (or share via Profiles) | Full isolation — no shared context, separate filesystems. **Hermes Profiles** let multiple agent personas (different skills, secrets, personalities) run inside a single container for collaborative teams, while keeping per-container isolation for security-critical agents |
 | **Host networking** | Containers use the host's network stack directly — agents reach Piper, Tailscale, etc. on `localhost` without port mapping |
 | **SeedDir over :ro volumes** | Hermes can write learned skills; base files seed once, never overwrite |
 | **Agenix or envFile** | Choose between encrypted-in-repo or plain-file secrets |
@@ -405,6 +410,7 @@ New agents appear as Docker containers. Remove an agent from the list, rebuild �
 | `tailscale.nix` | Tailscale with SSH + tag:auto (optional) |
 | `piper-tts-server.nix` | Local TTS via Piper (OpenAI-compatible API) |
 | `hermes-auditd.nix` | Filesystem audit daemon + `hermes top` live activity dashboard — [docs](docs/06-shell.md#hermes-top--live-activity-dashboard) |
+| **Hermes Profiles** | *(no module needed)* Run multiple agent personas inside a single container. Configure via `hermes profile create` — each profile gets its own personality, skills, model config, and toolsets while sharing the container's secrets and runtime |
 
 ### Available ISOs
 
