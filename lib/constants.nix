@@ -29,4 +29,12 @@
 
   # Reserved: default image for mkHermesAgent (not wired yet)
   # hermesImage = "ghcr.io/nousresearch/hermes-agent:latest";
+
+  # UID/GID the official hermes-agent image runs its `hermes` user as. The host
+  # state dir + any mounted data must be owned by this so the container (which
+  # runs as this uid) can write them. Owning host dirs to a *different* uid (e.g.
+  # an auto-allocated NixOS system user) is the classic cause of PermissionError
+  # on $HERMES_HOME. Override via mkHermesAgent's `containerUid`/`containerGid`.
+  containerUid = 10000;
+  containerGid = 10000;
 }
