@@ -208,17 +208,27 @@ Defined in `lib/mkHermesAgent.nix`. Creates one Hermes agent as a NixOS module.
 | `seedDir` | path? | `null` | Directory of base files (SOUL.md, skills/) for first-boot seed |
 | `extraVolumes` | list of str | `[]` | Extra Docker volumes |
 | `extraEnvironment` | attrset | `{}` | Extra env vars |
-| `cmd` | list of str | `["gateway", "run", "--replace"]` | Container entrypoint |
+| `cmd` | list of str? | `null` | Container command (null → `gateway run --replace`) |
 | `networkMode` | str | `"host"` | Docker network mode |
 | `autoStart` | bool | `true` | Auto-start with system |
 | `createUser` | bool | `true` | Create system user/group |
 | `extraContainerConfig` | attrset | `{}` | Merged into OCI container config (use for `memory`, `cpus`, port maps) |
 | `settings` | YAML attrset? | `null` | Hermes YAML/JSON config serialized to `config.yaml` |
+| `containerUid` / `containerGid` | int | `10000` | UID/GID the container runs as; state owned by it (fixes `PermissionError`) |
+| `healDataDirs` | list of str | `[]` | Extra data dirs to `chown` to the container uid each boot |
+| `providerHealthcheck` | attrset? | `null` | Fail-loud boot preflight (`{ url; model; apiKeyEnv; }`) |
+| `gitIdentity` | attrset? | `null` | Git identity inside the container (`{ name; email; }`), re-applied each boot |
+| `gitAutoPush` | attrset? | `null` | Host-side secret-safe push (`{ tokenEnvFile; reposRoot?; tokenEnvVar?; interval?; }`) |
+| `dashboard` | attrset? | `null` | Launch + optional tailnet serve (`{ port; tailnetPort?; }`) |
+| `services` | attrset | `{}` | Durable agent-built web apps (`<name> = { startCommand; port?; tailnetPort?; }`) |
+
+Operational-hardening args (`containerUid` … `services`) are all optional and
+default-off. See `docs/07-operations.md` for the rationale and gotchas.
 
 **What each agent gets:**
 
 - System user `hermes-<name>` + group
-- State dir `/var/lib/hermes-<name>` (0700, owned by agent user)
+- State dir `/var/lib/hermes-<name>` (0700, owned by the container uid, default 10000)
 - OCI container `hermes-<name>` (host networking, auto-started via systemd)
 - `HERMES_HOME` pointing to its isolated state dir
 - Optional `config.yaml` from `settings` attrset (mounted read-only)

@@ -67,6 +67,11 @@ let
     #     model = {
     #       default = "anthropic/claude-haiku-4.5";
     #       provider = "openrouter";
+    #       # For provider = "custom" / any OpenAI-compatible endpoint, set base_url
+    #       # EXPLICITLY and make sure the matching <NAME>_API_KEY is in the env file.
+    #       # A wrong/absent base_url is the #1 cause of silent 401s that surface as
+    #       # "agent crashed / protocol violation" — see `providerHealthcheck` below.
+    #       # base_url = "https://api.example.com/v1";
     #       # Tried in order if the default errors/times out:
     #       fallbacks = [
     #         {
@@ -177,6 +182,44 @@ let
     #
     #   # ── Extra OCI/Docker options (resource limits, etc.) ──
     #   # extraContainerConfig = { extraOptions = [ "--memory=4g" ]; };
+    #
+    #   # ══════════════════════════════════════════════════════════
+    #   # Operational hardening (all optional, default-off).
+    #   # See docs/07-operations.md for the why behind each.
+    #   # ══════════════════════════════════════════════════════════
+    #
+    #   # Fail-loud provider preflight. POSTs a 1-token completion at boot and logs
+    #   # PASS/FAIL + HTTP status to the journal, so a bad base_url / API key is an
+    #   # obvious auth error instead of a downstream "agent crashed" mystery.
+    #   # providerHealthcheck = {
+    #   #   url       = "https://api.example.com/v1";  # the model.base_url
+    #   #   model     = "anthropic/claude-haiku-4.5";
+    #   #   apiKeyEnv = "OPENROUTER_API_KEY";          # value stays in the container
+    #   # };
+    #
+    #   # Chown extra mounted data dirs to the container uid each boot (rebuilds
+    #   # heal ownership instead of breaking $HERMES_HOME writes).
+    #   # healDataDirs = [ "/srv/agent-data/assistant" ];
+    #
+    #   # Git identity inside the container (re-applied each boot — survives the
+    #   # ephemeral in-container $HOME being wiped on recreate).
+    #   # gitIdentity = { name = "assistant-bot"; email = "assistant@example.com"; };
+    #
+    #   # Push the agent's repos from the HOST with a token the agent never sees
+    #   # (Hermes strips secrets from the agent terminal — the agent commits, the
+    #   # host pushes). Targets GitHub https remotes under <stateDir>/workspace.
+    #   # gitAutoPush = { tokenEnvFile = "/run/agenix/hermes-assistant-env"; };
+    #
+    #   # Publish the agent's web dashboard on the tailnet (TLS, tailnet-only).
+    #   # `port` = in-container bind; `tailnetPort` = external HTTPS (keep them
+    #   # different under host networking — convention: internal = external + 100).
+    #   # dashboard = { port = 9219; tailnetPort = 9119; };
+    #
+    #   # Expose agent-built web apps durably (auto-restart, optional tailnet serve).
+    #   # services.knowledge-base = {
+    #   #   startCommand = "cd $HERMES_HOME/workspace/kb && exec ./.venv/bin/python app.py";
+    #   #   port = 9191; tailnetPort = 9122;
+    #   # };
     # }
 
   ];
