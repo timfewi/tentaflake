@@ -92,7 +92,7 @@ in
   # NOTE: config.yaml is mounted READ-ONLY by design (config is declarative —
   # edit it here + rebuild, not via the dashboard). The dashboard's "save
   # config" button will return a 500 against this read-only file; that is
-  # expected. See docs/persistence-and-ops.md.
+  # expected. See docs/07-operations.md.
   settings ? null,
 
   # ── Operational hardening (all optional, default-off) ───────────────────────

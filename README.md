@@ -280,6 +280,21 @@ Each agent gets:
 | `networkMode` | `string` | `"host"` | `"host"` or `"bridge"` |
 | `extraVolumes` | `list` | `[]` | Extra `host:container:mode` mounts |
 
+#### Operational hardening (all optional, default-off)
+
+| Option | Type | Description |
+|---|---|---|
+| `containerUid` / `containerGid` | `int` | UID/GID the container runs as; state dirs are owned by it (default `10000`, the image's `hermes` user). Prevents `PermissionError` on `$HERMES_HOME` |
+| `healDataDirs` | `list` | Extra mounted data dirs to `chown` to the container uid each boot (rebuilds heal ownership) |
+| `providerHealthcheck` | `attrset` | Fail-loud boot preflight: POSTs a 1-token completion, logs PASS/FAIL + HTTP status so a bad `base_url`/key isn't mistaken for an agent crash |
+| `gitIdentity` | `attrset` | Set git identity inside the container, re-applied each boot |
+| `gitAutoPush` | `attrset` | Push the agent's repos from the **host** with a token the agent never sees (Hermes strips secrets from the agent terminal) |
+| `dashboard` | `attrset` | Launch + optionally tailnet-publish the agent dashboard |
+| `services` | `attrset` | Run + optionally tailnet-publish durable agent-built web apps |
+
+See [`docs/07-operations.md`](docs/07-operations.md) for the persistence model, the
+UID/secret/`config.yaml` gotchas, and the rationale behind each option.
+
 Full option reference: [`.agents/skills/tentaflake-repo-guidance/SKILL.md`](.agents/skills/tentaflake-repo-guidance/SKILL.md)
 
 ### Secrets: Two Patterns
