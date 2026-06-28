@@ -56,7 +56,7 @@ Nix is a **package manager** — NOT NixOS the operating system. It runs on Ubun
 
 ```bash
 # Install Nix on any Linux or macOS — works alongside your existing tools
-curl --proto '=https' --tlsv1.2 -sSf https://nix.dev/install-nix | sh
+curl --proto '=https' --tlsv1.2 -L https://nixos.org/nix/install | sh
 
 # Restart your shell or source the profile
 . "$HOME/.nix-profile/etc/profile.d/nix.sh"
@@ -105,7 +105,7 @@ git clone https://github.com/timfewi/tentaflake
 cd tentaflake
 
 # Build the live ISO (takes a few mins first time)
-nix build .#live-agent-iso
+nix build .#live-agent-iso --extra-experimental-features 'nix-command flakes'
 #     ^^^^   ^^^^^^^^^^^^^^^^
 #     |      output named "live-agent-iso" from this flake
 #     "nix build" builds an output (package, ISO, config)
