@@ -409,7 +409,7 @@ New agents appear as Docker containers. Remove an agent from the list, rebuild �
 | `editor.nix` | Optional Neovim via nvf (LSP, treesitter, telescope) — `tentaflake.editor.nvf.enable`, exported as `nixosModules.editor` ([docs](docs/06-shell.md#zsh-zoxide-lazygit-neovim)) |
 | `tailscale.nix` | Tailscale with SSH + tag:auto (optional) |
 | `piper-tts-server.nix` | Local TTS via Piper (OpenAI-compatible API) |
-| `hermes-auditd.nix` | Filesystem audit daemon + `hermes top` live activity dashboard — [docs](docs/06-shell.md#hermes-top--live-activity-dashboard) |
+| `hermes-auditd.nix` | Filesystem audit daemon + `hermes top` TUI + the **Agent Console** web file explorer & live monitor — [docs](docs/06-shell.md#agent-console--web-file-explorer--live-monitor) |
 | **Hermes Profiles** | *(no module needed)* Run multiple agent personas inside a single container. Configure via `hermes profile create` — each profile gets its own personality, skills, model config, and toolsets while sharing the container's secrets and runtime |
 
 ### Available ISOs

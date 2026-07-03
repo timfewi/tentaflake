@@ -26,6 +26,25 @@ type Config struct {
 
 	// RetentionHours is the number of hours to retain events (AUDIT_RETENTION_HOURS, default 24).
 	RetentionHours int
+
+	// ConsoleAddr is the listen address for the Agent Console web server
+	// (AUDIT_CONSOLE_ADDR, default 127.0.0.1:9090). Used by cmd/tentaflake-console.
+	ConsoleAddr string
+
+	// ConsoleRoots are the agent file roots exposed (read-only) by the console
+	// file explorer (AUDIT_CONSOLE_ROOTS, comma-separated "name:path" pairs).
+	ConsoleRoots []Root
+
+	// ConsoleDeny are extra basename glob patterns hidden by the file explorer,
+	// appended to the built-in secret/clutter denylist (AUDIT_CONSOLE_DENY,
+	// comma-separated, case-insensitive filepath.Match patterns).
+	ConsoleDeny []string
+}
+
+// Root maps a display name (the agent) to a host directory the console exposes.
+type Root struct {
+	Name string
+	Path string
 }
 
 var (
@@ -63,12 +82,56 @@ func Load() (*Config, error) {
 		return nil, fmt.Errorf("AUDIT_RETENTION_HOURS %d: %w", retention, ErrRetentionInvalid)
 	}
 
+	consoleAddr := envStr("AUDIT_CONSOLE_ADDR", "127.0.0.1:9090")
+
+	roots, err := parseRoots(envStr("AUDIT_CONSOLE_ROOTS", ""))
+	if err != nil {
+		return nil, fmt.Errorf("AUDIT_CONSOLE_ROOTS: %w", err)
+	}
+
+	var deny []string
+	if raw := strings.TrimSpace(envStr("AUDIT_CONSOLE_DENY", "")); raw != "" {
+		for _, p := range strings.Split(raw, ",") {
+			if p = strings.TrimSpace(p); p != "" {
+				deny = append(deny, p)
+			}
+		}
+	}
+
 	return &Config{
 		Port:           port,
 		DBPath:         dbPath,
 		WatchDirs:      watchDirs,
 		RetentionHours: retention,
+		ConsoleAddr:    consoleAddr,
+		ConsoleRoots:   roots,
+		ConsoleDeny:    deny,
 	}, nil
+}
+
+// parseRoots parses a comma-separated list of "name:path" pairs into Roots.
+// Whitespace around each pair and field is trimmed; empty entries are skipped.
+// Only the first ':' separates name from path, so absolute paths are fine.
+func parseRoots(raw string) ([]Root, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil, nil
+	}
+	var roots []Root
+	for _, pair := range strings.Split(raw, ",") {
+		pair = strings.TrimSpace(pair)
+		if pair == "" {
+			continue
+		}
+		name, path, ok := strings.Cut(pair, ":")
+		name = strings.TrimSpace(name)
+		path = strings.TrimSpace(path)
+		if !ok || name == "" || path == "" {
+			return nil, fmt.Errorf("invalid root %q: want \"name:path\"", pair)
+		}
+		roots = append(roots, Root{Name: name, Path: path})
+	}
+	return roots, nil
 }
 
 func envStr(key, def string) string {

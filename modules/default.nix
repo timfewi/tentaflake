@@ -5,6 +5,7 @@
     ./boot.nix
     ./hardening.nix
     ./hermes-auditd.nix
+    ./hive-research.nix
     ./locale.nix
     ./networking.nix
     ./nix-settings.nix
