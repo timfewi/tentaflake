@@ -402,6 +402,29 @@ will fail with "command not found". Solutions:
 2. **Use a Python-based MCP server** (e.g. `mcp-server-filesystem` Python package)
 3. **Mount Node from host**: `extraVolumes = [ "/usr/bin/node:/usr/bin/node:ro" ]`
 
+4. **Run the MCP server on the host** — no Node.js or subprocess needed in
+   the container at all. Because agents use host networking, an HTTP MCP
+   server on the host is reachable at `127.0.0.1`. Tentaflake ships a
+   module for [hive-research](modules/hive-research.nix), a unified
+   web-research MCP server (search / extract / crawl / contacts across
+   Brave, Tavily, FireCrawl, Hunter.io and Spider Cloud with failover):
+
+   ```nix
+   services.hive-research = {
+     enable  = true;
+     package = inputs.hive-research.packages.${pkgs.system}.default;
+     keyFiles.BRAVE_API_KEY_FILE = "/run/agenix/hive-brave-api-key";
+   };
+   ```
+
+   Then in each agent profile's `config.yaml`:
+
+   ```yaml
+   mcp_servers:
+     hive-research:
+       url: "http://127.0.0.1:7815/mcp"
+   ```
+
 ### TTS Piper voice files
 
 Piper TTS needs voice model files on disk. They are not in the container
