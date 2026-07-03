@@ -92,6 +92,42 @@ tentaflake.hermes-auditd.enable = true;
 # tentaflake.hermes-auditd.retentionHours = 24;
 ```
 
+## Agent Console — web file explorer + live monitor
+
+`hermes top` is local-only (a TUI over SSH). The **Agent Console** (`tentaflake-console`
+binary, same package) is its web counterpart: one fast page, served on the tailnet,
+that replaces logging into each agent's kanban/dashboard. It has two panes:
+
+- **Files** — a read-only, Google-Drive-style explorer over every agent's state dir.
+  Browse, preview text, and download. **Secrets are always hidden** (`.env*`,
+  `auth.json`, `config.yaml*`, `*.key`/`*.pem`/`*.age`, ssh/aws creds, …) at every
+  depth, alongside caches (`.cache`, `.npm`, `.venv`, `node_modules`, …). The surface
+  is **GET-only** — no edit, delete, or upload.
+- **Activity** — "`hermes top`, but more advanced": per-agent op-rate cards plus a
+  live event feed (create/write/remove/rename/chmod) streamed over SSE from the same
+  `events.db`.
+
+It reuses the daemon's exact security model — unprivileged `hermes-audit` user with a
+**read-only** `CAP_DAC_READ_SEARCH` bypass — so it can read the agents' `0700` dirs
+but write nowhere. Bind it to loopback and publish on the tailnet with
+`tailscale serve` (see [operations](07-operations.md#exposing-dashboards--agent-built-apps-on-the-tailnet)).
+
+```nix
+tentaflake.hermes-auditd.console.enable = true;
+# Roots auto-derive from your agents (one folder per /var/lib/hermes-<name>).
+# Keep those and ADD data-disk mounts with extraRoots:
+# tentaflake.hermes-auditd.console.extraRoots = [
+#   { name = "my-agent-data"; path = "/srv/agent-data/my-agent"; }
+# ];
+# tentaflake.hermes-auditd.console.roots = [ … ];             # override the
+#   auto-derived homes entirely (rarely needed; prefer extraRoots)
+# tentaflake.hermes-auditd.console.addr = "127.0.0.1:9090";   # loopback bind
+# tentaflake.hermes-auditd.console.extraDeny = [ "*.sqlite" ]; # extra hides
+```
+
+Then publish it, e.g. `tailscale serve --bg --https=9125 127.0.0.1:9090` →
+`https://<host>.<tailnet>.ts.net:9125`.
+
 ## zsh, zoxide, lazygit, Neovim
 
 Everything is opt-in — you're never locked into a shell or editor:

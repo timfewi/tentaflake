@@ -1,0 +1,227 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Hermes Agent Console</title>
+<style>
+  :root {
+    --bg:#0d1117; --panel:#161b22; --panel2:#1c2230; --border:#2a3140;
+    --fg:#e6edf3; --muted:#8b949e; --accent:#58a6ff;
+    --create:#3fb950; --write:#58a6ff; --remove:#f85149; --rename:#d29922; --chmod:#8b949e;
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; font:14px/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+         background:var(--bg); color:var(--fg); height:100vh; display:flex; flex-direction:column; }
+  header { display:flex; align-items:center; gap:16px; padding:10px 16px; background:var(--panel);
+           border-bottom:1px solid var(--border); }
+  header h1 { font-size:15px; margin:0; font-weight:600; }
+  .tabs { display:flex; gap:4px; }
+  .tab { padding:6px 14px; border:1px solid var(--border); border-radius:6px; cursor:pointer;
+         background:var(--panel2); color:var(--muted); }
+  .tab.active { color:var(--fg); border-color:var(--accent); }
+  .grow { flex:1; }
+  .clock { color:var(--muted); font-size:12px; }
+  main { flex:1; overflow:hidden; }
+  .view { display:none; height:100%; }
+  .view.active { display:flex; }
+
+  /* Files view */
+  #files { }
+  .sidebar { width:200px; border-right:1px solid var(--border); overflow:auto; background:var(--panel); }
+  .sidebar .root { padding:8px 14px; cursor:pointer; border-bottom:1px solid var(--border); }
+  .sidebar .root:hover, .sidebar .root.active { background:var(--panel2); color:var(--accent); }
+  .filespane { flex:1; display:flex; flex-direction:column; overflow:hidden; }
+  .crumb { padding:8px 14px; border-bottom:1px solid var(--border); color:var(--muted); }
+  .crumb a { color:var(--accent); cursor:pointer; text-decoration:none; }
+  .listing { flex:1; overflow:auto; }
+  .row { display:flex; gap:10px; padding:5px 14px; cursor:pointer; align-items:center; }
+  .row:hover { background:var(--panel2); }
+  .row .name { flex:1; }
+  .row .size, .row .mtime { color:var(--muted); font-size:12px; white-space:nowrap; }
+  .icon { width:16px; text-align:center; }
+  .preview { flex:1.4; border-left:1px solid var(--border); overflow:auto; display:none; }
+  .preview.show { display:block; }
+  .preview pre { margin:0; padding:14px; white-space:pre-wrap; word-break:break-word; }
+  .preview .pv-head { padding:8px 14px; border-bottom:1px solid var(--border); display:flex; gap:10px; align-items:center; }
+  .preview .pv-head a { color:var(--accent); }
+
+  /* Activity view */
+  #activity { flex-direction:column; }
+  .cards { display:flex; gap:10px; padding:12px; flex-wrap:wrap; }
+  .card { background:var(--panel); border:1px solid var(--border); border-radius:8px; padding:10px 14px; min-width:170px; }
+  .card .a { font-weight:600; color:var(--accent); }
+  .card .big { font-size:22px; }
+  .card .sub { color:var(--muted); font-size:12px; }
+  .feedbar { display:flex; gap:8px; padding:0 12px 8px; align-items:center; color:var(--muted); }
+  .feedbar select, .feedbar input { background:var(--panel2); color:var(--fg); border:1px solid var(--border);
+                                    border-radius:6px; padding:4px 8px; }
+  .feed { flex:1; overflow:auto; padding:0 12px 12px; }
+  .ev { display:flex; gap:10px; padding:3px 0; border-bottom:1px solid var(--border); }
+  .ev .op { width:64px; font-weight:600; text-transform:uppercase; font-size:12px; }
+  .ev .ag { width:110px; color:var(--accent); }
+  .ev .fl { flex:1; word-break:break-all; }
+  .ev .tm { color:var(--muted); font-size:12px; white-space:nowrap; }
+  .op-create{color:var(--create)} .op-write{color:var(--write)} .op-remove{color:var(--remove)}
+  .op-rename{color:var(--rename)} .op-chmod{color:var(--chmod)}
+  .empty { color:var(--muted); padding:14px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>🛰 Hermes Agent Console</h1>
+  <div class="tabs">
+    <div class="tab active" data-view="files">Files</div>
+    <div class="tab" data-view="activity">Activity</div>
+  </div>
+  <div class="grow"></div>
+  <div class="clock" id="clock"></div>
+</header>
+<main>
+  <!-- Files -->
+  <section class="view active" id="files">
+    <div class="sidebar" id="roots"></div>
+    <div class="filespane">
+      <div class="crumb" id="crumb">Select an agent</div>
+      <div style="flex:1; display:flex; overflow:hidden;">
+        <div class="listing" id="listing"></div>
+        <div class="preview" id="preview"></div>
+      </div>
+    </div>
+  </section>
+  <!-- Activity -->
+  <section class="view" id="activity">
+    <div class="cards" id="cards"></div>
+    <div class="feedbar">
+      <span>live</span>
+      <select id="f-agent"><option value="">all agents</option></select>
+      <select id="f-op">
+        <option value="">all ops</option>
+        <option>create</option><option>write</option><option>remove</option>
+        <option>rename</option><option>chmod</option>
+      </select>
+      <span id="livecount"></span>
+    </div>
+    <div class="feed" id="feed"><div class="empty">waiting for events…</div></div>
+  </section>
+</main>
+<script>
+const $ = s => document.querySelector(s);
+const api = (p) => fetch(p).then(r => { if(!r.ok) throw new Error(r.status); return r.json(); });
+const fmtSize = n => n<1024?n+"B":n<1048576?(n/1024).toFixed(1)+"K":(n/1048576).toFixed(1)+"M";
+const fmtTime = t => { const d=new Date(t); return isNaN(d)?"":d.toLocaleString(); };
+const shortPath = (file, agent) => {
+  const p = "/var/lib/hermes-"+agent+"/";
+  return file.startsWith(p) ? file.slice(p.length) : file;
+};
+setInterval(()=> $("#clock").textContent = new Date().toLocaleTimeString(), 1000);
+
+// ── tabs ──
+document.querySelectorAll(".tab").forEach(t => t.onclick = () => {
+  document.querySelectorAll(".tab").forEach(x=>x.classList.remove("active"));
+  document.querySelectorAll(".view").forEach(x=>x.classList.remove("active"));
+  t.classList.add("active");
+  $("#"+t.dataset.view).classList.add("active");
+});
+
+// ── files ──
+let curAgent=null, curPath="";
+async function loadRoots(){
+  const roots = await api("/api/roots");
+  const el = $("#roots"); el.innerHTML="";
+  roots.forEach(r=>{
+    const d=document.createElement("div"); d.className="root"; d.textContent=r.name;
+    d.onclick=()=>{ curAgent=r.name; curPath=""; setActiveRoot(d); hidePreview(); list(); };
+    el.appendChild(d);
+  });
+}
+function setActiveRoot(d){ document.querySelectorAll(".sidebar .root").forEach(x=>x.classList.remove("active")); d.classList.add("active"); }
+function hidePreview(){ $("#preview").classList.remove("show"); }
+function crumb(){
+  const parts = curPath ? curPath.split("/") : [];
+  let acc="", html=`<a data-p="">${curAgent}</a>`;
+  parts.forEach(p=>{ acc = acc?acc+"/"+p:p; html += ` / <a data-p="${acc}">${p}</a>`; });
+  const c=$("#crumb"); c.innerHTML=html;
+  c.querySelectorAll("a").forEach(a=>a.onclick=()=>{ curPath=a.dataset.p; hidePreview(); list(); });
+}
+async function list(){
+  crumb();
+  const el=$("#listing"); el.innerHTML="";
+  let entries;
+  try { entries = await api(`/api/fs/list?agent=${encodeURIComponent(curAgent)}&path=${encodeURIComponent(curPath)}`); }
+  catch(e){ el.innerHTML=`<div class="empty">cannot list (${e.message})</div>`; return; }
+  if(!entries.length){ el.innerHTML=`<div class="empty">empty</div>`; return; }
+  entries.forEach(en=>{
+    const row=document.createElement("div"); row.className="row";
+    row.innerHTML=`<span class="icon">${en.is_dir?"📁":"📄"}</span>
+      <span class="name">${en.name}</span>
+      <span class="size">${en.is_dir?"":fmtSize(en.size)}</span>
+      <span class="mtime">${fmtTime(en.mtime)}</span>`;
+    const child = curPath ? curPath+"/"+en.name : en.name;
+    row.onclick = () => en.is_dir ? (curPath=child, hidePreview(), list()) : preview(child);
+    el.appendChild(row);
+  });
+}
+async function preview(path){
+  const pv=$("#preview"); pv.classList.add("show");
+  const dl=`/api/fs/download?agent=${encodeURIComponent(curAgent)}&path=${encodeURIComponent(path)}`;
+  const rd=`/api/fs/read?agent=${encodeURIComponent(curAgent)}&path=${encodeURIComponent(path)}`;
+  pv.innerHTML=`<div class="pv-head"><b>${path.split("/").pop()}</b>
+    <a href="${dl}">download</a><span class="grow"></span><a id="pv-close">✕</a></div><pre>loading…</pre>`;
+  $("#pv-close").onclick=hidePreview;
+  try {
+    const r=await fetch(rd);
+    const txt=await r.text();
+    const trunc = r.headers.get("X-Truncated") ? "\n\n… (truncated — download for full file)" : "";
+    pv.querySelector("pre").textContent = txt + trunc;
+  } catch(e){ pv.querySelector("pre").textContent="cannot preview: "+e.message; }
+}
+
+// ── activity ──
+async function loadCards(){
+  let rows; try { rows = await api("/api/agents"); } catch { return; }
+  const el=$("#cards"); el.innerHTML="";
+  const sel=$("#f-agent"); const have=new Set([...sel.options].map(o=>o.value));
+  rows.sort((a,b)=>b.recent-a.recent).forEach(r=>{
+    const c=document.createElement("div"); c.className="card";
+    c.innerHTML=`<div class="a">${r.agent}</div>
+      <div class="big">${r.recent}</div><div class="sub">ops / 5min</div>
+      <div class="sub">${r.total} total · last ${r.last_op||"—"}</div>
+      <div class="sub">${r.last_file?shortPath(r.last_file,r.agent):""}</div>`;
+    el.appendChild(c);
+    if(!have.has(r.agent)){ const o=document.createElement("option"); o.value=o.textContent=r.agent; sel.appendChild(o); }
+  });
+}
+let liveCount=0;
+function addEvent(ev, prepend){
+  const fa=$("#f-agent").value, fo=$("#f-op").value;
+  if(fa && ev.agent!==fa) return;
+  if(fo && ev.op!==fo) return;
+  const feed=$("#feed");
+  if(feed.querySelector(".empty")) feed.innerHTML="";
+  const row=document.createElement("div"); row.className="ev";
+  row.innerHTML=`<span class="op op-${ev.op}">${ev.op}</span>
+    <span class="ag">${ev.agent}</span>
+    <span class="fl">${shortPath(ev.file,ev.agent)}</span>
+    <span class="tm">${new Date(ev.timestamp).toLocaleTimeString()}</span>`;
+  if(prepend) feed.prepend(row); else feed.prepend(row);
+  while(feed.children.length>500) feed.removeChild(feed.lastChild);
+}
+async function loadRecent(){
+  let evs; try { evs = await api("/api/events?limit=80"); } catch { return; }
+  evs.reverse().forEach(e=>addEvent(e,false));
+}
+function startStream(){
+  const es=new EventSource("/api/stream");
+  es.onmessage=(m)=>{ try{ const ev=JSON.parse(m.data); addEvent(ev,true); liveCount++;
+    $("#livecount").textContent=liveCount+" since connect"; }catch{} };
+  es.onerror=()=>{ /* browser auto-reconnects */ };
+}
+
+// boot
+loadRoots();
+loadCards(); loadRecent(); startStream();
+setInterval(loadCards, 5000);
+</script>
+</body>
+</html>

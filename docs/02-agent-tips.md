@@ -206,6 +206,11 @@ The fastest way to see this is the live dashboard:
 hermes top        # live TUI: per-agent activity + scrolling event log
 ```
 
+Prefer a browser? Enable the **Agent Console** (`tentaflake.hermes-auditd.console.enable`)
+for a tailnet-served web page that pairs a read-only, secrets-excluded file explorer
+across all agents with the same live activity feed — no per-agent dashboard logins.
+See [`docs/06-shell.md`](06-shell.md#agent-console--web-file-explorer--live-monitor).
+
 The daemon's own service log:
 
 ```bash
