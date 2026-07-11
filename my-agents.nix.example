@@ -1,7 +1,8 @@
-{ mkHermesAgent }:
+{ mkHermesAgent, mkZeroClawAgent }:
 
 # ════════════════════════════════════════════════════════════════════
-# my-agents.nix — define every Hermes agent that runs on THIS host.
+# my-agents.nix — define every agent that runs on THIS host, across
+# BOTH runtimes: Hermes (`hermesAgents`) and ZeroClaw (`zeroclawAgents`).
 #
 # Setup:
 #   cp my-agents.nix.example my-agents.nix
@@ -9,13 +10,14 @@
 #   git add my-agents.nix        # auto-imported by configuration.nix when present
 #
 # How it works:
-#   Each entry in `agentDefs` is one argument set passed to mkHermesAgent,
+#   Each entry in `hermesAgents` is one argument set passed to mkHermesAgent,
 #   which turns it into a NixOS module (system user + isolated state dir at
-#   /var/lib/hermes-<name> + auto-starting Docker container).
-#   `map mkHermesAgent agentDefs` returns the list of modules that
-#   configuration.nix splices into its `imports`.
+#   /var/lib/hermes-<name> + auto-starting Docker container). Entries in
+#   `zeroclawAgents` go through mkZeroClawAgent the same way (state dir at
+#   /var/lib/zeroclaw-<name>). The final expression maps both lists to the
+#   modules that configuration.nix splices into its `imports`.
 #
-#   To add an agent: append another attrset to `agentDefs` and rebuild.
+#   To add an agent: append another attrset to the matching list and rebuild.
 #   Adding it here is enough — the audit daemon's watchDirs auto-derive
 #   from these names too.
 #
@@ -24,7 +26,7 @@
 # ════════════════════════════════════════════════════════════════════
 
 let
-  agentDefs = [
+  hermesAgents = [
 
     # ──────────────────────────────────────────────────────────
     # Minimal agent — all you NEED to get started.
@@ -223,5 +225,50 @@ let
     # }
 
   ];
+
+  zeroclawAgents = [
+
+    # ──────────────────────────────────────────────────────────
+    # ZeroClaw agent (COMMENTED OUT) — uncomment and adapt to run
+    # a ZeroClaw runtime next to the Hermes agents above.
+    # `settings` is serialized to the config.toml mounted read-only
+    # into the container.
+    # ──────────────────────────────────────────────────────────
+    # {
+    #   name = "assistant";
+    #   # Env file with API keys, passed as --env-file. agenix-decrypted path
+    #   # recommended; a plaintext /run/secrets/... file also works.
+    #   # Key naming: ZeroClaw reads config overrides from env as
+    #   # ZEROCLAW_<section>__<sub>__<key> (double underscores), e.g.
+    #   # ZEROCLAW_providers__models__<provider>__default__api_key.
+    #   agenixFile = "/run/agenix/zeroclaw-assistant-env";
+    #   # seedDir = "/etc/nixos/seeds/zeroclaw-assistant";  # workspace seed, first boot only
+    #   hostPort = 9246;   # host loopback → container gateway port
+    #   servePort = 9145;  # tailnet HTTPS port (tailscale serve)
+    #   settings = {
+    #     # schema_version is REQUIRED. Without it the loader treats the file as v1
+    #     # and runs the v1->v2->v3 migration, which silently drops v3-only fields
+    #     # (e.g. providers.models.*.model/uri read back <unset>).
+    #     schema_version = 3;
+    #     # A concrete model id is required — catch-all ids like "openrouter/auto"
+    #     # are rejected (`zeroclaw doctor`: "no model configured").
+    #     # Provider/uri/key setup is per ZeroClaw's docs; openrouter shown here.
+    #     providers.models.openrouter.default.model = "anthropic/claude-haiku-4.5";
+    #     # The default runtime profile is agentic=false / max_tool_iterations=0 —
+    #     # without this the agent can observe but never act.
+    #     runtime_profiles.default = {
+    #       agentic = true;
+    #       max_tool_iterations = 25;
+    #     };
+    #     agents.main = {
+    #       model_provider = "openrouter.default";
+    #       risk_profile = "default";
+    #       runtime_profile = "default";
+    #     };
+    #     risk_profiles.default.level = "supervised";
+    #   };
+    # }
+
+  ];
 in
-map mkHermesAgent agentDefs
+map mkHermesAgent hermesAgents ++ map mkZeroClawAgent zeroclawAgents

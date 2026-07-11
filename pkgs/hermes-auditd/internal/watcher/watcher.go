@@ -243,15 +243,26 @@ func (watcher *Watcher) toEvent(fsEvent fsnotify.Event) *hermes.Event {
 	}
 }
 
-// agentNameFromPath extracts the agent name from a file path.
-// Convention: /var/lib/hermes-<name>/... → "name"
-// Unknown paths return "unknown".
+// Agent state-directory prefixes. Hermes labels stay bare ("coding") for
+// backwards compatibility with existing DBs; other runtimes keep their prefix
+// in the label ("zeroclaw-assistant") so runtimes stay distinguishable.
 // DefaultAgentPrefix is the default state directory prefix for agent paths.
 const DefaultAgentPrefix = "/var/lib/hermes-"
 
+const zeroClawAgentPrefix = "/var/lib/zeroclaw-"
+
+// agentNameFromPath extracts the agent name from a file path.
+// Convention: /var/lib/hermes-<name>/... → "name",
+// /var/lib/zeroclaw-<name>/... → "zeroclaw-<name>".
+// Unknown paths return "unknown".
 func agentNameFromPath(path string) string {
-	const prefix = DefaultAgentPrefix
-	if !strings.HasPrefix(path, prefix) {
+	var prefix, label string
+	switch {
+	case strings.HasPrefix(path, DefaultAgentPrefix):
+		prefix, label = DefaultAgentPrefix, ""
+	case strings.HasPrefix(path, zeroClawAgentPrefix):
+		prefix, label = zeroClawAgentPrefix, "zeroclaw-"
+	default:
 		return "unknown"
 	}
 	rest := strings.TrimPrefix(path, prefix)
@@ -259,7 +270,7 @@ func agentNameFromPath(path string) string {
 	if len(parts) == 0 || parts[0] == "" {
 		return "unknown"
 	}
-	return parts[0]
+	return label + parts[0]
 }
 
 // isIgnored returns true if the path should not produce events.

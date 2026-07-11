@@ -90,7 +90,7 @@ sudo docker inspect hermes-coding | jq '.[0].Mounts'
 
 **Add an agent:**
 
-1. Edit `my-agents.nix` — append an attrset to the `agentDefs` list:
+1. Edit `my-agents.nix` — append an attrset to the `hermesAgents` list:
 
    ```nix
    {
@@ -101,6 +101,12 @@ sudo docker inspect hermes-coding | jq '.[0].Mounts'
 
    See the commented reference agent in `my-agents.nix.example` for every
    available `settings` / volume / container option.
+
+   A second runtime, ZeroClaw, works the same way via the `zeroclawAgents`
+   list (agents get container/state dir `zeroclaw-<name>`, config from a
+   `settings` attrset serialized to TOML instead of YAML). See the
+   commented reference entry in `my-agents.nix.example` and
+   `zeroclaw.env.example` for its env-file convention.
 
 2. Create env file:
 
@@ -195,15 +201,17 @@ sudo docker exec hermes-coding cat $HERMES_HOME/logs/gateway.log
 
 ### Audit daemon (if enabled)
 
-The `hermes-auditd` service records **filesystem changes** inside each agent's
-state dir (`/var/lib/hermes-<name>/`) — which files an agent creates, writes,
-removes, renames, or chmods, with a timestamp and size. (It does *not* capture
-the agent's conversation or commands — for that, use `hermes logs <name>`.)
+The `hermes-auditd` service records **filesystem changes** inside every
+declarative agent container's state dir — `/var/lib/hermes-<name>/` and
+`/var/lib/zeroclaw-<name>/` alike, auto-discovered from whatever's defined in
+`my-agents.nix` — which files an agent creates, writes, removes, renames, or
+chmods, with a timestamp and size. (It does *not* capture the agent's
+conversation or commands — for that, use `tentaflake logs <name>`.)
 
 The fastest way to see this is the live dashboard:
 
 ```bash
-hermes top        # live TUI: per-agent activity + scrolling event log
+tentaflake top     # live TUI: per-agent activity + scrolling event log
 ```
 
 Prefer a browser? Enable the **Agent Console** (`tentaflake.hermes-auditd.console.enable`)
@@ -218,7 +226,7 @@ sudo journalctl -u hermes-auditd
 ```
 
 Enable it with `tentaflake.hermes-auditd.enable = true;` (on by default for the
-`agent-host` config). See [`docs/06-shell.md`](06-shell.md#hermes-top--live-activity-dashboard).
+`agent-host` config). See [`docs/06-shell.md`](06-shell.md#tentaflake-top--live-activity-dashboard).
 
 ---
 
@@ -339,8 +347,9 @@ Each agent has its own system user `hermes-<name>` with:
 ### Audit trail
 
 If `hermes-auditd` is enabled, every filesystem change in the agents' state
-dirs is recorded to a SQLite database (24h retention by default). Review it
-live with `hermes top`, or inspect the daemon's own log:
+dirs (across all runtimes) is recorded to a SQLite database (24h retention by
+default). Review it live with `tentaflake top`, or inspect the daemon's own
+log:
 
 ```bash
 sudo journalctl -u hermes-auditd --since today

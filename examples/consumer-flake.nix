@@ -46,12 +46,19 @@
       lib = nixpkgs.lib;
 
       # ── Import tentaflake helpers ──
+      # (zeroclaw agents work the same way: pass defs to mkZeroClawAgent)
       mkHermesAgent = tentaflake.lib.${system}.mkHermesAgent;
+      mkZeroClawAgent = tentaflake.lib.${system}.mkZeroClawAgent;
       constants = tentaflake.lib.${system}.constants;
 
       # ── Shared specialArgs for all hosts ──
       specialArgs = {
-        inherit self mkHermesAgent constants;
+        inherit
+          self
+          mkHermesAgent
+          mkZeroClawAgent
+          constants
+          ;
       };
 
       # ── mkHost: reusable NixOS system builder ──

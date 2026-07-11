@@ -325,12 +325,15 @@ func opStyle(op string) lipgloss.Style {
 	return dimStyle
 }
 
-// shortPath strips the conventional /var/lib/hermes-<agent>/ prefix so the log
-// shows the path relative to the agent's state dir.
+// shortPath strips the conventional state-dir prefix so the log shows the path
+// relative to the agent's state dir. Hermes labels are bare ("coding" →
+// /var/lib/hermes-coding/), other runtimes keep their prefix in the label
+// ("zeroclaw-assistant" → /var/lib/zeroclaw-assistant/).
 func shortPath(path, agent string) string {
-	prefix := "/var/lib/hermes-" + agent + "/"
-	if len(path) > len(prefix) && path[:len(prefix)] == prefix {
-		return path[len(prefix):]
+	for _, prefix := range []string{"/var/lib/hermes-" + agent + "/", "/var/lib/" + agent + "/"} {
+		if len(path) > len(prefix) && path[:len(prefix)] == prefix {
+			return path[len(prefix):]
+		}
 	}
 	return path
 }

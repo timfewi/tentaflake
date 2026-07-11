@@ -1,6 +1,6 @@
 # Agent Instructions — tentaflake
 
-NixOS flake template for running Hermes AI agents in isolated Docker containers on a single machine.
+NixOS flake template for running isolated AI agents (Hermes, ZeroClaw) in Docker containers on a single machine.
 
 ## Build & Test
 
@@ -35,7 +35,7 @@ still accurate before finishing — and update them in the same change:
 ## Module Boundaries
 
 - `modules/` — reusable NixOS modules (generic, composable via `tentaflake.*.enable` options)
-- `lib/` — helpers (`mkHermesAgent`, `constants`)
+- `lib/` — helpers (`mkHermesAgent`, `mkZeroClawAgent`, `constants`)
 - `pkgs/` — standalone packages (`hermes-auditd`)
 - `installer/` — ISO installer and firstboot scripts
 - `examples/` — consumer-flake reference

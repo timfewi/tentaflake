@@ -1,9 +1,9 @@
-# 🪼 Tentaflake — NixOS Flake Template for Hermes Multi-Agent
+# 🪼 Tentaflake — NixOS Flake Template for Multi-Agent Hosting
 
-> Deploy isolated Hermes AI agents on a single headless machine.
-> One NixOS brain · Many Hermes tentacles.
+> Deploy isolated AI agents on a single headless machine.
+> One NixOS brain · Many tentacles.
 
-> **What is Hermes?** [Hermes](https://github.com/NousResearch/hermes-agent) is an open-source AI agent daemon from Nous Research — like a personal AI assistant that runs on your own hardware. It connects to LLM providers (OpenRouter, Anthropic, OpenAI), runs tools (terminal, web search, file access), and can be customized with skills and personality. Tentaflake gives you a turnkey way to run one or many Hermes agents on a dedicated machine.
+> **What agents does this run?** Tentaflake supports two agent runtimes side by side: [Hermes](https://github.com/NousResearch/hermes-agent), an open-source AI agent daemon from Nous Research, and **ZeroClaw**, a second agent runtime you can declare with `mkZeroClawAgent`. Both connect to LLM providers (OpenRouter, Anthropic, OpenAI), run tools (terminal, web search, file access), and can be customized per agent. Tentaflake gives you a turnkey way to run one or many agents — of either runtime — on a dedicated machine.
 
 <p align="center">
   <a href="https://tentaflake.dev"><img src="https://img.shields.io/badge/tentaflake.dev-00d4ff?style=flat-square&labelColor=0a1628" alt="tentaflake.dev"/></a>
@@ -16,7 +16,7 @@
   <br/>
   <img src="public/tentaflake-colored-ascii.png" alt="Tentaflake ASCII art" width="500"/>
   <p align="center">
-    <i>Declaratively deploy & manage multiple isolated Hermes AI agents
+    <i>Declaratively deploy & manage multiple isolated AI agents (Hermes, ZeroClaw)
     on a single NixOS machine — each with its own secrets, skills, and personality.</i>
     <br/>
     <sub>Clone → configure → rebuild. Your swarm, your NixOS, your rules.</sub>
@@ -27,7 +27,7 @@
 
 ## What Is Tentaflake?
 
-**Tentaflake** is a **NixOS** (Linux distro configured entirely in code) template for running multiple isolated **Hermes AI agents** on one machine. Each agent lives in its own Docker container with its own secrets, skills, and personality. Or run teams of agents in one container using **Hermes Profiles** — multiple personas, different skills, shared resources, all in a single container. Define all your agents in one file — the template handles servers, secrets, networking, and shells.
+**Tentaflake** is a **NixOS** (Linux distro configured entirely in code) template for running multiple isolated **AI agents** on one machine, across two supported runtimes — **Hermes** and **ZeroClaw**. Each agent lives in its own Docker container with its own secrets, skills, and personality. Hermes agents can also share a container as a team using **Hermes Profiles** — multiple personas, different skills, shared resources, all in a single container. Define all your agents in one file — the template handles servers, secrets, networking, and shells.
 
 No SaaS, no third-party agent router — you host, you control. Clone → configure → rebuild.
 
@@ -208,9 +208,10 @@ sudo dd if=result/iso/tentaflake.iso of=/dev/sdX bs=4M status=progress oflag=syn
 ### After Install
 
 SSH in over Tailscale (`ssh admin@<hostname>`) and you land in a ready-to-operate
-shell: a login banner shows host + agent health, and the `hermes` command drives the
-agent containers (`hermes status`, `hermes logs <name>`, `hermes restart <name>`,
-`hermes shell <name>`). See [`docs/06-shell.md`](docs/06-shell.md).
+shell: a login banner shows host + agent health across all runtimes, and the `tentaflake`
+command drives the agent containers (`tentaflake status`, `tentaflake logs <name>`,
+`tentaflake restart <name>`, `tentaflake shell <name>`). A deprecated `hermes` shim
+still works and execs `tentaflake` with a warning. See [`docs/06-shell.md`](docs/06-shell.md).
 
 Then follow the [quickstart guide](docs/01-quickstart.md) to set up agent providers and start chatting.
 
@@ -233,38 +234,53 @@ Create `my-agents.nix` in the repo root. Here's a quick Nix syntax primer (it's 
 ```
 
 ```nix
-# my-agents.nix — each item in this list becomes one isolated agent container
-{ mkHermesAgent }:   # mkHermesAgent is a helper that creates agent modules
+# my-agents.nix — each item in these lists becomes one isolated agent container
+{ mkHermesAgent, mkZeroClawAgent }:   # helpers that create agent modules, one per runtime
 
-[
-  (mkHermesAgent {
-    name    = "coding";
-    envFile = "/run/secrets/hermes-coding.env";
-    settings = {
-      model.default = "openrouter/anthropic/claude-sonnet-4";
-      model.provider = "openrouter";
-      terminal.backend = "docker";
-      toolsets = [ "terminal" "memory" "file" "skills" ];
-    };
-  })
+let
+  hermesAgents = [
+    {
+      name    = "coding";
+      envFile = "/run/secrets/hermes-coding.env";
+      settings = {
+        model.default = "openrouter/anthropic/claude-sonnet-4";
+        model.provider = "openrouter";
+        terminal.backend = "docker";
+        toolsets = [ "terminal" "memory" "file" "skills" ];
+      };
+    }
 
-  (mkHermesAgent {
-    name    = "research";
-    envFile = "/run/secrets/hermes-research.env";
-    settings = {
-      model.default = "openrouter/deepseek/deepseek-v4-flash";
-      web.backend = "firecrawl";
-      toolsets = [ "terminal" "web" "memory" "file" "skills" ];
-    };
-  })
-]
+    {
+      name    = "research";
+      envFile = "/run/secrets/hermes-research.env";
+      settings = {
+        model.default = "openrouter/deepseek/deepseek-v4-flash";
+        web.backend = "firecrawl";
+        toolsets = [ "terminal" "web" "memory" "file" "skills" ];
+      };
+    }
+  ];
+
+  zeroclawAgents = [ ]; # mkZeroClawAgent {...} entries — see my-agents.nix.example
+in
+map mkHermesAgent hermesAgents ++ map mkZeroClawAgent zeroclawAgents
 ```
 
-Each agent gets:
+> Old single-arg `{ mkHermesAgent }: ...` files (no `zeroclawAgents`) keep working —
+> the runner only passes the builders your file actually asks for.
+
+Each Hermes agent gets:
 - System user `hermes-<name>`
 - State dir `/var/lib/hermes-<name>` (0700, owned by agent user)
 - Docker container `hermes-<name>` (host networking, auto-start)
 - `HERMES_HOME` pointing to its state dir
+
+Each ZeroClaw agent (`mkZeroClawAgent`) gets the analogous layout under the
+`zeroclaw-<name>` prefix — container `zeroclaw-${name}`, state dir
+`/var/lib/zeroclaw-${name}`, config rendered from `settings` to a mounted
+`config.toml`, secrets via `agenixFile` (see [`zeroclaw.env.example`](zeroclaw.env.example)
+for the `ZEROCLAW_<section>__<sub>__<key>` env convention). Full reference
+in [`my-agents.nix.example`](my-agents.nix.example).
 
 ### Common `mkHermesAgent` Options
 
@@ -296,6 +312,21 @@ See [`docs/07-operations.md`](docs/07-operations.md) for the persistence model, 
 UID/secret/`config.yaml` gotchas, and the rationale behind each option.
 
 Full option reference: [`.agents/skills/tentaflake-repo-guidance/SKILL.md`](.agents/skills/tentaflake-repo-guidance/SKILL.md)
+
+### Common `mkZeroClawAgent` Options
+
+| Option | Type | Default | Description |
+|---|---|---|---|
+| `name` | `string` | *(required)* | Agent identifier |
+| `agenixFile` | `path` | *(required)* | Env file mounted into the container (`--env-file`) — API keys as `ZEROCLAW_<section>__<sub>__<key>` overrides |
+| `image` | `string` | `ghcr.io/zeroclaw-labs/zeroclaw:v0.8.2` | OCI container image |
+| `hostPort` / `servePort` | `int` | *(required)* | Host loopback → container gateway port, and the tailnet HTTPS port `tailscale serve` publishes it on |
+| `settings` | `attrset` | `{ }` | ZeroClaw `config.toml` (model routing, runtime profiles, risk profiles, etc.) |
+| `seedDir` | `path` | `null` | Workspace dir copied in on first boot only, same no-clobber semantics as Hermes' `seedDir` |
+| `autoStart` | `bool` | `true` | Auto-start with systemd |
+| `extraEnvironment` / `extraVolumes` | `attrset` / `list` | `{ }` / `[ ]` | Extra container env vars / `host:container:mode` mounts |
+
+See [`my-agents.nix.example`](my-agents.nix.example) and [`zeroclaw.env.example`](zeroclaw.env.example) for a fully-commented reference agent.
 
 ### Secrets: Two Patterns
 
@@ -329,6 +360,9 @@ mkHermesAgent {
 ```
 
 Full guide: [`docs/04-agenix-secrets.md`](docs/04-agenix-secrets.md)
+
+> ZeroClaw agents (`mkZeroClawAgent`) only take `agenixFile` (no `envFile` option) —
+> copy [`zeroclaw.env.example`](zeroclaw.env.example) the same way and point `agenixFile` at it.
 
 ### Rebuild to Apply
 
@@ -384,6 +418,9 @@ New agents appear as Docker containers. Remove an agent from the list, rebuild �
    still get their own container.
 ```
 
+Tentacles shown are Hermes agents (`hermes-<name>`); ZeroClaw agents follow
+the same one-container-per-agent shape under a `zeroclaw-<name>` prefix.
+
 ### Key Design Decisions
 
 | Decision | Rationale |
@@ -405,11 +442,11 @@ New agents appear as Docker containers. Remove an agent from the list, rebuild �
 | `nix-settings.nix` | Flakes, auto-GC, trusted-users, substituters |
 | `packages.nix` | curl, git, jq, tmux, vim, and more |
 | `users.nix` | Admin user (wheel + networkmanager groups) |
-| `shell.nix` | SSH/console operator experience — `hermes` CLI, login banner, prompt, zsh/oh-my-zsh, zoxide, lazygit, modern CLI tools ([docs](docs/06-shell.md)) |
+| `shell.nix` | SSH/console operator experience — `tentaflake` CLI (deprecated `hermes` shim still works), login banner, prompt, zsh/oh-my-zsh, zoxide, lazygit, modern CLI tools ([docs](docs/06-shell.md)) |
 | `editor.nix` | Optional Neovim via nvf (LSP, treesitter, telescope) — `tentaflake.editor.nvf.enable`, exported as `nixosModules.editor` ([docs](docs/06-shell.md#zsh-zoxide-lazygit-neovim)) |
 | `tailscale.nix` | Tailscale with SSH + tag:auto (optional) |
 | `piper-tts-server.nix` | Local TTS via Piper (OpenAI-compatible API) |
-| `hermes-auditd.nix` | Filesystem audit daemon + `hermes top` TUI + the **Agent Console** web file explorer & live monitor — [docs](docs/06-shell.md#agent-console--web-file-explorer--live-monitor) |
+| `hermes-auditd.nix` | Filesystem audit daemon (watches state dirs of agent containers on **every** runtime) + `tentaflake top` TUI + the **Agent Console** web file explorer & live monitor — [docs](docs/06-shell.md#agent-console--web-file-explorer--live-monitor) |
 | **Hermes Profiles** | *(no module needed)* Run multiple agent personas inside a single container. Configure via `hermes profile create` — each profile gets its own personality, skills, model config, and toolsets while sharing the container's secrets and runtime |
 
 ### Available ISOs
@@ -429,9 +466,11 @@ nix build .#hermes-auditd                # build audit daemon package
 sudo nixos-rebuild switch --flake .#agent-host  # deploy config
 sudo nixos-rebuild dry-activate --flake .#agent-host  # dry-run
 sudo nixos-rebuild switch --rollback     # undo last deploy
-docker ps --filter "name=hermes-"        # list running agents
+tentaflake status                        # all agents, any runtime, with health
+docker ps --filter "name=hermes-"        # list running Hermes agents
+docker ps --filter "name=zeroclaw-"      # list running ZeroClaw agents
 docker logs hermes-coding                # view agent logs
-docker exec -it hermes-coding hermes chat  # chat with an agent
+docker exec -it hermes-coding hermes chat  # chat with a Hermes agent
 ```
 
 ---
@@ -473,10 +512,11 @@ Add tentaflake as a dependency to your own flake — useful when you already hav
   let
     system = "x86_64-linux";
     mkHermesAgent = tentaflake.lib.${system}.mkHermesAgent;
+    mkZeroClawAgent = tentaflake.lib.${system}.mkZeroClawAgent;
   in {
     nixosConfigurations.my-host = nixpkgs.lib.nixosSystem {
       inherit system;
-      specialArgs = { inherit mkHermesAgent; };
+      specialArgs = { inherit mkHermesAgent mkZeroClawAgent; };
       modules = [
         tentaflake.nixosModules.default    # all base modules
         {
@@ -485,18 +525,47 @@ Add tentaflake as a dependency to your own flake — useful when you already hav
           tentaflake.timeZone = "Europe/Vienna";
         }
         ./hardware-configuration.nix
-      ] ++ import ./my-agents.nix { inherit mkHermesAgent; };
+      ] ++ import ./my-agents.nix { inherit mkHermesAgent mkZeroClawAgent; };
     };
   };
 }
 ```
 
+> The direct call above requires your `my-agents.nix` to accept both arguments
+> (`{ mkHermesAgent, mkZeroClawAgent }:` — or add `...`). An older
+> `{ mkHermesAgent }:`-only file works unmodified inside this repo's
+> `configuration.nix` (it only passes what the function asks for), but for the
+> flake-input form shown here, pass only the builders your file declares.
+
 You get:
 - **`tentaflake.nixosModules.default`** — all NixOS modules with `tentaflake.*` options
-- **`tentaflake.lib.x86_64-linux.mkHermesAgent`** — agent builder helper
+- **`tentaflake.lib.x86_64-linux.mkHermesAgent`** / **`mkZeroClawAgent`** — agent builder helpers, one per runtime
 - **`tentaflake.lib.x86_64-linux.constants`** — default values (hostname, stateVersion, locale)
 
 See [`examples/consumer-flake.nix`](examples/consumer-flake.nix) for a full worked example including agenix and home-manager.
+
+---
+
+## ⬆️ Upgrading from v0.1.x (breaking)
+
+v0.2.0 renames the host operator surface and makes the host agent-agnostic.
+Compatibility bridges keep old setups running through the transition, but they
+are deprecated and will be removed in a future release:
+
+| What changed | Old | New | Bridge (temporary) |
+|---|---|---|---|
+| Host operator CLI | `hermes` | `tentaflake` | shim warns on stderr, then forwards |
+| Shell option | `tentaflake.shell.hermesCli.enable` | `tentaflake.shell.tentaflakeCli.enable` | `mkRenamedOptionModule` eval warning |
+| `my-agents.nix` signature | `{ mkHermesAgent }:` | `{ mkHermesAgent, mkZeroClawAgent }:` | in-repo import passes only the args your file declares |
+
+To migrate: switch scripts and habits to `tentaflake`, rename the option in your
+config, and move `my-agents.nix` to the two-list layout from
+[`my-agents.nix.example`](my-agents.nix.example). Flake-input consumers calling
+`import ./my-agents.nix { inherit mkHermesAgent mkZeroClawAgent; }` directly must
+update old single-arg files (or add `...`). Also note `tentaflake ps` now lists
+agent containers of **all runtimes including stopped ones**, and the Agent
+Console / `tentaflake top` label non-Hermes agents with a runtime prefix
+(`zeroclaw-<name>`). Nothing changes **inside** your agent containers.
 
 ---
 
