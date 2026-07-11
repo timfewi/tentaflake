@@ -42,4 +42,11 @@ still accurate before finishing — and update them in the same change:
 - `docs/` — user-facing documentation
 - `.agents/skills/` — bundled Hermes skills (also development agent instructions for this repo)
 
+## PR Description
+
+Fill out the full template at `.github/PULL_REQUEST_TEMPLATE.md` — a title alone
+is not enough. Write a real `## Description` (what changed and why), check
+the applicable `Type of Change` box, and tick every checklist item that
+applies (leave inapplicable ones unchecked, don't delete them).
+
 See CONTRIBUTING.md for PR process.
