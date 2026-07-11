@@ -105,6 +105,7 @@
       # ── Dev shell for contributors ──
       devShells.${system}.default = pkgs.mkShell {
         packages = with pkgs; [
+          just
           nixfmt-rfc-style
           statix
           deadnix
