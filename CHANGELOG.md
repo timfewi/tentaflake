@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.2.0] — 2026-07-11
 
+### ⚠ Breaking
+- The host operator CLI is now **`tentaflake`**. The `hermes` host command remains in this release as a deprecated shim (prints a warning to stderr, execs `tentaflake`) and **will be removed in a future release** — update scripts and habits. (The `hermes` CLI *inside* Hermes agent containers is unrelated and unchanged.)
+- `tentaflake.shell.hermesCli.enable` → `tentaflake.shell.tentaflakeCli.enable`. The old option still evaluates via `lib.mkRenamedOptionModule` with a deprecation warning and will be removed together with the shim.
+- `my-agents.nix` is now expected to accept `{ mkHermesAgent, mkZeroClawAgent }`. Inside this template, `configuration.nix` only passes the arguments your file declares, so old `{ mkHermesAgent }:`-only files keep evaluating — but flake-input consumers that call `import ./my-agents.nix { inherit mkHermesAgent mkZeroClawAgent; }` directly must update old files to the new signature (or add `...`).
+- `tentaflake ps` behaves differently from the old `hermes ps`: it lists agent containers of **all runtimes including stopped ones** (`--all` + anchored name filters) instead of `--filter name=hermes-` on running containers only.
+- Agent Console / `tentaflake top` label non-Hermes agents with a runtime prefix (`zeroclaw-<name>`). Hermes agents keep their bare labels, so existing audit DBs and dashboards are unaffected.
+
 ### Added
 - `lib/mkZeroClawAgent.nix` — second agent runtime alongside Hermes: OCI container (`ghcr.io/zeroclaw-labs/zeroclaw`), TOML `settings` attrset generated into a read-only `config.toml`, a `tailscale serve` unit for tailnet HTTPS access, and an optional `seedDir` copied into the state dir on first boot. State dir `/var/lib/zeroclaw-<name>`, secrets via `agenixFile` (`--env-file`).
 - `zeroclaw.env.example` — mirrors `hermes.env.example`; documents the `ZEROCLAW_<section>__<sub>__<key>` env-var convention ZeroClaw uses for config overrides, with an OpenRouter `api_key` example.

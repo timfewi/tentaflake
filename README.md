@@ -546,6 +546,29 @@ See [`examples/consumer-flake.nix`](examples/consumer-flake.nix) for a full work
 
 ---
 
+## ⬆️ Upgrading from v0.1.x (breaking)
+
+v0.2.0 renames the host operator surface and makes the host agent-agnostic.
+Compatibility bridges keep old setups running through the transition, but they
+are deprecated and will be removed in a future release:
+
+| What changed | Old | New | Bridge (temporary) |
+|---|---|---|---|
+| Host operator CLI | `hermes` | `tentaflake` | shim warns on stderr, then forwards |
+| Shell option | `tentaflake.shell.hermesCli.enable` | `tentaflake.shell.tentaflakeCli.enable` | `mkRenamedOptionModule` eval warning |
+| `my-agents.nix` signature | `{ mkHermesAgent }:` | `{ mkHermesAgent, mkZeroClawAgent }:` | in-repo import passes only the args your file declares |
+
+To migrate: switch scripts and habits to `tentaflake`, rename the option in your
+config, and move `my-agents.nix` to the two-list layout from
+[`my-agents.nix.example`](my-agents.nix.example). Flake-input consumers calling
+`import ./my-agents.nix { inherit mkHermesAgent mkZeroClawAgent; }` directly must
+update old single-arg files (or add `...`). Also note `tentaflake ps` now lists
+agent containers of **all runtimes including stopped ones**, and the Agent
+Console / `tentaflake top` label non-Hermes agents with a runtime prefix
+(`zeroclaw-<name>`). Nothing changes **inside** your agent containers.
+
+---
+
 ## 🤝 Contributing
 
 This is a **generic template** — keep it that way. No domain-specific code, real hostnames, API keys, or company config.
