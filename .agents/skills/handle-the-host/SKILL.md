@@ -31,8 +31,10 @@ Replace `<user>` with the admin username set during installation (default: `admi
    tailscale status
    ```
 
-2. **Check that Hermes agents are running:**
+2. **Check that agent containers are running** (covers every agent runtime — Hermes and ZeroClaw):
    ```bash
+   tentaflake status
+   # or, raw:
    docker ps
    ```
 
@@ -70,21 +72,35 @@ sudo nix store gc --print-dead
 # Running services
 systemctl list-units --type=service --state=running
 
-# Journal logs (Hermes agent)
-journalctl -u hermes-agent -f
+# Journal logs for a specific agent (any runtime)
+tentaflake logs <agent-name>
 ```
 
 ### Container Operations
 
+Prefer the `tentaflake` host CLI — it drives every declared agent regardless
+of runtime, so you never have to hardcode a container or unit name:
+
 ```bash
-# List Hermes agent containers
+tentaflake status                # all agents, every runtime, with state
+tentaflake restart <agent-name>
+tentaflake logs <agent-name>     # -f-style follow via journalctl
+tentaflake shell <agent-name>    # interactive shell inside the container
+tentaflake ps                    # raw docker/podman ps for agent containers
+```
+
+A deprecated `hermes` shim still works (prints a deprecation note to stderr,
+then execs `tentaflake`).
+
+Raw container commands still work if you need them directly. Containers are
+named `hermes-<agent-name>` (Hermes runtime) or `zeroclaw-<agent-name>`
+(ZeroClaw runtime), with state at `/var/lib/hermes-<agent-name>` or
+`/var/lib/zeroclaw-<agent-name>` respectively:
+
+```bash
 docker ps
-
-# Restart a specific agent
-sudo systemctl restart docker-hermes-<agent-name>
-
-# Inspect container logs
-docker logs hermes-<agent-name>
+docker logs hermes-<agent-name>       # or zeroclaw-<agent-name>
+sudo systemctl restart docker-hermes-<agent-name>   # or docker-zeroclaw-<agent-name>
 ```
 
 ## Passwordless Sudo for Tailscale & NixOS
@@ -155,7 +171,7 @@ tailscale ssh <user>@<hostname>
 hostname               # Should match the installed hostname
 tailscale status        # Should show the machine joined to tailnet
 systemctl status        # Should show running state
-docker ps               # Should list agent containers
+tentaflake status        # Should list agent containers across every runtime
 ```
 
 ## Pitfalls

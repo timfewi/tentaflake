@@ -10,25 +10,27 @@ let
   auditPkg = pkgs.callPackage ../pkgs/hermes-auditd { };
 
   # Dedicated unprivileged identity for the daemon and a group through which the
-  # admin reads the audit DB (and runs `hermes top`) without sudo.
+  # admin reads the audit DB (and runs `tentaflake top`) without sudo.
   auditUser = "hermes-audit";
   auditGroup = "hermes-audit";
 
-  # Auto-discover agent state dirs from the generated OCI containers when the
-  # operator hasn't set watchDirs explicitly. mkHermesAgent names each container
-  # `hermes-<name>` with state dir `/var/lib/hermes-<name>`, so we map the former
-  # to the latter. Agents with a custom stateDir must list watchDirs by hand.
+  # Auto-discover the conventional state directory of every declarative AGENT
+  # container (hermes-*/zeroclaw-*) — only agent prefixes, so an unrelated
+  # oci-container never gets its /var/lib dir watched or console-exposed.
+  # Agents with a custom stateDir must list watchDirs by hand.
   discoveredDirs = lib.mapAttrsToList (name: _: "/var/lib/${name}") (
     lib.filterAttrs (
-      name: _: lib.hasPrefix "hermes-" name
+      name: _: lib.hasPrefix "hermes-" name || lib.hasPrefix "zeroclaw-" name
     ) config.virtualisation.oci-containers.containers
   );
   effectiveWatchDirs = if cfg.watchDirs != [ ] then cfg.watchDirs else discoveredDirs;
 
   # Console roots: when the operator sets none, derive one root per watched agent
-  # state dir, labelled by the agent name (the "/var/lib/hermes-" prefix stripped).
+  # state dir. Hermes dirs keep their historical bare label ("coding"); other
+  # runtimes keep the prefix ("zeroclaw-assistant") so runtimes stay apart —
+  # matching how the daemon labels events (see watcher.agentNameFromPath).
   derivedConsoleRoots = map (dir: {
-    name = lib.removePrefix "/var/lib/hermes-" dir;
+    name = lib.removePrefix "/var/lib/" (lib.removePrefix "/var/lib/hermes-" dir);
     path = dir;
   }) effectiveWatchDirs;
   # `roots` (when set) overrides the auto-derived agent-home list; `extraRoots`
@@ -164,7 +166,7 @@ in
       description = "Hermes audit daemon";
     };
 
-    # ── Let the admin read the audit DB (and run `hermes top`) without sudo ──
+    # ── Let the admin read the audit DB (and run `tentaflake top`) without sudo ──
     # The DB lives in the daemon's StateDirectory (group hermes-audit, group-rw);
     # adding the admin to that group is the whole access grant.
     users.users.${config.tentaflake.adminUser}.extraGroups = lib.mkIf config.tentaflake.users.enable [

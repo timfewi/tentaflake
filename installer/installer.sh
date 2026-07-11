@@ -590,6 +590,7 @@ unset PASSWORD
 # STEP 12: Copy agent examples
 # ════════════════════════════════════════════════════════════
 cp "$REPO_DIR/hermes.env.example" "$TARGET_NIXOS/hermes.env.example" 2>/dev/null || true
+cp "$REPO_DIR/zeroclaw.env.example" "$TARGET_NIXOS/zeroclaw.env.example" 2>/dev/null || true
 cp "$REPO_DIR/my-agents.nix.example" "$TARGET_NIXOS/my-agents.nix.example" 2>/dev/null || true
 cp -r "$REPO_DIR/docs" "$TARGET_NIXOS/docs" 2>/dev/null || true
 cp -r "$REPO_DIR/skills" "$TARGET_NIXOS/skills" 2>/dev/null || true

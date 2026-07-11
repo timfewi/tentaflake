@@ -3,6 +3,7 @@
   lib,
   pkgs,
   mkHermesAgent,
+  mkZeroClawAgent,
   profile ? "installed",
   ...
 }:
@@ -11,8 +12,13 @@ let
   # ── Agent modules ──
   # Define agents in my-agents.nix (see my-agents.nix.example). Auto-imported when
   # present; git-track it (`git add my-agents.nix`) so the flake can evaluate it.
+  # intersectAttrs passes each builder only if the function asks for it, so older
+  # my-agents.nix files that take just `{ mkHermesAgent }` keep working.
   myAgents = lib.optionals (builtins.pathExists ./my-agents.nix) (
-    import ./my-agents.nix { inherit mkHermesAgent; }
+    let
+      f = import ./my-agents.nix;
+    in
+    f (lib.intersectAttrs (lib.functionArgs f) { inherit mkHermesAgent mkZeroClawAgent; })
   );
 in
 {

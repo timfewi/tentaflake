@@ -1,5 +1,5 @@
 {
-  description = "Generic NixOS flake template for running multiple isolated Hermes agents on one headless machine";
+  description = "Generic NixOS flake template for running multiple isolated AI agents (Hermes, ZeroClaw, …) on one headless machine";
 
   inputs = {
     # Tracks nixos-unstable, pinned to an exact revision by the committed flake.lock
@@ -67,8 +67,9 @@
       # ── Template constants ──
       constants = import ./lib/constants.nix;
 
-      # ── Shared mkHermesAgent helper ──
+      # ── Shared agent builders ──
       mkHermesAgent = (import ./lib { inherit pkgs lib; }).mkHermesAgent;
+      mkZeroClawAgent = (import ./lib { inherit pkgs lib; }).mkZeroClawAgent;
 
       # Module set imported by external consumers and built-in hosts
       tentaflakeModules = import ./modules/default.nix;
@@ -79,6 +80,7 @@
           inputs
           self
           mkHermesAgent
+          mkZeroClawAgent
           repoRoot
           constants
           ;
@@ -97,7 +99,9 @@
       nixosModules.editor = import ./modules/editor.nix;
 
       # ── Exported helpers ──
-      lib.${system} = { inherit mkHermesAgent constants; };
+      lib.${system} = {
+        inherit mkHermesAgent mkZeroClawAgent constants;
+      };
 
       # ── Formatting ──
       formatter.${system} = nixpkgs.legacyPackages.${system}.nixfmt-tree;
@@ -154,7 +158,7 @@
             tentaflake.shell.lazygit.enable = true;
             tentaflake.shell.tmux.enable = true;
             tentaflake.editor.nvf.enable = true;
-            # Audit daemon: records agent filesystem activity for `hermes top`.
+            # Audit daemon: records agent filesystem activity for `tentaflake top`.
             # watchDirs auto-derives from the agents defined in my-agents.nix.
             tentaflake.hermes-auditd.enable = true;
           }
@@ -208,7 +212,7 @@
             tentaflake.shell.enable = true;
             tentaflake.shell.motd.enable = false;
             tentaflake.shell.tmux.enable = true;
-            # Audit daemon on too, so `hermes top` works on the live appliance —
+            # Audit daemon on too, so `tentaflake top` works on the live appliance —
             # watchDirs auto-derives from the live agents (default + research).
             tentaflake.hermes-auditd.enable = true;
           }

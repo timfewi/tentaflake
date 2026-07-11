@@ -5,7 +5,7 @@
 # this module makes the landing experience useful instead of a bare prompt:
 #
 #   - `tentaflake-status`  dynamic login banner (host + agent health)
-#   - `hermes`             backend-aware CLI to drive the agent containers
+#   - `tentaflake`         backend-aware CLI to drive the agent containers
 #   - bash QoL             completion, history, colored prompt, aliases
 #   - modern CLI tools     eza, bat, fd, ripgrep, fzf, …  (optional)
 #
@@ -24,53 +24,83 @@ let
   backend = config.tentaflake.containerBackend; # "docker" | "podman"
   hostName = config.tentaflake.hostName;
 
-  # ── hermes: operator CLI for the agent containers ──
-  # Enumerates the generated `<backend>-hermes-<name>.service` units, so it
-  # works for any agent set and either container backend without hardcoding.
-  hermesCli = pkgs.writeShellApplication {
-    name = "hermes";
+  agentContainers = config.virtualisation.oci-containers.containers;
+  agentRecords = lib.concatStringsSep "\n" (
+    lib.mapAttrsToList (
+      container: _:
+      let
+        runtime =
+          if lib.hasPrefix "zeroclaw-" container then
+            "zeroclaw"
+          else if lib.hasPrefix "hermes-" container then
+            "hermes"
+          else
+            "agent";
+        name = lib.removePrefix "${runtime}-" container;
+      in
+      "${runtime}\t${name}\t${container}\t${backend}-${container}.service"
+    ) agentContainers
+  );
+
+  # ── tentaflake: operator CLI for all declarative agent containers ──
+  tentaflakeCli = pkgs.writeShellApplication {
+    name = "tentaflake";
     runtimeInputs = [
       pkgs.coreutils
       pkgs.gawk
       pkgs.systemd
+      statusBanner
     ];
     text = ''
       # Container backend is fixed at build time from tentaflake.containerBackend.
       BACKEND="${backend}"
 
-      bold=$(printf '\033[1m'); dim=$(printf '\033[2m'); reset=$(printf '\033[0m')
-      green=$(printf '\033[32m'); red=$(printf '\033[31m'); yellow=$(printf '\033[33m')
+      bold=$(printf '\033[1m'); reset=$(printf '\033[0m'); red=$(printf '\033[31m')
+
+      agent_records() {
+        printf '%s\n' ${lib.escapeShellArg agentRecords}
+      }
 
       usage() {
         cat <<EOF
-      ''${bold}hermes''${reset} — manage Hermes agent containers (backend: ''${BACKEND})
+      ''${bold}Tentaflake''${reset} — manage multi-runtime agent containers (backend: ''${BACKEND})
 
       ''${bold}USAGE''${reset}
-        hermes [status]            Show all agents and their state (default)
-        hermes logs <name> [args]  Follow an agent's logs (extra journalctl args ok)
-        hermes restart <name>      Restart an agent
-        hermes start <name>        Start an agent
-        hermes stop <name>         Stop an agent
-        hermes shell <name>        Open an interactive shell inside an agent container
-        hermes exec <name> -- cmd  Run a command inside an agent container
-        hermes ps                  Raw ${backend} ps for agent containers
-        hermes top                 Live TUI dashboard of agent filesystem activity
-        hermes help                Show this help
+        tentaflake [status]            Show all agents and their state (default)
+        tentaflake logs <name> [args]  Follow an agent's logs (extra journalctl args ok)
+        tentaflake restart <name>      Restart an agent
+        tentaflake start <name>        Start an agent
+        tentaflake stop <name>         Stop an agent
+        tentaflake shell <name>        Open a shell inside an agent container
+        tentaflake exec <name> -- cmd  Run a command inside an agent container
+        tentaflake ps                  Show all declarative agent containers
+        tentaflake top                 Live filesystem-activity TUI
+        tentaflake help                Show this help
       EOF
       }
 
-      # List agent names from the systemd unit files (loaded or not).
-      # `list-unit-files` exits non-zero when the glob matches nothing, so the
-      # trailing `|| true` keeps `set -e` from aborting on a host with no agents.
       agent_names() {
-        systemctl list-unit-files --no-legend "''${BACKEND}-hermes-*.service" 2>/dev/null \
-          | awk '{print $1}' \
-          | sed -e "s/^''${BACKEND}-hermes-//" -e 's/\.service$//' \
-          | sort -u || true
+        agent_records | awk -F '\t' 'NF == 4 { print $2 }'
       }
 
-      unit_of()  { printf '%s-hermes-%s.service' "$BACKEND" "$1"; }
-      cname_of() { printf 'hermes-%s' "$1"; }
+      record_of() {
+        local query="$1"
+        agent_records | awk -F '\t' -v q="$query" '$2 == q || $3 == q { print; exit }'
+      }
+
+      field_of() {
+        local record
+        record=$(record_of "$1")
+        if [ -z "$record" ]; then
+          echo "''${red}error:''${reset} unknown agent '$1'" >&2
+          echo "available: $(agent_names | paste -sd' ' -)" >&2
+          exit 2
+        fi
+        printf '%s\n' "$record" | awk -F '\t' -v n="$2" '{ print $n }'
+      }
+
+      unit_of() { field_of "$1" 4; }
+      cname_of() { field_of "$1" 3; }
 
       require_name() {
         if [ -z "''${1:-}" ]; then
@@ -81,26 +111,7 @@ let
       }
 
       cmd_status() {
-        local names; names=$(agent_names)
-        if [ -z "$names" ]; then
-          echo "No Hermes agents are defined on this host."
-          echo "''${dim}Define them in my-agents.nix (see my-agents.nix.example).''${reset}"
-          return 0
-        fi
-        printf '%b%-20s %-12s %s%b\n' "$bold" "AGENT" "STATE" "CONTAINER" "$reset"
-        local name unit state color cstate
-        while IFS= read -r name; do
-          [ -n "$name" ] || continue
-          unit=$(unit_of "$name")
-          state=$(systemctl is-active "$unit" 2>/dev/null || true)
-          case "$state" in
-            active)     color=$green ;;
-            failed)     color=$red ;;
-            *)          color=$yellow ;;
-          esac
-          cstate=$("$BACKEND" inspect -f '{{.State.Status}}' "$(cname_of "$name")" 2>/dev/null || echo "-")
-          printf '%-20s %b%-12s%b %s\n' "$name" "$color" "$state" "$reset" "$cstate"
-        done <<< "$names"
+        exec tentaflake-status
       }
 
       main() {
@@ -109,11 +120,15 @@ let
           status|ls|"") cmd_status ;;
           logs)
             require_name "''${2:-}"; local n="$2"; shift 2 || true
-            exec journalctl -u "$(unit_of "$n")" -n 100 -f "$@"
+            # Resolve BEFORE exec — a failing $(…) inside exec's args is ignored,
+            # so an unknown name would silently tail unit "".
+            local u; u=$(unit_of "$n")
+            exec journalctl -u "$u" -n 100 -f "$@"
             ;;
           restart|start|stop)
             require_name "''${2:-}"
-            exec sudo systemctl "$sub" "$(unit_of "$2")"
+            local u; u=$(unit_of "$2")
+            exec sudo systemctl "$sub" "$u"
             ;;
           shell)
             require_name "''${2:-}"
@@ -124,10 +139,18 @@ let
           exec)
             require_name "''${2:-}"; local n="$2"; shift 2 || true
             [ "''${1:-}" = "--" ] && shift
-            exec "$BACKEND" exec -it "$(cname_of "$n")" "$@"
+            local c; c=$(cname_of "$n")
+            exec "$BACKEND" exec -it "$c" "$@"
             ;;
           ps)
-            exec "$BACKEND" ps --filter "name=hermes-"
+            # docker/podman `ps` take no positional args — select agent
+            # containers via anchored name filters (multiple filters OR).
+            local filters=()
+            while IFS=$'\t' read -r _ _ container _; do
+              [ -n "$container" ] && filters+=(--filter "name=^''${container}$")
+            done < <(agent_records)
+            [ "''${#filters[@]}" -gt 0 ] || exit 0
+            exec "$BACKEND" ps --all "''${filters[@]}"
             ;;
           top)
             shift || true
@@ -151,6 +174,15 @@ let
     '';
   };
 
+  hermesCompatCli = pkgs.writeShellApplication {
+    name = "hermes";
+    runtimeInputs = [ tentaflakeCli ];
+    text = ''
+      echo "note: host command 'hermes' is deprecated; use 'tentaflake'" >&2
+      exec tentaflake "$@"
+    '';
+  };
+
   # ── tentaflake-status: dynamic login banner ──
   statusBanner = pkgs.writeShellApplication {
     name = "tentaflake-status";
@@ -162,16 +194,15 @@ let
       pkgs.systemd
     ];
     text = ''
-      BACKEND="${backend}"
       bold=$(printf '\033[1m'); dim=$(printf '\033[2m'); reset=$(printf '\033[0m')
-      cyan=$(printf '\033[36m'); green=$(printf '\033[32m'); red=$(printf '\033[31m')
-      yellow=$(printf '\033[33m')
+      cyan=$(printf '\033[36m'); red=$(printf '\033[31m')
+      yellow=$(printf '\033[33m'); blue=$(printf '\033[34m')
 
       kv() { printf '  %b%-10s%b %s\n' "$dim" "$1" "$reset" "$2"; }
 
       # ── Header ──
       printf '\n%b  ╔═╗ tentaflake%b  %b%s%b\n' "$cyan" "$reset" "$bold" "$(hostname)" "$reset"
-      printf '%b  ╚═╝ isolated Hermes agent host%b\n\n' "$dim" "$reset"
+      printf '%b  ╚═╝ multi-runtime agent host%b\n\n' "$dim" "$reset"
 
       # ── System facts ──
       kv "kernel" "$(uname -sr)"
@@ -196,26 +227,43 @@ let
       fi
 
       # ── Agents ──
-      names=$(systemctl list-unit-files --no-legend "''${BACKEND}-hermes-*.service" 2>/dev/null \
-        | awk '{print $1}' | sed -e "s/^''${BACKEND}-hermes-//" -e 's/\.service$//' | sort -u || true)
+      records=${lib.escapeShellArg agentRecords}
 
       printf '\n  %b%s%b\n' "$bold" "AGENTS" "$reset"
-      if [ -z "$names" ]; then
+      if [ -z "$records" ]; then
         printf '    %bnone defined — see my-agents.nix.example%b\n' "$dim" "$reset"
       else
-        while IFS= read -r n; do
-          [ -n "$n" ] || continue
-          st=$(systemctl is-active "''${BACKEND}-hermes-''${n}.service" 2>/dev/null || true)
+        while IFS=$'\t' read -r runtime n container unit; do
+          [ -n "$container" ] || continue
+          st=$(systemctl is-active "$unit" 2>/dev/null || true)
           case "$st" in
-            active) c=$green; dot="●" ;;
-            failed) c=$red;   dot="●" ;;
-            *)      c=$yellow; dot="○" ;;
+            active)
+              dot="●"
+              if [ "$runtime" = "zeroclaw" ]; then
+                icon_color=$blue
+                status_color=$blue
+              else
+                icon_color=$yellow
+                status_color=$yellow
+              fi
+              ;;
+            failed)
+              dot="●"
+              icon_color=$red
+              status_color=$red
+              ;;
+            *)
+              dot="○"
+              icon_color=$yellow
+              status_color=$dim
+              ;;
           esac
-          printf '    %b%s%b %-20s %b%s%b\n' "$c" "$dot" "$reset" "$n" "$c" "$st" "$reset"
-        done <<< "$names"
+          printf '    %b%s%b %-20s %-10s %b%s%b\n' \
+            "$icon_color" "$dot" "$reset" "$n" "$runtime" "$status_color" "$st" "$reset"
+        done <<< "$records"
       fi
 
-      printf '\n  %brun %b%shermes%b%b to manage agents · %bhermes help%b for commands%b\n\n' \
+      printf '\n  %brun %b%stentaflake%b%b to manage agents · %btentaflake help%b for commands%b\n\n' \
         "$dim" "$reset" "$bold" "$reset" "$dim" "$bold" "$reset" "$reset"
     '';
   };
@@ -271,7 +319,10 @@ let
 in
 lib.mkIf cfg.enable {
   environment.systemPackages =
-    lib.optional cfg.hermesCli.enable hermesCli
+    lib.optionals cfg.tentaflakeCli.enable [
+      tentaflakeCli
+      hermesCompatCli
+    ]
     ++ lib.optional cfg.motd.enable statusBanner
     ++ lib.optional cfg.lazygit.enable pkgs.lazygit
     ++ lib.optionals cfg.tools.enable (

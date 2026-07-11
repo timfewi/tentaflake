@@ -36,8 +36,9 @@ nixpkgs flags as insecure, and only Go 1.24.
 
 ## Files to create in your fork
 
-- `my-agents.nix` — define your agents with `mkHermesAgent` (see `my-agents.nix.example`)
-- `secrets/hermes-<name>.env` — API keys for each agent
+- `my-agents.nix` — define your agents with `mkHermesAgent` and/or `mkZeroClawAgent`
+  (see `my-agents.nix.example`)
+- `secrets/hermes-<name>.env` / `secrets/zeroclaw-<name>.env` — API keys for each agent
 
 ## Don't forget
 

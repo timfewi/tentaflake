@@ -11,6 +11,13 @@ let
     ;
 in
 {
+  imports = [
+    (lib.mkRenamedOptionModule
+      [ "tentaflake" "shell" "hermesCli" "enable" ]
+      [ "tentaflake" "shell" "tentaflakeCli" "enable" ]
+    )
+  ];
+
   options.tentaflake = {
     hostName = lib.mkOption {
       type = lib.types.str;
@@ -138,7 +145,7 @@ in
     # ── Interactive shell experience for SSH/console operators ──
     shell = {
       enable =
-        lib.mkEnableOption "improved interactive shell (prompt, completion, MOTD, hermes CLI, tools)"
+        lib.mkEnableOption "improved interactive shell (prompt, completion, MOTD, tentaflake CLI, tools)"
         // {
           default = true;
         };
@@ -189,8 +196,8 @@ in
         };
       };
 
-      hermesCli = {
-        enable = lib.mkEnableOption "the 'hermes' agent-management CLI" // {
+      tentaflakeCli = {
+        enable = lib.mkEnableOption "the 'tentaflake' multi-runtime agent-management CLI" // {
           default = true;
         };
       };

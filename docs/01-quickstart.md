@@ -28,10 +28,17 @@ sudo systemctl status docker
 cp /etc/nixos/my-agents.nix.example /etc/nixos/my-agents.nix
 ```
 
-This activates a single "coding" agent. The example file also carries a
-fully-commented reference agent showing every `settings` option — uncomment
-it (or copy fields onto your own agent) to declare model, toolsets, memory,
-compression, TTS/STT, and more in Nix. Edit later to add more.
+This activates a single "coding" agent (in the `hermesAgents` list). The
+example file also carries a fully-commented reference agent showing every
+`settings` option — uncomment it (or copy fields onto your own agent) to
+declare model, toolsets, memory, compression, TTS/STT, and more in Nix. Edit
+later to add more.
+
+The example file also has a `zeroclawAgents` list for the second supported
+runtime, ZeroClaw (commented out by default) — see
+[02-agent-tips.md](02-agent-tips.md#adding--removing-agents) and
+`zeroclaw.env.example` if you want to run one alongside your Hermes agents.
+This quickstart continues with the default Hermes "coding" agent.
 
 If `/etc/nixos/my-agents.nix` doesn't exist on your system, copy the example:
 

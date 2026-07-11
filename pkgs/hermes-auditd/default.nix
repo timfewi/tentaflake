@@ -2,7 +2,7 @@
 
 buildGoModule {
   pname = "hermes-auditd";
-  version = "0.1.2";
+  version = "0.1.3";
   src = ./.;
   vendorHash = "sha256-+b+JmOmyut/bhwQSsmv49fpRfi4cW1qxrQoDbs9CMBE=";
   subPackages = [

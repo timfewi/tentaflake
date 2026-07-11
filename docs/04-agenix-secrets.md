@@ -1,6 +1,6 @@
 # Agenix Secrets — Encrypted Agent Credentials
 
-This guide covers encrypting Hermes agent API keys and tokens with [agenix](https://github.com/ryantm/agenix) so they can be committed to Git safely and decrypted only at NixOS activation time.
+This guide covers encrypting agent API keys and tokens — for either the Hermes or ZeroClaw runtime — with [agenix](https://github.com/ryantm/agenix) so they can be committed to Git safely and decrypted only at NixOS activation time.
 
 ## Why Agenix?
 
@@ -99,10 +99,11 @@ Edit `secrets.nix` to set your agent names and SSH public keys:
 { config, lib, pkgs, ... }:
 
 let
-  # Your agent names (match mkHermesAgent calls)
+  # Your agent names (match mkHermesAgent / mkZeroClawAgent calls)
   agentNames = [
     "hermes-coding"
     "hermes-research"
+    "zeroclaw-assistant"
   ];
 
   # SSH public keys of machines that can decrypt.
@@ -169,31 +170,56 @@ OPENROUTER_API_KEY=sk-or-v1-abc123...
 TELEGRAM_BOT_TOKEN=123456:ABC-DEF1234...
 ```
 
+The same works for a **ZeroClaw** agent — see `zeroclaw.env.example` for its
+`ZEROCLAW_<section>__<sub>__<key>` env-var convention (double underscores):
+
+```bash
+echo "ZEROCLAW_providers__models__openrouter__default__api_key=sk-or-..." \
+  | agenix -e secrets/zeroclaw-assistant.env.age --stdin
+```
+
 ### 5. Wire Agenix Secrets to Agents
 
-In `my-agents.nix`, use `agenixFile` instead of `envFile`:
+In `my-agents.nix`, use `agenixFile` instead of `envFile`. Both runtimes accept
+it the same way — `mkHermesAgent` and `mkZeroClawAgent`:
 
 ```nix
 # my-agents.nix
-{ mkHermesAgent }:
-[
-  (mkHermesAgent {
-    name       = "coding";
-    agenixFile = "/run/agenix/hermes-coding-env";  # ← matches secrets.nix path
-    settings = {
-      model.default = "openrouter/anthropic/claude-sonnet-4";
-      toolsets = [ "terminal" "memory" "file" "skills" ];
-    };
-  })
-  (mkHermesAgent {
-    name       = "research";
-    agenixFile = "/run/agenix/hermes-research-env";
-    settings = {
-      model.default = "openrouter/deepseek/deepseek-v4-flash";
-      toolsets = [ "terminal" "web" "memory" "file" "skills" ];
-    };
-  })
-]
+{ mkHermesAgent, mkZeroClawAgent }:
+let
+  hermesAgents = [
+    {
+      name       = "coding";
+      agenixFile = "/run/agenix/hermes-coding-env";  # ← matches secrets.nix path
+      settings = {
+        model.default = "openrouter/anthropic/claude-sonnet-4";
+        toolsets = [ "terminal" "memory" "file" "skills" ];
+      };
+    }
+    {
+      name       = "research";
+      agenixFile = "/run/agenix/hermes-research-env";
+      settings = {
+        model.default = "openrouter/deepseek/deepseek-v4-flash";
+        toolsets = [ "terminal" "web" "memory" "file" "skills" ];
+      };
+    }
+  ];
+  zeroclawAgents = [
+    {
+      name       = "assistant";
+      agenixFile = "/run/agenix/zeroclaw-assistant-env";
+      hostPort   = 9246;
+      servePort  = 9145;
+      # Trimmed for brevity — see the zeroclawAgents entry in
+      # my-agents.nix.example for the full required settings
+      # (runtime_profiles, agents.main, risk_profiles, …).
+      settings.schema_version = 3;
+      settings.providers.models.openrouter.default.model = "anthropic/claude-haiku-4.5";
+    }
+  ];
+in
+map mkHermesAgent hermesAgents ++ map mkZeroClawAgent zeroclawAgents
 ```
 
 The runtime path follows this convention:
