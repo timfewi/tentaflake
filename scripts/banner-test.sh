@@ -179,12 +179,14 @@ printf '\n  %brun %b%btentaflake%b %bto manage agents · %b%btentaflake%b %bhelp
 
 # ── Self-checks ──
 # counters + duration formatting
-[ "$total" -eq 6 ] && [ "$n_active" -eq 3 ] && [ "$n_failed" -eq 1 ] && [ "$n_inactive" -eq 2 ] \
-  || { echo "COUNTER MISMATCH: total=$total active=$n_active failed=$n_failed inactive=$n_inactive"; exit 1; }
-[ "$(fmt_dur 180000)" = "2d 2h" ] && [ "$(fmt_dur 11520)" = "3h 12m" ] && [ "$(fmt_dur 2700)" = "45m" ] \
-  || { echo "fmt_dur MISMATCH"; exit 1; }
+if ! { [ "$total" -eq 6 ] && [ "$n_active" -eq 3 ] && [ "$n_failed" -eq 1 ] && [ "$n_inactive" -eq 2 ]; }; then
+  echo "COUNTER MISMATCH: total=$total active=$n_active failed=$n_failed inactive=$n_inactive"; exit 1
+fi
+if ! { [ "$(fmt_dur 180000)" = "2d 2h" ] && [ "$(fmt_dur 11520)" = "3h 12m" ] && [ "$(fmt_dur 2700)" = "45m" ]; }; then
+  echo "fmt_dur MISMATCH"; exit 1
+fi
 # logo loaded and non-trivial
-[ "${#art[@]}" -ge 1 ] && [ "$w" -gt 0 ] || { echo "LOGO NOT LOADED"; exit 1; }
+if ! { [ "${#art[@]}" -ge 1 ] && [ "$w" -gt 0 ]; }; then echo "LOGO NOT LOADED"; exit 1; fi
 # info column alignment: title, tagline, and kernel must start at column w+4
 # shellcheck disable=SC2001  # regex strip needs sed; ${var//…} can't do [0-9;]*
 plain=$(sed -e $'s/\x1b\[[0-9;]*m//g' <<< "$header")
@@ -192,6 +194,7 @@ c_title=$(awk '/tentaflake agent-hub/ {print index($0, "tentaflake"); exit}' <<<
 c_tag=$(awk '/multi-runtime/ {print index($0, "multi-runtime"); exit}' <<< "$plain")
 c_kern=$(awk '/kernel/ {print index($0, "kernel"); exit}' <<< "$plain")
 expected=$((w + 4))
-[ "$c_title" = "$expected" ] && [ "$c_tag" = "$expected" ] && [ "$c_kern" = "$expected" ] \
-  || { echo "ALIGNMENT MISMATCH: title=$c_title tag=$c_tag kernel=$c_kern expected=$expected (w=$w)"; exit 1; }
+if ! { [ "$c_title" = "$expected" ] && [ "$c_tag" = "$expected" ] && [ "$c_kern" = "$expected" ]; }; then
+  echo "ALIGNMENT MISMATCH: title=$c_title tag=$c_tag kernel=$c_kern expected=$expected (w=$w)"; exit 1
+fi
 echo "self-check OK (logo ${#art[@]} rows × $w cols, info column at $expected)"
