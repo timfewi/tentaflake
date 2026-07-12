@@ -14,7 +14,7 @@
 
 <p align="center">
   <br/>
-  <img src="public/tentaflake-colored-ascii.png" alt="Tentaflake ASCII art" width="500"/>
+  <img src="public/_compressed/tentaflake-3d-realism-logo-wallpaper-16x9.png" alt="Tentaflake" width="500"/>
   <p align="center">
     <i>Declaratively deploy & manage multiple isolated AI agents (Hermes, ZeroClaw)
     on a single NixOS machine — each with its own secrets, skills, and personality.</i>
@@ -472,6 +472,12 @@ docker ps --filter "name=zeroclaw-"      # list running ZeroClaw agents
 docker logs hermes-coding                # view agent logs
 docker exec -it hermes-coding hermes chat  # chat with a Hermes agent
 ```
+
+<p align="center">
+  <img src="public/_compressed/tentaflake-tui-ui.png" alt="Tentaflake login banner — agent roster on SSH" width="700"/>
+  <br/>
+  <sub>SSH into the host and the login banner shows every agent — Hermes and ZeroClaw — with live status.</sub>
+</p>
 
 ---
 
