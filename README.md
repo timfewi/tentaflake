@@ -14,7 +14,7 @@
 
 <p align="center">
   <br/>
-  <img src="public/_compressed/tentaflake-3d-realism-logo-wallpaper-16x9.png" alt="Tentaflake" width="500"/>
+  <img src="public/_compressed/tentaflake-3d-realism-logo-wallpaper-16x9.png" alt="Tentaflake" width="720"/>
   <p align="center">
     <i>Declaratively deploy & manage multiple isolated AI agents (Hermes, ZeroClaw)
     on a single NixOS machine — each with its own secrets, skills, and personality.</i>
@@ -212,6 +212,12 @@ shell: a login banner shows host + agent health across all runtimes, and the `te
 command drives the agent containers (`tentaflake status`, `tentaflake logs <name>`,
 `tentaflake restart <name>`, `tentaflake shell <name>`). A deprecated `hermes` shim
 still works and execs `tentaflake` with a warning. See [`docs/06-shell.md`](docs/06-shell.md).
+
+<p align="center">
+  <img src="public/_compressed/tentaflake-tui-ui.png" alt="Tentaflake login banner — agent roster on SSH" width="820"/>
+  <br/>
+  <sub>SSH into the host and the login banner shows every agent — Hermes and ZeroClaw — with live status.</sub>
+</p>
 
 Then follow the [quickstart guide](docs/01-quickstart.md) to set up agent providers and start chatting.
 
@@ -472,12 +478,6 @@ docker ps --filter "name=zeroclaw-"      # list running ZeroClaw agents
 docker logs hermes-coding                # view agent logs
 docker exec -it hermes-coding hermes chat  # chat with a Hermes agent
 ```
-
-<p align="center">
-  <img src="public/_compressed/tentaflake-tui-ui.png" alt="Tentaflake login banner — agent roster on SSH" width="700"/>
-  <br/>
-  <sub>SSH into the host and the login banner shows every agent — Hermes and ZeroClaw — with live status.</sub>
-</p>
 
 ---
 
