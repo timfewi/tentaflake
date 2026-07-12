@@ -9,7 +9,7 @@ agent; it reflects whatever you defined in `my-agents.nix`.
 
 | Feature | Description |
 |---|---|
-| **Login banner** | `tentaflake-status` runs once per SSH/console login: host facts (kernel, uptime, load, memory, disk), Tailscale IP, and a colored health line per agent (with its runtime). |
+| **Login banner** | `tentaflake-status` runs once per SSH/console login: host facts (kernel, uptime, load, memory/disk with usage-colored percentages), Tailscale IP, an agent count (total · active · inactive · failed), and a health line per agent colored by runtime — with per-agent uptime for active agents, dimmed inactive agents, and a `tentaflake logs` hint when one has failed. |
 | **`tentaflake` CLI** | One command to drive agent containers across every runtime (Hermes, ZeroClaw) — backend-aware (works for `docker` or `podman`). A deprecated `hermes` shim still works, with a warning. |
 | **Bash QoL** | Completion, large deduped history, a colored prompt, and sensible aliases. |
 | **Modern CLI tools** | `eza`, `bat`, `fd`, `ripgrep`, `fzf`, `htop`, `btop`, `jq`, `tree`, `ncdu`, `tmux`, `dnsutils`. |
@@ -59,12 +59,16 @@ default).
 ### Status output has a runtime column
 
 `tentaflake status` (and the login banner) list every agent with its runtime,
-so a mixed Hermes + ZeroClaw fleet is legible at a glance:
+so a mixed Hermes + ZeroClaw fleet is legible at a glance. The header counts
+the fleet (total · active · inactive · failed), each runtime has its own color
+(hermes yellow, zeroclaw blue, other magenta), agents are sorted by name,
+active agents show how long they have been up, inactive agents are dimmed,
+and a failed agent adds a `tentaflake logs <name>` hint below the list:
 
 ```
-  AGENTS
-    ● coding                hermes     active
-    ● assistant             zeroclaw   active
+  AGENTS (3 · 2 active · 1 inactive)
+    ● assistant             zeroclaw   active   3h 12m
+    ● coding                hermes     active   2d 4h
     ○ research              hermes     inactive
 ```
 

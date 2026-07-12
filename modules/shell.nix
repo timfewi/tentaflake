@@ -24,6 +24,12 @@ let
   backend = config.tentaflake.containerBackend; # "docker" | "podman"
   hostName = config.tentaflake.hostName;
 
+  # Braille-art logo; single source of truth is public/tentaflake-shell-logo.txt.
+  # Indented here at build time so the banner script stays a single printf.
+  logo = lib.concatMapStringsSep "\n" (line: "  " + line) (
+    lib.splitString "\n" (lib.removeSuffix "\n" (builtins.readFile ../public/tentaflake-shell-logo.txt))
+  );
+
   agentContainers = config.virtualisation.oci-containers.containers;
   agentRecords = lib.concatStringsSep "\n" (
     lib.mapAttrsToList (
@@ -197,25 +203,54 @@ let
       bold=$(printf '\033[1m'); dim=$(printf '\033[2m'); reset=$(printf '\033[0m')
       cyan=$(printf '\033[36m'); red=$(printf '\033[31m')
       yellow=$(printf '\033[33m'); blue=$(printf '\033[34m')
+      green=$(printf '\033[32m'); magenta=$(printf '\033[35m')
 
-      kv() { printf '  %b%-10s%b %s\n' "$dim" "$1" "$reset" "$2"; }
+      # Info rows collected here render as a column to the right of the logo.
+      info=()
+      kv() { info+=("$(printf '%b%-10s%b %s' "$dim" "$1" "$reset" "$2")"); }
 
-      # ── Header ──
-      printf '\n%b  ╔═╗ tentaflake%b  %b%s%b\n' "$cyan" "$reset" "$bold" "$(hostname)" "$reset"
-      printf '%b  ╚═╝ multi-runtime agent host%b\n\n' "$dim" "$reset"
+      # 0-100 usage percent → green / yellow (≥75) / red (≥90)
+      pct_color() {
+        if [ "$1" -ge 90 ]; then printf '%s' "$red"
+        elif [ "$1" -ge 75 ]; then printf '%s' "$yellow"
+        else printf '%s' "$green"; fi
+      }
+
+      # seconds → compact human duration (2d 4h / 3h 12m / 45m)
+      fmt_dur() {
+        local s=$1 d h m
+        d=$((s / 86400)); h=$((s % 86400 / 3600)); m=$((s % 3600 / 60))
+        if [ "$d" -gt 0 ]; then printf '%dd %dh' "$d" "$h"
+        elif [ "$h" -gt 0 ]; then printf '%dh %dm' "$h" "$m"
+        else printf '%dm' "$m"; fi
+      }
+
+      # ── Header info (rendered right of the logo below) ──
+      info+=("$(printf '%b%btentaflake%b %b%s%b' "$bold" "$cyan" "$reset" "$bold" "$(hostname)" "$reset")")
+      info+=("$(printf '%bmulti-runtime agent host · ${backend}%b' "$dim" "$reset")")
+      info+=("")
 
       # ── System facts ──
       kv "kernel" "$(uname -sr)"
-      up=$(uptime -p 2>/dev/null | sed 's/^up //' || true)
-      if [ -z "$up" ]; then up=$(uptime 2>/dev/null || true); fi
-      kv "uptime" "$up"
+      up=$(awk '{print int($1)}' /proc/uptime 2>/dev/null || true)
+      [ -n "$up" ] && kv "uptime" "$(fmt_dur "$up")"
       kv "load"   "$(awk '{print $1", "$2", "$3}' /proc/loadavg 2>/dev/null || true)"
 
       mem=$(free -h 2>/dev/null | awk '/^Mem:/ {print $3" / "$2}' || true)
-      [ -n "$mem" ] && kv "memory" "$mem"
+      mem_pct=$(free 2>/dev/null | awk '/^Mem:/ {printf "%d", $3*100/$2}' || true)
+      if [ -n "$mem" ] && [ -n "$mem_pct" ]; then
+        kv "memory" "$mem ($(pct_color "$mem_pct")$mem_pct% used$reset)"
+      elif [ -n "$mem" ]; then
+        kv "memory" "$mem"
+      fi
 
-      disk=$(df -h / 2>/dev/null | awk 'NR==2 {print $3" / "$2" ("$5" used)"}' || true)
-      [ -n "$disk" ] && kv "disk /" "$disk"
+      disk=$(df -Ph / 2>/dev/null | awk 'NR==2 {print $3" / "$2}' || true)
+      disk_pct=$(df -P / 2>/dev/null | awk 'NR==2 {sub(/%/,"",$5); print $5}' || true)
+      if [ -n "$disk" ] && [ -n "$disk_pct" ]; then
+        kv "disk /" "$disk ($(pct_color "$disk_pct")$disk_pct% used$reset)"
+      elif [ -n "$disk" ]; then
+        kv "disk /" "$disk"
+      fi
 
       if command -v tailscale >/dev/null 2>&1; then
         ts=$(tailscale ip -4 2>/dev/null | head -n1 || true)
@@ -226,45 +261,101 @@ let
         fi
       fi
 
+      # ── Render: logo left, info column right ──
+      # ''${#l} counts characters, not bytes (braille is multibyte) — needs the
+      # UTF-8 locale NixOS sets by default.
+      mapfile -t art <<< ${lib.escapeShellArg logo}
+      w=0
+      for l in "''${art[@]}"; do [ "''${#l}" -gt "$w" ] && w=''${#l}; done
+      pad=2 # blank rows above the info column, for rough vertical centering
+      rows=''${#art[@]}
+      [ $((''${#info[@]} + pad)) -gt "$rows" ] && rows=$((''${#info[@]} + pad))
+      printf '\n'
+      for ((i = 0; i < rows; i++)); do
+        l=''${art[i]-}
+        j=$((i - pad))
+        if [ "$j" -ge 0 ] && [ -n "''${info[j]-}" ]; then
+          printf '%b%s%b%*s   %s\n' "$cyan" "$l" "$reset" "$((w - ''${#l}))" "" "''${info[j]}"
+        else
+          printf '%b%s%b\n' "$cyan" "$l" "$reset"
+        fi
+      done
+
+      printf '\n  %b──────────────────────────────────────────────%b\n' "$dim" "$reset"
+
       # ── Agents ──
       records=${lib.escapeShellArg agentRecords}
 
-      printf '\n  %b%s%b\n' "$bold" "AGENTS" "$reset"
       if [ -z "$records" ]; then
+        printf '\n  %bAGENTS%b\n' "$bold$cyan" "$reset"
         printf '    %bnone defined — see my-agents.nix.example%b\n' "$dim" "$reset"
       else
+        # Mixed-runtime fleet sorted by agent name, not grouped by runtime.
+        records=$(sort -t$'\t' -k2,2 <<< "$records")
+
+        # One agent class = one color: hermes yellow, zeroclaw blue, other magenta.
+        rows=(); failed_names=()
+        total=0; n_active=0; n_failed=0; n_inactive=0
         while IFS=$'\t' read -r runtime n container unit; do
           [ -n "$container" ] || continue
-          st=$(systemctl is-active "$unit" 2>/dev/null || true)
+          st=""; since=""
+          while IFS='=' read -r k v; do
+            case "$k" in
+              ActiveState) st=$v ;;
+              ActiveEnterTimestamp) since=$v ;;
+            esac
+          done < <(systemctl show -p ActiveState -p ActiveEnterTimestamp "$unit" 2>/dev/null || true)
+          total=$((total + 1))
+          case "$runtime" in
+            hermes) rcolor=$yellow ;;
+            zeroclaw) rcolor=$blue ;;
+            *) rcolor=$magenta ;;
+          esac
           case "$st" in
             active)
-              dot="●"
-              if [ "$runtime" = "zeroclaw" ]; then
-                icon_color=$blue
-                status_color=$blue
-              else
-                icon_color=$yellow
-                status_color=$yellow
+              n_active=$((n_active + 1))
+              age=""
+              if [ -n "$since" ]; then
+                since_s=$(date -d "$since" +%s 2>/dev/null || true)
+                [ -n "$since_s" ] && age=$(fmt_dur $(($(date +%s) - since_s)))
               fi
+              rows+=("$(printf '    %b●%b %-20s %b%-10s%b %b%-8s%b %b%s%b' \
+                "$rcolor" "$reset" "$n" "$rcolor" "$runtime" "$reset" \
+                "$rcolor" "$st" "$reset" "$dim" "$age" "$reset")")
               ;;
             failed)
-              dot="●"
-              icon_color=$red
-              status_color=$red
+              n_failed=$((n_failed + 1)); failed_names+=("$n")
+              rows+=("$(printf '    %b●%b %-20s %b%-10s%b %b%s%b' \
+                "$red" "$reset" "$n" "$rcolor" "$runtime" "$reset" "$red" "$st" "$reset")")
               ;;
             *)
-              dot="○"
-              icon_color=$yellow
-              status_color=$dim
+              n_inactive=$((n_inactive + 1))
+              rows+=("$(printf '    %b○%b %b%-20s %-10s %s%b' \
+                "$rcolor" "$reset" "$dim" "$n" "$runtime" "''${st:-inactive}" "$reset")")
               ;;
           esac
-          printf '    %b%s%b %-20s %-10s %b%s%b\n' \
-            "$icon_color" "$dot" "$reset" "$n" "$runtime" "$status_color" "$st" "$reset"
         done <<< "$records"
+
+        failed_part=""
+        if [ "$n_failed" -gt 0 ]; then
+          failed_part=$(printf ' · %b%d failed%b' "$red" "$n_failed" "$reset")
+        fi
+        printf '\n  %bAGENTS%b %b(%d · %b%d active%b%b · %d inactive%s%b)%b\n' \
+          "$bold$cyan" "$reset" \
+          "$dim" "$total" \
+          "$green" "$n_active" "$reset" \
+          "$dim" "$n_inactive" \
+          "$failed_part" "$dim" "$reset"
+        printf '%s\n' "''${rows[@]}"
+        if [ "$n_failed" -gt 0 ]; then
+          joined=$(printf '%s, ' "''${failed_names[@]}"); joined=''${joined%, }
+          printf '\n    %b⚠ failed: %s — tentaflake logs %s%b\n' \
+            "$red" "$joined" "''${failed_names[0]}" "$reset"
+        fi
       fi
 
-      printf '\n  %brun %b%stentaflake%b%b to manage agents · %btentaflake help%b for commands%b\n\n' \
-        "$dim" "$reset" "$bold" "$reset" "$dim" "$bold" "$reset" "$reset"
+      printf '\n  %brun %b%btentaflake%b %bto manage agents · %b%btentaflake%b %bhelp for commands%b\n\n' \
+        "$dim" "$reset" "$cyan" "$reset" "$dim" "$reset" "$cyan" "$reset" "$dim" "$reset"
     '';
   };
 
