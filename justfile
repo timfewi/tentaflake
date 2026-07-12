@@ -55,6 +55,10 @@ go-lint:
 shellcheck:
     shellcheck installer/*.sh scripts/*.sh
 
+# Preview the tentaflake-status login banner with a fake fleet (+ self-checks)
+banner:
+    ./scripts/banner-test.sh
+
 # ── ISOs ─────────────────────────────────────────────────────
 
 # Build the live-agent ISO (Hermes + Piper, boot-and-run appliance)
