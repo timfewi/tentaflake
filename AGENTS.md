@@ -9,6 +9,7 @@ nix flake check              # validate flake and build toplevel
 nix build .#installer-iso    # build installer ISO
 nix build .#live-agent-iso   # build live agent ISO
 cd pkgs/hermes-auditd && go vet ./... && go test ./...
+./scripts/banner-test.sh     # preview tentaflake-status banner (fake fleet + self-checks)
 ```
 
 ## Conventions
