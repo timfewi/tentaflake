@@ -469,6 +469,12 @@ TARGET_NIXOS="/mnt/etc/nixos"
 cp -r "$REPO_DIR/modules" "$TARGET_NIXOS/modules"
 cp -r "$REPO_DIR/lib" "$TARGET_NIXOS/lib"
 cp -r "$REPO_DIR/pkgs" "$TARGET_NIXOS/pkgs"
+# modules/shell.nix reads ../public/tentaflake-shell-logo.txt at eval time.
+# Copy just that file — the rest of public/ is multi-MB imagery that would
+# bloat every installed system's config repo and nix store.
+mkdir -p "$TARGET_NIXOS/public"
+cp "$REPO_DIR/public/tentaflake-shell-logo.txt" "$TARGET_NIXOS/public/" ||
+  die "Failed to copy shell logo (modules/shell.nix needs it)"
 cp "$REPO_DIR/configuration.nix" "$TARGET_NIXOS/configuration.nix"
 cp "$REPO_DIR/my-agents.nix" "$TARGET_NIXOS/my-agents.nix" 2>/dev/null || echo '{ mkHermesAgent }: [ ]' >"$TARGET_NIXOS/my-agents.nix"
 
