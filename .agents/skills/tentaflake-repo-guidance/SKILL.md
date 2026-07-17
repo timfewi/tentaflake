@@ -379,6 +379,11 @@ tentaflake shell <name> # Interactive container shell
 tentaflake exec <name> -- <cmd>
 tentaflake ps           # Raw docker ps for agent containers
 tentaflake top          # Live TUI (hermes-top, needs audit daemon)
+tentaflake backup <name>  # Snapshot an agent's state dir to a .tar.gz (0600)
+tentaflake doctor       # Host health check (exits nonzero on problems)
+tentaflake console      # Agent Console URL + tailnet publish hint
+tentaflake rebuild      # Apply the system config (nixos-rebuild switch)
+tentaflake update       # Update flake inputs, review, then rebuild
 ```
 
 A deprecated `hermes` shim still works — it prints a deprecation note to

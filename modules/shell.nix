@@ -273,8 +273,12 @@ let
       cmd_console() {
         if [ -z "$CONSOLE_ENABLED" ]; then
           echo "The Agent Console is not enabled on this host."
-          echo "enable it: add 'tentaflake.hermes-auditd.console.enable = true;' to your host"
-          echo "config in $FLAKE_DIR, then apply it with: tentaflake rebuild"
+          echo "enable it: add to your host config in $FLAKE_DIR:"
+          # console lives inside the auditd module — without auditd the console
+          # option alone is a no-op, so print both when auditd is off too.
+          [ -n "$AUDITD_ENABLED" ] || echo "  tentaflake.hermes-auditd.enable = true;"
+          echo "  tentaflake.hermes-auditd.console.enable = true;"
+          echo "then apply it with: tentaflake rebuild"
           exit 1
         fi
         local st
@@ -311,10 +315,14 @@ let
           echo "common causes: not enough disk space here (check: df -h .) or a cancelled sudo prompt." >&2
           exit 1
         fi
+        # root's default umask leaves the tarball world-readable — it holds
+        # agent secrets (auth.json, .env, keys). Own it to the caller, 0600.
+        sudo chown "$(id -u):$(id -g)" "$out"
+        chmod 600 "$out"
         echo "''${bold}backup written:''${reset} $out ($(du -h "$out" | awk '{print $1}'))"
         echo "restore with:"
         echo "  tentaflake stop $n"
-        echo "  sudo tar xzf $out -C $parent"
+        echo "  sudo tar xzf '$out' -C '$parent'"
         echo "  tentaflake start $n"
       }
 
