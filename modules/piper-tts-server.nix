@@ -225,6 +225,10 @@ in
       after = [ "network.target" ];
       wantedBy = [ "multi-user.target" ];
 
+      # Put piper on the unit PATH — the server shells out to `piper`, and
+      # /run/current-system/sw/bin is not on a systemd unit's default PATH.
+      path = [ pkgs.piper-tts ];
+
       serviceConfig = {
         ExecStart = "${pkgs.python3}/bin/python3 ${serverPy}";
         User = "piper-tts";
