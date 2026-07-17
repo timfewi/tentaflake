@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- `tentaflake` CLI host-management subcommands (#51): `rebuild` (nixos-rebuild switch on the system flake — same command as the `rebuild` alias), `update` (`nix flake update` on `/etc/nixos`, shows the `flake.lock` diff, asks y/N, then rebuilds), `doctor` (deep health check — failed systemd units, root disk ≥90%, Tailscale, `hermes-auditd`/`tentaflake-console` service state when enabled, per-agent unit state — every problem paired with its exact fix command; nonzero exit when problems found), `console` (Agent Console URL + the `tailscale serve` publish one-liner, or how to enable the console when it's off), and `backup <name>` (one-shot `sudo tar` snapshot of the agent's state dir to `./tentaflake-<name>-<UTC timestamp>.tar.gz`, with an active-agent consistency warning and the matching restore one-liner). Agent records now carry each agent's state dir, derived from the container's first volume mount (so custom `stateDir`s are honored).
 - `scripts/banner-test.sh` (also `just banner`) — renders the `tentaflake-status` banner with a stubbed `systemctl` and a fake mixed-runtime fleet (active/inactive/failed) so the banner can be previewed and regression-checked on any dev machine; self-checks cover fleet counters, duration formatting, logo loading, and logo/info-column alignment.
 
 ### Changed

@@ -210,7 +210,9 @@ sudo dd if=result/iso/tentaflake.iso of=/dev/sdX bs=4M status=progress oflag=syn
 SSH in over Tailscale (`ssh admin@<hostname>`) and you land in a ready-to-operate
 shell: a login banner shows host + agent health across all runtimes, and the `tentaflake`
 command drives the agent containers (`tentaflake status`, `tentaflake logs <name>`,
-`tentaflake restart <name>`, `tentaflake shell <name>`). A deprecated `hermes` shim
+`tentaflake restart <name>`, `tentaflake shell <name>`) and the host itself
+(`tentaflake doctor`, `tentaflake update`, `tentaflake rebuild`, `tentaflake console`,
+`tentaflake backup <name>`). A deprecated `hermes` shim
 still works and execs `tentaflake` with a warning. See [`docs/06-shell.md`](docs/06-shell.md).
 
 <p align="center">
@@ -473,6 +475,8 @@ sudo nixos-rebuild switch --flake .#agent-host  # deploy config
 sudo nixos-rebuild dry-activate --flake .#agent-host  # dry-run
 sudo nixos-rebuild switch --rollback     # undo last deploy
 tentaflake status                        # all agents, any runtime, with health
+tentaflake doctor                        # host health check (nonzero exit on problems)
+tentaflake backup coding                 # snapshot an agent's state dir to ./
 docker ps --filter "name=hermes-"        # list running Hermes agents
 docker ps --filter "name=zeroclaw-"      # list running ZeroClaw agents
 docker logs hermes-coding                # view agent logs
