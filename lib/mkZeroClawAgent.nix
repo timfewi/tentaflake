@@ -10,6 +10,8 @@
   hostPort,
   servePort,
   autoStart ? true,
+  # Max number of processes in the container (--pids-limit). null = unlimited.
+  pidsLimit ? 512,
   settings ? { },
   extraEnvironment ? { },
   extraVolumes ? [ ],
@@ -82,6 +84,7 @@ in
     extraOptions = [
       "--env-file=${agenixFile}"
       "--security-opt=no-new-privileges:true"
-    ];
+    ]
+    ++ lib.optional (pidsLimit != null) "--pids-limit=${toString pidsLimit}";
   };
 }

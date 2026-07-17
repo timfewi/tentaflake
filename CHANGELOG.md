@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- `pidsLimit` parameter on `mkHermesAgent` and `mkZeroClawAgent` — renders `--pids-limit=<n>` on the agent container (default `512`, generous because agents compile code; `null` skips the flag). Hermes containers additionally gain `--security-opt=no-new-privileges:true` by default (ZeroClaw containers already had it). Opt-in `--cap-drop=ALL` recipe and the docker-group-is-root-equivalent tradeoff (podman as the rootless alternative) documented in `docs/02-agent-tips.md` and `docs/07-operations.md`. (#3)
 - `scripts/banner-test.sh` (also `just banner`) — renders the `tentaflake-status` banner with a stubbed `systemctl` and a fake mixed-runtime fleet (active/inactive/failed) so the banner can be previewed and regression-checked on any dev machine; self-checks cover fleet counters, duration formatting, logo loading, and logo/info-column alignment.
 
 ### Changed

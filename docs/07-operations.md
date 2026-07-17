@@ -121,6 +121,20 @@ services.knowledge-base = {                          # any agent-built web app, 
 `docker exec` under `Type=simple`): when the container restarts they die and are
 restarted once it's back, so the exposure is durable across reboots and recreates.
 
+## The `docker` group is root-equivalent
+
+With the default backend, `configuration.nix` adds the admin user to the
+`docker` group so the shell tooling (`tentaflake ps`/`logs`/`top`, the login
+banner) can talk to the daemon without sudo. Understand the tradeoff: docker
+socket access is effectively **root on the host** — any group member can start
+a privileged container with `/` bind-mounted. This template accepts that
+deliberately: the admin user *is* the machine's operator, and the shell
+experience depends on it.
+
+Don't want a root-equivalent group at all? Set
+`tentaflake.containerBackend = "podman"` — podman is rootless/daemonless, no
+group is created, and agents plus shell tooling work unchanged.
+
 ## Quick reference
 
 | Argument | Tier | What it does |

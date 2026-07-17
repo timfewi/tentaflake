@@ -300,6 +300,7 @@ in [`my-agents.nix.example`](my-agents.nix.example).
 | `settings` | `attrset` | `null` | Hermes config.yaml (model routing, toolsets, etc.) |
 | `autoStart` | `bool` | `true` | Auto-start with systemd |
 | `networkMode` | `string` | `"host"` | `"host"` or `"bridge"` |
+| `pidsLimit` | `int` | `512` | Container `--pids-limit` (fork-bomb ceiling); `null` disables |
 | `extraVolumes` | `list` | `[]` | Extra `host:container:mode` mounts |
 
 #### Operational hardening (all optional, default-off)
@@ -330,6 +331,7 @@ Full option reference: [`.agents/skills/tentaflake-repo-guidance/SKILL.md`](.age
 | `settings` | `attrset` | `{ }` | ZeroClaw `config.toml` (model routing, runtime profiles, risk profiles, etc.) |
 | `seedDir` | `path` | `null` | Workspace dir copied in on first boot only, same no-clobber semantics as Hermes' `seedDir` |
 | `autoStart` | `bool` | `true` | Auto-start with systemd |
+| `pidsLimit` | `int` | `512` | Container `--pids-limit` (fork-bomb ceiling); `null` disables |
 | `extraEnvironment` / `extraVolumes` | `attrset` / `list` | `{ }` / `[ ]` | Extra container env vars / `host:container:mode` mounts |
 
 See [`my-agents.nix.example`](my-agents.nix.example) and [`zeroclaw.env.example`](zeroclaw.env.example) for a fully-commented reference agent.
