@@ -32,7 +32,7 @@ lib.mkIf cfg.enable {
     "net.ipv4.icmp_echo_ignore_broadcasts" = 1;
     "net.ipv4.icmp_ignore_bogus_error_responses" = 1;
     # rp_filter=2 (loose) not 1 (strict): strict breaks Docker bridge networking
-    # and multi-homed routing on this host.
+    # and multi-homed routing on hosts built from this template.
     "net.ipv4.conf.all.rp_filter" = 2;
     "net.ipv4.conf.default.rp_filter" = 2;
     "net.ipv4.conf.all.log_martians" = 1;
@@ -51,12 +51,19 @@ lib.mkIf cfg.enable {
     "vsyscall=none"
     "debugfs=off"
     "randomize_kstack_offset=on"
-    "lsm=landlock,yama,apparmor,bpf"
   ];
 
   security = {
     sudo.wheelNeedsPassword = true;
     apparmor.enable = true;
+    # Explicit LSM order via the first-class option; a raw lsm= kernel param
+    # would be overridden by the one this option appends later on the cmdline.
+    lsm = lib.mkForce [
+      "landlock"
+      "yama"
+      "apparmor"
+      "bpf"
+    ];
   };
 
   services.journald.extraConfig = ''

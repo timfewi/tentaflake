@@ -8,7 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
-- Kernel hardening (#4): `hardening.nix` gains sysctls (kexec/sysrq off, BPF JIT hardening, TCP RFC 1337, ICMP broadcast/bogus-error ignore, loose rp_filter — Docker-compatible, martian logging, ARP ignore/announce) and `boot.kernelParams` (`slab_nomerge`, `init_on_alloc/free`, `pti=on`, `vsyscall=none`, `debugfs=off`, `randomize_kstack_offset=on`, explicit `lsm=landlock,yama,apparmor,bpf`); `boot.nix` disables the systemd-boot menu editor (blocks `init=/bin/sh`).
+- Kernel hardening (#4): `hardening.nix` gains sysctls (kexec/sysrq off, BPF JIT hardening, TCP RFC 1337, ICMP broadcast/bogus-error ignore, loose rp_filter — Docker-compatible, martian logging, ARP ignore/announce) , `boot.kernelParams` (`slab_nomerge`, `init_on_alloc/free`, `pti=on`, `vsyscall=none`, `debugfs=off`, `randomize_kstack_offset=on`), and an explicit LSM order via `security.lsm` (`landlock,yama,apparmor,bpf`); `boot.nix` disables the systemd-boot menu editor (blocks `init=/bin/sh`).
 - `scripts/banner-test.sh` (also `just banner`) — renders the `tentaflake-status` banner with a stubbed `systemctl` and a fake mixed-runtime fleet (active/inactive/failed) so the banner can be previewed and regression-checked on any dev machine; self-checks cover fleet counters, duration formatting, logo loading, and logo/info-column alignment.
 
 ### Changed
