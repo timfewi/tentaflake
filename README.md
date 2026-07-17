@@ -446,7 +446,7 @@ the same one-container-per-agent shape under a `zeroclaw-<name>` prefix.
 | `hardening.nix` | Sysctl + kernel-param hardening, LSM order, AppArmor, journald limits |
 | `locale.nix` | Timezone, locale, console keymap |
 | `networking.nix` | Hostname, nftables firewall, NetworkManager |
-| `nix-settings.nix` | Flakes, auto-GC, trusted-users, substituters |
+| `nix-settings.nix` | Flakes, auto-GC, daemon hardening (allowed-users, strict sandbox, min-free/max-free), trusted-users, substituters |
 | `packages.nix` | curl, git, jq, tmux, vim, and more |
 | `users.nix` | Admin user (wheel + networkmanager groups) |
 | `shell.nix` | SSH/console operator experience — `tentaflake` CLI (deprecated `hermes` shim still works), login banner, prompt, zsh/oh-my-zsh, zoxide, lazygit, modern CLI tools ([docs](docs/06-shell.md)) |
