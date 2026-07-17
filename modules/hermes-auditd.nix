@@ -158,6 +158,9 @@ in
   config = lib.mkIf cfg.enable {
     environment.systemPackages = [ auditPkg ];
 
+    # The daemon adds one inotify watch per agent directory; raise the kernel cap.
+    boot.kernel.sysctl."fs.inotify.max_user_watches" = 524288;
+
     # ── Identity ──
     users.groups.${auditGroup} = { };
     users.users.${auditUser} = {
