@@ -142,6 +142,11 @@ in
       };
     };
 
+    ssh = {
+      # Off by default: Tailscale SSH is the primary access path.
+      enable = lib.mkEnableOption "hardened OpenSSH server (key-only, no root) with fail2ban, opens TCP 22";
+    };
+
     # ── Interactive shell experience for SSH/console operators ──
     shell = {
       enable =

@@ -193,8 +193,10 @@ timedatectl status
 
 ### Firewall
 
-The `networking.nix` module enables nftables. Default allows SSH (port 22)
-and Hermes gateway ports. Check rules:
+The `networking.nix` module enables nftables with a deny-all default — no
+TCP/UDP ports are open. Remote access goes through Tailscale SSH; set
+`tentaflake.ssh.enable = true` for a hardened key-only sshd on port 22.
+Check rules:
 
 ```bash
 sudo nft list ruleset
