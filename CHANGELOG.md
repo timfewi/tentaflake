@@ -8,7 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
-- Opt-in egress filtering (`tentaflake.networking.egress.enable`, **default off**): an nftables output chain (table `tentaflake-egress`, policy drop) allowing loopback, established/related, and configurable outbound ports (`allowedTCPPorts` default `[443]`, `allowedUDPPorts` default `[53 67 123 41641]` — DNS, DHCP, NTP, tailscale). Because agent containers use host networking, the host rules cover the whole fleet. (#9, [docs](docs/07-operations.md#egress-filtering-opt-in))
+- Opt-in egress filtering (`tentaflake.networking.egress.enable`, **default off**): an nftables output chain (table `tentaflake-egress`, policy drop) allowing loopback, established/related, ICMP/ICMPv6, and configurable outbound ports (`allowedTCPPorts` default `[443]`, `allowedUDPPorts` default `[53 67 123 547 41641]` — DNS, DHCP, NTP, DHCPv6, tailscale). Because agent containers use host networking, the host rules cover the whole fleet. (#9, [docs](docs/07-operations.md#egress-filtering-opt-in))
 - `scripts/banner-test.sh` (also `just banner`) — renders the `tentaflake-status` banner with a stubbed `systemctl` and a fake mixed-runtime fleet (active/inactive/failed) so the banner can be previewed and regression-checked on any dev machine; self-checks cover fleet counters, duration formatting, logo loading, and logo/info-column alignment.
 
 ### Changed

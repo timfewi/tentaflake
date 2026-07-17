@@ -128,12 +128,19 @@ Off by default. When enabled, the host gets an nftables **output** chain
 through:
 
 - loopback traffic and established/related connections (always, first)
+- ICMP and ICMPv6 (always — IPv6 neighbor discovery is not conntrack-tracked,
+  so dropping ICMPv6 would break all IPv6 traffic)
 - TCP to `tentaflake.networking.egress.allowedTCPPorts` (default `[ 443 ]`)
 - UDP to `tentaflake.networking.egress.allowedUDPPorts` (default
-  `[ 53 67 123 41641 ]` — DNS, DHCP, NTP, tailscale WireGuard)
+  `[ 53 67 123 547 41641 ]` — DNS, DHCP, NTP, DHCPv6, tailscale WireGuard)
 
 Everything else outbound is counted and dropped — including plain-HTTP
 (port 80) fetches, SMTP, and arbitrary high-port callbacks.
+
+Note on tailscale: the UDP rule matches the *destination* port, so direct
+WireGuard connections only reach peers listening on 41641; peers behind NAT
+(random mapped ports) fall back to DERP relays over TCP 443 — still
+functional, but slower.
 
 ```nix
 tentaflake.networking.egress = {

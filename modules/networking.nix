@@ -33,6 +33,10 @@ lib.mkIf cfg.networking.enable {
           type filter hook output priority 0; policy drop;
           oifname "lo" accept
           ct state established,related accept
+          # ICMPv6 is not conntrack-tracked; without this, neighbor discovery
+          # is dropped and ALL IPv6 traffic breaks (allowlisted ports included).
+          # ICMPv4 kept too for ping/PMTU diagnostics.
+          meta l4proto { icmp, ipv6-icmp } accept
           ${lib.optionalString (egress.allowedTCPPorts != [ ]) ''
             tcp dport { ${portList egress.allowedTCPPorts} } accept
           ''}
