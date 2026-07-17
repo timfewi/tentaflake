@@ -10,6 +10,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - CI security workflows: CodeQL analysis of the Go code (`.github/workflows/codeql.yml`, push/PR to main + weekly), gitleaks full-history secret scanning (`.github/workflows/gitleaks.yml`), and a weekly `flake.lock` update PR via DeterminateSystems/update-flake-lock (`.github/workflows/update-flake-lock.yml`).
 - `.pre-commit-config.yaml` — optional local hooks mirroring the CI gates (gitleaks, shellcheck, gofmt, `go vet`, `nix fmt`); setup documented in CONTRIBUTING.md.
+- Git hygiene: `.gitignore` now covers `age.key` and `*.log`; `CONTRIBUTING.md` documents SSH commit/tag signing and signed release tags (`git tag -s`). (#10)
+- `docs/04-agenix-secrets.md`: "Key Rotation & Recovery" section — rotating secret values, rekeying out a compromised recipient (old ciphertext in Git history stays exposed), recovering from a lost host SSH key via any surviving recipient, and an example rotation cadence for forks. (#6)
+- `SECURITY.md`: operator **incident response** runbook — isolate the container, revoke provider keys, inspect the `hermes-auditd` audit trail (UTC timestamps), preserve the state dir, rotate secrets and rebuild. (#11)
+- `docs/07-operations.md`: **Backup & restore** (state dirs, audit DB via `sqlite3 .backup` — never `cp` a live WAL db — off-host age identity, restic example for forks) and **Log forwarding** (`services.journald.upload` snippet) sections. (#11)
 - `scripts/banner-test.sh` (also `just banner`) — renders the `tentaflake-status` banner with a stubbed `systemctl` and a fake mixed-runtime fleet (active/inactive/failed) so the banner can be previewed and regression-checked on any dev machine; self-checks cover fleet counters, duration formatting, logo loading, and logo/info-column alignment.
 
 ### Changed
