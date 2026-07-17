@@ -98,6 +98,14 @@ container) but loud.
 > A subtly wrong path (e.g. `/v1` vs `/go/v1`) with an otherwise-valid key is the
 > classic silent 401.
 
+## Host access paths
+
+Tailscale SSH (`modules/tailscale.nix`, on by default) is the primary way onto
+the host — no open firewall ports, auth handled by the tailnet. If you need
+direct SSH, set `tentaflake.ssh.enable = true`: a hardened key-only sshd (no
+passwords, no root login, max 3 auth tries) plus fail2ban, opening TCP 22 in
+the otherwise deny-all firewall. Keys go in `tentaflake.adminAuthorizedKeys`.
+
 ## Exposing dashboards & agent-built apps on the tailnet
 
 Containers use host networking, so a service bound to the host's `127.0.0.1:<port>`

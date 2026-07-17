@@ -8,9 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- `modules/ssh.nix` — opt-in hardened OpenSSH server (`tentaflake.ssh.enable`, default off): key-only auth (no passwords, no keyboard-interactive, no root login, max 3 auth tries), fail2ban, and TCP 22 opened in the otherwise deny-all firewall. Tailscale SSH remains the primary access path; admin keys come from `tentaflake.adminAuthorizedKeys`.
 - `scripts/banner-test.sh` (also `just banner`) — renders the `tentaflake-status` banner with a stubbed `systemctl` and a fake mixed-runtime fleet (active/inactive/failed) so the banner can be previewed and regression-checked on any dev machine; self-checks cover fleet counters, duration formatting, logo loading, and logo/info-column alignment.
 
 ### Changed
+- Live agent ISO: the debug sshd no longer accepts password auth (`PasswordAuthentication = false`) — Tailscale SSH covers remote debugging on the live ISO.
 - `tentaflake-status` login banner redesigned: braille-art octopus-snowflake logo in cyan (embedded at build time from `public/tentaflake-shell-logo.txt`, the single source of truth) with the header and host facts rendered as a column to its right, and the container backend in the tagline; `AGENTS` header now cyan with a fleet count (`total · active · inactive`, plus `failed` in red when present); each runtime gets its own color (hermes yellow, zeroclaw blue, other magenta) on dot/runtime/status; agents sorted by name; active agents show their uptime (`active 2d 4h`); inactive agents render dimmed; a failed agent adds a red `⚠ failed: <name> — tentaflake logs <name>` hint. Also: memory/disk lines gain usage-colored percentages (green/yellow ≥75%/red ≥90%), host uptime is read from `/proc/uptime` (fixes the duplicated load average in the old fallback), and a separator rule divides host facts from the agent list.
 
 ## [0.2.0] — 2026-07-11

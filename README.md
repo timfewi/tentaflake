@@ -450,6 +450,7 @@ the same one-container-per-agent shape under a `zeroclaw-<name>` prefix.
 | `users.nix` | Admin user (wheel + networkmanager groups) |
 | `shell.nix` | SSH/console operator experience — `tentaflake` CLI (deprecated `hermes` shim still works), login banner, prompt, zsh/oh-my-zsh, zoxide, lazygit, modern CLI tools ([docs](docs/06-shell.md)) |
 | `editor.nix` | Optional Neovim via nvf (LSP, treesitter, telescope) — `tentaflake.editor.nvf.enable`, exported as `nixosModules.editor` ([docs](docs/06-shell.md#zsh-zoxide-lazygit-neovim)) |
+| `ssh.nix` | Opt-in hardened OpenSSH (key-only, no root login, max 3 auth tries) + fail2ban, opens TCP 22 — off by default, Tailscale SSH is the primary access path |
 | `tailscale.nix` | Tailscale with SSH + tag:auto (optional) |
 | `piper-tts-server.nix` | Local TTS via Piper (OpenAI-compatible API) |
 | `hermes-auditd.nix` | Filesystem audit daemon (watches state dirs of agent containers on **every** runtime) + `tentaflake top` TUI + the **Agent Console** web file explorer & live monitor — [docs](docs/06-shell.md#agent-console--web-file-explorer--live-monitor) |
