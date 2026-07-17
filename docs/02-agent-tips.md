@@ -370,7 +370,7 @@ Do NOT store env files in `/etc/nixos/` (ends up in Nix store, world-readable).
 
 Containers run with:
 - Host networking (`--network=host`)
-- Dedicated system user (not root in container: `--user=<uid>`)
+- Non-root inside the container — the image's built-in `hermes` user (no host `--user` override)
 - Read-only state dir permissions (0700, owner only)
 - No privilege escalation (`--security-opt=no-new-privileges:true`)
 - A process ceiling (`--pids-limit=512`, tunable via `pidsLimit`)

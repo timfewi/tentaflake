@@ -132,8 +132,12 @@ deliberately: the admin user *is* the machine's operator, and the shell
 experience depends on it.
 
 Don't want a root-equivalent group at all? Set
-`tentaflake.containerBackend = "podman"` — podman is rootless/daemonless, no
-group is created, and agents plus shell tooling work unchanged.
+`tentaflake.containerBackend = "podman"` — daemonless, and no root-equivalent
+group is created. Note the tradeoff: agent containers still run as root-managed
+systemd services, and the admin user's rootless podman has a separate container
+store, so the container-level subcommands (`tentaflake ps`/`shell`/`exec`) need
+root's store — run them under `sudo`. `status`, `logs`, and
+`start`/`stop`/`restart` go through journald/systemctl and work unchanged.
 
 ## Quick reference
 
