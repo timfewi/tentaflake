@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Kernel hardening (#4): `hardening.nix` gains sysctls (kexec/sysrq off, BPF JIT hardening, TCP RFC 1337, ICMP broadcast/bogus-error ignore, loose rp_filter — Docker-compatible, martian logging, ARP ignore/announce) , `boot.kernelParams` (`slab_nomerge`, `init_on_alloc/free`, `pti=on`, `vsyscall=none`, `debugfs=off`, `randomize_kstack_offset=on`), and an explicit LSM order via `security.lsm` (`landlock,yama,apparmor,bpf`); `boot.nix` disables the systemd-boot menu editor (blocks `init=/bin/sh`).
 - CI security workflows: CodeQL analysis of the Go code (`.github/workflows/codeql.yml`, push/PR to main + weekly), gitleaks full-history secret scanning (`.github/workflows/gitleaks.yml`), and a weekly `flake.lock` update PR via DeterminateSystems/update-flake-lock (`.github/workflows/update-flake-lock.yml`).
 - `.pre-commit-config.yaml` — optional local hooks mirroring the CI gates (gitleaks, shellcheck, gofmt, `go vet`, `nix fmt`); setup documented in CONTRIBUTING.md.
 - Git hygiene: `.gitignore` now covers `age.key` and `*.log`; `CONTRIBUTING.md` documents SSH commit/tag signing and signed release tags (`git tag -s`). (#10)
