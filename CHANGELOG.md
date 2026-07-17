@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Git hygiene: `.gitignore` now covers `age.key` and `*.log`; `CONTRIBUTING.md` documents SSH commit/tag signing and signed release tags (`git tag -s`). (#10)
 - `scripts/banner-test.sh` (also `just banner`) — renders the `tentaflake-status` banner with a stubbed `systemctl` and a fake mixed-runtime fleet (active/inactive/failed) so the banner can be previewed and regression-checked on any dev machine; self-checks cover fleet counters, duration formatting, logo loading, and logo/info-column alignment.
 
 ### Changed
