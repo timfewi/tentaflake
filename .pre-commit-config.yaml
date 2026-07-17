@@ -1,0 +1,36 @@
+# Mirrors the CI gates (.github/workflows/) — see CONTRIBUTING.md for setup.
+# Tools (shellcheck, go, nix) come from the environment; only gitleaks is
+# fetched by pre-commit itself.
+repos:
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.29.1
+    hooks:
+      - id: gitleaks
+
+  - repo: local
+    hooks:
+      - id: shellcheck
+        name: shellcheck
+        entry: shellcheck
+        language: system
+        types: [shell]
+
+      - id: gofmt
+        name: gofmt
+        entry: gofmt -l -w
+        language: system
+        types: [go]
+
+      - id: go-vet
+        name: go vet
+        entry: bash -c 'cd pkgs/hermes-auditd && go vet ./...'
+        language: system
+        types: [go]
+        pass_filenames: false
+
+      - id: nixfmt
+        name: nix fmt
+        entry: nix fmt
+        language: system
+        types: [nix]
+        pass_filenames: false

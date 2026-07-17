@@ -30,7 +30,7 @@ tentaflake/
 │   ├── hardening.nix             # Kernel sysctl, sudo rules, AppArmor, journald
 │   ├── locale.nix                # Timezone, locale, console keymap
 │   ├── networking.nix            # Hostname, NetworkManager, nftables firewall
-│   ├── nix-settings.nix          # Nix daemon: flakes, GC, optimisation, trusted users
+│   ├── nix-settings.nix          # Nix daemon: flakes, GC, optimisation, trusted users, hardening
 │   ├── packages.nix              # System packages (curl, git)
 │   ├── users.nix                 # Admin user creation (wheel + networkmanager groups)
 │   ├── tailscale.nix             # Tailscale VPN with extraUpFlags
@@ -212,6 +212,7 @@ Defined in `lib/mkHermesAgent.nix`. Creates one Hermes agent as a NixOS module.
 | `extraEnvironment` | attrset | `{}` | Extra env vars |
 | `cmd` | list of str? | `null` | Container command (null → `gateway run --replace`) |
 | `networkMode` | str | `"host"` | Docker network mode |
+| `pidsLimit` | int? | `512` | Container `--pids-limit` (fork-bomb ceiling); `null` disables |
 | `autoStart` | bool | `true` | Auto-start with system |
 | `createUser` | bool | `true` | Create system user/group |
 | `extraContainerConfig` | attrset | `{}` | Merged into OCI container config (use for `memory`, `cpus`, port maps) |
@@ -271,6 +272,7 @@ Defined in `lib/mkZeroClawAgent.nix`. Creates one ZeroClaw agent as a NixOS modu
 | `hostPort` | int | **required** | Host loopback port forwarded to the gateway |
 | `servePort` | int | **required** | Tailnet HTTPS port (published via `tailscale serve`) |
 | `autoStart` | bool | `true` | Auto-start with system |
+| `pidsLimit` | int? | `512` | Container `--pids-limit` (fork-bomb ceiling); `null` disables |
 | `settings` | TOML attrset | `{}` | ZeroClaw config serialized to `config.toml` |
 | `extraEnvironment` | attrset | `{}` | Extra env vars |
 | `extraVolumes` | list of str | `[]` | Extra Docker volumes |
@@ -335,6 +337,7 @@ Kernel hardening and security controls:
 ### `nix-settings.nix`
 - `nix.settings.experimental-features = ["nix-command" "flakes"]`
 - `trusted-users = ["root" adminUser]`
+- Daemon hardening: `allowed-users = ["root" "@wheel"]` (agents live in containers, never talk to the host daemon), `sandbox = true` + `sandbox-fallback = false` (no silent downgrade to unsandboxed builds), `min-free`/`max-free` (2 GiB / 8 GiB) so builds cannot fill the disk
 - Auto GC: weekly, `--delete-older-than 14d`
 - Auto optimise: weekly, persistent
 - `allowUnfree` via `tentaflake.allowUnfree`

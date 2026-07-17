@@ -314,6 +314,34 @@ func TestWatcherDebounceWriteAfterCreate(t *testing.T) {
 	assertNoEvent(t, ch, "second event after coalesce")
 }
 
+// TestWatcherDirCap verifies that addRecursive stops adding inotify watches
+// once the directory cap is reached.
+func TestWatcherDirCap(t *testing.T) {
+	old := maxWatchedDirs
+	maxWatchedDirs = 2
+	t.Cleanup(func() { maxWatchedDirs = old })
+
+	dir := newTempDir(t)
+	for _, name := range []string{"a", "b", "c", "d"} {
+		if err := os.Mkdir(filepath.Join(dir, name), 0755); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	w, err := NewWatcher([]string{dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer w.Close()
+
+	if w.watched != 2 {
+		t.Errorf("watched = %d, want cap 2", w.watched)
+	}
+	if !w.capWarned {
+		t.Error("capWarned not set after hitting the cap")
+	}
+}
+
 // TestWatcherNewSubDirectory verifies that creating a new directory
 // within a watched directory is recursively watched.
 func TestWatcherNewSubDirectory(t *testing.T) {

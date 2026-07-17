@@ -15,10 +15,12 @@ import (
 
 // fakeQuerier implements the querier interface with canned data.
 type fakeQuerier struct {
-	events []hermes.Event
+	events    []hermes.Event
+	lastLimit int
 }
 
 func (f *fakeQuerier) Query(_ context.Context, agent, _, _ string, limit int) ([]hermes.Event, error) {
+	f.lastLimit = limit
 	var out []hermes.Event
 	for i := len(f.events) - 1; i >= 0 && len(out) < limit; i-- { // newest first
 		if agent == "" || f.events[i].Agent == agent {
@@ -104,6 +106,24 @@ func TestWriteMethodRejected(t *testing.T) {
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusMethodNotAllowed {
 		t.Errorf("POST should be 405, got %d", resp.StatusCode)
+	}
+}
+
+func TestEventsLimitClamped(t *testing.T) {
+	q := &fakeQuerier{}
+	exp, err := NewExplorer([]config.Root{{Name: "x", Path: t.TempDir()}}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(NewServer(q, exp).Handler())
+	defer srv.Close()
+	resp, err := http.Get(srv.URL + "/api/events?limit=999999")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if q.lastLimit != maxEventsLimit {
+		t.Errorf("limit passed to store = %d, want clamp to %d", q.lastLimit, maxEventsLimit)
 	}
 }
 
