@@ -8,6 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- `SECURITY.md`: operator **incident response** runbook — isolate the container, revoke provider keys, inspect the `hermes-auditd` audit trail (UTC timestamps), preserve the state dir, rotate secrets and rebuild. (#11)
+- `docs/07-operations.md`: **Backup & restore** (state dirs, audit DB via `sqlite3 .backup` — never `cp` a live WAL db — off-host age identity, restic example for forks) and **Log forwarding** (`services.journald.upload` snippet) sections. (#11)
 - `scripts/banner-test.sh` (also `just banner`) — renders the `tentaflake-status` banner with a stubbed `systemctl` and a fake mixed-runtime fleet (active/inactive/failed) so the banner can be previewed and regression-checked on any dev machine; self-checks cover fleet counters, duration formatting, logo loading, and logo/info-column alignment.
 
 ### Changed
