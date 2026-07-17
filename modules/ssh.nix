@@ -24,7 +24,8 @@ lib.mkIf cfg.enable {
   # and belongs in forks.
   services.fail2ban.enable = true;
 
-  # The default firewall is deny-all (modules/networking.nix), so sshd is
-  # unreachable unless we open its port.
+  # Explicit statement of intent: services.openssh.openFirewall already opens
+  # the SSH port by default, so this line is not functionally required — it
+  # documents that TCP 22 is deliberately open in the deny-all firewall.
   networking.firewall.allowedTCPPorts = [ 22 ];
 }
