@@ -5,7 +5,7 @@
     # Tracks nixos-unstable, pinned to an exact revision by the committed flake.lock
     # (so builds are reproducible — run `nix flake update` to bump deliberately).
     # Unstable is required here: it is the only channel that currently provides BOTH
-    # a non-vulnerable docker (29.x) AND Go >= 1.25 (needed by hermes-auditd's
+    # a non-vulnerable docker (29.x) AND Go >= 1.25 (needed by tentaflake-auditd's
     # modernc.org/sqlite). The 25.11 stable ships docker 28.5.2, flagged insecure.
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
 
@@ -123,7 +123,7 @@
       # ── Checks (validates nixosConfigurations build) ──
       checks.${system} = {
         agent-host = self.nixosConfigurations.agent-host.config.system.build.toplevel;
-        hermes-auditd = self.packages.${system}.hermes-auditd;
+        tentaflake-auditd = self.packages.${system}.tentaflake-auditd;
       };
 
       # ── agent-host: Installed system, consumes my-agents.nix ──
@@ -160,7 +160,7 @@
             tentaflake.editor.nvf.enable = true;
             # Audit daemon: records agent filesystem activity for `tentaflake top`.
             # watchDirs auto-derives from the agents defined in my-agents.nix.
-            tentaflake.hermes-auditd.enable = true;
+            tentaflake.auditd.enable = true;
           }
           self.nixosModules.default
           self.nixosModules.editor
@@ -214,7 +214,7 @@
             tentaflake.shell.tmux.enable = true;
             # Audit daemon on too, so `tentaflake top` works on the live appliance —
             # watchDirs auto-derives from the live agents (default + research).
-            tentaflake.hermes-auditd.enable = true;
+            tentaflake.auditd.enable = true;
           }
           self.nixosModules.default
           ./configuration.nix
@@ -223,8 +223,10 @@
       };
 
       # ── Convenience packages ──
-      packages.${system} = {
-        hermes-auditd = pkgs.callPackage ./pkgs/hermes-auditd { };
+      packages.${system} = rec {
+        tentaflake-auditd = pkgs.callPackage ./pkgs/tentaflake-auditd { };
+        # Deprecated alias for the pre-rename attr name; remove in a future release.
+        hermes-auditd = tentaflake-auditd;
         installer-iso = self.nixosConfigurations.installer-iso.config.system.build.isoImage;
         live-agent-iso = self.nixosConfigurations.live-agent.config.system.build.isoImage;
         piper-voices = pkgs.callPackage ./pkgs/piper-voices { };

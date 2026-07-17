@@ -6,11 +6,14 @@
 }:
 
 let
-  cfg = config.tentaflake.hermes-auditd;
-  auditPkg = pkgs.callPackage ../pkgs/hermes-auditd { };
+  cfg = config.tentaflake.auditd;
+  auditPkg = pkgs.callPackage ../pkgs/tentaflake-auditd { };
 
   # Dedicated unprivileged identity for the daemon and a group through which the
   # admin reads the audit DB (and runs `tentaflake top`) without sudo.
+  # ponytail: legacy user/group name preserved — it owns the existing audit DB
+  # files under /var/lib/hermes-audit; rename together with the state dir in a
+  # future major.
   auditUser = "hermes-audit";
   auditGroup = "hermes-audit";
 
@@ -55,8 +58,58 @@ let
   };
 in
 {
-  options.tentaflake.hermes-auditd = {
-    enable = lib.mkEnableOption "Hermes audit daemon (filesystem change monitoring)";
+  # Old option names (pre-rename) still evaluate, with a deprecation warning.
+  # Remove together with the other rename shims.
+  imports =
+    map
+      (
+        path:
+        lib.mkRenamedOptionModule
+          (
+            [
+              "tentaflake"
+              "hermes-auditd"
+            ]
+            ++ path
+          )
+          (
+            [
+              "tentaflake"
+              "auditd"
+            ]
+            ++ path
+          )
+      )
+      [
+        [ "enable" ]
+        [ "watchDirs" ]
+        [ "port" ]
+        [ "dbPath" ]
+        [ "retentionHours" ]
+        [
+          "console"
+          "enable"
+        ]
+        [
+          "console"
+          "addr"
+        ]
+        [
+          "console"
+          "roots"
+        ]
+        [
+          "console"
+          "extraRoots"
+        ]
+        [
+          "console"
+          "extraDeny"
+        ]
+      ];
+
+  options.tentaflake.auditd = {
+    enable = lib.mkEnableOption "Tentaflake audit daemon (filesystem change monitoring)";
 
     watchDirs = lib.mkOption {
       type = with lib.types; listOf str;
@@ -76,6 +129,8 @@ in
 
     dbPath = lib.mkOption {
       type = lib.types.str;
+      # ponytail: legacy state-dir name preserved so existing audit DBs survive
+      # the hermes→tentaflake rename; rename it in a future major.
       default = "/var/lib/hermes-audit/events.db";
       description = "Path to the SQLite database";
     };
@@ -89,7 +144,7 @@ in
     # ── Agent Console: read-only web file explorer + live activity monitor ──
     console = {
       enable = lib.mkEnableOption ''
-        the Hermes Agent Console: a read-only web UI combining a file explorer
+        the Tentaflake Agent Console: a read-only web UI combining a file explorer
         over the agent state dirs with a live activity monitor (backed by the
         same events.db). Bind it to loopback and publish on the tailnet via
         `tailscale serve`'';
@@ -167,7 +222,7 @@ in
     users.users.${auditUser} = {
       isSystemUser = true;
       group = auditGroup;
-      description = "Hermes audit daemon";
+      description = "Tentaflake audit daemon";
     };
 
     # ── Let the admin read the audit DB (and run `tentaflake top`) without sudo ──
@@ -177,13 +232,13 @@ in
       auditGroup
     ];
 
-    systemd.services.hermes-auditd = {
-      description = "Hermes agent filesystem audit daemon";
+    systemd.services.tentaflake-auditd = {
+      description = "Tentaflake agent filesystem audit daemon";
       wantedBy = [ "multi-user.target" ];
       after = [ "local-fs.target" ];
 
       serviceConfig = {
-        ExecStart = "${auditPkg}/bin/hermes-auditd";
+        ExecStart = "${auditPkg}/bin/tentaflake-auditd";
         Restart = "on-failure";
         RestartSec = "5s";
         Type = "simple";
@@ -213,6 +268,8 @@ in
 
         # SQLite DB dir: group-accessible so admins in the hermes-audit group can
         # read it (and open the WAL files) without sudo. UMask 0007 → files 0660.
+        # ponytail: legacy state-dir name preserved so existing audit DBs
+        # survive the hermes→tentaflake rename; rename it in a future major.
         StateDirectory = "hermes-audit";
         StateDirectoryMode = "0770";
         UMask = "0007";
@@ -225,11 +282,11 @@ in
     # its (shared) StateDirectory. The HTTP surface is GET-only, bound to
     # loopback; expose it on the tailnet with `tailscale serve`.
     systemd.services.tentaflake-console = lib.mkIf cfg.console.enable {
-      description = "Hermes Agent Console (read-only file explorer + live monitor)";
+      description = "Tentaflake Agent Console (read-only file explorer + live monitor)";
       wantedBy = [ "multi-user.target" ];
       after = [
         "local-fs.target"
-        "hermes-auditd.service"
+        "tentaflake-auditd.service"
       ];
 
       serviceConfig = {

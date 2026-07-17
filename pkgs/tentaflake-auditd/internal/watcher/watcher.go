@@ -16,7 +16,7 @@ import (
 	"time"
 
 	"github.com/fsnotify/fsnotify"
-	"tentaflake/hermes-auditd/internal/hermes"
+	"tentaflake/tentaflake-auditd/internal/event"
 )
 
 // maxWatchedDirs caps the total number of inotify-watched directories so an
@@ -25,7 +25,7 @@ import (
 var maxWatchedDirs = 10000
 
 // Watcher monitors directories for filesystem events and emits
-// hermes.Event values on a channel.
+// event.Event values on a channel.
 type Watcher struct {
 	w    *fsnotify.Watcher
 	dirs []string
@@ -90,10 +90,10 @@ func (watcher *Watcher) addRecursive(dir string) error {
 }
 
 // Start begins watching directories and returns a receive-only channel
-// of hermes.Event values. Events are debounced per file within a 100ms
+// of event.Event values. Events are debounced per file within a 100ms
 // window. The goroutine exits when ctx is cancelled.
-func (watcher *Watcher) Start(ctx context.Context) <-chan hermes.Event {
-	out := make(chan hermes.Event, 100)
+func (watcher *Watcher) Start(ctx context.Context) <-chan event.Event {
+	out := make(chan event.Event, 100)
 
 	go watcher.loop(ctx, out)
 
@@ -102,7 +102,7 @@ func (watcher *Watcher) Start(ctx context.Context) <-chan hermes.Event {
 
 // debounceEntry tracks the latest event for a file and its coalescing timer.
 type debounceEntry struct {
-	event hermes.Event
+	event event.Event
 	timer *time.Timer
 }
 
@@ -122,7 +122,7 @@ func newDebounceMap() *debounceMap {
 
 // Add stores or updates a debounce entry for path.
 // When the timer fires, after is called.
-func (dm *debounceMap) Add(path string, evt hermes.Event, after func()) {
+func (dm *debounceMap) Add(path string, evt event.Event, after func()) {
 	dm.mu.Lock()
 	defer dm.mu.Unlock()
 
@@ -141,7 +141,7 @@ func (dm *debounceMap) Add(path string, evt hermes.Event, after func()) {
 }
 
 // Flush sends the pending event for path (if any) and removes it.
-func (dm *debounceMap) Flush(path string, out chan<- hermes.Event, ctx context.Context) bool {
+func (dm *debounceMap) Flush(path string, out chan<- event.Event, ctx context.Context) bool {
 	dm.mu.Lock()
 	entry, ok := dm.pending[path]
 	if ok {
@@ -159,7 +159,7 @@ func (dm *debounceMap) Flush(path string, out chan<- hermes.Event, ctx context.C
 }
 
 // FlushAll sends all pending events (non-blocking) and clears the map.
-func (dm *debounceMap) FlushAll(out chan<- hermes.Event) {
+func (dm *debounceMap) FlushAll(out chan<- event.Event) {
 	dm.mu.Lock()
 	for path, entry := range dm.pending {
 		entry.timer.Stop()
@@ -174,7 +174,7 @@ func (dm *debounceMap) FlushAll(out chan<- hermes.Event) {
 	dm.mu.Unlock()
 }
 
-func (watcher *Watcher) loop(ctx context.Context, out chan<- hermes.Event) {
+func (watcher *Watcher) loop(ctx context.Context, out chan<- event.Event) {
 	defer close(out)
 
 	dm := newDebounceMap()
@@ -227,9 +227,9 @@ func (watcher *Watcher) watchNewDirectory(path string) {
 	}
 }
 
-// toEvent converts an fsnotify event to a hermes.Event.
+// toEvent converts an fsnotify event to a event.Event.
 // Returns nil if the event type is not interesting.
-func (watcher *Watcher) toEvent(fsEvent fsnotify.Event) *hermes.Event {
+func (watcher *Watcher) toEvent(fsEvent fsnotify.Event) *event.Event {
 	var op string
 	switch {
 	case fsEvent.Has(fsnotify.Create):
@@ -252,7 +252,7 @@ func (watcher *Watcher) toEvent(fsEvent fsnotify.Event) *hermes.Event {
 		size = info.Size()
 	}
 
-	return &hermes.Event{
+	return &event.Event{
 		Agent:     agentNameFromPath(fsEvent.Name),
 		File:      fsEvent.Name,
 		Op:        op,

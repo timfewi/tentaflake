@@ -8,7 +8,7 @@
 /configuration.nix @timfewi
 
 # Go daemon
-/pkgs/hermes-auditd/ @timfewi
+/pkgs/tentaflake-auditd/ @timfewi
 
 # Installer
 /installer/ @timfewi

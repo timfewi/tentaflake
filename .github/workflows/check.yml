@@ -29,17 +29,17 @@ jobs:
 
       - uses: actions/setup-go@v6
         with:
-          go-version-file: pkgs/hermes-auditd/go.mod
-          cache-dependency-path: pkgs/hermes-auditd/go.sum
+          go-version-file: pkgs/tentaflake-auditd/go.mod
+          cache-dependency-path: pkgs/tentaflake-auditd/go.sum
 
       - name: go build
-        run: cd pkgs/hermes-auditd && go build ./...
+        run: cd pkgs/tentaflake-auditd && go build ./...
 
       - name: go vet
-        run: cd pkgs/hermes-auditd && go vet ./...
+        run: cd pkgs/tentaflake-auditd && go vet ./...
 
       - name: go test
-        run: cd pkgs/hermes-auditd && go test ./...
+        run: cd pkgs/tentaflake-auditd && go test ./...
 
       - name: shellcheck
         run: shellcheck installer/*.sh scripts/*.sh

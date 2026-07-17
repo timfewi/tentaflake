@@ -1,6 +1,6 @@
 // Command tentaflake-console serves the Agent Console: a read-only web UI that
 // combines a file explorer over the Hermes agent state dirs with a live activity
-// monitor backed by the same audit database the hermes-auditd daemon writes.
+// monitor backed by the same audit database the tentaflake-auditd daemon writes.
 //
 // It opens events.db for queries only (no watcher, no pruning) and exposes a
 // GET-only HTTP surface on a loopback address, meant to be published on the
@@ -17,9 +17,9 @@ import (
 	"syscall"
 	"time"
 
-	"tentaflake/hermes-auditd/internal/config"
-	"tentaflake/hermes-auditd/internal/store"
-	"tentaflake/hermes-auditd/internal/web"
+	"tentaflake/tentaflake-auditd/internal/config"
+	"tentaflake/tentaflake-auditd/internal/store"
+	"tentaflake/tentaflake-auditd/internal/web"
 )
 
 func main() {

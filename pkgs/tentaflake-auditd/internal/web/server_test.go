@@ -8,20 +8,20 @@ import (
 	"testing"
 	"time"
 
-	"tentaflake/hermes-auditd/internal/config"
-	"tentaflake/hermes-auditd/internal/hermes"
-	"tentaflake/hermes-auditd/internal/store"
+	"tentaflake/tentaflake-auditd/internal/config"
+	"tentaflake/tentaflake-auditd/internal/event"
+	"tentaflake/tentaflake-auditd/internal/store"
 )
 
 // fakeQuerier implements the querier interface with canned data.
 type fakeQuerier struct {
-	events    []hermes.Event
+	events    []event.Event
 	lastLimit int
 }
 
-func (f *fakeQuerier) Query(_ context.Context, agent, _, _ string, limit int) ([]hermes.Event, error) {
+func (f *fakeQuerier) Query(_ context.Context, agent, _, _ string, limit int) ([]event.Event, error) {
 	f.lastLimit = limit
-	var out []hermes.Event
+	var out []event.Event
 	for i := len(f.events) - 1; i >= 0 && len(out) < limit; i-- { // newest first
 		if agent == "" || f.events[i].Agent == agent {
 			out = append(out, f.events[i])
@@ -30,8 +30,8 @@ func (f *fakeQuerier) Query(_ context.Context, agent, _, _ string, limit int) ([
 	return out, nil
 }
 
-func (f *fakeQuerier) Since(_ context.Context, afterID int64, limit int) ([]hermes.Event, error) {
-	var out []hermes.Event
+func (f *fakeQuerier) Since(_ context.Context, afterID int64, limit int) ([]event.Event, error) {
+	var out []event.Event
 	for _, e := range f.events {
 		if e.ID > afterID && len(out) < limit {
 			out = append(out, e)
@@ -50,7 +50,7 @@ func (f *fakeQuerier) Stats(_ context.Context, _ string) (map[string]int, error)
 
 func testServer(t *testing.T) *httptest.Server {
 	t.Helper()
-	q := &fakeQuerier{events: []hermes.Event{
+	q := &fakeQuerier{events: []event.Event{
 		{ID: 1, Agent: "x", File: "/var/lib/hermes-x/a", Op: "create", Timestamp: time.Unix(1, 0).UTC()},
 		{ID: 2, Agent: "x", File: "/var/lib/hermes-x/b", Op: "write", Timestamp: time.Unix(2, 0).UTC()},
 	}}
@@ -72,7 +72,7 @@ func TestEventsEndpoint(t *testing.T) {
 	if resp.StatusCode != 200 {
 		t.Fatalf("status %d", resp.StatusCode)
 	}
-	var evs []hermes.Event
+	var evs []event.Event
 	if err := json.NewDecoder(resp.Body).Decode(&evs); err != nil {
 		t.Fatal(err)
 	}
@@ -90,7 +90,9 @@ func TestRootsEndpoint(t *testing.T) {
 	}
 	defer resp.Body.Close()
 	var roots []RootName
-	json.NewDecoder(resp.Body).Decode(&roots)
+	if err := json.NewDecoder(resp.Body).Decode(&roots); err != nil {
+		t.Fatal(err)
+	}
 	if len(roots) != 1 || roots[0].Name != "x" {
 		t.Errorf("want one root 'x', got %+v", roots)
 	}

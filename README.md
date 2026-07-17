@@ -136,10 +136,11 @@ The ISO is a **UEFI + legacy-BIOS hybrid** — boots on modern and older machine
 
 ### Skip the Wizard (Unattended Boot)
 
-Put `.env` files on a **second** USB labeled `HERMES_ENV`:
+Put `.env` files on a **second** USB labeled `TENTAFLAKE_ENV` (the legacy
+`HERMES_ENV` label is still accepted):
 
 ```bash
-sudo mkfs.ext4 -L HERMES_ENV /dev/sdY1     # label is what matters
+sudo mkfs.ext4 -L TENTAFLAKE_ENV /dev/sdY1     # label is what matters
 # copy default.env, research.env onto it
 ```
 
@@ -147,10 +148,10 @@ On boot the system auto-detects the label, copies env files in, starts agents **
 
 ### Persist Data Across Reboots
 
-By design nothing survives a reboot. To keep agent memory and learned skills, attach a USB labeled `HERMES_DATA`:
+By design nothing survives a reboot. To keep agent memory and learned skills, attach a USB labeled `TENTAFLAKE_DATA` (legacy `HERMES_DATA` also works):
 
 ```bash
-sudo mkfs.ext4 -L HERMES_DATA /dev/sdZ1
+sudo mkfs.ext4 -L TENTAFLAKE_DATA /dev/sdZ1
 ```
 
 At boot, each agent's state dir redirects onto that USB. Without it, the system stays fully ephemeral.
@@ -458,7 +459,7 @@ the same one-container-per-agent shape under a `zeroclaw-<name>` prefix.
 | `ssh.nix` | Opt-in hardened OpenSSH (key-only, no root login, max 3 auth tries) + fail2ban, opens TCP 22 — off by default, Tailscale SSH is the primary access path |
 | `tailscale.nix` | Tailscale with SSH + tag:auto (optional) |
 | `piper-tts-server.nix` | Local TTS via Piper (OpenAI-compatible API) — sandboxed systemd unit with a configurable memory cap (`memoryMax`, default 2G) |
-| `hermes-auditd.nix` | Filesystem audit daemon (watches state dirs of agent containers on **every** runtime) + `tentaflake top` TUI + the **Agent Console** web file explorer & live monitor — [docs](docs/06-shell.md#agent-console--web-file-explorer--live-monitor) |
+| `tentaflake-auditd.nix` | Filesystem audit daemon (watches state dirs of agent containers on **every** runtime) + `tentaflake top` TUI + the **Agent Console** web file explorer & live monitor — [docs](docs/06-shell.md#agent-console--web-file-explorer--live-monitor) |
 | **Hermes Profiles** | *(no module needed)* Run multiple agent personas inside a single container. Configure via `hermes profile create` — each profile gets its own personality, skills, model config, and toolsets while sharing the container's secrets and runtime |
 
 ### Available ISOs
@@ -474,7 +475,7 @@ the same one-container-per-agent shape under a `zeroclaw-<name>` prefix.
 nix flake check                          # validate everything builds
 nix build .#installer-iso                # build installer ISO
 nix build .#live-agent-iso               # build live ISO
-nix build .#hermes-auditd                # build audit daemon package
+nix build .#tentaflake-auditd            # build audit daemon package
 sudo nixos-rebuild switch --flake .#agent-host  # deploy config
 sudo nixos-rebuild dry-activate --flake .#agent-host  # dry-run
 sudo nixos-rebuild switch --rollback     # undo last deploy
@@ -581,6 +582,24 @@ agent containers of **all runtimes including stopped ones**, and the Agent
 Console / `tentaflake top` label non-Hermes agents with a runtime prefix
 (`zeroclaw-<name>`). Nothing changes **inside** your agent containers.
 
+### Unreleased: `hermes-*` infrastructure renamed to `tentaflake-*`
+
+The fleet-generic infrastructure (audit daemon, installer plumbing) drops its
+`hermes-` branding; "Hermes" now only names the Hermes agent runtime:
+
+| What changed | Old | New | Bridge (temporary) |
+|---|---|---|---|
+| Audit daemon unit | `hermes-auditd.service` | `tentaflake-auditd.service` | none — update `systemctl` scripts |
+| Audit options | `tentaflake.hermes-auditd.*` | `tentaflake.auditd.*` | `mkRenamedOptionModule` eval warning |
+| Flake package attr | `packages.hermes-auditd` | `packages.tentaflake-auditd` | old attr aliased, deprecated |
+| Activity TUI binary | `hermes-top` | `tentaflake-top` | `hermes-top` symlink for one release |
+| USB labels | `HERMES_ENV` / `HERMES_DATA` | `TENTAFLAKE_ENV` / `TENTAFLAKE_DATA` | legacy labels still detected |
+| Live-ISO env dir | `/run/hermes` | `/run/tentaflake` | `/run/hermes` compat symlink |
+
+The audit DB state dir `/var/lib/hermes-audit` (and the `hermes-audit`
+user/group) is deliberately **not** renamed, so existing audit history
+survives the upgrade.
+
 ---
 
 ## 🤝 Contributing
@@ -590,7 +609,7 @@ This is a **generic template** — keep it that way. No domain-specific code, re
 1. Fork the repo
 2. Create a feature branch (`git checkout -b feat/amazing`)
 3. Commit using [Conventional Commits](https://www.conventionalcommits.org/) (`feat:`, `fix:`, `docs:`)
-4. Run `nix flake check` and `go test ./...` in `pkgs/hermes-auditd/`
+4. Run `nix flake check` and `go test ./...` in `pkgs/tentaflake-auditd/`
 5. Open a Pull Request
 
 See [`CONTRIBUTING.md`](CONTRIBUTING.md) for full details.

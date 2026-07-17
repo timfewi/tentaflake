@@ -20,7 +20,7 @@ let
 in
 {
   imports = liveAgents ++ [
-    ./hermes-firstboot.nix
+    ./firstboot.nix
     ../modules/piper-tts-server.nix
   ];
 

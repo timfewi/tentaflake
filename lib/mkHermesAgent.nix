@@ -48,7 +48,7 @@ in
   image ? "nousresearch/hermes-agent:latest",
 
   # Path to an env file (plaintext .env) on the host filesystem, e.g.:
-  #   envFile = "/run/hermes/default.env";
+  #   envFile = "/run/tentaflake/default.env";
   # The file is passed to Docker via --env-file and loaded at container start.
   # Useful for live ISO / non-agenix setups where secrets are on tmpfs.
   envFile ? null,

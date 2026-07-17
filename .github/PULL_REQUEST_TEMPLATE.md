@@ -15,7 +15,7 @@
 - [ ] I have read [CONTRIBUTING.md](CONTRIBUTING.md)
 - [ ] This PR keeps the template **generic** — no domain-specific code
 - [ ] `nix flake check` passes
-- [ ] `cd pkgs/hermes-auditd && go vet ./... && go test ./...` passes (if Go code changed)
+- [ ] `cd pkgs/tentaflake-auditd && go vet ./... && go test ./...` passes (if Go code changed)
 - [ ] Documentation updated in `docs/` (if user-facing change)
 - [ ] Module table in `README.md` updated (if module added/removed)
 - [ ] Commit messages follow [Conventional Commits](https://www.conventionalcommits.org/)

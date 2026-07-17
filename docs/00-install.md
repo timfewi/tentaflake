@@ -102,9 +102,9 @@ Expect a filesystem type like `iso9660` or similar — confirms the ISO landed.
 Auto-logs into TTY1 and prompts for API keys. Enter at minimum an OpenRouter
 key. Piper TTS is already serving on `http://localhost:5001/v1`.
 
-> **Unattended boot?** Put `.env` files on a second USB labeled `HERMES_ENV`
-> and the wizard is skipped automatically. See
-> [README.md](../README.md#skip-the-wizard-with-a-hermes_env-usb) for details.
+> **Unattended boot?** Put `.env` files on a second USB labeled `TENTAFLAKE_ENV`
+> (legacy `HERMES_ENV` also accepted) and the wizard is skipped automatically. See
+> [README.md](../README.md#skip-the-wizard-unattended-boot) for details.
 
 ### Installer ISO boots into a TUI installer
 

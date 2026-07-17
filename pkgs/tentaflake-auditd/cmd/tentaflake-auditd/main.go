@@ -8,9 +8,9 @@ import (
 	"sync"
 	"syscall"
 
-	"tentaflake/hermes-auditd/internal/config"
-	"tentaflake/hermes-auditd/internal/store"
-	"tentaflake/hermes-auditd/internal/watcher"
+	"tentaflake/tentaflake-auditd/internal/config"
+	"tentaflake/tentaflake-auditd/internal/store"
+	"tentaflake/tentaflake-auditd/internal/watcher"
 )
 
 func main() {
@@ -25,7 +25,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	slog.Info("starting hermes-auditd",
+	slog.Info("starting tentaflake-auditd",
 		"port", cfg.Port,
 		"db_path", cfg.DBPath,
 		"watch_dirs", cfg.WatchDirs,
@@ -69,7 +69,7 @@ func main() {
 		st.PruneLoop(ctx)
 	}()
 
-	// Events are read back out of SQLite directly by the `hermes-top` TUI
+	// Events are read back out of SQLite directly by the `tentaflake-top` TUI
 	// (run over Tailscale SSH), so the daemon intentionally exposes no network
 	// surface. The live notify channel is therefore unused here; drain it so a
 	// full buffer never blocks the store's non-blocking send.
@@ -78,7 +78,7 @@ func main() {
 		}
 	}()
 
-	slog.Info("hermes-auditd running",
+	slog.Info("tentaflake-auditd running",
 		"watch_count", len(cfg.WatchDirs),
 	)
 

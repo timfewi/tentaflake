@@ -1,16 +1,26 @@
-linters:
-  enable:
-    - errcheck
-    - govet
-    - staticcheck
-    - ineffassign
-    - unused
-    - gosimple
-
-linters-settings:
-  staticcheck:
-    checks: ["all"]
-
+version: "2"
 run:
   tests: true
-  timeout: 3m
+linters:
+  settings:
+    staticcheck:
+      checks:
+        - all
+  exclusions:
+    generated: lax
+    presets:
+      - comments
+      - common-false-positives
+      - legacy
+      - std-error-handling
+    paths:
+      - third_party$
+      - builtin$
+      - examples$
+formatters:
+  exclusions:
+    generated: lax
+    paths:
+      - third_party$
+      - builtin$
+      - examples$

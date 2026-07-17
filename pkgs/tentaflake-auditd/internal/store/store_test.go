@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"tentaflake/hermes-auditd/internal/hermes"
+	"tentaflake/tentaflake-auditd/internal/event"
 )
 
 func newTempDB(t *testing.T) string {
@@ -48,7 +48,7 @@ func TestInsertAndQueryRoundTrip(t *testing.T) {
 
 	ctx := context.Background()
 
-	evt := hermes.Event{
+	evt := event.Event{
 		Agent:     "coding",
 		File:      "/var/lib/hermes-coding/test.txt",
 		Op:        "write",
@@ -96,12 +96,14 @@ func TestQueryFilterByAgent(t *testing.T) {
 	now := time.Now().UTC()
 
 	for idx, agent := range []string{"coding", "writing", "coding"} {
-		st.Insert(ctx, hermes.Event{
+		if err := st.Insert(ctx, event.Event{
 			Agent:     agent,
 			File:      "/tmp/f",
 			Op:        "write",
 			Timestamp: now.Add(time.Duration(idx) * time.Second),
-		})
+		}); err != nil {
+			t.Fatal(err)
+		}
 	}
 
 	events, err := st.Query(ctx, "coding", "", "", 10)
@@ -133,12 +135,14 @@ func TestPruneRemovesOldEvents(t *testing.T) {
 	}
 
 	// Insert a recent event
-	st.Insert(ctx, hermes.Event{
+	if err := st.Insert(ctx, event.Event{
 		Agent:     "coding",
 		File:      "/new.txt",
 		Op:        "create",
 		Timestamp: now,
-	})
+	}); err != nil {
+		t.Fatal(err)
+	}
 
 	// Prune (retention 24h)
 	if err := st.Prune(ctx); err != nil {
@@ -173,8 +177,12 @@ func TestPruneSameDayBoundary(t *testing.T) {
 	now := time.Now().UTC()
 
 	// 90 minutes old — same day, but outside the 1-hour window.
-	st.Insert(ctx, hermes.Event{Agent: "coding", File: "/old.txt", Op: "write", Timestamp: now.Add(-90 * time.Minute)})
-	st.Insert(ctx, hermes.Event{Agent: "coding", File: "/new.txt", Op: "write", Timestamp: now})
+	if err := st.Insert(ctx, event.Event{Agent: "coding", File: "/old.txt", Op: "write", Timestamp: now.Add(-90 * time.Minute)}); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Insert(ctx, event.Event{Agent: "coding", File: "/new.txt", Op: "write", Timestamp: now}); err != nil {
+		t.Fatal(err)
+	}
 
 	if err := st.Prune(ctx); err != nil {
 		t.Fatal(err)
@@ -207,7 +215,7 @@ func TestConcurrentInserts(t *testing.T) {
 		wg.Add(1)
 		go func(idx int) {
 			defer wg.Done()
-			evt := hermes.Event{
+			evt := event.Event{
 				Agent:     "coding",
 				File:      "/f.txt",
 				Op:        "write",
@@ -238,7 +246,7 @@ func TestInMemorySQLite(t *testing.T) {
 	defer st.Close()
 
 	ctx := context.Background()
-	evt := hermes.Event{
+	evt := event.Event{
 		Agent:     "test",
 		File:      "/test.txt",
 		Op:        "create",
@@ -269,12 +277,14 @@ func TestStats(t *testing.T) {
 	now := time.Now().UTC()
 
 	for _, agent := range []string{"coding", "coding", "writing"} {
-		st.Insert(ctx, hermes.Event{
+		if err := st.Insert(ctx, event.Event{
 			Agent:     agent,
 			File:      "/f.txt",
 			Op:        "write",
 			Timestamp: now,
-		})
+		}); err != nil {
+			t.Fatal(err)
+		}
 	}
 
 	stats, err := st.Stats(ctx, "-24 hours")
@@ -301,12 +311,14 @@ func TestSinceReturnsOnlyNewerEvents(t *testing.T) {
 	ctx := context.Background()
 	now := time.Now().UTC()
 	for i := range 5 {
-		st.Insert(ctx, hermes.Event{
+		if err := st.Insert(ctx, event.Event{
 			Agent:     "coding",
 			File:      "/f.txt",
 			Op:        "write",
 			Timestamp: now.Add(time.Duration(i) * time.Second),
-		})
+		}); err != nil {
+			t.Fatal(err)
+		}
 	}
 
 	// All events, ascending.
@@ -359,10 +371,16 @@ func TestAgentRows(t *testing.T) {
 		"coding", "/old.txt", "write", now.Add(-1*time.Hour).Format(time.RFC3339)); err != nil {
 		t.Fatal(err)
 	}
-	st.Insert(ctx, hermes.Event{Agent: "coding", File: "/a.txt", Op: "create", Timestamp: now.Add(-2 * time.Second)})
-	st.Insert(ctx, hermes.Event{Agent: "coding", File: "/b.txt", Op: "remove", Timestamp: now})
-	// research: one recent event.
-	st.Insert(ctx, hermes.Event{Agent: "research", File: "/r.txt", Op: "write", Timestamp: now})
+	for _, evt := range []event.Event{
+		{Agent: "coding", File: "/a.txt", Op: "create", Timestamp: now.Add(-2 * time.Second)},
+		{Agent: "coding", File: "/b.txt", Op: "remove", Timestamp: now},
+		// research: one recent event.
+		{Agent: "research", File: "/r.txt", Op: "write", Timestamp: now},
+	} {
+		if err := st.Insert(ctx, evt); err != nil {
+			t.Fatal(err)
+		}
+	}
 
 	rows, err := st.AgentRows(ctx, "-5 minutes")
 	if err != nil {
@@ -408,13 +426,13 @@ func TestStartConsumesEvents(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	eventCh := make(chan hermes.Event, 10)
+	eventCh := make(chan event.Event, 10)
 	notifyCh, err := st.Start(ctx, eventCh)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	evt := hermes.Event{
+	evt := event.Event{
 		Agent:     "coding",
 		File:      "/test.txt",
 		Op:        "create",

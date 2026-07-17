@@ -38,7 +38,7 @@ Security concerns relevant to this project include:
 | **Container isolation** | Docker container breakout, volume mounts, privilege escalation |
 | **Agent sandboxing** | File access, network access, and tool restrictions per agent |
 | **Installer** | Disk wiping safety, password handling, input validation |
-| **Go daemon (hermes-auditd)** | SQLite injection, file descriptor leaks, resource exhaustion |
+| **Go daemon (tentaflake-auditd)** | SQLite injection, file descriptor leaks, resource exhaustion |
 | **Nix evaluation** | Supply chain, IFD (import from derivation), secrets in store |
 
 ## Disclosure Policy
@@ -72,7 +72,7 @@ credentials, unexpected pushes, suspicious filesystem activity):
 2. **Revoke the agent's provider API keys** at the provider — stopping the
    container does not stop a key that already leaked.
 
-3. **Inspect the audit trail** — `hermes-auditd` logs filesystem activity for
+3. **Inspect the audit trail** — `tentaflake-auditd` logs filesystem activity for
    every watched agent to a SQLite database:
 
    ```bash

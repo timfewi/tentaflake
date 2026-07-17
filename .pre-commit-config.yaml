@@ -23,7 +23,7 @@ repos:
 
       - id: go-vet
         name: go vet
-        entry: bash -c 'cd pkgs/hermes-auditd && go vet ./...'
+        entry: bash -c 'cd pkgs/tentaflake-auditd && go vet ./...'
         language: system
         types: [go]
         pass_filenames: false

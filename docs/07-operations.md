@@ -223,7 +223,7 @@ To restore: reinstall/rebuild from your flake, stop the agent
 
 ## Log forwarding
 
-To ship host journals (container logs, `hermes-auditd`, provider healthchecks)
+To ship host journals (container logs, `tentaflake-auditd`, provider healthchecks)
 to a remote collector, use systemd's native journal upload — no tentaflake
 option needed:
 

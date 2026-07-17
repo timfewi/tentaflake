@@ -201,7 +201,7 @@ sudo docker exec hermes-coding cat $HERMES_HOME/logs/gateway.log
 
 ### Audit daemon (if enabled)
 
-The `hermes-auditd` service records **filesystem changes** inside every
+The `tentaflake-auditd` service records **filesystem changes** inside every
 declarative agent container's state dir — `/var/lib/hermes-<name>/` and
 `/var/lib/zeroclaw-<name>/` alike, auto-discovered from whatever's defined in
 `my-agents.nix` — which files an agent creates, writes, removes, renames, or
@@ -214,7 +214,7 @@ The fastest way to see this is the live dashboard:
 tentaflake top     # live TUI: per-agent activity + scrolling event log
 ```
 
-Prefer a browser? Enable the **Agent Console** (`tentaflake.hermes-auditd.console.enable`)
+Prefer a browser? Enable the **Agent Console** (`tentaflake.auditd.console.enable`)
 for a tailnet-served web page that pairs a read-only, secrets-excluded file explorer
 across all agents with the same live activity feed — no per-agent dashboard logins.
 See [`docs/06-shell.md`](06-shell.md#agent-console--web-file-explorer--live-monitor).
@@ -222,10 +222,10 @@ See [`docs/06-shell.md`](06-shell.md#agent-console--web-file-explorer--live-moni
 The daemon's own service log:
 
 ```bash
-sudo journalctl -u hermes-auditd
+sudo journalctl -u tentaflake-auditd
 ```
 
-Enable it with `tentaflake.hermes-auditd.enable = true;` (on by default for the
+Enable it with `tentaflake.auditd.enable = true;` (on by default for the
 `agent-host` config). See [`docs/06-shell.md`](06-shell.md#tentaflake-top--live-activity-dashboard).
 
 ---
@@ -384,13 +384,13 @@ Each agent has its own system user `hermes-<name>` with:
 
 ### Audit trail
 
-If `hermes-auditd` is enabled, every filesystem change in the agents' state
+If `tentaflake-auditd` is enabled, every filesystem change in the agents' state
 dirs (across all runtimes) is recorded to a SQLite database (24h retention by
 default, size capped at ~40 MB so an event flood cannot fill the disk).
 Review it live with `tentaflake top`, or inspect the daemon's own log:
 
 ```bash
-sudo journalctl -u hermes-auditd --since today
+sudo journalctl -u tentaflake-auditd --since today
 ```
 
 ---

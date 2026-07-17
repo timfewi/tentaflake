@@ -1,7 +1,7 @@
 { mkHermesAgent }:
 
 # ── Default agents for the live ISO ──
-# Both use env files at /run/hermes/<name>.env (tmpfs, created by firstboot wizard)
+# Both use env files at /run/tentaflake/<name>.env (tmpfs, created by firstboot wizard)
 # Piper TTS runs as a host service at http://localhost:5001/v1
 
 let
@@ -24,7 +24,7 @@ in
   # ── Agent 1: default (general purpose) ──
   (mkHermesAgent {
     name = "default";
-    envFile = "/run/hermes/default.env";
+    envFile = "/run/tentaflake/default.env";
 
     settings = {
       model = {
@@ -121,7 +121,7 @@ in
   # ── Agent 2: research (web-focused, deeper research) ──
   (mkHermesAgent {
     name = "research";
-    envFile = "/run/hermes/research.env";
+    envFile = "/run/tentaflake/research.env";
 
     settings = {
       model = {

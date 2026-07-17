@@ -4,7 +4,7 @@
 
 set shell := ["bash", "-euo", "pipefail", "-c"]
 
-auditd := "pkgs/hermes-auditd"
+auditd := "pkgs/tentaflake-auditd"
 
 # List recipes
 default:
@@ -16,7 +16,7 @@ default:
 ci: fmt-check lint shellcheck go-lint go check iso iso-installer
     @echo "==> all green"
 
-# nix flake check (eval + agent-host toplevel + hermes-auditd)
+# nix flake check (eval + agent-host toplevel + tentaflake-auditd)
 check:
     nix flake check
 
@@ -39,9 +39,9 @@ lint:
     statix check .
     deadnix --fail .
 
-# ── Go: hermes-auditd ────────────────────────────────────────
+# ── Go: tentaflake-auditd ────────────────────────────────────────
 
-# build + vet + test hermes-auditd (the CI Go steps)
+# build + vet + test tentaflake-auditd (the CI Go steps)
 go:
     cd {{auditd}} && go build ./... && go vet ./... && go test ./...
 

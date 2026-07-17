@@ -8,7 +8,7 @@ NixOS flake template for running isolated AI agents (Hermes, ZeroClaw) in Docker
 nix flake check              # validate flake and build toplevel
 nix build .#installer-iso    # build installer ISO
 nix build .#live-agent-iso   # build live agent ISO
-cd pkgs/hermes-auditd && go vet ./... && go test ./...
+cd pkgs/tentaflake-auditd && go vet ./... && go test ./...
 ./scripts/banner-test.sh     # preview tentaflake-status banner (fake fleet + self-checks)
 ```
 
@@ -37,7 +37,7 @@ still accurate before finishing — and update them in the same change:
 
 - `modules/` — reusable NixOS modules (generic, composable via `tentaflake.*.enable` options)
 - `lib/` — helpers (`mkHermesAgent`, `mkZeroClawAgent`, `constants`)
-- `pkgs/` — standalone packages (`hermes-auditd`)
+- `pkgs/` — standalone packages (`tentaflake-auditd`)
 - `installer/` — ISO installer and firstboot scripts
 - `examples/` — consumer-flake reference
 - `docs/` — user-facing documentation

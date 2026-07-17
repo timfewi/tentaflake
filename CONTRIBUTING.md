@@ -45,10 +45,10 @@ nix build .#installer-iso
 nix build .#live-agent-iso
 ```
 
-### Go (hermes-auditd)
+### Go (tentaflake-auditd)
 
 ```bash
-cd pkgs/hermes-auditd
+cd pkgs/tentaflake-auditd
 
 # Run tests
 go test ./...
@@ -120,7 +120,7 @@ git tag -s vX.Y.Z -m "vX.Y.Z"
 2. Make your changes and verify:
    ```bash
    nix flake check
-   cd pkgs/hermes-auditd && go vet ./... && go test ./...
+   cd pkgs/tentaflake-auditd && go vet ./... && go test ./...
    ```
 
 3. Commit using conventional commits:
