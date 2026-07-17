@@ -1,0 +1,35 @@
+name: CodeQL
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  schedule:
+    - cron: "30 4 * * 1"
+
+jobs:
+  analyze:
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: pkgs/hermes-auditd/go.mod
+          cache-dependency-path: pkgs/hermes-auditd/go.sum
+
+      - uses: github/codeql-action/init@v4
+        with:
+          languages: go
+
+      # Manual build — the Go module lives in a subdirectory, which autobuild
+      # does not reliably discover.
+      - name: go build
+        run: go build ./...
+        working-directory: pkgs/hermes-auditd
+
+      - uses: github/codeql-action/analyze@v4
