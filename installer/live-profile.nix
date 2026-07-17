@@ -46,8 +46,10 @@ in
   };
 
   # ── SSH for remote debugging ──
+  # Key-only: Tailscale SSH (above) covers remote debugging on the live ISO,
+  # so password auth stays off.
   services.openssh.enable = true;
-  services.openssh.settings.PasswordAuthentication = true;
+  services.openssh.settings.PasswordAuthentication = false;
 
   # ── Boot robustness for the agent containers ──
   # The live ISO is ephemeral: the ~1.3 GB Hermes image is re-pulled into the

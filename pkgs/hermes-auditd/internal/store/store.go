@@ -18,6 +18,10 @@ import (
 	"tentaflake/hermes-auditd/internal/hermes"
 )
 
+// queryTimeout bounds every read query so a slow or contended SQLite file
+// cannot wedge an HTTP handler or TUI refresh indefinitely.
+const queryTimeout = 5 * time.Second
+
 // Store persists events to SQLite and provides query methods.
 type Store struct {
 	db             *sql.DB
@@ -97,6 +101,9 @@ func (s *Store) Query(ctx context.Context, agent, since, until string, limit int
 		limit = 100
 	}
 
+	ctx, cancel := context.WithTimeout(ctx, queryTimeout)
+	defer cancel()
+
 	query, args := buildQuery(agent, since, until, limit)
 
 	rows, err := s.db.QueryContext(ctx, query, args...)
@@ -134,6 +141,8 @@ func (s *Store) Since(ctx context.Context, afterID int64, limit int) ([]hermes.E
 	if limit <= 0 {
 		limit = 1000
 	}
+	ctx, cancel := context.WithTimeout(ctx, queryTimeout)
+	defer cancel()
 	query := `SELECT id, agent, file, op, size, timestamp FROM events WHERE id > ? ORDER BY id ASC LIMIT ?`
 	rows, err := s.db.QueryContext(ctx, query, afterID, limit)
 	if err != nil {
@@ -178,6 +187,8 @@ type AgentRow struct {
 // SQLite datetime modifier like "-5 minutes" (must start with "-") used for the
 // Recent count; Total counts every retained row for the agent.
 func (s *Store) AgentRows(ctx context.Context, window string) ([]AgentRow, error) {
+	ctx, cancel := context.WithTimeout(ctx, queryTimeout)
+	defer cancel()
 	recent, err := s.Stats(ctx, window)
 	if err != nil {
 		return nil, fmt.Errorf("agent rows recent: %w", err)
@@ -258,6 +269,8 @@ func (s *Store) Stats(ctx context.Context, window string) (map[string]int, error
 	if !strings.HasPrefix(window, "-") {
 		return nil, fmt.Errorf("invalid window %q: must start with '-'", window)
 	}
+	ctx, cancel := context.WithTimeout(ctx, queryTimeout)
+	defer cancel()
 	// Wrap the stored column in datetime() so the comparison is format-agnostic:
 	// events are stored as RFC3339 ("…T…Z") but datetime('now', …) yields the
 	// space-separated form, and a raw string compare only agrees when the date

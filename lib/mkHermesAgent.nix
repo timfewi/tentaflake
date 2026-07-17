@@ -18,6 +18,9 @@
 #   - State dir    /var/lib/hermes-<name>  (0700, owned by the container uid)
 #   - Docker container  hermes-<name>      (host networking, auto-start)
 #   - HERMES_HOME pointing to its isolated state dir
+#   - Hardened container defaults: --security-opt=no-new-privileges:true
+#     (no setuid/setgid privilege escalation inside the container) and
+#     --pids-limit=512 (fork-bomb ceiling; tune or disable via `pidsLimit`)
 #
 # Optional operational hardening (all default-off): UID alignment + ownership
 # self-heal, a fail-loud provider preflight, in-container git identity,
@@ -75,6 +78,11 @@ in
   # Network mode for the container. "host" shares host networking.
   # "bridge" isolates the container (requires port mappings in extraContainerConfig).
   networkMode ? "host",
+
+  # Max number of processes in the container (--pids-limit). Caps fork bombs
+  # without starving real work — agents compile code, so 200 would be too
+  # tight; 512 is a sane ceiling. Set to null to skip the flag (unlimited).
+  pidsLimit ? 512,
 
   # Auto-start container with system
   autoStart ? true,
@@ -453,8 +461,10 @@ in
   ];
 
   # ── OCI container ──
-  # Build base config, then merge caller overrides, then append env-file options
-  # (extraOptions from extraContainerConfig is preserved; --env-file is appended after merge)
+  # Build base config, then merge caller overrides, then append env-file and
+  # hardening options (extraOptions from extraContainerConfig is preserved;
+  # --env-file / --security-opt / --pids-limit are appended after the merge so
+  # they're never lost to a caller's extraOptions override)
   virtualisation.oci-containers.containers."hermes-${name}" =
     let
       baseConfig = {
@@ -483,10 +493,12 @@ in
     in
     merged
     // {
-      # Append --env-file AFTER the merge so it's never lost
+      # Append --env-file and hardening flags AFTER the merge so they're never lost
       extraOptions =
         merged.extraOptions
         ++ lib.optional (envFile != null) "--env-file=${envFile}"
-        ++ lib.optional (agenixFile != null) "--env-file=${agenixFile}";
+        ++ lib.optional (agenixFile != null) "--env-file=${agenixFile}"
+        ++ [ "--security-opt=no-new-privileges:true" ]
+        ++ lib.optional (pidsLimit != null) "--pids-limit=${toString pidsLimit}";
     };
 }

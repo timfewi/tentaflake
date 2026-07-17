@@ -12,6 +12,7 @@
     ./packages.nix
     ./piper-tts-server.nix
     ./shell.nix
+    ./ssh.nix
     ./tailscale.nix
     ./users.nix
   ];

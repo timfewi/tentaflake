@@ -19,11 +19,21 @@ import (
 	"tentaflake/hermes-auditd/internal/hermes"
 )
 
+// maxWatchedDirs caps the total number of inotify-watched directories so an
+// agent creating a deep directory tree cannot exhaust the host's watch limit.
+// A var (not const) so tests can lower it.
+var maxWatchedDirs = 10000
+
 // Watcher monitors directories for filesystem events and emits
 // hermes.Event values on a channel.
 type Watcher struct {
 	w    *fsnotify.Watcher
 	dirs []string
+
+	// watched/capWarned are only touched by NewWatcher (before Start) and the
+	// single loop goroutine (via watchNewDirectory), so they need no lock.
+	watched   int
+	capWarned bool
 }
 
 // NewWatcher creates a new Watcher and recursively adds all given
@@ -62,9 +72,17 @@ func (watcher *Watcher) addRecursive(dir string) error {
 			if isIgnored(path) {
 				return filepath.SkipDir
 			}
+			if watcher.watched >= maxWatchedDirs {
+				if !watcher.capWarned {
+					watcher.capWarned = true
+					slog.Warn("watched-directory cap reached; new directories will not be watched", "cap", maxWatchedDirs)
+				}
+				return filepath.SkipDir
+			}
 			if err := watcher.w.Add(path); err != nil {
 				return fmt.Errorf("watch add %q: %w", path, err)
 			}
+			watcher.watched++
 			slog.Debug("watching directory", "path", path)
 		}
 		return nil
