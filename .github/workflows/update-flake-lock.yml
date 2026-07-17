@@ -19,7 +19,19 @@ jobs:
           extra-conf: |
             accept-flake-config = true
 
+      # Note: PRs opened with the default GITHUB_TOKEN do not trigger other
+      # workflows (GitHub's recursive-run prevention), so check.yml will not
+      # run on the bot PR. Close/reopen the PR (or push to its branch) to
+      # trigger CI. A GitHub App token or PAT secret would fix this, but
+      # can't ship in a generic template.
       - uses: DeterminateSystems/update-flake-lock@v28
         with:
           pr-title: "chore: update flake.lock"
           pr-labels: dependencies
+          pr-body: |
+            Automated weekly `flake.lock` update.
+
+            > [!NOTE]
+            > CI does not run automatically on PRs opened with the default
+            > `GITHUB_TOKEN`. Close and reopen this PR (or push to its branch)
+            > to trigger the checks.

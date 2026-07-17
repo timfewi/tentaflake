@@ -23,9 +23,11 @@ cd tentaflake
 ```
 
 All the commands below are wrapped as `just` recipes (`just` is in the dev
-shell). Run `just` to list them; `just ci` runs the full local gate — every CI
-step **plus the two ISO builds and the statix/deadnix/golangci-lint linters CI
-does not do**. The raw commands stay the source of truth and are documented below.
+shell). Run `just` to list them; `just ci` runs the full local gate — every
+`check.yml` CI step **plus the two ISO builds and the statix/deadnix/golangci-lint
+linters CI does not do**. CodeQL and gitleaks run only in GitHub CI (gitleaks is
+also covered locally by the optional pre-commit hooks). The raw commands stay the
+source of truth and are documented below.
 
 ### Nix/NixOS (flake checks, ISO builds)
 
