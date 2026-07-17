@@ -19,8 +19,8 @@ jobs:
 
       - uses: actions/setup-go@v6
         with:
-          go-version-file: pkgs/hermes-auditd/go.mod
-          cache-dependency-path: pkgs/hermes-auditd/go.sum
+          go-version-file: pkgs/tentaflake-auditd/go.mod
+          cache-dependency-path: pkgs/tentaflake-auditd/go.sum
 
       - uses: github/codeql-action/init@v4
         with:
@@ -30,6 +30,6 @@ jobs:
       # does not reliably discover.
       - name: go build
         run: go build ./...
-        working-directory: pkgs/hermes-auditd
+        working-directory: pkgs/tentaflake-auditd
 
       - uses: github/codeql-action/analyze@v4

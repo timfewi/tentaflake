@@ -1,4 +1,4 @@
-// Package config loads the hermes-auditd configuration from environment variables.
+// Package config loads the tentaflake-auditd configuration from environment variables.
 //
 // Every shared value (port, paths, user names) is defined here in ONE place.
 // The Go binary reads from env vars; the NixOS module sets them.
@@ -12,7 +12,7 @@ import (
 	"strings"
 )
 
-// Config holds all configuration for hermes-auditd.
+// Config holds all configuration for tentaflake-auditd.
 // All values are populated from environment variables with sensible defaults.
 type Config struct {
 	// Port is the HTTP/WebSocket listen port (AUDIT_PORT, default 9090).
@@ -63,6 +63,8 @@ func Load() (*Config, error) {
 		return nil, fmt.Errorf("AUDIT_PORT %d: %w", port, ErrPortOutOfRange)
 	}
 
+	// ponytail: legacy state-dir name preserved so existing audit DBs survive
+	// the hermes→tentaflake rename; rename it in a future major.
 	dbPath := envStr("AUDIT_DB_PATH", "/var/lib/hermes-audit/events.db")
 
 	watchDirsRaw := envStr("AUDIT_WATCH_DIRS", "")

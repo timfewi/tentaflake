@@ -14,8 +14,8 @@ import (
 	"strings"
 	"time"
 
-	"tentaflake/hermes-auditd/internal/hermes"
-	"tentaflake/hermes-auditd/internal/store"
+	"tentaflake/tentaflake-auditd/internal/event"
+	"tentaflake/tentaflake-auditd/internal/store"
 )
 
 //go:embed ui
@@ -31,8 +31,8 @@ const maxEventsLimit = 1000
 // querier is the read-only subset of *store.Store the console depends on.
 // Defining it as an interface keeps the web package testable with a fake store.
 type querier interface {
-	Query(ctx context.Context, agent, since, until string, limit int) ([]hermes.Event, error)
-	Since(ctx context.Context, afterID int64, limit int) ([]hermes.Event, error)
+	Query(ctx context.Context, agent, since, until string, limit int) ([]event.Event, error)
+	Since(ctx context.Context, afterID int64, limit int) ([]event.Event, error)
 	AgentRows(ctx context.Context, window string) ([]store.AgentRow, error)
 	Stats(ctx context.Context, window string) (map[string]int, error)
 }

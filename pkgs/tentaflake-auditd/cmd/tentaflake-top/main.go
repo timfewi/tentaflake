@@ -1,6 +1,6 @@
-// Command hermes-top is a live terminal dashboard for Hermes agent activity.
+// Command tentaflake-top is a live terminal dashboard for Hermes agent activity.
 //
-// It reads the hermes-auditd SQLite database directly (no network surface — you
+// It reads the tentaflake-auditd SQLite database directly (no network surface — you
 // run it inside a Tailscale SSH session) and shows, refreshing once a second:
 //
 //   - a per-agent activity table (events in the recent window, all-time total,
@@ -23,11 +23,13 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
-	"tentaflake/hermes-auditd/internal/hermes"
-	"tentaflake/hermes-auditd/internal/store"
+	"tentaflake/tentaflake-auditd/internal/event"
+	"tentaflake/tentaflake-auditd/internal/store"
 )
 
 const (
+	// ponytail: legacy state-dir name preserved so existing audit DBs survive
+	// the hermes→tentaflake rename; rename it in a future major.
 	defaultDBPath = "/var/lib/hermes-audit/events.db"
 	maxLogLines   = 2000
 )
@@ -54,7 +56,7 @@ type tickMsg time.Time
 
 type refreshMsg struct {
 	agents []store.AgentRow
-	events []hermes.Event
+	events []event.Event
 	total  int
 	err    error
 }
@@ -73,7 +75,7 @@ type model struct {
 
 	agents      []store.AgentRow
 	total       int
-	logbuf      []hermes.Event // ascending by ID
+	logbuf      []event.Event // ascending by ID
 	lastID      int64
 	lastRefresh time.Time
 	err         error
@@ -225,7 +227,7 @@ func (m model) View() string {
 	if m.paused {
 		pause = "  " + pausedStyle.Render("[PAUSED]")
 	}
-	out(titleStyle.Render("hermes-top") + "  " + headerStyle.Render(m.hostname) + pause + "\n")
+	out(titleStyle.Render("tentaflake-top") + "  " + headerStyle.Render(m.hostname) + pause + "\n")
 	out(dimStyle.Render(fmt.Sprintf("%d events retained · window %s · updated %s",
 		m.total, m.windowLbl, m.lastRefresh.Format("15:04:05"))) + "\n\n")
 
@@ -305,11 +307,11 @@ func (m model) View() string {
 	return string(b)
 }
 
-func (m model) filtered() []hermes.Event {
+func (m model) filtered() []event.Event {
 	if m.filter == "" {
 		return m.logbuf
 	}
-	out := make([]hermes.Event, 0, len(m.logbuf))
+	out := make([]event.Event, 0, len(m.logbuf))
 	for _, e := range m.logbuf {
 		if e.Agent == m.filter {
 			out = append(out, e)
@@ -349,18 +351,18 @@ func trunc(s string, n int) string {
 }
 
 func main() {
-	dbPath := flag.String("db", envOr("AUDIT_DB_PATH", defaultDBPath), "path to the hermes-auditd SQLite database")
+	dbPath := flag.String("db", envOr("AUDIT_DB_PATH", defaultDBPath), "path to the tentaflake-auditd SQLite database")
 	window := flag.Duration("window", 5*time.Minute, "recent-activity window for the per-agent counts")
 	interval := flag.Duration("interval", time.Second, "refresh interval")
 	flag.Parse()
 
 	st, err := store.New(*dbPath, 1)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "hermes-top: cannot open audit database %s: %v\n", *dbPath, err)
+		fmt.Fprintf(os.Stderr, "tentaflake-top: cannot open audit database %s: %v\n", *dbPath, err)
 		if os.IsPermission(err) {
 			fmt.Fprintln(os.Stderr, "hint: you must be a member of the 'hermes-audit' group (or use sudo).")
 		} else {
-			fmt.Fprintln(os.Stderr, "hint: is hermes-auditd enabled? (tentaflake.hermes-auditd.enable = true)")
+			fmt.Fprintln(os.Stderr, "hint: is tentaflake-auditd enabled? (tentaflake.auditd.enable = true)")
 		}
 		os.Exit(1)
 	}
@@ -377,7 +379,7 @@ func main() {
 	}
 
 	if _, err := tea.NewProgram(m, tea.WithAltScreen()).Run(); err != nil {
-		fmt.Fprintf(os.Stderr, "hermes-top: %v\n", err)
+		fmt.Fprintf(os.Stderr, "tentaflake-top: %v\n", err)
 		os.Exit(1)
 	}
 }

@@ -1,4 +1,4 @@
-// Package store provides a SQLite-backed persistence layer for hermes events.
+// Package store provides a SQLite-backed persistence layer for audit events.
 //
 // It uses modernc.org/sqlite (pure Go, no CGo) with WAL mode and
 // SetMaxOpenConns(1) for safe concurrent access. The store auto-migrates
@@ -15,7 +15,7 @@ import (
 
 	_ "modernc.org/sqlite"
 
-	"tentaflake/hermes-auditd/internal/hermes"
+	"tentaflake/tentaflake-auditd/internal/event"
 )
 
 // queryTimeout bounds every read query so a slow or contended SQLite file
@@ -55,8 +55,8 @@ func New(dbPath string, retentionHours int) (*Store, error) {
 // Start consumes events from the input channel, inserts them into SQLite,
 // and forwards them to the returned notify channel for broadcasting.
 // The goroutine exits when ctx is cancelled or the input channel is closed.
-func (s *Store) Start(ctx context.Context, eventCh <-chan hermes.Event) (<-chan hermes.Event, error) {
-	notifyCh := make(chan hermes.Event, 100)
+func (s *Store) Start(ctx context.Context, eventCh <-chan event.Event) (<-chan event.Event, error) {
+	notifyCh := make(chan event.Event, 100)
 
 	go func() {
 		defer close(notifyCh)
@@ -85,7 +85,7 @@ func (s *Store) Start(ctx context.Context, eventCh <-chan hermes.Event) (<-chan 
 }
 
 // Insert stores a single event into the database.
-func (s *Store) Insert(ctx context.Context, evt hermes.Event) error {
+func (s *Store) Insert(ctx context.Context, evt event.Event) error {
 	query := `INSERT INTO events (agent, file, op, size, timestamp) VALUES (?, ?, ?, ?, ?)`
 	_, err := s.db.ExecContext(ctx, query, evt.Agent, evt.File, evt.Op, evt.Size, evt.Timestamp.UTC().Format(time.RFC3339))
 	if err != nil {
@@ -96,7 +96,7 @@ func (s *Store) Insert(ctx context.Context, evt hermes.Event) error {
 
 // Query retrieves events matching the given filters. Empty strings mean
 // no filter for that field. Limit caps the number of results (default 100).
-func (s *Store) Query(ctx context.Context, agent, since, until string, limit int) ([]hermes.Event, error) {
+func (s *Store) Query(ctx context.Context, agent, since, until string, limit int) ([]event.Event, error) {
 	if limit <= 0 {
 		limit = 100
 	}
@@ -112,9 +112,9 @@ func (s *Store) Query(ctx context.Context, agent, since, until string, limit int
 	}
 	defer rows.Close()
 
-	var events []hermes.Event
+	var events []event.Event
 	for rows.Next() {
-		var evt hermes.Event
+		var evt event.Event
 		var ts string
 		if err := rows.Scan(&evt.ID, &evt.Agent, &evt.File, &evt.Op, &evt.Size, &ts); err != nil {
 			return nil, fmt.Errorf("scan event: %w", err)
@@ -135,9 +135,9 @@ func (s *Store) Query(ctx context.Context, agent, since, until string, limit int
 }
 
 // Since returns events with an ID greater than afterID, in ascending ID order.
-// It is the incremental tail used by readers (e.g. the hermes-top TUI) to fetch
+// It is the incremental tail used by readers (e.g. the tentaflake-top TUI) to fetch
 // only events they have not yet seen. Limit caps results (default 1000).
-func (s *Store) Since(ctx context.Context, afterID int64, limit int) ([]hermes.Event, error) {
+func (s *Store) Since(ctx context.Context, afterID int64, limit int) ([]event.Event, error) {
 	if limit <= 0 {
 		limit = 1000
 	}
@@ -150,9 +150,9 @@ func (s *Store) Since(ctx context.Context, afterID int64, limit int) ([]hermes.E
 	}
 	defer rows.Close()
 
-	var events []hermes.Event
+	var events []event.Event
 	for rows.Next() {
-		var evt hermes.Event
+		var evt event.Event
 		var ts string
 		if err := rows.Scan(&evt.ID, &evt.Agent, &evt.File, &evt.Op, &evt.Size, &ts); err != nil {
 			return nil, fmt.Errorf("scan event: %w", err)

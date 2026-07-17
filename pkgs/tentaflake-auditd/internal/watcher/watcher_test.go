@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"tentaflake/hermes-auditd/internal/hermes"
+	"tentaflake/tentaflake-auditd/internal/event"
 )
 
 func newTempDir(t *testing.T) string {
@@ -40,7 +40,7 @@ func createEmptyFile(t *testing.T, path string) {
 }
 
 // assertEventIn checks that an event arrives with any of the given ops.
-func assertEventIn(t *testing.T, ch <-chan hermes.Event, ops []string, file string) hermes.Event {
+func assertEventIn(t *testing.T, ch <-chan event.Event, ops []string, file string) event.Event {
 	t.Helper()
 	select {
 	case evt := <-ch:
@@ -60,11 +60,11 @@ func assertEventIn(t *testing.T, ch <-chan hermes.Event, ops []string, file stri
 		return evt
 	case <-time.After(2 * time.Second):
 		t.Fatalf("timeout waiting for event: ops=%v file=%q", ops, file)
-		return hermes.Event{}
+		return event.Event{}
 	}
 }
 
-func assertNoEvent(t *testing.T, ch <-chan hermes.Event, label string) {
+func assertNoEvent(t *testing.T, ch <-chan event.Event, label string) {
 	t.Helper()
 	select {
 	case evt := <-ch:

@@ -1,4 +1,4 @@
-module tentaflake/hermes-auditd
+module tentaflake/tentaflake-auditd
 
 go 1.25.0
 

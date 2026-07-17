@@ -7,7 +7,7 @@
 
 let
   cfg = config.tentaflake.hermes-auditd;
-  auditPkg = pkgs.callPackage ../pkgs/hermes-auditd { };
+  auditPkg = pkgs.callPackage ../pkgs/tentaflake-auditd { };
 
   # Dedicated unprivileged identity for the daemon and a group through which the
   # admin reads the audit DB (and runs `tentaflake top`) without sudo.
@@ -183,7 +183,7 @@ in
       after = [ "local-fs.target" ];
 
       serviceConfig = {
-        ExecStart = "${auditPkg}/bin/hermes-auditd";
+        ExecStart = "${auditPkg}/bin/tentaflake-auditd";
         Restart = "on-failure";
         RestartSec = "5s";
         Type = "simple";

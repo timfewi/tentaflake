@@ -8,8 +8,8 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"tentaflake/hermes-auditd/internal/hermes"
-	"tentaflake/hermes-auditd/internal/store"
+	"tentaflake/tentaflake-auditd/internal/event"
+	"tentaflake/tentaflake-auditd/internal/store"
 )
 
 // seededModel returns a model backed by an in-memory store with a few events,
@@ -24,7 +24,7 @@ func seededModel(t *testing.T) model {
 
 	ctx := context.Background()
 	now := time.Now().UTC()
-	events := []hermes.Event{
+	events := []event.Event{
 		{Agent: "coding", File: "/var/lib/hermes-coding/SOUL.md", Op: "write", Timestamp: now.Add(-3 * time.Second)},
 		{Agent: "coding", File: "/var/lib/hermes-coding/skills/web.md", Op: "create", Timestamp: now.Add(-1 * time.Second)},
 		{Agent: "research", File: "/var/lib/hermes-research/notes.md", Op: "remove", Timestamp: now},
@@ -57,7 +57,7 @@ func TestViewRendersAgentsAndEvents(t *testing.T) {
 	}
 	out := m.View()
 
-	for _, want := range []string{"hermes-top", "test-host", "coding", "research", "SOUL.md", "skills/web.md", "notes.md", "EVENTS", "create", "remove", "write"} {
+	for _, want := range []string{"tentaflake-top", "test-host", "coding", "research", "SOUL.md", "skills/web.md", "notes.md", "EVENTS", "create", "remove", "write"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("View() missing %q\n---\n%s", want, out)
 		}

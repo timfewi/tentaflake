@@ -7,7 +7,7 @@ import (
 	"runtime"
 	"testing"
 
-	"tentaflake/hermes-auditd/internal/config"
+	"tentaflake/tentaflake-auditd/internal/config"
 )
 
 // newTestExplorer builds a root tree with a mix of content and secrets.

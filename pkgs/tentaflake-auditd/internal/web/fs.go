@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	"tentaflake/hermes-auditd/internal/config"
+	"tentaflake/tentaflake-auditd/internal/config"
 )
 
 // Sentinel errors returned by the explorer; the server maps them to HTTP codes.
