@@ -1,0 +1,22 @@
+{
+  "hermes": [
+    {
+      "name": "example",
+      "provider": "openrouter",
+      "model": "example-provider/example-model",
+      "base_url": null,
+      "envFile": "/var/lib/tentaflake/secrets/hermes-example.env"
+    }
+  ],
+  "zeroclaw": [
+    {
+      "name": "example",
+      "provider": "openrouter",
+      "model": "example-provider/example-model",
+      "base_url": null,
+      "hostPort": 9250,
+      "servePort": 9150,
+      "envFile": "/var/lib/tentaflake/secrets/zeroclaw-example.env"
+    }
+  ]
+}

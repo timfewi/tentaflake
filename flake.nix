@@ -70,6 +70,7 @@
       # ── Shared agent builders ──
       mkHermesAgent = (import ./lib { inherit pkgs lib; }).mkHermesAgent;
       mkZeroClawAgent = (import ./lib { inherit pkgs lib; }).mkZeroClawAgent;
+      agentsFromData = (import ./lib { inherit pkgs lib; }).agentsFromData;
 
       # Module set imported by external consumers and built-in hosts
       tentaflakeModules = import ./modules/default.nix;
@@ -81,6 +82,7 @@
           self
           mkHermesAgent
           mkZeroClawAgent
+          agentsFromData
           repoRoot
           constants
           ;
@@ -100,7 +102,7 @@
 
       # ── Exported helpers ──
       lib.${system} = {
-        inherit mkHermesAgent mkZeroClawAgent constants;
+        inherit mkHermesAgent mkZeroClawAgent agentsFromData constants;
       };
 
       # ── Formatting ──
