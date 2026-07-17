@@ -12,7 +12,8 @@
 #
 # Bootable ISO that auto-starts Hermes AI agents + Piper TTS.
 # First boot: enter API keys via TUI wizard, or plug a USB
-# labeled HERMES_ENV with .env files to skip the wizard.
+# labeled TENTAFLAKE_ENV (legacy: HERMES_ENV) with .env files
+# to skip the wizard.
 #
 # Also usable as a standard installer — the full repo is
 # embedded at /etc/tentaflake/ for installation.

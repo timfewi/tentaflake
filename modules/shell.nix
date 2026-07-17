@@ -23,7 +23,7 @@ let
   cfg = config.tentaflake.shell;
   backend = config.tentaflake.containerBackend; # "docker" | "podman"
   hostName = config.tentaflake.hostName;
-  auditdCfg = config.tentaflake.hermes-auditd;
+  auditdCfg = config.tentaflake.auditd;
   consoleOn = auditdCfg.enable && auditdCfg.console.enable;
 
   # The system flake every installed host manages itself from. Used by the
@@ -53,7 +53,7 @@ let
         # Host state dir = host side of the container's first volume mount
         # (both mkHermesAgent and mkZeroClawAgent mount stateDir first);
         # hand-rolled containers without volumes fall back to the
-        # /var/lib/<container> convention (same as hermes-auditd discovery).
+        # /var/lib/<container> convention (same as tentaflake-auditd discovery).
         stateDir =
           if def.volumes == [ ] then
             "/var/lib/${container}"
@@ -245,7 +245,7 @@ let
           note "tailscale not installed — skipping"
         fi
 
-        [ -n "$AUDITD_ENABLED" ] && svc hermes-auditd
+        [ -n "$AUDITD_ENABLED" ] && svc tentaflake-auditd
         [ -n "$CONSOLE_ENABLED" ] && svc tentaflake-console
 
         local runtime n container unit st
@@ -276,8 +276,8 @@ let
           echo "enable it: add to your host config in $FLAKE_DIR:"
           # console lives inside the auditd module — without auditd the console
           # option alone is a no-op, so print both when auditd is off too.
-          [ -n "$AUDITD_ENABLED" ] || echo "  tentaflake.hermes-auditd.enable = true;"
-          echo "  tentaflake.hermes-auditd.console.enable = true;"
+          [ -n "$AUDITD_ENABLED" ] || echo "  tentaflake.auditd.enable = true;"
+          echo "  tentaflake.auditd.console.enable = true;"
           echo "then apply it with: tentaflake rebuild"
           exit 1
         fi
@@ -366,12 +366,12 @@ let
             ;;
           top)
             shift || true
-            if ! command -v hermes-top >/dev/null 2>&1; then
-              echo "''${red}error:''${reset} hermes-top not installed — enable the audit daemon:" >&2
-              echo "  tentaflake.hermes-auditd.enable = true;" >&2
+            if ! command -v tentaflake-top >/dev/null 2>&1; then
+              echo "''${red}error:''${reset} tentaflake-top not installed — enable the audit daemon:" >&2
+              echo "  tentaflake.auditd.enable = true;" >&2
               exit 1
             fi
-            exec hermes-top "$@"
+            exec tentaflake-top "$@"
             ;;
           backup)
             require_name "''${2:-}"

@@ -160,7 +160,7 @@
             tentaflake.editor.nvf.enable = true;
             # Audit daemon: records agent filesystem activity for `tentaflake top`.
             # watchDirs auto-derives from the agents defined in my-agents.nix.
-            tentaflake.hermes-auditd.enable = true;
+            tentaflake.auditd.enable = true;
           }
           self.nixosModules.default
           self.nixosModules.editor
@@ -214,7 +214,7 @@
             tentaflake.shell.tmux.enable = true;
             # Audit daemon on too, so `tentaflake top` works on the live appliance —
             # watchDirs auto-derives from the live agents (default + research).
-            tentaflake.hermes-auditd.enable = true;
+            tentaflake.auditd.enable = true;
           }
           self.nixosModules.default
           ./configuration.nix

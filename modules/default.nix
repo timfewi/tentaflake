@@ -4,7 +4,6 @@
     ./options.nix
     ./boot.nix
     ./hardening.nix
-    ./hermes-auditd.nix
     ./hive-research.nix
     ./locale.nix
     ./networking.nix
@@ -14,6 +13,7 @@
     ./shell.nix
     ./ssh.nix
     ./tailscale.nix
+    ./tentaflake-auditd.nix
     ./users.nix
   ];
 }

@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
 # ────────────────────────────────────────────────────────────
-# hermes-firstboot — First-boot setup for live agent ISO
+# tentaflake-firstboot — First-boot setup for live agent ISO
 #
 # Runs on TTY1 auto-login. Three modes:
-#   1. USB HERMES_ENV detected → silent, auto-config
+#   1. USB TENTAFLAKE_ENV (or legacy HERMES_ENV) detected → silent, auto-config
 #   2. No USB → interactive TUI wizard
 #   3. Already configured → skip (stamp file)
 # ────────────────────────────────────────────────────────────
 set -euo pipefail
 
-ENV_DIR="/run/hermes"
+ENV_DIR="/run/tentaflake"
 STAMP="${ENV_DIR}/.configured"
 # Agent names — override via AGENTS env var (space-separated)
 read -ra AGENTS <<<"${AGENTS:-default research}"
@@ -21,25 +21,27 @@ fi
 
 mkdir -p "$ENV_DIR"
 
-# ── STEP 1: Try USB HERMES_ENV auto-detection ──
-USB_DEV=$(blkid -l -o device -t LABEL=HERMES_ENV 2>/dev/null || true)
+# ── STEP 1: Try USB TENTAFLAKE_ENV auto-detection ──
+# (legacy HERMES_ENV label still accepted so existing sticks keep working)
+USB_DEV=$(blkid -l -o device -t LABEL=TENTAFLAKE_ENV 2>/dev/null || true)
+[ -n "$USB_DEV" ] || USB_DEV=$(blkid -l -o device -t LABEL=HERMES_ENV 2>/dev/null || true)
 if [ -n "$USB_DEV" ]; then
-  mkdir -p /mnt/hermes-env
-  mount "$USB_DEV" /mnt/hermes-env 2>/dev/null || true
+  mkdir -p /mnt/tentaflake-env
+  mount "$USB_DEV" /mnt/tentaflake-env 2>/dev/null || true
   FOUND=0
   for agent in "${AGENTS[@]}"; do
-    if [ -f "/mnt/hermes-env/${agent}.env" ]; then
-      cp "/mnt/hermes-env/${agent}.env" "${ENV_DIR}/${agent}.env"
+    if [ -f "/mnt/tentaflake-env/${agent}.env" ]; then
+      cp "/mnt/tentaflake-env/${agent}.env" "${ENV_DIR}/${agent}.env"
       chmod 600 "${ENV_DIR}/${agent}.env"
       FOUND=$((FOUND + 1))
     fi
   done
-  umount /mnt/hermes-env 2>/dev/null || true
-  rmdir /mnt/hermes-env 2>/dev/null || true
+  umount /mnt/tentaflake-env 2>/dev/null || true
+  rmdir /mnt/tentaflake-env 2>/dev/null || true
 
   if [ "$FOUND" -gt 0 ]; then
     echo ""
-    echo "  ✓ USB HERMES_ENV: loaded $FOUND agent env files"
+    echo "  ✓ USB env stick: loaded $FOUND agent env files"
     echo ""
     touch "$STAMP"
     for agent in "${AGENTS[@]}"; do
@@ -125,7 +127,7 @@ cat <<"EOF"
 ║  This will WIPE the target disk and install      ║
 ║  NixOS with the agent orchestration framework.   ║
 ║                                                  ║
-║  To re-enter setup: rm /run/hermes/.configured   ║
+║  Re-enter setup: rm /run/tentaflake/.configured  ║
 ╚══════════════════════════════════════════════════╝
 EOF
 echo ""

@@ -235,7 +235,7 @@ in
         Restart = "always";
         RestartSec = "3";
 
-        # Hardening — parity with hermes-auditd and hive-research. The service
+        # Hardening — parity with tentaflake-auditd and hive-research. The service
         # is a pure transformer: it reads the voice model/config from the Nix
         # store (read-only), shells out to piper, and serves WAV over HTTP.
         # It writes nothing but /tmp (PrivateTmp), so ProtectSystem=strict
