@@ -19,7 +19,13 @@ let
     mkdir -p "$ENV_DIR"
 
     # Compat symlink for one release: older configs hardcode
-    # /run/hermes/<name>.env as their envFile.
+    # /run/hermes/<name>.env as their envFile. If /run/hermes is a real
+    # directory (in-place rebuild across the rename on a running system),
+    # migrate its env files first so ln doesn't abort the script.
+    if [ -d /run/hermes ] && [ ! -L /run/hermes ]; then
+      cp /run/hermes/*.env "$ENV_DIR"/ 2>/dev/null || true
+      rm -rf /run/hermes
+    fi
     ln -sfn "$ENV_DIR" /run/hermes
 
     # ── Copy env files from a labeled TENTAFLAKE_ENV USB, if present.
