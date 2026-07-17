@@ -348,8 +348,8 @@ Each agent has its own system user `hermes-<name>` with:
 
 If `hermes-auditd` is enabled, every filesystem change in the agents' state
 dirs (across all runtimes) is recorded to a SQLite database (24h retention by
-default). Review it live with `tentaflake top`, or inspect the daemon's own
-log:
+default, size capped at ~40 MB so an event flood cannot fill the disk).
+Review it live with `tentaflake top`, or inspect the daemon's own log:
 
 ```bash
 sudo journalctl -u hermes-auditd --since today
