@@ -90,7 +90,9 @@ func TestRootsEndpoint(t *testing.T) {
 	}
 	defer resp.Body.Close()
 	var roots []RootName
-	json.NewDecoder(resp.Body).Decode(&roots)
+	if err := json.NewDecoder(resp.Body).Decode(&roots); err != nil {
+		t.Fatal(err)
+	}
 	if len(roots) != 1 || roots[0].Name != "x" {
 		t.Errorf("want one root 'x', got %+v", roots)
 	}

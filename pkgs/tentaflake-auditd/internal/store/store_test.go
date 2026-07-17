@@ -96,12 +96,14 @@ func TestQueryFilterByAgent(t *testing.T) {
 	now := time.Now().UTC()
 
 	for idx, agent := range []string{"coding", "writing", "coding"} {
-		st.Insert(ctx, event.Event{
+		if err := st.Insert(ctx, event.Event{
 			Agent:     agent,
 			File:      "/tmp/f",
 			Op:        "write",
 			Timestamp: now.Add(time.Duration(idx) * time.Second),
-		})
+		}); err != nil {
+			t.Fatal(err)
+		}
 	}
 
 	events, err := st.Query(ctx, "coding", "", "", 10)
@@ -133,12 +135,14 @@ func TestPruneRemovesOldEvents(t *testing.T) {
 	}
 
 	// Insert a recent event
-	st.Insert(ctx, event.Event{
+	if err := st.Insert(ctx, event.Event{
 		Agent:     "coding",
 		File:      "/new.txt",
 		Op:        "create",
 		Timestamp: now,
-	})
+	}); err != nil {
+		t.Fatal(err)
+	}
 
 	// Prune (retention 24h)
 	if err := st.Prune(ctx); err != nil {
@@ -173,8 +177,12 @@ func TestPruneSameDayBoundary(t *testing.T) {
 	now := time.Now().UTC()
 
 	// 90 minutes old — same day, but outside the 1-hour window.
-	st.Insert(ctx, event.Event{Agent: "coding", File: "/old.txt", Op: "write", Timestamp: now.Add(-90 * time.Minute)})
-	st.Insert(ctx, event.Event{Agent: "coding", File: "/new.txt", Op: "write", Timestamp: now})
+	if err := st.Insert(ctx, event.Event{Agent: "coding", File: "/old.txt", Op: "write", Timestamp: now.Add(-90 * time.Minute)}); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Insert(ctx, event.Event{Agent: "coding", File: "/new.txt", Op: "write", Timestamp: now}); err != nil {
+		t.Fatal(err)
+	}
 
 	if err := st.Prune(ctx); err != nil {
 		t.Fatal(err)
@@ -269,12 +277,14 @@ func TestStats(t *testing.T) {
 	now := time.Now().UTC()
 
 	for _, agent := range []string{"coding", "coding", "writing"} {
-		st.Insert(ctx, event.Event{
+		if err := st.Insert(ctx, event.Event{
 			Agent:     agent,
 			File:      "/f.txt",
 			Op:        "write",
 			Timestamp: now,
-		})
+		}); err != nil {
+			t.Fatal(err)
+		}
 	}
 
 	stats, err := st.Stats(ctx, "-24 hours")
@@ -301,12 +311,14 @@ func TestSinceReturnsOnlyNewerEvents(t *testing.T) {
 	ctx := context.Background()
 	now := time.Now().UTC()
 	for i := range 5 {
-		st.Insert(ctx, event.Event{
+		if err := st.Insert(ctx, event.Event{
 			Agent:     "coding",
 			File:      "/f.txt",
 			Op:        "write",
 			Timestamp: now.Add(time.Duration(i) * time.Second),
-		})
+		}); err != nil {
+			t.Fatal(err)
+		}
 	}
 
 	// All events, ascending.
@@ -359,10 +371,16 @@ func TestAgentRows(t *testing.T) {
 		"coding", "/old.txt", "write", now.Add(-1*time.Hour).Format(time.RFC3339)); err != nil {
 		t.Fatal(err)
 	}
-	st.Insert(ctx, event.Event{Agent: "coding", File: "/a.txt", Op: "create", Timestamp: now.Add(-2 * time.Second)})
-	st.Insert(ctx, event.Event{Agent: "coding", File: "/b.txt", Op: "remove", Timestamp: now})
-	// research: one recent event.
-	st.Insert(ctx, event.Event{Agent: "research", File: "/r.txt", Op: "write", Timestamp: now})
+	for _, evt := range []event.Event{
+		{Agent: "coding", File: "/a.txt", Op: "create", Timestamp: now.Add(-2 * time.Second)},
+		{Agent: "coding", File: "/b.txt", Op: "remove", Timestamp: now},
+		// research: one recent event.
+		{Agent: "research", File: "/r.txt", Op: "write", Timestamp: now},
+	} {
+		if err := st.Insert(ctx, evt); err != nil {
+			t.Fatal(err)
+		}
+	}
 
 	rows, err := st.AgentRows(ctx, "-5 minutes")
 	if err != nil {

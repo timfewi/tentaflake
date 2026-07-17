@@ -123,8 +123,12 @@ func TestUnknownAgent(t *testing.T) {
 
 func TestExtraDeny(t *testing.T) {
 	dir := t.TempDir()
-	os.WriteFile(filepath.Join(dir, "keepout.bin"), []byte("x"), 0o644)
-	os.WriteFile(filepath.Join(dir, "ok.txt"), []byte("x"), 0o644)
+	if err := os.WriteFile(filepath.Join(dir, "keepout.bin"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "ok.txt"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	exp, err := NewExplorer([]config.Root{{Name: "x", Path: dir}}, []string{"*.bin"})
 	if err != nil {
 		t.Fatal(err)
