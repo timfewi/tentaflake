@@ -121,6 +121,37 @@ services.knowledge-base = {                          # any agent-built web app, 
 `docker exec` under `Type=simple`): when the container restarts they die and are
 restarted once it's back, so the exposure is durable across reboots and recreates.
 
+## Egress filtering (opt-in)
+
+Off by default. When enabled, the host gets an nftables **output** chain
+(table `tentaflake-egress`, family `inet`, policy `drop`) that only lets
+through:
+
+- loopback traffic and established/related connections (always, first)
+- TCP to `tentaflake.networking.egress.allowedTCPPorts` (default `[ 443 ]`)
+- UDP to `tentaflake.networking.egress.allowedUDPPorts` (default
+  `[ 53 67 123 41641 ]` — DNS, DHCP, NTP, tailscale WireGuard)
+
+Everything else outbound is counted and dropped — including plain-HTTP
+(port 80) fetches, SMTP, and arbitrary high-port callbacks.
+
+```nix
+tentaflake.networking.egress = {
+  enable = true;
+  # allow an extra outbound port on top of the defaults:
+  allowedTCPPorts = [ 443 2222 ];   # e.g. SSH to a git remote on 2222
+};
+```
+
+> **Why this covers the agents.** Agent containers run with `--network=host`,
+> so they share the host's network stack — these host OUTPUT rules apply to
+> every agent container with no per-container setup. That is the point:
+> one allowlist governs the whole fleet.
+
+Per-agent, cgroup-based, or domain-based egress policy is deliberately out of
+scope: fragile under host networking and deployment-specific. Forks can build
+on this port-allowlist hook.
+
 ## Quick reference
 
 | Argument | Tier | What it does |
