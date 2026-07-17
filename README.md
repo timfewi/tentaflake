@@ -315,7 +315,8 @@ in [`my-agents.nix.example`](my-agents.nix.example).
 | `services` | `attrset` | Run + optionally tailnet-publish durable agent-built web apps |
 
 See [`docs/07-operations.md`](docs/07-operations.md) for the persistence model, the
-UID/secret/`config.yaml` gotchas, and the rationale behind each option.
+UID/secret/`config.yaml` gotchas, backup & restore, log forwarding, and the
+rationale behind each option.
 
 Full option reference: [`.agents/skills/tentaflake-repo-guidance/SKILL.md`](.agents/skills/tentaflake-repo-guidance/SKILL.md)
 
