@@ -300,6 +300,42 @@ Set container memory limits via `extraContainerConfig` in `my-agents.nix`:
 })
 ```
 
+### Process limits
+
+Every agent container gets `--pids-limit=512` by default — a fork-bomb ceiling
+generous enough for compile jobs. Tune it (or disable with `null`) via the
+`pidsLimit` parameter on `mkHermesAgent`/`mkZeroClawAgent`:
+
+```nix
+(mkHermesAgent {
+  name      = "coding";
+  envFile   = "/run/secrets/hermes-coding.env";
+  pidsLimit = 1024;   # heavy parallel builds; null = unlimited
+})
+```
+
+### Dropping capabilities (opt-in)
+
+For agents that never need root-style operations inside the container, drop
+all Linux capabilities via `extraContainerConfig`:
+
+```nix
+extraContainerConfig = {
+  # Overriding extraOptions replaces the default network flag, so restate it.
+  # (--env-file, --security-opt and --pids-limit are appended after the merge
+  # and survive this override.)
+  extraOptions = [
+    "--network=host"
+    "--cap-drop=ALL"
+  ];
+};
+```
+
+> **Warning:** agents that run `sudo`, `apt install`, or otherwise install
+> packages inside the container need capabilities (`CAP_SETUID`,
+> `CAP_CHOWN`, …) — `--cap-drop=ALL` will break them. That's why this is
+> opt-in, not the default.
+
 ### Resource monitoring
 
 ```bash
@@ -334,8 +370,10 @@ Do NOT store env files in `/etc/nixos/` (ends up in Nix store, world-readable).
 
 Containers run with:
 - Host networking (`--network=host`)
-- Dedicated system user (not root in container: `--user=<uid>`)
+- Non-root inside the container — the image's built-in `hermes` user (no host `--user` override)
 - Read-only state dir permissions (0700, owner only)
+- No privilege escalation (`--security-opt=no-new-privileges:true`)
+- A process ceiling (`--pids-limit=512`, tunable via `pidsLimit`)
 
 ### System user security
 

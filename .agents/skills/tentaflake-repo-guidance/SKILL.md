@@ -212,6 +212,7 @@ Defined in `lib/mkHermesAgent.nix`. Creates one Hermes agent as a NixOS module.
 | `extraEnvironment` | attrset | `{}` | Extra env vars |
 | `cmd` | list of str? | `null` | Container command (null → `gateway run --replace`) |
 | `networkMode` | str | `"host"` | Docker network mode |
+| `pidsLimit` | int? | `512` | Container `--pids-limit` (fork-bomb ceiling); `null` disables |
 | `autoStart` | bool | `true` | Auto-start with system |
 | `createUser` | bool | `true` | Create system user/group |
 | `extraContainerConfig` | attrset | `{}` | Merged into OCI container config (use for `memory`, `cpus`, port maps) |
@@ -271,6 +272,7 @@ Defined in `lib/mkZeroClawAgent.nix`. Creates one ZeroClaw agent as a NixOS modu
 | `hostPort` | int | **required** | Host loopback port forwarded to the gateway |
 | `servePort` | int | **required** | Tailnet HTTPS port (published via `tailscale serve`) |
 | `autoStart` | bool | `true` | Auto-start with system |
+| `pidsLimit` | int? | `512` | Container `--pids-limit` (fork-bomb ceiling); `null` disables |
 | `settings` | TOML attrset | `{}` | ZeroClaw config serialized to `config.toml` |
 | `extraEnvironment` | attrset | `{}` | Extra env vars |
 | `extraVolumes` | list of str | `[]` | Extra Docker volumes |
