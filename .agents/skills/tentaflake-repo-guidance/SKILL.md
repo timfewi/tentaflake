@@ -35,7 +35,7 @@ tentaflake/
 │   ├── users.nix                 # Admin user creation (wheel + networkmanager groups)
 │   ├── tailscale.nix             # Tailscale VPN with extraUpFlags
 │   ├── shell.nix                 # ★ Interactive shell: tentaflake CLI, banner, zsh, tools
-│   ├── hermes-auditd.nix         # ★ Filesystem audit daemon + hermes-top TUI (watches all runtimes)
+│   ├── tentaflake-auditd.nix     # ★ Filesystem audit daemon + tentaflake-top TUI (watches all runtimes)
 │   ├── piper-tts-server.nix      # ★ Piper TTS HTTP server (OpenAI-compatible)
 │   └── editor.nix                # Neovim (nvf) module (separate import)
 │
@@ -46,10 +46,10 @@ tentaflake/
 │   └── mkZeroClawAgent.nix       # ★ Builds one isolated ZeroClaw agent as a NixOS module
 │
 ├── pkgs/
-│   ├── hermes-auditd/            # Go daemon: filesystem watcher + SQLite + HTTP/WS
-│   │   ├── cmd/hermes-auditd/    # Daemon binary
-│   │   ├── cmd/hermes-top/       # TUI dashboard
-│   │   └── internal/             # config, watcher, store, hermes event types
+│   ├── tentaflake-auditd/        # Go daemon: filesystem watcher + SQLite + HTTP/WS
+│   │   ├── cmd/tentaflake-auditd/ # Daemon binary
+│   │   ├── cmd/tentaflake-top/   # TUI dashboard
+│   │   └── internal/             # config, watcher, store, event types
 │   └── piper-voices/             # Bundled Piper voice ONNX models
 │
 ├── installer/
@@ -57,7 +57,7 @@ tentaflake/
 │   ├── live-iso.nix              # Live Agent ISO config (RAM, no disk touch)
 │   ├── live-profile.nix          # Live ISO profile: agents, Piper, Tailscale, SSH
 │   ├── live-agents.nix           # Pre-configured agents for live ISO (default + research)
-│   ├── hermes-firstboot.nix      # USB env detection, data persistence, TTY1 wizard
+│   ├── firstboot.nix             # USB env detection, data persistence, TTY1 wizard
 │   ├── installer.sh              # ★ Interactive TUI installer (partitions, installs, reboots)
 │   └── firstboot.sh              # Live ISO first-boot wizard (env file entry)
 │
@@ -103,7 +103,7 @@ Three machines are defined in `flake.nix`:
 ## All `tentaflake.*` Options
 
 Most options are defined in `modules/options.nix`. Exceptions:
-- `tentaflake.hermes-auditd.*` — defined in `modules/hermes-auditd.nix`
+- `tentaflake.auditd.*` — defined in `modules/tentaflake-auditd.nix`
 - `tentaflake.editor.nvf.*` — defined in `modules/editor.nix`
 
 These are the knobs you turn in your host config.
@@ -153,15 +153,15 @@ These are the knobs you turn in your host config.
 | `tentaflake.shell.tmux.enable` | bool | `false` | tmux multiplexer with system config |
 | `tentaflake.shell.tentaflakeCli.enable` | bool | `true` | `tentaflake` CLI for multi-runtime agent management (renamed from `hermesCli`; old name still accepted via `mkRenamedOptionModule`) |
 
-### hermes-auditd Sub-options (`tentaflake.hermes-auditd.*`)
+### tentaflake-auditd Sub-options (`tentaflake.auditd.*`)
 
 | Option | Type | Default | Description |
 |---|---|---|---|
-| `tentaflake.hermes-auditd.enable` | bool | — | Enable audit daemon |
-| `tentaflake.hermes-auditd.watchDirs` | list of str | `[]` | Auto-discovers from every declarative agent container (any runtime) |
-| `tentaflake.hermes-auditd.port` | port | `9090` | HTTP/WebSocket listen port |
-| `tentaflake.hermes-auditd.dbPath` | str | `/var/lib/hermes-audit/events.db` | SQLite DB path |
-| `tentaflake.hermes-auditd.retentionHours` | int | `24` | Event retention window |
+| `tentaflake.auditd.enable` | bool | — | Enable audit daemon |
+| `tentaflake.auditd.watchDirs` | list of str | `[]` | Auto-discovers from every declarative agent container (any runtime) |
+| `tentaflake.auditd.port` | port | `9090` | HTTP/WebSocket listen port |
+| `tentaflake.auditd.dbPath` | str | `/var/lib/hermes-audit/events.db` | SQLite DB path |
+| `tentaflake.auditd.retentionHours` | int | `24` | Event retention window |
 
 ### Piper TTS (`services.piper-tts-server.*`)
 
@@ -381,7 +381,7 @@ tentaflake stop <name>
 tentaflake shell <name> # Interactive container shell
 tentaflake exec <name> -- <cmd>
 tentaflake ps           # Raw docker ps for agent containers
-tentaflake top          # Live TUI (hermes-top, needs audit daemon)
+tentaflake top          # Live TUI (tentaflake-top, needs audit daemon)
 tentaflake backup <name>  # Snapshot an agent's state dir to a .tar.gz (0600)
 tentaflake doctor       # Host health check (exits nonzero on problems)
 tentaflake console      # Agent Console URL + tailnet publish hint
@@ -392,15 +392,15 @@ tentaflake update       # Update flake inputs, review, then rebuild
 A deprecated `hermes` shim still works — it prints a deprecation note to
 stderr and execs `tentaflake "$@"`.
 
-### `hermes-auditd.nix`
+### `tentaflake-auditd.nix`
 Filesystem audit daemon for agent activity tracking (all runtimes):
 - Go daemon watches agent state dirs via inotify
 - Records events to SQLite DB
-- Serves HTTP/WS on `tentaflake.hermes-auditd.port` (default 9090)
-- `hermes-top` TUI reads the DB for live dashboard
+- Serves HTTP/WS on `tentaflake.auditd.port` (default 9090)
+- `tentaflake-top` TUI reads the DB for live dashboard
 - Admin added to `hermes-audit` group for sudo-less access
 - Auto-discovers watch dirs from every declarative agent container — Hermes
-  and ZeroClaw alike (module/package name unchanged: still `hermes-auditd`)
+  and ZeroClaw alike
 
 ### `piper-tts-server.nix`
 Local TTS HTTP server (OpenAI-compatible `/v1/audio/speech`):
@@ -457,8 +457,8 @@ The file is git-tracked. Check `my-agents.nix.example` for a complete reference.
 ### Live Agent ISO (`nix build .#live-agent-iso`)
 - Boots directly into Hermes agents + Piper TTS in RAM
 - Ephemeral — pull the USB and everything is gone
-- First boot: TUI wizard or USB `HERMES_ENV` auto-detection
-- USB `HERMES_DATA` auto-mount for persistent agent state across reboots
+- First boot: TUI wizard or USB `TENTAFLAKE_ENV` auto-detection (legacy `HERMES_ENV` accepted)
+- USB `TENTAFLAKE_DATA` auto-mount for persistent agent state across reboots (legacy `HERMES_DATA` accepted)
 - Pre-configured with two agents: `default` (general) and `research` (web-focused)
 - `sudo tailscale up` for connectivity
 - Can also install to disk via `/etc/tentaflake/installer/installer.sh`
@@ -497,7 +497,7 @@ tentaflake.lib.x86_64-linux.constants        # Default constants
 
 Two approaches for agent secrets:
 
-1. **Plain env files** — `envFile = "/run/hermes/<name>.env"` (for live ISO / tmpfs)
+1. **Plain env files** — `envFile = "/run/tentaflake/<name>.env"` (for live ISO / tmpfs)
 2. **Agenix** — `agenixFile = "/run/agenix/<name>-env"` (for installed systems)
 
 Both are passed to Docker via `--env-file`. Never commit secrets to the repo.
@@ -511,10 +511,10 @@ plain `envFile` option for that runtime.
 nix flake check                   # Validate flake + build toplevel + run Go tests
 nix build .#installer-iso         # Build installer ISO
 nix build .#live-agent-iso        # Build live agent ISO
-nix build .#hermes-auditd         # Build audit daemon package
+nix build .#tentaflake-auditd     # Build audit daemon package
 nix fmt                           # Format Nix files (nixfmt-tree)
-cd pkgs/hermes-auditd && go test ./...  # Run Go tests
-golangci-lint run                 # Go lint (in pkgs/hermes-auditd/)
+cd pkgs/tentaflake-auditd && go test ./...  # Run Go tests
+golangci-lint run                 # Go lint (in pkgs/tentaflake-auditd/)
 ```
 
 ## Check (CI)
@@ -536,16 +536,16 @@ The `checks.${system}.agent-host` target validates that the full toplevel builds
 
 ## Packaging
 
-### `pkgs/hermes-auditd`
+### `pkgs/tentaflake-auditd`
 Go application with:
-- `cmd/hermes-auditd/` — daemon binary (filesystem watcher + SQLite + HTTP/WS)
-- `cmd/hermes-top/` — TUI dashboard (reads audit DB)
+- `cmd/tentaflake-auditd/` — daemon binary (filesystem watcher + SQLite + HTTP/WS)
+- `cmd/tentaflake-top/` — TUI dashboard (reads audit DB)
 - `internal/config/` — configuration loading
 - `internal/watcher/` — inotify-based directory watcher
 - `internal/store/` — SQLite event store
-- `internal/hermes/` — event types
+- `internal/event/` — event types
 
-Build via `pkgs.callPackage ./pkgs/hermes-auditd { }`.
+Build via `pkgs.callPackage ./pkgs/tentaflake-auditd { }`.
 
 ### `pkgs/piper-voices`
 Bundled Piper ONNX voice models for TTS. Provides voice files under `/share/piper-voices/`.

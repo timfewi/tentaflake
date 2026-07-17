@@ -89,7 +89,7 @@ The CLI also covers day-2 host chores, so routine operation never needs raw
   the `flake.lock` diff, and asks `[y/N]` before rebuilding. Decline and the
   updated lock stays in place — apply later with `tentaflake rebuild`.
 - **`tentaflake doctor`** — one deep health check: failed systemd units, root
-  disk ≥90% full, Tailscale connectivity, the `hermes-auditd` /
+  disk ≥90% full, Tailscale connectivity, the `tentaflake-auditd` /
   `tentaflake-console` services (when enabled), and every agent's unit state.
   Each problem comes with the exact fix command (e.g. `tentaflake restart
   <name>`), and the exit code is nonzero when problems were found — cron/CI
@@ -106,14 +106,15 @@ The CLI also covers day-2 host chores, so routine operation never needs raw
 
 ## `tentaflake top` — live activity dashboard
 
-`tentaflake top` (execs the `hermes-top` binary — that name is unchanged) is a
+`tentaflake top` (execs the `tentaflake-top` binary; a deprecated `hermes-top`
+symlink remains for one release) is a
 full-screen TUI showing, in real time, what files your agents are touching,
-across every runtime. It reads the `hermes-auditd` SQLite database directly
+across every runtime. It reads the `tentaflake-auditd` SQLite database directly
 and refreshes once a second — **no network port is opened**, so it fits the
 Tailscale-only, firewall-closed posture: you run it inside your SSH session.
 
 ```
-hermes-top  agent-host
+tentaflake-top  agent-host
 3 events retained · window 5m · updated 12:04:31
 
   AGENT                  5m    TOTAL  LAST ACTIVITY
@@ -132,7 +133,7 @@ Keys: `q`/`Esc` quit · `↑↓`/`jk` scroll · `pgup`/`pgdn` page · `g`/`G` to
 `f` cycle the agent filter · `p`/space pause · `r` force refresh. Flags:
 `-db <path>`, `-window <dur>` (recent-count window, default 5m), `-interval <dur>`.
 
-**What it shows vs. what it doesn't:** `hermes-auditd` records *filesystem
+**What it shows vs. what it doesn't:** `tentaflake-auditd` records *filesystem
 changes* in every declarative agent's state dir (`/var/lib/hermes-<name>/` and
 `/var/lib/zeroclaw-<name>/` alike) — a strong "is the agent working, and on
 what" signal. It is **not** the agent's conversation or tool-call stream; for
@@ -147,11 +148,11 @@ state dirs).
 Enable it (on by default for `agent-host`):
 
 ```nix
-tentaflake.hermes-auditd.enable = true;
+tentaflake.auditd.enable = true;
 # watchDirs auto-derives from ALL your agents, both runtimes (hermes-<name>
 # and zeroclaw-<name> state dirs); override only for custom stateDirs:
-# tentaflake.hermes-auditd.watchDirs = [ "/var/lib/hermes-coding" ];
-# tentaflake.hermes-auditd.retentionHours = 24;
+# tentaflake.auditd.watchDirs = [ "/var/lib/hermes-coding" ];
+# tentaflake.auditd.retentionHours = 24;
 ```
 
 ## Agent Console — web file explorer + live monitor
@@ -175,17 +176,17 @@ but write nowhere. Bind it to loopback and publish on the tailnet with
 `tailscale serve` (see [operations](07-operations.md#exposing-dashboards--agent-built-apps-on-the-tailnet)).
 
 ```nix
-tentaflake.hermes-auditd.console.enable = true;
+tentaflake.auditd.console.enable = true;
 # Roots auto-derive from your agents across both runtimes (one folder per
 # /var/lib/hermes-<name> or /var/lib/zeroclaw-<name>).
 # Keep those and ADD data-disk mounts with extraRoots:
-# tentaflake.hermes-auditd.console.extraRoots = [
+# tentaflake.auditd.console.extraRoots = [
 #   { name = "my-agent-data"; path = "/srv/agent-data/my-agent"; }
 # ];
-# tentaflake.hermes-auditd.console.roots = [ … ];             # override the
+# tentaflake.auditd.console.roots = [ … ];             # override the
 #   auto-derived homes entirely (rarely needed; prefer extraRoots)
-# tentaflake.hermes-auditd.console.addr = "127.0.0.1:9090";   # loopback bind
-# tentaflake.hermes-auditd.console.extraDeny = [ "*.sqlite" ]; # extra hides
+# tentaflake.auditd.console.addr = "127.0.0.1:9090";   # loopback bind
+# tentaflake.auditd.console.extraDeny = [ "*.sqlite" ]; # extra hides
 ```
 
 Then publish it, e.g. `tailscale serve --bg --https=9125 127.0.0.1:9090` →

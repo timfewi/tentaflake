@@ -14,9 +14,9 @@ Find and replace these before deploying your fork:
 | Agenix recipients | (`secrets.nix`) | your SSH pubkeys |
 
 A global `tentaflake` → `<your-repo>` replace also renames the Go module:
-`pkgs/hermes-auditd/go.mod` declares `module tentaflake/hermes-auditd` and every
+`pkgs/tentaflake-auditd/go.mod` declares `module tentaflake/tentaflake-auditd` and every
 import uses that prefix, so they stay consistent. (Equivalently, run
-`cd pkgs/hermes-auditd && go mod edit -module <new>/hermes-auditd` and update the
+`cd pkgs/tentaflake-auditd && go mod edit -module <new>/tentaflake-auditd` and update the
 `import` lines.)
 
 ## nixpkgs channel
@@ -24,7 +24,7 @@ import uses that prefix, so they stay consistent. (Equivalently, run
 The template tracks `nixos-unstable`, pinned to an exact revision by the committed
 `flake.lock` — so builds are reproducible; bump deliberately with `nix flake update`.
 Unstable is required: it is currently the only channel that provides BOTH a
-non-vulnerable `docker` (29.x) and Go ≥ 1.25 (needed by `hermes-auditd`'s
+non-vulnerable `docker` (29.x) and Go ≥ 1.25 (needed by `tentaflake-auditd`'s
 `modernc.org/sqlite`). The current stable (25.11) ships `docker` 28.5.2, which
 nixpkgs flags as insecure, and only Go 1.24.
 

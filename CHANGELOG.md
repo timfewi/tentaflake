@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### ⚠ Breaking
+- The fleet-generic infrastructure drops its `hermes-` branding (#52); "Hermes" now only names the Hermes agent runtime. What renames, and what bridges the transition for one release:
+  - **systemd units**: `hermes-auditd` → `tentaflake-auditd`, and on the live ISO `hermes-env-detect`/`hermes-data-mount` → `tentaflake-env-detect`/`tentaflake-data-mount`. The old unit names are **gone** — update `systemctl`/`journalctl` scripts. (The console unit was already `tentaflake-console`.)
+  - **module options**: `tentaflake.hermes-auditd.*` → `tentaflake.auditd.*`. Old names still evaluate with a deprecation warning via `lib.mkRenamedOptionModule` and will be removed in a future release.
+  - **flake package attr**: `packages.hermes-auditd` → `packages.tentaflake-auditd`. The old attr remains as a deprecated alias to the same derivation.
+  - **binaries**: `hermes-auditd` → `tentaflake-auditd`, `hermes-top` → `tentaflake-top` (`tentaflake top` now execs the new name). The package installs a deprecated `hermes-top` symlink for one release.
+  - **USB labels** (live ISO): `TENTAFLAKE_ENV`/`TENTAFLAKE_DATA` are the primary labels; the legacy `HERMES_ENV`/`HERMES_DATA` labels are still accepted, so existing sticks keep working.
+  - **live-ISO env dir**: `/run/hermes` → `/run/tentaflake`, with a `/run/hermes` compat symlink for configs that hardcode the old `envFile` path.
+  - **Go module** (fork-relevant only): `tentaflake/hermes-auditd` → `tentaflake/tentaflake-auditd`; `internal/hermes` → `internal/event`.
+  - **NOT renamed** (deliberately, so existing deployments keep their audit history): the audit DB state dir `/var/lib/hermes-audit`, the default `dbPath` `/var/lib/hermes-audit/events.db`, and the `hermes-audit` user/group. These rename in a future major with a migration.
+  - Also: the `hermes-<name>`/`zeroclaw-<name>` container/user/state-dir prefixes, the `HERMES_*` env contract, and `mkHermesAgent` are unchanged — they name the Hermes runtime, not the infrastructure.
+
 ### Security
 - `hermes-auditd` hardening (#8): the audit DB now sets `secure_delete` and is capped at 10000 pages (~40 MB) so an agent flooding filesystem events cannot fill the host disk; inotify directory watches are capped at 10000 per daemon (with a one-time warning when hit); the console clamps `?limit=` to 1000 and every store read is bounded by a 5 s query timeout. (No `fs.inotify.max_user_watches` sysctl needed — nixpkgs already defaults it to 524288.)
 
@@ -28,6 +40,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `docs/07-operations.md`: **Backup & restore** (state dirs, audit DB via `sqlite3 .backup` — never `cp` a live WAL db — off-host age identity, restic example for forks) and **Log forwarding** (`services.journald.upload` snippet) sections. (#11)
 - `modules/piper-tts-server.nix`: systemd unit hardened to parity with `hermes-auditd`/`hive-research` (`ProtectSystem=strict`, `ProtectHome`, `PrivateDevices`, `RestrictNamespaces`, `LockPersonality`, empty capability bounding set, `RestrictAddressFamilies`, `SystemCallFilter=@system-service`) plus resource limits: `TasksMax=64` and a new `services.piper-tts-server.memoryMax` option (default `2G` — raise for larger voice models). (#12)
 - `modules/nix-settings.nix`: Nix daemon hardening — `allowed-users` restricted to `root` and `@wheel` (agents live in containers and never talk to the host daemon), explicit `sandbox = true` with `sandbox-fallback = false` (no silent downgrade to unsandboxed builds), and `min-free`/`max-free` (2 GiB / 8 GiB) so builds cannot fill the disk. (#5)
+- Live-ISO firstboot env detection genericized (#52): agent env-file placeholders are now created for `docker-`/`podman-` units of **both** runtimes (`hermes-*` and `zeroclaw-*`, previously `hermes-*` only), and the USB data-mount persists `/var/lib/zeroclaw-*` state dirs too. Hermes env files keep their bare names (`coding.env`); other runtimes keep the runtime prefix (`zeroclaw-scout.env`).
+- `.golangci.yaml` migrated to the golangci-lint v2 config format — the v1 file no longer loaded under golangci-lint 2.x, so lint was silently broken; the errcheck findings that had accumulated unseen are fixed.
 - `tentaflake-status` login banner redesigned: braille-art octopus-snowflake logo in cyan (embedded at build time from `public/tentaflake-shell-logo.txt`, the single source of truth) with the header and host facts rendered as a column to its right, and the container backend in the tagline; `AGENTS` header now cyan with a fleet count (`total · active · inactive`, plus `failed` in red when present); each runtime gets its own color (hermes yellow, zeroclaw blue, other magenta) on dot/runtime/status; agents sorted by name; active agents show their uptime (`active 2d 4h`); inactive agents render dimmed; a failed agent adds a red `⚠ failed: <name> — tentaflake logs <name>` hint. Also: memory/disk lines gain usage-colored percentages (green/yellow ≥75%/red ≥90%), host uptime is read from `/proc/uptime` (fixes the duplicated load average in the old fallback), and a separator rule divides host facts from the agent list.
 
 ## [0.2.0] — 2026-07-11
