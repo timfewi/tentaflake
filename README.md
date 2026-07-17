@@ -447,7 +447,7 @@ the same one-container-per-agent shape under a `zeroclaw-<name>` prefix.
 | `boot.nix` | systemd-boot (boot-menu editor disabled), EFI |
 | `hardening.nix` | Sysctl + kernel-param hardening, LSM order, AppArmor, journald limits |
 | `locale.nix` | Timezone, locale, console keymap |
-| `networking.nix` | Hostname, nftables firewall, NetworkManager |
+| `networking.nix` | Hostname, nftables firewall, NetworkManager, opt-in egress allowlist (`tentaflake.networking.egress.enable` — covers agent containers too via host networking, [docs](docs/07-operations.md#egress-filtering-opt-in)) |
 | `nix-settings.nix` | Flakes, auto-GC, daemon hardening (allowed-users, strict sandbox, min-free/max-free), trusted-users, substituters |
 | `packages.nix` | curl, git, jq, tmux, vim, and more |
 | `users.nix` | Admin user (wheel + networkmanager groups) |

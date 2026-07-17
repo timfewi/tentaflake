@@ -116,6 +116,31 @@ in
       enable = lib.mkEnableOption "networking, firewall, and NetworkManager" // {
         default = true;
       };
+
+      # Opt-in outbound filtering. MUST stay default-off: a default-on drop
+      # policy would break tailscale, DNS, DHCP, NTP, and nix substituters on
+      # existing deployments.
+      egress = {
+        enable = lib.mkEnableOption "outbound (egress) port allowlist via nftables";
+
+        allowedTCPPorts = lib.mkOption {
+          type = lib.types.listOf lib.types.port;
+          default = [ 443 ];
+          description = "TCP destination ports allowed outbound when egress filtering is enabled";
+        };
+
+        allowedUDPPorts = lib.mkOption {
+          type = lib.types.listOf lib.types.port;
+          default = [
+            53 # DNS
+            67 # DHCP client -> server
+            123 # NTP
+            547 # DHCPv6 client -> server
+            41641 # tailscale WireGuard
+          ];
+          description = "UDP destination ports allowed outbound when egress filtering is enabled";
+        };
+      };
     };
 
     nixSettings = {
