@@ -68,6 +68,32 @@ go vet ./... && go test ./...
 | Go formatting | Standard `gofmt` |
 | Module boundary | Keep template generic — fork for specifics |
 
+## Signing Commits and Tags
+
+Sign your commits and tags. SSH signing is the low-friction option — it reuses
+the key you already push with:
+
+```bash
+git config gpg.format ssh
+git config user.signingkey ~/.ssh/id_ed25519.pub
+git config commit.gpgsign true
+```
+
+Upload the key as a *signing key* in GitHub (Settings → SSH and GPG keys) so
+commits show as **Verified**. To verify locally:
+
+```bash
+# One-off allowed_signers file, then verify a commit
+echo "$(git config user.email) $(cat ~/.ssh/id_ed25519.pub)" > /tmp/allowed_signers
+git -c gpg.ssh.allowedSignersFile=/tmp/allowed_signers verify-commit HEAD
+```
+
+Release tags are signed:
+
+```bash
+git tag -s vX.Y.Z -m "vX.Y.Z"
+```
+
 ## Pull Request Process
 
 1. Fork the repo and create a feature branch:
