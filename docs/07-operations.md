@@ -121,6 +121,63 @@ services.knowledge-base = {                          # any agent-built web app, 
 `docker exec` under `Type=simple`): when the container restarts they die and are
 restarted once it's back, so the exposure is durable across reboots and recreates.
 
+## Backup & restore
+
+Everything declarative (containers, config, mounts) is recreated by
+`nixos-rebuild switch` — you back up **state**, not the system:
+
+| What | Where | How |
+|---|---|---|
+| Per-agent state | `stateDir` (default `/var/lib/hermes-<name>`), especially `workspace/` | Plain file backup |
+| Audit trail | `/var/lib/hermes-audit/events.db` | `sqlite3 ... ".backup ..."` — **never plain `cp`**: the DB runs in WAL mode, a live copy is torn |
+| Secrets | `secrets/*.age` (already in git) **plus the age identity** | Keep the identity (host SSH key / age key) **off-host** — without it, backed-up `.age` files are unrecoverable |
+
+Example — restic on NixOS (borgbackup works the same way via
+`services.borgbackup.jobs`). This belongs in **your fork**: the template ships
+no backup module because repository targets and credentials are
+deployment-specific.
+
+```nix
+services.restic.backups.agents = {
+  paths = [
+    "/var/lib/hermes-coding"
+    "/var/lib/hermes-audit/events.backup.db"
+  ];
+  # Snapshot the live WAL database safely before each run:
+  backupPrepareCommand = ''
+    ${pkgs.sqlite}/bin/sqlite3 /var/lib/hermes-audit/events.db \
+      ".backup '/var/lib/hermes-audit/events.backup.db'"
+  '';
+  repository = "sftp:backup@backup-host:/srv/restic";
+  passwordFile = "/run/agenix/restic-password";
+  timerConfig.OnCalendar = "03:00";
+  pruneOpts = [ "--keep-daily 7" "--keep-weekly 4" ];
+};
+```
+
+To restore: reinstall/rebuild from your flake, stop the agent
+(`tentaflake stop <name>`), restore the state dir, fix ownership if needed
+(the `heal-uid` oneshot chowns on next start anyway), start the agent.
+
+## Log forwarding
+
+To ship host journals (container logs, `hermes-auditd`, provider healthchecks)
+to a remote collector, use systemd's native journal upload — no tentaflake
+option needed:
+
+```nix
+services.journald.upload = {
+  enable = true;
+  settings.Upload.URL = "https://logs.example.com:19532";  # systemd-journal-remote endpoint
+};
+```
+
+The receiving side runs `systemd-journal-remote`
+(`services.journald.remote.enable` on NixOS). For TLS client auth, set
+`ServerKeyFile` / `ServerCertificateFile` / `TrustedCertificateFile` under
+`settings.Upload`. Target URL and certificates are deployment-specific — keep
+them in your fork.
+
 ## Quick reference
 
 | Argument | Tier | What it does |

@@ -315,7 +315,8 @@ in [`my-agents.nix.example`](my-agents.nix.example).
 | `services` | `attrset` | Run + optionally tailnet-publish durable agent-built web apps |
 
 See [`docs/07-operations.md`](docs/07-operations.md) for the persistence model, the
-UID/secret/`config.yaml` gotchas, and the rationale behind each option.
+UID/secret/`config.yaml` gotchas, backup & restore, log forwarding, and the
+rationale behind each option.
 
 Full option reference: [`.agents/skills/tentaflake-repo-guidance/SKILL.md`](.agents/skills/tentaflake-repo-guidance/SKILL.md)
 
@@ -441,8 +442,8 @@ the same one-container-per-agent shape under a `zeroclaw-<name>` prefix.
 
 | Module | What it configures |
 |---|---|
-| `boot.nix` | systemd-boot, EFI, kernel params |
-| `hardening.nix` | Sysctl hardening, AppArmor, journald limits |
+| `boot.nix` | systemd-boot (boot-menu editor disabled), EFI |
+| `hardening.nix` | Sysctl + kernel-param hardening, LSM order, AppArmor, journald limits |
 | `locale.nix` | Timezone, locale, console keymap |
 | `networking.nix` | Hostname, nftables firewall, NetworkManager |
 | `nix-settings.nix` | Flakes, auto-GC, daemon hardening (allowed-users, strict sandbox, min-free/max-free), trusted-users, substituters |
