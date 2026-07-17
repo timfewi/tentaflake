@@ -16,7 +16,7 @@ default:
 ci: fmt-check lint shellcheck go-lint go check iso iso-installer
     @echo "==> all green"
 
-# nix flake check (eval + agent-host toplevel + fleetboard-selftest + hermes-auditd)
+# nix flake check (eval + agent-host toplevel + hermes-auditd)
 check:
     nix flake check
 
@@ -78,11 +78,6 @@ vm: iso
         -cdrom result/iso/tentaflake-live.iso -boot d
 
 # ── Release ──────────────────────────────────────────────────
-
-# Stage an agent seed into a consumer repo + rebuild the host.
-# Usage: DEPLOY_HOST=admin@host just deploy-seed ./seeds/ada ada
-deploy-seed *ARGS:
-    nix run .#deploy-seed -- {{ARGS}}
 
 # Cut a release tag. Update CHANGELOG.md FIRST, then: just tag v0.3.0
 # The git tag is the source of truth for the repo version.
