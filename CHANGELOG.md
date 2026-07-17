@@ -44,6 +44,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `.golangci.yaml` migrated to the golangci-lint v2 config format — the v1 file no longer loaded under golangci-lint 2.x, so lint was silently broken; the errcheck findings that had accumulated unseen are fixed.
 - `tentaflake-status` login banner redesigned: braille-art octopus-snowflake logo in cyan (embedded at build time from `public/tentaflake-shell-logo.txt`, the single source of truth) with the header and host facts rendered as a column to its right, and the container backend in the tagline; `AGENTS` header now cyan with a fleet count (`total · active · inactive`, plus `failed` in red when present); each runtime gets its own color (hermes yellow, zeroclaw blue, other magenta) on dot/runtime/status; agents sorted by name; active agents show their uptime (`active 2d 4h`); inactive agents render dimmed; a failed agent adds a red `⚠ failed: <name> — tentaflake logs <name>` hint. Also: memory/disk lines gain usage-colored percentages (green/yellow ≥75%/red ≥90%), host uptime is read from `/proc/uptime` (fixes the duplicated load average in the old fallback), and a separator rule divides host facts from the agent list.
 
+### Fixed
+- Installer: `nixos-install` failed evaluating the target flake with a `readFile` error — the redesigned `tentaflake-status` banner reads `public/tentaflake-shell-logo.txt` from `modules/shell.nix`, but the installer never copied `public/` into `/mnt/etc/nixos`. The installer now copies the logo file (just that file, not the multi-MB imagery in `public/`).
+
 ## [0.2.0] — 2026-07-11
 
 ### ⚠ Breaking
