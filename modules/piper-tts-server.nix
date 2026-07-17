@@ -198,6 +198,13 @@ in
       default = "127.0.0.1";
       description = "Bind address (default localhost only)";
     };
+
+    memoryMax = lib.mkOption {
+      type = lib.types.str;
+      default = "2G";
+      example = "4G";
+      description = "systemd MemoryMax for the service. Piper loads the whole ONNX voice model into RAM — raise this for larger voices.";
+    };
   };
 
   config = lib.mkIf cfg.enable {
@@ -223,8 +230,30 @@ in
         User = "piper-tts";
         Restart = "always";
         RestartSec = "3";
+
+        # Hardening — parity with hermes-auditd and hive-research. The service
+        # is a pure transformer: it reads the voice model/config from the Nix
+        # store (read-only), shells out to piper, and serves WAV over HTTP.
+        # It writes nothing but /tmp (PrivateTmp), so ProtectSystem=strict
+        # needs no StateDirectory/ReadWritePaths whitelist.
         PrivateTmp = true;
         NoNewPrivileges = true;
+        ProtectSystem = "strict";
+        ProtectHome = true;
+        PrivateDevices = true;
+        RestrictNamespaces = true;
+        LockPersonality = true;
+        CapabilityBoundingSet = "";
+        RestrictAddressFamilies = [
+          "AF_INET"
+          "AF_INET6"
+          "AF_UNIX"
+        ];
+        SystemCallFilter = [ "@system-service" ];
+
+        # Resource limits — a runaway synthesis can't take down the host.
+        MemoryMax = cfg.memoryMax;
+        TasksMax = 64;
       };
 
       environment = {
