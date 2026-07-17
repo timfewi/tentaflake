@@ -30,7 +30,7 @@ tentaflake/
 │   ├── hardening.nix             # Kernel sysctl, sudo rules, AppArmor, journald
 │   ├── locale.nix                # Timezone, locale, console keymap
 │   ├── networking.nix            # Hostname, NetworkManager, nftables firewall
-│   ├── nix-settings.nix          # Nix daemon: flakes, GC, optimisation, trusted users
+│   ├── nix-settings.nix          # Nix daemon: flakes, GC, optimisation, trusted users, hardening
 │   ├── packages.nix              # System packages (curl, git)
 │   ├── users.nix                 # Admin user creation (wheel + networkmanager groups)
 │   ├── tailscale.nix             # Tailscale VPN with extraUpFlags
@@ -335,6 +335,7 @@ Kernel hardening and security controls:
 ### `nix-settings.nix`
 - `nix.settings.experimental-features = ["nix-command" "flakes"]`
 - `trusted-users = ["root" adminUser]`
+- Daemon hardening: `allowed-users = ["root" "@wheel"]` (agents live in containers, never talk to the host daemon), `sandbox = true` + `sandbox-fallback = false` (no silent downgrade to unsandboxed builds), `min-free`/`max-free` (2 GiB / 8 GiB) so builds cannot fill the disk
 - Auto GC: weekly, `--delete-older-than 14d`
 - Auto optimise: weekly, persistent
 - `allowUnfree` via `tentaflake.allowUnfree`
