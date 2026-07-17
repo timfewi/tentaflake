@@ -8,6 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- CI security workflows: CodeQL analysis of the Go code (`.github/workflows/codeql.yml`, push/PR to main + weekly), gitleaks full-history secret scanning (`.github/workflows/gitleaks.yml`), and a weekly `flake.lock` update PR via DeterminateSystems/update-flake-lock (`.github/workflows/update-flake-lock.yml`).
+- `.pre-commit-config.yaml` — optional local hooks mirroring the CI gates (gitleaks, shellcheck, gofmt, `go vet`, `nix fmt`); setup documented in CONTRIBUTING.md.
 - `scripts/banner-test.sh` (also `just banner`) — renders the `tentaflake-status` banner with a stubbed `systemctl` and a fake mixed-runtime fleet (active/inactive/failed) so the banner can be previewed and regression-checked on any dev machine; self-checks cover fleet counters, duration formatting, logo loading, and logo/info-column alignment.
 
 ### Changed

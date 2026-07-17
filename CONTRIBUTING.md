@@ -58,6 +58,20 @@ go vet ./...
 go vet ./... && go test ./...
 ```
 
+### Pre-commit hooks (optional, recommended)
+
+`.pre-commit-config.yaml` mirrors the CI gates (gitleaks, shellcheck, gofmt,
+`go vet`, `nix fmt`) so failures surface before you push:
+
+```bash
+# Install pre-commit (pick one)
+pip install pre-commit
+nix-shell -p pre-commit
+
+# Enable the hooks for this clone
+pre-commit install
+```
+
 ## Conventions
 
 | Area | Convention |
