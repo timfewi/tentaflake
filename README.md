@@ -441,8 +441,8 @@ the same one-container-per-agent shape under a `zeroclaw-<name>` prefix.
 
 | Module | What it configures |
 |---|---|
-| `boot.nix` | systemd-boot, EFI, kernel params |
-| `hardening.nix` | Sysctl hardening, AppArmor, journald limits |
+| `boot.nix` | systemd-boot (boot-menu editor disabled), EFI |
+| `hardening.nix` | Sysctl + kernel-param hardening, LSM order, AppArmor, journald limits |
 | `locale.nix` | Timezone, locale, console keymap |
 | `networking.nix` | Hostname, nftables firewall, NetworkManager |
 | `nix-settings.nix` | Flakes, auto-GC, trusted-users, substituters |
