@@ -26,6 +26,11 @@ tentaflake shell <name>        Open a shell inside an agent container
 tentaflake exec <name> -- cmd  Run a command inside an agent container
 tentaflake ps                  Show all declarative agent containers
 tentaflake top                 Live filesystem-activity TUI
+tentaflake backup <name>       Snapshot an agent's state dir to a .tar.gz here
+tentaflake doctor              Host health check (exits nonzero on problems)
+tentaflake console             Agent Console URL + how to publish it on the tailnet
+tentaflake rebuild             Apply the system config (nixos-rebuild switch)
+tentaflake update              Update flake inputs, review, then rebuild
 tentaflake help                Show this help
 ```
 
@@ -71,6 +76,33 @@ and a failed agent adds a `tentaflake logs <name>` hint below the list:
     ● coding                hermes     active   2d 4h
     ○ research              hermes     inactive
 ```
+
+## Host management commands
+
+The CLI also covers day-2 host chores, so routine operation never needs raw
+`nixos-rebuild`/`nix` invocations:
+
+- **`tentaflake rebuild`** — `sudo nixos-rebuild switch --flake /etc/nixos#<hostName>`,
+  the same command as the `rebuild` alias. On failure the running system is
+  unchanged; fix the config and re-run.
+- **`tentaflake update`** — runs `sudo nix flake update` on `/etc/nixos`, shows
+  the `flake.lock` diff, and asks `[y/N]` before rebuilding. Decline and the
+  updated lock stays in place — apply later with `tentaflake rebuild`.
+- **`tentaflake doctor`** — one deep health check: failed systemd units, root
+  disk ≥90% full, Tailscale connectivity, the `hermes-auditd` /
+  `tentaflake-console` services (when enabled), and every agent's unit state.
+  Each problem comes with the exact fix command (e.g. `tentaflake restart
+  <name>`), and the exit code is nonzero when problems were found — cron/CI
+  friendly.
+- **`tentaflake console`** — prints the Agent Console URL (from the configured
+  `console.addr`) plus the `tailscale serve` one-liner to publish it on the
+  tailnet; when the console is disabled it says which option to enable instead.
+- **`tentaflake backup <name>`** — one-shot snapshot of the agent's state dir to
+  `./tentaflake-<name>-<UTC timestamp>.tar.gz` (via `sudo tar`), printing the
+  matching restore one-liner after success. It warns when the agent is running
+  (the snapshot may be inconsistent) — `tentaflake stop <name>` first for a
+  clean one. The state dir is derived from the container's first volume mount,
+  so custom `stateDir`s are picked up automatically.
 
 ## `tentaflake top` — live activity dashboard
 
@@ -180,7 +212,7 @@ Always present with `shell.enable` (bash + zsh):
 
 | Alias | Expands to |
 |---|---|
-| `rebuild` | `sudo nixos-rebuild switch --flake /etc/nixos#<hostName>` |
+| `rebuild` | `sudo nixos-rebuild switch --flake /etc/nixos#<hostName>` (same as `tentaflake rebuild`) |
 | `reload` | `exec $SHELL` (reload the current shell) |
 | `cls` | `clear` |
 | `lg` | `lazygit` (when `lazygit.enable`) |

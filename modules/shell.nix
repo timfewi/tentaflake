@@ -23,6 +23,13 @@ let
   cfg = config.tentaflake.shell;
   backend = config.tentaflake.containerBackend; # "docker" | "podman"
   hostName = config.tentaflake.hostName;
+  auditdCfg = config.tentaflake.hermes-auditd;
+  consoleOn = auditdCfg.enable && auditdCfg.console.enable;
+
+  # The system flake every installed host manages itself from. Used by the
+  # `rebuild` alias and the CLI's rebuild/update subcommands alike.
+  flakeDir = "/etc/nixos";
+  rebuildCmd = "sudo nixos-rebuild switch --flake ${flakeDir}#${hostName}";
 
   # Braille-art logo; single source of truth is public/tentaflake-shell-logo.txt.
   # Indented here at build time so the banner script stays a single printf.
@@ -33,7 +40,7 @@ let
   agentContainers = config.virtualisation.oci-containers.containers;
   agentRecords = lib.concatStringsSep "\n" (
     lib.mapAttrsToList (
-      container: _:
+      container: def:
       let
         runtime =
           if lib.hasPrefix "zeroclaw-" container then
@@ -43,8 +50,17 @@ let
           else
             "agent";
         name = lib.removePrefix "${runtime}-" container;
+        # Host state dir = host side of the container's first volume mount
+        # (both mkHermesAgent and mkZeroClawAgent mount stateDir first);
+        # hand-rolled containers without volumes fall back to the
+        # /var/lib/<container> convention (same as hermes-auditd discovery).
+        stateDir =
+          if def.volumes == [ ] then
+            "/var/lib/${container}"
+          else
+            lib.head (lib.splitString ":" (lib.head def.volumes));
       in
-      "${runtime}\t${name}\t${container}\t${backend}-${container}.service"
+      "${runtime}\t${name}\t${container}\t${backend}-${container}.service\t${stateDir}"
     ) agentContainers
   );
 
@@ -53,15 +69,22 @@ let
     name = "tentaflake";
     runtimeInputs = [
       pkgs.coreutils
+      pkgs.diffutils
       pkgs.gawk
       pkgs.systemd
       statusBanner
     ];
     text = ''
-      # Container backend is fixed at build time from tentaflake.containerBackend.
+      # Container backend, system flake dir, and console wiring are fixed at
+      # build time from the tentaflake.* options.
       BACKEND="${backend}"
+      FLAKE_DIR="${flakeDir}"
+      AUDITD_ENABLED="${lib.optionalString auditdCfg.enable "1"}"
+      CONSOLE_ENABLED="${lib.optionalString consoleOn "1"}"
+      CONSOLE_ADDR="${auditdCfg.console.addr}"
 
-      bold=$(printf '\033[1m'); reset=$(printf '\033[0m'); red=$(printf '\033[31m')
+      bold=$(printf '\033[1m'); dim=$(printf '\033[2m'); reset=$(printf '\033[0m')
+      red=$(printf '\033[31m'); green=$(printf '\033[32m'); yellow=$(printf '\033[33m')
 
       agent_records() {
         printf '%s\n' ${lib.escapeShellArg agentRecords}
@@ -81,12 +104,17 @@ let
         tentaflake exec <name> -- cmd  Run a command inside an agent container
         tentaflake ps                  Show all declarative agent containers
         tentaflake top                 Live filesystem-activity TUI
+        tentaflake backup <name>       Snapshot an agent's state dir to a .tar.gz here
+        tentaflake doctor              Host health check (exits nonzero on problems)
+        tentaflake console             Agent Console URL + how to publish it on the tailnet
+        tentaflake rebuild             Apply the system config (nixos-rebuild switch)
+        tentaflake update              Update flake inputs, review, then rebuild
         tentaflake help                Show this help
       EOF
       }
 
       agent_names() {
-        agent_records | awk -F '\t' 'NF == 4 { print $2 }'
+        agent_records | awk -F '\t' 'NF == 5 { print $2 }'
       }
 
       record_of() {
@@ -107,6 +135,7 @@ let
 
       unit_of() { field_of "$1" 4; }
       cname_of() { field_of "$1" 3; }
+      statedir_of() { field_of "$1" 5; }
 
       require_name() {
         if [ -z "''${1:-}" ]; then
@@ -118,6 +147,183 @@ let
 
       cmd_status() {
         exec tentaflake-status
+      }
+
+      cmd_rebuild() {
+        echo "''${bold}Applying system configuration''${reset} — sudo nixos-rebuild switch --flake $FLAKE_DIR#${hostName}"
+        if ! sudo nixos-rebuild switch --flake "$FLAKE_DIR#${hostName}"; then
+          echo "''${red}error:''${reset} rebuild failed — the running system is unchanged." >&2
+          echo "read the error above, fix your config in $FLAKE_DIR, then re-run: tentaflake rebuild" >&2
+          exit 1
+        fi
+      }
+
+      cmd_update() {
+        local lock="$FLAKE_DIR/flake.lock" before answer=""
+        if [ ! -f "$lock" ]; then
+          echo "''${red}error:''${reset} no flake.lock at $lock" >&2
+          echo "this host doesn't look flake-managed from $FLAKE_DIR — nothing to update" >&2
+          exit 1
+        fi
+        before=$(mktemp)
+        cp "$lock" "$before"
+        echo "''${bold}Updating flake inputs''${reset} in $FLAKE_DIR ..."
+        if ! sudo nix flake update --flake "$FLAKE_DIR"; then
+          rm -f "$before"
+          echo "''${red}error:''${reset} 'nix flake update' failed — nothing was changed." >&2
+          echo "check the message above (often a network problem), then re-run: tentaflake update" >&2
+          exit 1
+        fi
+        if cmp -s "$before" "$lock"; then
+          rm -f "$before"
+          echo "Already up to date — nothing to rebuild."
+          return 0
+        fi
+        echo
+        echo "''${bold}flake.lock changes:''${reset}"
+        diff -u --label before --label after "$before" "$lock" || true
+        rm -f "$before"
+        echo
+        printf 'Rebuild now to apply the update? [y/N] '
+        read -r answer || true
+        case "$answer" in
+          y | Y | yes | YES) cmd_rebuild ;;
+          *) echo "Not rebuilding. Apply later with: tentaflake rebuild" ;;
+        esac
+      }
+
+      cmd_doctor() {
+        local problems=0
+        ok() { printf '  %b✓%b %s\n' "$green" "$reset" "$*"; }
+        bad() {
+          printf '  %b✗%b %s\n' "$red" "$reset" "$*"
+          problems=$((problems + 1))
+        }
+        note() { printf '  %b○ %s%b\n' "$dim" "$*" "$reset"; }
+        fix() { printf '      %bfix:%b %s\n' "$yellow" "$reset" "$*"; }
+        svc() {
+          local unit="$1" st
+          st=$(systemctl is-active "$unit" 2>/dev/null || true)
+          if [ "$st" = "active" ]; then
+            ok "$unit is active"
+          else
+            bad "$unit is ''${st:-unknown}"
+            fix "sudo systemctl restart $unit — then inspect: journalctl -u $unit -e"
+          fi
+        }
+
+        printf '%bTentaflake doctor%b — %s\n\n' "$bold" "$reset" "$(uname -n)"
+
+        local failed_units
+        failed_units=$(systemctl --failed --no-legend --plain 2>/dev/null | awk '{print $1}' | paste -sd' ' - || true)
+        if [ -n "$failed_units" ]; then
+          bad "failed systemd units: $failed_units"
+          fix "inspect one with: journalctl -u <unit> -e"
+        else
+          ok "no failed systemd units"
+        fi
+
+        local disk_pct
+        disk_pct=$(df -P / 2>/dev/null | awk 'NR==2 {sub(/%/,"",$5); print $5}' || true)
+        if [ -n "$disk_pct" ] && [ "$disk_pct" -ge 90 ]; then
+          bad "root disk is $disk_pct% full"
+          fix "free space with: sudo nix-collect-garbage --delete-older-than 14d"
+        else
+          ok "root disk usage: ''${disk_pct:-?}%"
+        fi
+
+        if command -v tailscale >/dev/null 2>&1; then
+          local ts_ip
+          ts_ip=$(tailscale ip -4 2>/dev/null | head -n1 || true)
+          if [ -n "$ts_ip" ]; then
+            ok "tailscale connected ($ts_ip)"
+          else
+            bad "tailscale is not connected"
+            fix "run: sudo tailscale up"
+          fi
+        else
+          note "tailscale not installed — skipping"
+        fi
+
+        [ -n "$AUDITD_ENABLED" ] && svc hermes-auditd
+        [ -n "$CONSOLE_ENABLED" ] && svc tentaflake-console
+
+        local runtime n container unit st
+        while IFS=$'\t' read -r runtime n container unit _; do
+          [ -n "$container" ] || continue
+          st=$(systemctl is-active "$unit" 2>/dev/null || true)
+          case "$st" in
+            active) ok "agent $n ($runtime) is active" ;;
+            failed)
+              bad "agent $n ($runtime) has failed"
+              fix "tentaflake restart $n — logs: tentaflake logs $n"
+              ;;
+            *) note "agent $n ($runtime) is ''${st:-inactive} — start it with: tentaflake start $n" ;;
+          esac
+        done < <(agent_records)
+
+        echo
+        if [ "$problems" -gt 0 ]; then
+          printf '%b%s problem(s) found.%b\n' "$red" "$problems" "$reset"
+          exit 1
+        fi
+        printf '%bNo problems found.%b\n' "$green" "$reset"
+      }
+
+      cmd_console() {
+        if [ -z "$CONSOLE_ENABLED" ]; then
+          echo "The Agent Console is not enabled on this host."
+          echo "enable it: add to your host config in $FLAKE_DIR:"
+          # console lives inside the auditd module — without auditd the console
+          # option alone is a no-op, so print both when auditd is off too.
+          [ -n "$AUDITD_ENABLED" ] || echo "  tentaflake.hermes-auditd.enable = true;"
+          echo "  tentaflake.hermes-auditd.console.enable = true;"
+          echo "then apply it with: tentaflake rebuild"
+          exit 1
+        fi
+        local st
+        st=$(systemctl is-active tentaflake-console 2>/dev/null || true)
+        echo "''${bold}Agent Console''${reset} — http://$CONSOLE_ADDR (loopback only, service: ''${st:-unknown})"
+        if [ "$st" != "active" ]; then
+          echo "''${yellow}warning:''${reset} tentaflake-console is ''${st:-unknown} — try: sudo systemctl restart tentaflake-console"
+        fi
+        echo "publish it on your tailnet:"
+        echo "  tailscale serve --bg --https=9125 $CONSOLE_ADDR"
+        echo "then open: https://$(uname -n).<your-tailnet>.ts.net:9125"
+      }
+
+      cmd_backup() {
+        local n="$1" unit statedir parent base stamp out
+        unit=$(unit_of "$n")
+        statedir=$(statedir_of "$n")
+        if [ ! -d "$statedir" ]; then
+          echo "''${red}error:''${reset} state dir not found: $statedir" >&2
+          echo "the agent may never have started — check: tentaflake status" >&2
+          exit 1
+        fi
+        if systemctl is-active --quiet "$unit" 2>/dev/null; then
+          echo "''${yellow}warning:''${reset} agent '$n' is running — files may change mid-backup." >&2
+          echo "for a consistent snapshot, stop it first: tentaflake stop $n" >&2
+        fi
+        parent=$(dirname "$statedir")
+        base=$(basename "$statedir")
+        stamp=$(date -u +%Y%m%dT%H%M%SZ)
+        out="./tentaflake-$n-$stamp.tar.gz"
+        echo "Backing up $statedir ..."
+        if ! sudo tar czf "$out" -C "$parent" "$base"; then
+          echo "''${red}error:''${reset} backup failed — see the tar error above." >&2
+          echo "common causes: not enough disk space here (check: df -h .) or a cancelled sudo prompt." >&2
+          exit 1
+        fi
+        # root's default umask leaves the tarball world-readable — it holds
+        # agent secrets (auth.json, .env, keys). Own it to the caller, 0600.
+        sudo chown "$(id -u):$(id -g)" "$out"
+        chmod 600 "$out"
+        echo "''${bold}backup written:''${reset} $out ($(du -h "$out" | awk '{print $1}'))"
+        echo "restore with:"
+        echo "  tentaflake stop $n"
+        echo "  sudo tar xzf '$out' -C '$parent'"
+        echo "  tentaflake start $n"
       }
 
       main() {
@@ -167,6 +373,14 @@ let
             fi
             exec hermes-top "$@"
             ;;
+          backup)
+            require_name "''${2:-}"
+            cmd_backup "$2"
+            ;;
+          doctor) cmd_doctor ;;
+          console) cmd_console ;;
+          rebuild) cmd_rebuild ;;
+          update) cmd_update ;;
           help|-h|--help) usage ;;
           *)
             echo "''${red}error:''${reset} unknown command '$sub'" >&2
@@ -296,7 +510,7 @@ let
         # One agent class = one color: hermes yellow, zeroclaw blue, other magenta.
         rows=(); failed_names=()
         total=0; n_active=0; n_failed=0; n_inactive=0
-        while IFS=$'\t' read -r runtime n container unit; do
+        while IFS=$'\t' read -r runtime n container unit _; do
           [ -n "$container" ] || continue
           st=""; since=""
           while IFS='=' read -r k v; do
@@ -369,7 +583,7 @@ let
     free = "free -h";
     cls = "clear";
     reload = "exec $SHELL"; # reload the current shell (re-reads its rc)
-    rebuild = "sudo nixos-rebuild switch --flake /etc/nixos#${hostName}";
+    rebuild = rebuildCmd; # same command `tentaflake rebuild` runs
   }
   // (
     if cfg.tools.enable then

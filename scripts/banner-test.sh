@@ -104,7 +104,7 @@ printf '\n%s' "$header"
 printf '\n  %b──────────────────────────────────────────────%b\n' "$dim" "$reset"
 
 # ── Agents (fake fleet: 3 active, 2 inactive, 1 failed) ──
-records=$(printf 'hermes\tatlas-core\thermes-atlas-core\tdocker-hermes-atlas-core.service\nzeroclaw\tdata-scout\tzeroclaw-data-scout\tdocker-zeroclaw-data-scout.service\nhermes\tflux-reporter\thermes-flux-reporter\tdocker-hermes-flux-reporter.service\nhermes\tlog-analyst\thermes-log-analyst\tdocker-hermes-log-analyst.service\nzeroclaw\tmetric-lens\tzeroclaw-metric-lens\tdocker-zeroclaw-metric-lens.service\nagent\tmain\tagent-main\tdocker-agent-main.service')
+records=$(printf 'hermes\tatlas-core\thermes-atlas-core\tdocker-hermes-atlas-core.service\t/var/lib/hermes-atlas-core\nzeroclaw\tdata-scout\tzeroclaw-data-scout\tdocker-zeroclaw-data-scout.service\t/var/lib/zeroclaw-data-scout\nhermes\tflux-reporter\thermes-flux-reporter\tdocker-hermes-flux-reporter.service\t/var/lib/hermes-flux-reporter\nhermes\tlog-analyst\thermes-log-analyst\tdocker-hermes-log-analyst.service\t/var/lib/hermes-log-analyst\nzeroclaw\tmetric-lens\tzeroclaw-metric-lens\tdocker-zeroclaw-metric-lens.service\t/var/lib/zeroclaw-metric-lens\nagent\tmain\tagent-main\tdocker-agent-main.service\t/var/lib/agent-main')
 
 if [ -z "$records" ]; then
   printf '\n  %bAGENTS%b\n' "$bold$cyan" "$reset"
@@ -116,7 +116,7 @@ else
   # One agent class = one color: hermes yellow, zeroclaw blue, other magenta.
   agent_rows=(); failed_names=()
   total=0; n_active=0; n_failed=0; n_inactive=0
-  while IFS=$'\t' read -r runtime n container unit; do
+  while IFS=$'\t' read -r runtime n container unit _; do
     [ -n "$container" ] || continue
     st=""; since=""
     while IFS='=' read -r k v; do
