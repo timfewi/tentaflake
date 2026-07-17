@@ -316,7 +316,8 @@ in [`my-agents.nix.example`](my-agents.nix.example).
 | `services` | `attrset` | Run + optionally tailnet-publish durable agent-built web apps |
 
 See [`docs/07-operations.md`](docs/07-operations.md) for the persistence model, the
-UID/secret/`config.yaml` gotchas, and the rationale behind each option.
+UID/secret/`config.yaml` gotchas, backup & restore, log forwarding, and the
+rationale behind each option.
 
 Full option reference: [`.agents/skills/tentaflake-repo-guidance/SKILL.md`](.agents/skills/tentaflake-repo-guidance/SKILL.md)
 
@@ -443,17 +444,17 @@ the same one-container-per-agent shape under a `zeroclaw-<name>` prefix.
 
 | Module | What it configures |
 |---|---|
-| `boot.nix` | systemd-boot, EFI, kernel params |
-| `hardening.nix` | Sysctl hardening, AppArmor, journald limits |
+| `boot.nix` | systemd-boot (boot-menu editor disabled), EFI |
+| `hardening.nix` | Sysctl + kernel-param hardening, LSM order, AppArmor, journald limits |
 | `locale.nix` | Timezone, locale, console keymap |
 | `networking.nix` | Hostname, nftables firewall, NetworkManager |
-| `nix-settings.nix` | Flakes, auto-GC, trusted-users, substituters |
+| `nix-settings.nix` | Flakes, auto-GC, daemon hardening (allowed-users, strict sandbox, min-free/max-free), trusted-users, substituters |
 | `packages.nix` | curl, git, jq, tmux, vim, and more |
 | `users.nix` | Admin user (wheel + networkmanager groups) |
 | `shell.nix` | SSH/console operator experience — `tentaflake` CLI (deprecated `hermes` shim still works), login banner, prompt, zsh/oh-my-zsh, zoxide, lazygit, modern CLI tools ([docs](docs/06-shell.md)) |
 | `editor.nix` | Optional Neovim via nvf (LSP, treesitter, telescope) — `tentaflake.editor.nvf.enable`, exported as `nixosModules.editor` ([docs](docs/06-shell.md#zsh-zoxide-lazygit-neovim)) |
 | `tailscale.nix` | Tailscale with SSH + tag:auto (optional) |
-| `piper-tts-server.nix` | Local TTS via Piper (OpenAI-compatible API) |
+| `piper-tts-server.nix` | Local TTS via Piper (OpenAI-compatible API) — sandboxed systemd unit with a configurable memory cap (`memoryMax`, default 2G) |
 | `hermes-auditd.nix` | Filesystem audit daemon (watches state dirs of agent containers on **every** runtime) + `tentaflake top` TUI + the **Agent Console** web file explorer & live monitor — [docs](docs/06-shell.md#agent-console--web-file-explorer--live-monitor) |
 | **Hermes Profiles** | *(no module needed)* Run multiple agent personas inside a single container. Configure via `hermes profile create` — each profile gets its own personality, skills, model config, and toolsets while sharing the container's secrets and runtime |
 

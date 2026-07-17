@@ -24,6 +24,10 @@ var uiFS embed.FS
 // maxPreviewBytes caps the size of a text preview returned by /api/fs/read.
 const maxPreviewBytes = 512 * 1024
 
+// maxEventsLimit caps ?limit= on /api/events so a client cannot request an
+// unbounded result set.
+const maxEventsLimit = 1000
+
 // querier is the read-only subset of *store.Store the console depends on.
 // Defining it as an interface keeps the web package testable with a fake store.
 type querier interface {
@@ -154,9 +158,9 @@ func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleEvents returns the most recent events (newest first), optionally
-// filtered by ?agent=. ?limit= caps results (default 200).
+// filtered by ?agent=. ?limit= caps results (default 200, max 1000).
 func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
-	limit := intParam(r, "limit", 200)
+	limit := intParam(r, "limit", 200, maxEventsLimit)
 	events, err := s.q.Query(r.Context(), r.URL.Query().Get("agent"), "", "", limit)
 	if err != nil {
 		http.Error(w, "query failed", http.StatusInternalServerError)
@@ -250,10 +254,11 @@ func windowParam(r *http.Request, def string) (string, error) {
 	return v, nil
 }
 
-func intParam(r *http.Request, key string, def int) int {
+// intParam reads a positive integer query param, clamped to maxN.
+func intParam(r *http.Request, key string, def, maxN int) int {
 	if v := r.URL.Query().Get(key); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n > 0 {
-			return n
+			return min(n, maxN)
 		}
 	}
 	return def
