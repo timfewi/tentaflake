@@ -288,6 +288,63 @@ agenix --rekey
 
 The `.age` format supports multiple recipients — each can decrypt independently.
 
+## Key Rotation & Recovery
+
+### Rotating a Secret Value
+
+When an API key or token changes (provider rotation, suspected leak, expiry),
+edit the `.age` file, rebuild, and restart the agent — the container only reads
+its `--env-file` at start:
+
+```bash
+agenix -e secrets/hermes-coding.env.age           # replace the old key
+sudo nixos-rebuild switch --flake /etc/nixos#agent-host
+tentaflake restart coding                          # pick up the new env file
+```
+
+Don't forget to revoke the old key at the provider (OpenRouter, Telegram, …).
+
+### Rotating or Removing a Compromised Recipient Key
+
+If a recipient's SSH private key is compromised (lost laptop, leaked key):
+
+```bash
+# 1. Remove or replace the key in secrets.nix `recipients`
+# 2. Re-encrypt every .age file for the new recipient set
+agenix --rekey
+# 3. Commit, rebuild, and revoke the old key everywhere else it grants
+#    access (GitHub, authorized_keys on servers, ...)
+```
+
+Rekeying does **not** rewrite Git history — old ciphertext remains decryptable
+by the compromised key. Treat every secret *value* it could read as exposed and
+rotate those too (see above).
+
+### Recovery: Lost Host SSH Key
+
+Decryption needs **any one** listed recipient, so a reinstalled host is
+recoverable from any surviving recipient machine (e.g. your dev machine):
+
+```bash
+# On the surviving recipient machine:
+# Get the reinstalled host's public key (awk strips the leading hostname —
+# recipients need the bare "ssh-ed25519 AAAA..." form):
+ssh-keyscan -t ed25519 <new-host> | awk '{print $2, $3}'
+# Add it to secrets.nix `recipients`, then:
+agenix --rekey
+# Commit, then deploy to the new host as usual
+```
+
+If the **only** recipient key is lost, the secrets are unrecoverable — there is
+no passphrase fallback. Always keep at least one offline recovery recipient
+(e.g. an admin `age` key stored off-machine) in `recipients`.
+
+### Rotation Cadence
+
+This template sets no policy — pick one in your fork. A common example: rotate
+agent API keys every 90 days, and rekey immediately whenever a recipient
+machine is decommissioned or a key is suspected compromised.
+
 ## Security Checklist
 
 - [ ] `agenix` input uncommented in `flake.nix`
