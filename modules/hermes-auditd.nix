@@ -158,8 +158,9 @@ in
   config = lib.mkIf cfg.enable {
     environment.systemPackages = [ auditPkg ];
 
-    # The daemon adds one inotify watch per agent directory; raise the kernel cap.
-    boot.kernel.sysctl."fs.inotify.max_user_watches" = 524288;
+    # The daemon adds one inotify watch per agent directory. No sysctl needed:
+    # nixpkgs already defaults fs.inotify.max_user_watches to 524288
+    # (nixos/modules/config/sysctl.nix); defining it here would conflict.
 
     # ── Identity ──
     users.groups.${auditGroup} = { };

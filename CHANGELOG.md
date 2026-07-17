@@ -8,7 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Security
-- `hermes-auditd` hardening (#8): the audit DB now sets `secure_delete` and is capped at 10000 pages (~40 MB) so an agent flooding filesystem events cannot fill the host disk; inotify directory watches are capped at 10000 per daemon (with a one-time warning when hit); the console clamps `?limit=` to 1000 and every store read is bounded by a 5 s query timeout; the NixOS module raises `fs.inotify.max_user_watches` to 524288.
+- `hermes-auditd` hardening (#8): the audit DB now sets `secure_delete` and is capped at 10000 pages (~40 MB) so an agent flooding filesystem events cannot fill the host disk; inotify directory watches are capped at 10000 per daemon (with a one-time warning when hit); the console clamps `?limit=` to 1000 and every store read is bounded by a 5 s query timeout. (No `fs.inotify.max_user_watches` sysctl needed — nixpkgs already defaults it to 524288.)
 
 ### Added
 - `scripts/banner-test.sh` (also `just banner`) — renders the `tentaflake-status` banner with a stubbed `systemctl` and a fake mixed-runtime fleet (active/inactive/failed) so the banner can be previewed and regression-checked on any dev machine; self-checks cover fleet counters, duration formatting, logo loading, and logo/info-column alignment.
