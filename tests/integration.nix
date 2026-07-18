@@ -7,15 +7,17 @@
 #   - the audit daemon comes up and listens,
 #   - a declared agent produces its systemd unit, system user, and state dir.
 #
-# The agent is declared with `autoStart = false` so the VM never tries to pull
-# the container image over the (sandboxed, offline) network — we assert the
-# unit is *defined*, not that the container is running.
+# Agents are declared with `autoStart = false` so the VM never tries to pull
+# a container image over the (sandboxed, offline) network — we assert each
+# unit is *defined*, not that the container is running. A second agent from a
+# different runtime (OpenCode) proves the multi-runtime discovery path.
 #
 # Run just this check:
 #   nix build .#checks.x86_64-linux.vm-integration -L
 {
   self,
   mkHermesAgent,
+  mkOpenCodeAgent,
   ...
 }:
 {
@@ -29,6 +31,13 @@
         # One declarative Hermes agent, kept stopped so no image pull happens.
         (mkHermesAgent {
           name = "test";
+          autoStart = false;
+        })
+        # One OpenCode agent (second runtime), also stopped — exercises the
+        # mkOpenCodeAgent builder and multi-runtime discovery.
+        (mkOpenCodeAgent {
+          name = "code";
+          hostPort = 4096;
           autoStart = false;
         })
       ];
@@ -81,5 +90,14 @@
         # State dir must be private (0700) per the template's isolation contract.
         perms = machine.succeed("stat -c '%a' /var/lib/hermes-test").strip()
         assert perms == "700", f"expected 0700 state dir, got {perms}"
+
+    with subtest("second-runtime (OpenCode) agent produced its unit and 0700 state dir"):
+        # mkOpenCodeAgent runs as an anonymous uid (65534) — no NixOS system
+        # user — so we assert the unit, the private state dir, and the workspace.
+        machine.succeed("systemctl cat docker-opencode-code.service")
+        machine.succeed("test -d /var/lib/opencode-code")
+        oc_perms = machine.succeed("stat -c '%a' /var/lib/opencode-code").strip()
+        assert oc_perms == "700", f"expected 0700 opencode state dir, got {oc_perms}"
+        machine.succeed("test -d /var/lib/opencode-code/workspace")
   '';
 }

@@ -40,10 +40,11 @@ tentaflake/
 │   └── editor.nix                # Neovim (nvf) module (separate import)
 │
 ├── lib/
-│   ├── default.nix               # Exports: mkHermesAgent, mkZeroClawAgent, constants
+│   ├── default.nix               # Exports: mkHermesAgent, mkZeroClawAgent, mkOpenCodeAgent, constants
 │   ├── constants.nix             # Template-wide defaults (hostName, adminUser, stateVersion...)
 │   ├── mkHermesAgent.nix         # ★ Builds one isolated Hermes agent as a NixOS module
-│   └── mkZeroClawAgent.nix       # ★ Builds one isolated ZeroClaw agent as a NixOS module
+│   ├── mkZeroClawAgent.nix       # ★ Builds one isolated ZeroClaw agent as a NixOS module
+│   └── mkOpenCodeAgent.nix       # ★ Builds one isolated OpenCode agent (opencode serve) as a NixOS module
 │
 ├── pkgs/
 │   ├── tentaflake-auditd/        # Go daemon: filesystem watcher + SQLite + HTTP/WS
@@ -72,6 +73,7 @@ tentaflake/
 │   ├── 04-agenix-secrets.md      # Agenix secrets guide
 │   ├── 05-fork-checklist.md      # What to change when forking
 │   └── 06-shell.md               # Shell/operator experience
+│   # (also: 07-operations.md, 08-opencode.md)
 │
 ├── scripts/
 │   └── build-iso.sh              # Convenience script for ISO builds
@@ -289,6 +291,33 @@ Defined in `lib/mkZeroClawAgent.nix`. Creates one ZeroClaw agent as a NixOS modu
 - Secrets via `agenixFile` → `--env-file`; overrides use `ZEROCLAW_<section>__<sub>__<key>` env vars (double underscores between path segments)
 - A `tailscale serve` unit publishing `hostPort` on the tailnet at `servePort`
 
+### `mkOpenCodeAgent`
+
+Defined in `lib/mkOpenCodeAgent.nix`. Creates one [OpenCode](https://opencode.ai) agent as a NixOS module — the third supported runtime. Runs `opencode serve` (headless HTTP, documented OpenAPI 3.1), which makes it the cleanest runtime to drive from external orchestrators (n8n, CI, cron): `POST /session` then `POST /session/<id>/message`.
+
+**Usage in `my-agents.nix`:**
+
+```nix
+{ mkOpenCodeAgent }:
+[
+  (mkOpenCodeAgent {
+    name = "code";
+    hostPort = 4096;                 # http://127.0.0.1:4096
+    envFile = "/run/secrets/opencode-code.env"; # OPENCODE_SERVER_PASSWORD + key
+    settings = {
+      model = "anthropic/claude-haiku-4.5";
+      provider.anthropic.options.baseURL = "http://proxy.host:4000"; # local LLM proxy
+    };
+  })
+]
+```
+
+**Key parameters:** `name` (required), `hostPort` (required, host loopback → gateway), `image` (default `ghcr.io/anomalyco/opencode:latest`), `stateDir`, `workspaceDir` (mounted `/workspace`), `seedDir`, `gatewayPort` (default 4096), `servePort` (optional tailnet HTTPS, must differ from `hostPort`), `envFile`/`agenixFile` (secrets), `authFile` (opt-in read-only provider `auth.json`), `settings` (→ `opencode.json`, JSON, ro), `containerUid`/`containerGid` (default 65534), `autoStart`, `pidsLimit`, `extraEnvironment`, `extraVolumes`.
+
+**Credentials:** two patterns — a **local LLM proxy** (recommended; `settings` base_url + env-file key; host-portable, keeps agents isolated) or **reuse an `auth.json`** via `authFile` (must exist on the host; never mount the whole data dir — `opencode.db` can be many GB). Always set `OPENCODE_SERVER_PASSWORD` in the env file for HTTP basic auth. Full guide: `docs/08-opencode.md`.
+
+**What each agent gets:** state dir `/var/lib/opencode-<name>` (0700, owned by the container uid), a `/workspace` project dir, `opencode.json` mounted read-only, `opencode serve` on `hostPort` (loopback), and an optional `tailscale serve` unit on `servePort`.
+
 ### `constants`
 
 Defined in `lib/constants.nix`. Single source of truth for template-wide defaults:
@@ -410,8 +439,9 @@ Filesystem audit daemon for agent activity tracking (all runtimes):
 - Serves HTTP/WS on `tentaflake.auditd.port` (default 9090)
 - `tentaflake-top` TUI reads the DB for live dashboard
 - Admin added to `hermes-audit` group for sudo-less access
-- Auto-discovers watch dirs from every declarative agent container — Hermes
-  and ZeroClaw alike
+- Auto-discovers watch dirs from every declarative agent container — Hermes,
+  ZeroClaw, and OpenCode alike (state-dir prefixes `hermes-`/`zeroclaw-`/`opencode-`;
+  the Go watcher's `agentNameFromPath` labels each accordingly)
 
 ### `piper-tts-server.nix`
 Local TTS HTTP server (OpenAI-compatible `/v1/audio/speech`):
@@ -422,12 +452,13 @@ Local TTS HTTP server (OpenAI-compatible `/v1/audio/speech`):
 
 ## Agent Configuration (`my-agents.nix`)
 
-Create a `my-agents.nix` in the repo root. It now takes both builders and
-returns two lists mapped through their respective builder — `hermesAgents`
-through `mkHermesAgent`, `zeroclawAgents` through `mkZeroClawAgent`:
+Create a `my-agents.nix` in the repo root. It takes the three builders and
+returns lists mapped through their respective builder — `hermesAgents`
+through `mkHermesAgent`, `zeroclawAgents` through `mkZeroClawAgent`, and
+`opencodeAgents` through `mkOpenCodeAgent`:
 
 ```nix
-{ mkHermesAgent, mkZeroClawAgent }:
+{ mkHermesAgent, mkZeroClawAgent, mkOpenCodeAgent }:
 let
   hermesAgents = [
     {
@@ -444,14 +475,21 @@ let
     }
   ];
   zeroclawAgents = [ ];
+  opencodeAgents = [
+    { name = "code"; hostPort = 4096; envFile = "/run/secrets/opencode-code.env"; }
+  ];
 in
-map mkHermesAgent hermesAgents ++ map mkZeroClawAgent zeroclawAgents
+map mkHermesAgent hermesAgents
+++ map mkZeroClawAgent zeroclawAgents
+++ map mkOpenCodeAgent opencodeAgents
 ```
 
-The `settings` attrset is serialized to `config.yaml` (Hermes) or `config.toml`
-(ZeroClaw), mounted read-only into the respective container.
+The `settings` attrset is serialized to `config.yaml` (Hermes), `config.toml`
+(ZeroClaw), or `opencode.json` (OpenCode), mounted read-only into the
+respective container.
 
-Old single-argument `{ mkHermesAgent }: ...` files still work — `configuration.nix`
+Old files taking fewer builders (e.g. `{ mkHermesAgent }: ...` or
+`{ mkHermesAgent, mkZeroClawAgent }: ...`) still work — `configuration.nix`
 passes only the args each `my-agents.nix` declares (`lib.intersectAttrs (lib.functionArgs f)`).
 
 The file is git-tracked. Check `my-agents.nix.example` for a complete reference.

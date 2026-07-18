@@ -71,6 +71,7 @@
       mkHermesAgent = (import ./lib { inherit pkgs lib; }).mkHermesAgent;
       mkZeroClawAgent = (import ./lib { inherit pkgs lib; }).mkZeroClawAgent;
       agentsFromData = (import ./lib { inherit pkgs lib; }).agentsFromData;
+      mkOpenCodeAgent = (import ./lib { inherit pkgs lib; }).mkOpenCodeAgent;
 
       # Module set imported by external consumers and built-in hosts
       tentaflakeModules = import ./modules/default.nix;
@@ -83,6 +84,7 @@
           mkHermesAgent
           mkZeroClawAgent
           agentsFromData
+          mkOpenCodeAgent
           repoRoot
           constants
           ;
@@ -105,6 +107,7 @@
         inherit
           mkHermesAgent
           mkZeroClawAgent
+          mkOpenCodeAgent
           agentsFromData
           constants
           ;

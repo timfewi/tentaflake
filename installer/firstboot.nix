@@ -53,13 +53,14 @@ let
     # so this stays generic (works for docker- and podman- backends and both
     # agent runtimes). Missing files get an empty placeholder; the firstboot
     # wizard later overwrites them with real keys and restarts the units. ──
-    for unit in $(systemctl list-unit-files --no-legend 'docker-hermes-*.service' 'podman-hermes-*.service' 'docker-zeroclaw-*.service' 'podman-zeroclaw-*.service' 2>/dev/null | awk '{print $1}'); do
+    for unit in $(systemctl list-unit-files --no-legend 'docker-hermes-*.service' 'podman-hermes-*.service' 'docker-zeroclaw-*.service' 'podman-zeroclaw-*.service' 'docker-opencode-*.service' 'podman-opencode-*.service' 2>/dev/null | awk '{print $1}'); do
       name=''${unit%.service}
       name=''${name#docker-}
       name=''${name#podman-}
       # Hermes env files keep their historical bare names (hermes-coding →
       # coding); other runtimes keep the runtime prefix (zeroclaw-scout stays
-      # zeroclaw-scout) — same labeling scheme as the audit daemon.
+      # zeroclaw-scout, opencode-code stays opencode-code) — same labeling
+      # scheme as the audit daemon.
       name=''${name#hermes-}
       envf="''${ENV_DIR}/''${name}.env"
       if [ ! -f "$envf" ]; then
@@ -82,8 +83,8 @@ let
     mkdir -p /mnt/tentaflake-data
     mount "$USB_DEV" /mnt/tentaflake-data 2>/dev/null || exit 0
 
-    # Symlink agent state dirs to USB for persistence (both runtimes)
-    for dir in /var/lib/hermes-* /var/lib/zeroclaw-*; do
+    # Symlink agent state dirs to USB for persistence (all runtimes)
+    for dir in /var/lib/hermes-* /var/lib/zeroclaw-* /var/lib/opencode-*; do
       [ -d "$dir" ] || continue
       name=$(basename "$dir")
       usb_dir="/mnt/tentaflake-data/''${name}"

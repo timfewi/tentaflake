@@ -246,10 +246,14 @@ func TestAgentNameFromPath(t *testing.T) {
 		{"/var/lib/zeroclaw-assistant/test.txt", "zeroclaw-assistant"},
 		{"/var/lib/zeroclaw-assistant/data/skills/foo.md", "zeroclaw-assistant"},
 		{"/var/lib/zeroclaw-assistant", "zeroclaw-assistant"},
+		{"/var/lib/opencode-code/test.txt", "opencode-code"},
+		{"/var/lib/opencode-code/workspace/main.go", "opencode-code"},
+		{"/var/lib/opencode-code", "opencode-code"},
 		{"/tmp/something.txt", "unknown"},
 		{"/var/lib/other/file.txt", "unknown"},
 		{"/var/lib/hermes-/file.txt", "unknown"},
 		{"/var/lib/zeroclaw-/file.txt", "unknown"},
+		{"/var/lib/opencode-/file.txt", "unknown"},
 	}
 
 	for _, tc := range tests {

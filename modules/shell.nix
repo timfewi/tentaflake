@@ -47,6 +47,8 @@ let
             "zeroclaw"
           else if lib.hasPrefix "hermes-" container then
             "hermes"
+          else if lib.hasPrefix "opencode-" container then
+            "opencode"
           else
             "agent";
         name = lib.removePrefix "${runtime}-" container;
