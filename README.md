@@ -230,6 +230,12 @@ Then follow the [quickstart guide](docs/01-quickstart.md) to set up agent provid
 
 If you already have NixOS running (or just finished Path 2), define your agents with a **my-agents.nix** file and rebuild.
 
+> **Not a developer?** `tentaflake agent add` is an interactive wizard that
+> configures a Hermes or ZeroClaw agent for you — no Nix required, and API
+> keys never touch Git or the Nix store. See
+> [docs/08-agent-cli.md](docs/08-agent-cli.md). The rest of this section is
+> for the hand-written Nix path.
+
 ### Agent Definition File
 
 Create `my-agents.nix` in the repo root. Here's a quick Nix syntax primer (it's simpler than it looks):

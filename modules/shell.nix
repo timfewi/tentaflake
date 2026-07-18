@@ -71,6 +71,7 @@ let
       pkgs.coreutils
       pkgs.diffutils
       pkgs.gawk
+      pkgs.jq
       pkgs.systemd
       statusBanner
     ];
@@ -82,6 +83,11 @@ let
       AUDITD_ENABLED="${lib.optionalString auditdCfg.enable "1"}"
       CONSOLE_ENABLED="${lib.optionalString consoleOn "1"}"
       CONSOLE_ADDR="${auditdCfg.console.addr}"
+
+      # Agent config (non-secret) lives in a git-tracked JSON; API keys live ONLY
+      # in root-owned 0600 files under SECRET_BASE — never in this JSON or git.
+      AGENTS_JSON="$FLAKE_DIR/agents.json"
+      SECRET_BASE="/var/lib/tentaflake/secrets"
 
       bold=$(printf '\033[1m'); dim=$(printf '\033[2m'); reset=$(printf '\033[0m')
       red=$(printf '\033[31m'); green=$(printf '\033[32m'); yellow=$(printf '\033[33m')
@@ -107,6 +113,10 @@ let
         tentaflake backup <name>       Snapshot an agent's state dir to a .tar.gz here
         tentaflake doctor              Host health check (exits nonzero on problems)
         tentaflake console             Agent Console URL + how to publish it on the tailnet
+        tentaflake agent list          List configured agents (from agents.json)
+        tentaflake agent add           Add + configure an agent — interactive wizard, no Nix
+        tentaflake agent set-model <n> Change an agent's model (interactive)
+        tentaflake agent remove <n>    Remove an agent from agents.json
         tentaflake rebuild             Apply the system config (nixos-rebuild switch)
         tentaflake update              Update flake inputs, review, then rebuild
         tentaflake help                Show this help
@@ -326,6 +336,260 @@ let
         echo "  tentaflake start $n"
       }
 
+      # ── agent config wizard (edits agents.json; keys go to root 0600 files) ──
+      #
+      # agents.json holds ONLY non-secret config (names/models/providers/ports/
+      # envFile paths). The API key never touches this JSON, argv, or history —
+      # it is read with `read -rs` and written by root to a 0600 file.
+      #
+      # The jq mutation primitives (aj_*) take the JSON path as $1 so they can be
+      # smoke-tested against a scratch file. Manual check:
+      #   tentaflake agent __selftest   # round-trips a temp agents.json, asserts
+
+      agents_json_ensure() {
+        [ -f "$AGENTS_JSON" ] || printf '%s\n' '{"hermes":[],"zeroclaw":[]}' > "$AGENTS_JSON"
+      }
+
+      # env var name a provider expects its key under (hermes/openai-style).
+      provider_key_var() {
+        case "$1" in
+          openrouter) printf 'OPENROUTER_API_KEY' ;;
+          anthropic)  printf 'ANTHROPIC_API_KEY' ;;
+          openai)     printf 'OPENAI_API_KEY' ;;
+          *)          : ;; # custom → caller asks for the var name (empty)
+        esac
+      }
+
+      aj_has() { jq -e --arg n "$2" 'any(.hermes[],.zeroclaw[]; .name==$n)' "$1" >/dev/null 2>&1; }
+      aj_append() {
+        local f="$1" rt="$2" entry="$3" tmp; tmp=$(mktemp)
+        jq --arg rt "$rt" --argjson e "$entry" '.[$rt] += [$e]' "$f" > "$tmp" && mv "$tmp" "$f"
+      }
+      aj_set_model() {
+        local f="$1" n="$2" m="$3" tmp; tmp=$(mktemp)
+        jq --arg n "$n" --arg m "$m" '(.hermes,.zeroclaw) |= map(if .name==$n then .model=$m else . end)' \
+          "$f" > "$tmp" && mv "$tmp" "$f"
+      }
+      aj_remove() {
+        local f="$1" n="$2" tmp; tmp=$(mktemp)
+        jq --arg n "$n" '(.hermes,.zeroclaw) |= map(select(.name!=$n))' "$f" > "$tmp" && mv "$tmp" "$f"
+      }
+      aj_get() { jq -r --arg n "$2" 'first((.hermes[],.zeroclaw[]) | select(.name==$n) | .'"$3"')' "$1"; }
+      aj_runtime() { jq -r --arg n "$2" 'if any(.hermes[];.name==$n) then "hermes" else "zeroclaw" end' "$1"; }
+
+      # prompt on stderr, answer on stdout (usable in $(...)). Optional default.
+      ask() {
+        local prompt="$1" def="''${2:-}" ans
+        if [ -n "$def" ]; then printf '%s [%s]: ' "$prompt" "$def" >&2
+        else printf '%s: ' "$prompt" >&2; fi
+        read -r ans || true
+        [ -n "$ans" ] || ans="$def"
+        printf '%s' "$ans"
+      }
+
+      # numbered menu; chosen option on stdout. Loops until a valid pick, so it
+      # never returns empty — callers' `[ -n "$x" ]` guards are belt-and-braces.
+      pick() {
+        local prompt="$1"; shift
+        local opts=("$@")
+        local i choice
+        for i in "''${!opts[@]}"; do printf '  %d) %s\n' "$((i + 1))" "''${opts[i]}" >&2; done
+        while :; do
+          printf '%s [1-%d]: ' "$prompt" "''${#opts[@]}" >&2
+          read -r choice || true
+          if [[ "$choice" =~ ^[0-9]+$ ]] && [ "$choice" -ge 1 ] && [ "$choice" -le "''${#opts[@]}" ]; then
+            printf '%s' "''${opts[$((choice - 1))]}"; return
+          fi
+          echo "''${red}invalid choice''${reset}" >&2
+        done
+      }
+
+      cmd_agent_list() {
+        agents_json_ensure
+        if [ "$(jq '[.hermes[],.zeroclaw[]] | length' "$AGENTS_JSON")" -eq 0 ]; then
+          echo "  no agents configured — add one with: ''${bold}tentaflake agent add''${reset}"
+          return
+        fi
+        printf '%b  %-9s %-16s %-11s %-26s %-6s %-6s%b\n' \
+          "$bold" RUNTIME NAME PROVIDER MODEL HOST SERVE "$reset"
+        jq -r '
+          (.hermes[]   | [ "hermes",   .name, .provider, .model, "-", "-" ]),
+          (.zeroclaw[] | [ "zeroclaw", .name, .provider, .model, (.hostPort|tostring), (.servePort|tostring) ])
+          | @tsv
+        ' "$AGENTS_JSON" | while IFS=$'\t' read -r rt name prov model host serve; do
+          printf '  %-9s %-16s %-11s %-26s %-6s %-6s\n' "$rt" "$name" "$prov" "$model" "$host" "$serve"
+        done
+      }
+
+      cmd_agent_add() {
+        agents_json_ensure
+        local runtime name provider model base_url="" host="" serve="" keyvar keyline secret_file entry answer
+
+        runtime=$(pick "runtime" hermes zeroclaw)
+        [ -n "$runtime" ] || { echo "''${red}error:''${reset} cancelled" >&2; exit 1; }
+
+        while :; do
+          name=$(ask "agent name (lowercase, digits, dashes)")
+          if ! [[ "$name" =~ ^[a-z0-9-]+$ ]]; then
+            echo "''${red}error:''${reset} name must match ^[a-z0-9-]+\$" >&2; continue
+          fi
+          if aj_has "$AGENTS_JSON" "$name"; then
+            echo "''${red}error:''${reset} an agent named '$name' already exists" >&2; continue
+          fi
+          break
+        done
+
+        provider=$(pick "provider" openrouter anthropic openai custom)
+        [ -n "$provider" ] || { echo "''${red}error:''${reset} cancelled" >&2; exit 1; }
+
+        model=$(ask "model id (concrete id, e.g. anthropic/claude-sonnet-4)")
+        [ -n "$model" ] || { echo "''${red}error:''${reset} model id is required" >&2; exit 1; }
+
+        if [ "$provider" = "custom" ]; then
+          base_url=$(ask "base_url (e.g. https://host/v1)")
+        fi
+
+        if [ "$runtime" = "zeroclaw" ]; then
+          while :; do host=$(ask "hostPort"); [[ "$host" =~ ^[0-9]+$ ]] && break; echo "''${red}must be an integer''${reset}" >&2; done
+          while :; do serve=$(ask "servePort"); [[ "$serve" =~ ^[0-9]+$ ]] && break; echo "''${red}must be an integer''${reset}" >&2; done
+        fi
+
+        # Env var the key is written under. zeroclaw expects a nested config key;
+        # hermes/openai-style providers expect a single bearer var.
+        if [ "$provider" = "custom" ] && [ "$runtime" != "zeroclaw" ]; then
+          keyvar=$(ask "env var name for the API key" "OPENROUTER_API_KEY")
+        else
+          keyvar=$(provider_key_var "$provider")
+        fi
+
+        secret_file="$SECRET_BASE/$runtime-$name.env"
+
+        # Key: silent read, never echoed, never in argv/history.
+        local apikey=""
+        printf 'API key for %s (input hidden, leave blank to abort): ' "$name" >&2
+        read -rs apikey || true
+        printf '\n' >&2
+        [ -n "$apikey" ] || { echo "''${red}error:''${reset} no API key entered — aborting" >&2; exit 1; }
+
+        if [ "$runtime" = "zeroclaw" ]; then
+          keyline="ZEROCLAW_providers__models__''${provider}__default__api_key=$apikey"
+        else
+          keyline="$keyvar=$apikey"
+        fi
+
+        # Stage to a 0600 temp owned by us, then let root install it. The key
+        # goes via a file, so it never appears in any process's argv.
+        local tmp; tmp=$(mktemp)
+        chmod 600 "$tmp"
+        printf '%s\n' "$keyline" > "$tmp"
+        unset apikey keyline
+        if ! sudo install -D -m 600 -o root -g root "$tmp" "$secret_file"; then
+          rm -f "$tmp"
+          echo "''${red}error:''${reset} failed to write secret to $secret_file" >&2
+          exit 1
+        fi
+        rm -f "$tmp"
+
+        if [ "$runtime" = "hermes" ]; then
+          entry=$(jq -n --arg name "$name" --arg provider "$provider" --arg model "$model" \
+            --arg base_url "$base_url" --arg envFile "$secret_file" \
+            '{name:$name, provider:$provider, model:$model,
+              base_url: (if $base_url=="" then null else $base_url end), envFile:$envFile}')
+        else
+          entry=$(jq -n --arg name "$name" --arg provider "$provider" --arg model "$model" \
+            --arg base_url "$base_url" --arg envFile "$secret_file" \
+            --argjson hostPort "$host" --argjson servePort "$serve" \
+            '{name:$name, provider:$provider, model:$model,
+              base_url: (if $base_url=="" then null else $base_url end),
+              hostPort:$hostPort, servePort:$servePort, envFile:$envFile}')
+        fi
+        aj_append "$AGENTS_JSON" "$runtime" "$entry"
+        git -C "$FLAKE_DIR" add agents.json >/dev/null 2>&1 || true
+
+        echo "''${green}✓''${reset} added $runtime agent '$name' → $AGENTS_JSON"
+        echo "  secret: $secret_file (root:root 0600, key not in git)"
+        echo "next: rebuild so the container is created from this config."
+        printf 'Rebuild now? [y/N] '
+        read -r answer || true
+        case "$answer" in y | Y | yes | YES) cmd_rebuild ;; *) echo "Apply later with: tentaflake rebuild" ;; esac
+      }
+
+      cmd_agent_set_model() {
+        agents_json_ensure
+        local name="''${1:-}" cur model
+        [ -n "$name" ] || { echo "''${red}error:''${reset} usage: tentaflake agent set-model <name>" >&2; exit 2; }
+        if ! aj_has "$AGENTS_JSON" "$name"; then
+          echo "''${red}error:''${reset} no agent '$name' in $AGENTS_JSON" >&2; exit 2
+        fi
+        cur=$(aj_get "$AGENTS_JSON" "$name" model)
+        echo "current model for '$name': $cur"
+        model=$(ask "new model id" "$cur")
+        [ -n "$model" ] || { echo "''${red}error:''${reset} model id is required" >&2; exit 1; }
+        aj_set_model "$AGENTS_JSON" "$name" "$model"
+        git -C "$FLAKE_DIR" add agents.json >/dev/null 2>&1 || true
+        echo "''${green}✓''${reset} set model for '$name' → $model"
+        echo "apply with: tentaflake rebuild"
+      }
+
+      cmd_agent_remove() {
+        agents_json_ensure
+        local name="''${1:-}" runtime envfile answer
+        [ -n "$name" ] || { echo "''${red}error:''${reset} usage: tentaflake agent remove <name>" >&2; exit 2; }
+        if ! aj_has "$AGENTS_JSON" "$name"; then
+          echo "''${red}error:''${reset} no agent '$name' in $AGENTS_JSON" >&2; exit 2
+        fi
+        runtime=$(aj_runtime "$AGENTS_JSON" "$name")
+        envfile=$(aj_get "$AGENTS_JSON" "$name" envFile)
+        printf 'Remove %s agent %s from agents.json? [y/N] ' "$runtime" "$name"
+        read -r answer || true
+        case "$answer" in y | Y | yes | YES) ;; *) echo "cancelled."; exit 0 ;; esac
+        aj_remove "$AGENTS_JSON" "$name"
+        git -C "$FLAKE_DIR" add agents.json >/dev/null 2>&1 || true
+        echo "''${green}✓''${reset} removed '$name' from $AGENTS_JSON"
+        if [ -n "$envfile" ] && [ "$envfile" != "null" ]; then
+          printf 'Also delete its secret file %s? [y/N] ' "$envfile"
+          read -r answer || true
+          case "$answer" in
+            y | Y | yes | YES) sudo rm -f "$envfile" && echo "deleted $envfile" ;;
+            *) echo "kept $envfile" ;;
+          esac
+        fi
+        echo "apply with: tentaflake rebuild"
+      }
+
+      # Hidden smoke test for the aj_* jq primitives (see block comment above).
+      cmd_agent_selftest() {
+        local f; f=$(mktemp)
+        printf '%s\n' '{"hermes":[],"zeroclaw":[]}' > "$f"
+        aj_append "$f" hermes   '{"name":"t1","provider":"openrouter","model":"m1","base_url":null,"envFile":"/x"}'
+        aj_append "$f" zeroclaw '{"name":"t2","provider":"openai","model":"m2","base_url":null,"hostPort":1,"servePort":2,"envFile":"/y"}'
+        aj_has "$f" t1 || { echo "FAIL: append/has"; rm -f "$f"; exit 1; }
+        aj_set_model "$f" t1 m1b
+        [ "$(aj_get "$f" t1 model)" = "m1b" ] || { echo "FAIL: set-model"; rm -f "$f"; exit 1; }
+        [ "$(aj_runtime "$f" t2)" = "zeroclaw" ] || { echo "FAIL: runtime"; rm -f "$f"; exit 1; }
+        aj_remove "$f" t1
+        aj_has "$f" t1 && { echo "FAIL: remove"; rm -f "$f"; exit 1; }
+        [ "$(aj_get "$f" t2 name)" = "t2" ] || { echo "FAIL: t2 clobbered"; rm -f "$f"; exit 1; }
+        rm -f "$f"
+        echo "''${green}agent selftest OK''${reset}"
+      }
+
+      cmd_agent() {
+        local action="''${1:-list}"; shift || true
+        case "$action" in
+          list | ls | "") cmd_agent_list ;;
+          add) cmd_agent_add ;;
+          set-model) cmd_agent_set_model "''${1:-}" ;;
+          remove | rm) cmd_agent_remove "''${1:-}" ;;
+          __selftest) cmd_agent_selftest ;;
+          *)
+            echo "''${red}error:''${reset} unknown agent command '$action'" >&2
+            echo "usage: tentaflake agent [list | add | set-model <name> | remove <name>]" >&2
+            exit 2
+            ;;
+        esac
+      }
+
       main() {
         local sub="''${1:-status}"
         case "$sub" in
@@ -379,6 +643,10 @@ let
             ;;
           doctor) cmd_doctor ;;
           console) cmd_console ;;
+          agent)
+            shift || true
+            cmd_agent "$@"
+            ;;
           rebuild) cmd_rebuild ;;
           update) cmd_update ;;
           help|-h|--help) usage ;;

@@ -1,6 +1,12 @@
 { mkHermesAgent, mkZeroClawAgent }:
 
 # ════════════════════════════════════════════════════════════════════
+# Non-developer? You don't need this file. Run `tentaflake agent add`
+# for an interactive wizard that writes agents.json instead — no Nix
+# required. See docs/08-agent-cli.md. The two coexist; this file is
+# for power users who want the full `settings` surface below.
+# ════════════════════════════════════════════════════════════════════
+#
 # my-agents.nix — define every agent that runs on THIS host, across
 # BOTH runtimes: Hermes (`hermesAgents`) and ZeroClaw (`zeroclawAgents`).
 #
