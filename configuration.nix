@@ -25,9 +25,10 @@ let
   # agents.json — non-Nix config written by the `tentaflake` setup wizard, for
   # non-developers. Additive to my-agents.nix (both may coexist); git-tracked
   # (no secrets — see lib/agentsFromData.nix).
-  dataAgents = lib.optionals (builtins.pathExists ./agents.json) (
-    agentsFromData { file = ./agents.json; inherit mkHermesAgent mkZeroClawAgent; }
-  );
+  dataAgents = lib.optionals (builtins.pathExists ./agents.json) (agentsFromData {
+    file = ./agents.json;
+    inherit mkHermesAgent mkZeroClawAgent;
+  });
 in
 {
   imports =

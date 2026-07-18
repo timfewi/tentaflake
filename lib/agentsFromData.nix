@@ -20,37 +20,42 @@
 let
   data = builtins.fromJSON (builtins.readFile file);
 
-  hermesModule = e: mkHermesAgent {
-    name = e.name;
-    envFile = e.envFile;
-    settings.model = {
-      default = e.model;
-      provider = e.provider;
-    }
-    // lib.optionalAttrs ((e.base_url or null) != null) { base_url = e.base_url; };
-  };
-
-  zeroclawModule = e: mkZeroClawAgent {
-    name = e.name;
-    agenixFile = e.envFile;
-    hostPort = e.hostPort;
-    servePort = e.servePort;
-    settings = {
-      schema_version = 3;
-      providers.models.${e.provider}.default =
-        { model = e.model; }
-        // lib.optionalAttrs ((e.base_url or null) != null) { uri = e.base_url; };
-      runtime_profiles.default = {
-        agentic = true;
-        max_tool_iterations = 25;
-      };
-      agents.main = {
-        model_provider = "${e.provider}.default";
-        risk_profile = "default";
-        runtime_profile = "default";
-      };
-      risk_profiles.default.level = "supervised";
+  hermesModule =
+    e:
+    mkHermesAgent {
+      name = e.name;
+      envFile = e.envFile;
+      settings.model = {
+        default = e.model;
+        provider = e.provider;
+      }
+      // lib.optionalAttrs ((e.base_url or null) != null) { base_url = e.base_url; };
     };
-  };
+
+  zeroclawModule =
+    e:
+    mkZeroClawAgent {
+      name = e.name;
+      agenixFile = e.envFile;
+      hostPort = e.hostPort;
+      servePort = e.servePort;
+      settings = {
+        schema_version = 3;
+        providers.models.${e.provider}.default = {
+          model = e.model;
+        }
+        // lib.optionalAttrs ((e.base_url or null) != null) { uri = e.base_url; };
+        runtime_profiles.default = {
+          agentic = true;
+          max_tool_iterations = 25;
+        };
+        agents.main = {
+          model_provider = "${e.provider}.default";
+          risk_profile = "default";
+          runtime_profile = "default";
+        };
+        risk_profiles.default.level = "supervised";
+      };
+    };
 in
 map hermesModule (data.hermes or [ ]) ++ map zeroclawModule (data.zeroclaw or [ ])

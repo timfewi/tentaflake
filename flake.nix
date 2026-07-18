@@ -102,7 +102,12 @@
 
       # ── Exported helpers ──
       lib.${system} = {
-        inherit mkHermesAgent mkZeroClawAgent agentsFromData constants;
+        inherit
+          mkHermesAgent
+          mkZeroClawAgent
+          agentsFromData
+          constants
+          ;
       };
 
       # ── Formatting ──
