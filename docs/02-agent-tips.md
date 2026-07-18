@@ -261,22 +261,45 @@ echo "Backup: $BACKUP.tar.gz"
 
 ## Updating Containers
 
-Agent images are pinned in the flake. To update:
+The default agent images are pinned directly in their builders by OCI manifest
+digest. The image digests are independent of `flake.lock`, so update them
+deliberately:
 
 ```bash
-# Update flake lock (pulls latest hermes-agent image reference)
-nix flake update
+# Print the current upstream digest for every tracked image
+./scripts/update-agent-images.sh
 
-# Rebuild to pull new images
+# Review the output, edit lib/constants.nix by hand, then rebuild
 sudo nixos-rebuild switch --flake /etc/nixos#<hostname>
 ```
 
-Docker images update automatically on rebuild when the tag changes.
-For `:latest` tag, force pull:
+The bump stays manual on purpose: a script that rewrites the pin for you is a
+mutable tag with extra steps.
 
-```bash
-sudo docker pull ghcr.io/nousresearch/hermes-agent:latest
-sudo systemctl restart docker-hermes-coding
+If you override `image`, it must be digest-pinned too — `mkHermesAgent` and
+`mkZeroClawAgent` reject an unpinned reference at eval time, so a mutable tag
+fails the build instead of silently producing a different deployment.
+
+Write the reference as `registry/repository@sha256:digest`, **not**
+`repository:tag@sha256:digest`. The docker CLI tolerates carrying both a tag and
+a digest, but podman and skopeo reject it outright:
+
+```
+Docker references with both a tag and digest are currently not supported
+```
+
+Since `tentaflake.containerBackend` supports podman, the tag-plus-digest form
+would break those hosts; keep the version in a comment instead.
+
+For an image you build locally, there is no registry digest to pin to. Set
+`allowMutableImage = true;` on that agent to acknowledge it is not reproducible:
+
+```nix
+(mkHermesAgent {
+  name = "coding";
+  image = "my-hermes:local";
+  allowMutableImage = true;
+})
 ```
 
 ---
@@ -441,7 +464,7 @@ recent conversation get compressed — losing identity and continuity.
 
 ### MCP Servers & Node.js
 
-The Hermes agent container (`ghcr.io/nousresearch/hermes-agent:latest`) is
+The default Hermes agent container (`docker.io/nousresearch/hermes-agent`) is
 **Python-based** and may not include Node.js. MCP servers using `npx`
 will fail with "command not found". Solutions:
 
