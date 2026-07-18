@@ -1,10 +1,18 @@
 { pkgs, lib }:
 
+let
+  constants = import ./constants.nix;
+  pinnedImage = import ./pinnedImage.nix { inherit lib; };
+in
+
 {
   name,
   agenixFile,
-  # Pinned multi-platform manifest; update tag and digest together.
-  image ? "ghcr.io/zeroclaw-labs/zeroclaw:v0.8.2@sha256:eae321dac2d314bc282bdfb28b5378c9d527998f7e2fe0dee8315bfdcdf13a0c",
+  # Digest-pinned (lib/constants.nix). Overrides must be digest-pinned too — a
+  # bare tag is rejected at eval time, see lib/pinnedImage.nix.
+  image ? constants.zeroclawImage,
+  # Escape hatch for locally-built images that have no registry digest.
+  allowMutableImage ? false,
   stateDir ? "/var/lib/zeroclaw-${name}",
   seedDir ? null,
   gatewayPort ? 42617,
@@ -68,7 +76,8 @@ in
     };
 
   virtualisation.oci-containers.containers.${containerName} = {
-    inherit image autoStart;
+    inherit autoStart;
+    image = pinnedImage name allowMutableImage image;
     cmd = [ "daemon" ];
     volumes = [
       "${stateDir}:/zeroclaw-data:rw"

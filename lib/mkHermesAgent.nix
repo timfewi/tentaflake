@@ -30,6 +30,7 @@
 
 let
   constants = import ./constants.nix;
+  pinnedImage = import ./pinnedImage.nix { inherit lib; };
 in
 {
   name,
@@ -41,12 +42,16 @@ in
   uid ? null,
   gid ? null,
 
-  # Container image. The default is pinned to an exact multi-platform manifest.
-  # Update the digest deliberately when upgrading Hermes.
-  # Override with any OCI-compatible image, e.g.:
-  #   image = "ubuntu:24.04";
-  # You can then install hermes-agent inside via a Dockerfile.
-  image ? "docker.io/nousresearch/hermes-agent:latest@sha256:4a2f23bd3ffaa6ee7b3be8a302a38be43ab0321a2988cd3fb16b7dd472dde812",
+  # Container image. Default is the official hermes-agent image, digest-pinned
+  # in lib/constants.nix. Overrides MUST also be digest-pinned — a bare tag is
+  # rejected at eval time, because the registry can repoint a tag at different
+  # bytes between rebuilds. Example:
+  #   image = "ubuntu@sha256:<64 hex digest>";
+  image ? constants.hermesImage,
+
+  # Escape hatch for locally-built images, which have no registry digest to pin
+  # to. Setting this to true gives up reproducibility for this agent.
+  allowMutableImage ? false,
 
   # Path to an env file (plaintext .env) on the host filesystem, e.g.:
   #   envFile = "/run/tentaflake/default.env";
@@ -494,6 +499,10 @@ in
     in
     merged
     // {
+      # Digest-check AFTER the merge: extraContainerConfig can override `image`,
+      # so checking the argument alone would leave a bypass.
+      image = pinnedImage name allowMutableImage merged.image;
+
       # Append --env-file and hardening flags AFTER the merge so they're never lost
       extraOptions =
         merged.extraOptions

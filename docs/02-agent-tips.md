@@ -266,17 +266,41 @@ digest. The image digests are independent of `flake.lock`, so update them
 deliberately:
 
 ```bash
-# Inspect the current upstream manifest digest
-docker buildx imagetools inspect docker.io/nousresearch/hermes-agent:latest
-docker buildx imagetools inspect ghcr.io/zeroclaw-labs/zeroclaw:v0.8.2
+# Print the current upstream digest for every tracked image
+./scripts/update-agent-images.sh
 
-# Replace the matching tag and digest in lib/mk*Agent.nix, then rebuild
+# Review the output, edit lib/constants.nix by hand, then rebuild
 sudo nixos-rebuild switch --flake /etc/nixos#<hostname>
 ```
 
-The rebuild pulls the new exact digest when it is not already local. If you
-override `image`, prefer `registry/repository:tag@sha256:digest`; a tag alone is
-mutable and can produce different deployments from the same Nix configuration.
+The bump stays manual on purpose: a script that rewrites the pin for you is a
+mutable tag with extra steps.
+
+If you override `image`, it must be digest-pinned too — `mkHermesAgent` and
+`mkZeroClawAgent` reject an unpinned reference at eval time, so a mutable tag
+fails the build instead of silently producing a different deployment.
+
+Write the reference as `registry/repository@sha256:digest`, **not**
+`repository:tag@sha256:digest`. The docker CLI tolerates carrying both a tag and
+a digest, but podman and skopeo reject it outright:
+
+```
+Docker references with both a tag and digest are currently not supported
+```
+
+Since `tentaflake.containerBackend` supports podman, the tag-plus-digest form
+would break those hosts; keep the version in a comment instead.
+
+For an image you build locally, there is no registry digest to pin to. Set
+`allowMutableImage = true;` on that agent to acknowledge it is not reproducible:
+
+```nix
+(mkHermesAgent {
+  name = "coding";
+  image = "my-hermes:local";
+  allowMutableImage = true;
+})
+```
 
 ---
 

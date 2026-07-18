@@ -97,7 +97,7 @@ Expected output:
 
 ```
 CONTAINER ID   IMAGE                                             ...   NAMES
-abc123def456   docker.io/nousresearch/hermes-agent:latest@sha256:… ... hermes-coding
+abc123def456   docker.io/nousresearch/hermes-agent@sha256:… ... hermes-coding
 ```
 
 If container not running:

@@ -131,6 +131,7 @@
       checks.${system} = {
         agent-host = self.nixosConfigurations.agent-host.config.system.build.toplevel;
         tentaflake-auditd = self.packages.${system}.tentaflake-auditd;
+        image-pinning = import ./lib/pinnedImage-test.nix { inherit pkgs; };
       };
 
       # ── agent-host: Installed system, consumes my-agents.nix ──
