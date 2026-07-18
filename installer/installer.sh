@@ -511,13 +511,18 @@ ${NVF_INPUT}  };
       pkgs      = nixpkgs.legacyPackages.\${system};
       lib       = nixpkgs.lib;
       uc        = import ./user-config.nix;
-      constants = import ./lib/constants.nix;
-      mkHermesAgent = (import ./lib { inherit pkgs lib; }).mkHermesAgent;
+      # Splat the whole helper set (mkHermesAgent, mkZeroClawAgent,
+      # agentsFromData, constants) instead of listing helpers by hand, so this
+      # generated flake cannot drift out of sync with what configuration.nix
+      # asks for. Drift does not fail loudly: configuration.nix consumes these
+      # inside imports, so a missing one sends Nix to config._module.args and
+      # the rebuild dies with "infinite recursion encountered" instead.
+      tfLib     = import ./lib { inherit pkgs lib; };
     in {
       nixosConfigurations.\${uc.hostName} = lib.nixosSystem {
         inherit system;
-        specialArgs = {
-          inherit self inputs mkHermesAgent constants;
+        specialArgs = tfLib // {
+          inherit self inputs;
           profile = "installed";
         };
         modules = [

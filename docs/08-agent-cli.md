@@ -324,6 +324,74 @@ entry into the matching Nix attrset, add whatever `settings` you need, then
 run `tentaflake agent remove <name>` to drop it from `agents.json` so it
 isn't declared twice.
 
+## Troubleshooting
+
+### `infinite recursion encountered` on the first rebuild after `agent add`
+
+Machines installed before this was fixed hit this the moment they add their
+**first** agent:
+
+```
+… while evaluating the module argument `agentsFromData' in "…/configuration.nix":
+… noting that argument `agentsFromData` is not externally provided, so querying
+  `_module.args` instead, requiring `config`
+error: infinite recursion encountered
+```
+
+The flake the installer generated at `/etc/nixos/flake.nix` passes only
+`mkHermesAgent` and `constants` in `specialArgs`, but `configuration.nix` also
+takes `mkZeroClawAgent` and `agentsFromData` — and uses them inside `imports`.
+A missing module argument there does not fail loudly: Nix looks it up in
+`config._module.args`, which needs `config`, which needs `imports`, and the
+evaluation loops. Nothing surfaces until an `agents.json` exists, because
+`lib.optionals (builtins.pathExists ./agents.json)` keeps `agentsFromData`
+unforced on a fresh install — so the first `tentaflake agent add` trips it.
+
+Fix it in place — edit `/etc/nixos/flake.nix` and replace these two `let`
+bindings:
+
+```nix
+      constants = import ./lib/constants.nix;
+      mkHermesAgent = (import ./lib { inherit pkgs lib; }).mkHermesAgent;
+```
+
+with a single binding for the whole helper set:
+
+```nix
+      tfLib     = import ./lib { inherit pkgs lib; };
+```
+
+then change `specialArgs` from:
+
+```nix
+        specialArgs = {
+          inherit self inputs mkHermesAgent constants;
+          profile = "installed";
+        };
+```
+
+to:
+
+```nix
+        specialArgs = tfLib // {
+          inherit self inputs;
+          profile = "installed";
+        };
+```
+
+`/etc/nixos` is a git repo and flakes only evaluate committed or staged files,
+so commit before rebuilding:
+
+```bash
+sudo git -C /etc/nixos add -A
+sudo git -C /etc/nixos -c user.email=root@localhost -c user.name=root \
+  commit -m "fix: pass all agent helpers in specialArgs"
+sudo tentaflake rebuild
+```
+
+Machines installed from an ISO built after the fix generate the corrected flake
+already.
+
 ## See also
 
 - [06-shell.md](06-shell.md) — the rest of the `tentaflake` CLI (status,
