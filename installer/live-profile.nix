@@ -27,6 +27,15 @@ in
   # ── Auto-login root on TTY1 for firstboot wizard ──
   services.getty.autologinUser = "root";
 
+  # ── Legacy VT on the live ISO ──
+  # The firstboot wizard is gated on `[ "$(tty)" = /dev/tty1 ]` and writes
+  # straight to /dev/tty1 (firstboot.nix / firstboot.sh). kmscon hands the login
+  # a pty and owns the VT in graphics mode, so the wizard would neither trigger
+  # nor be visible. The installed system turns kmscon on (modules/locale.nix).
+  tentaflake.modernConsole.enable = false;
+  # Same for the VT font — the firstboot wizard is a dialog TUI, see iso.nix.
+  tentaflake.consoleFont = null;
+
   # ── Piper TTS with bundled voice from the ISO ──
   services.piper-tts-server = {
     enable = true;

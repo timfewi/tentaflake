@@ -75,7 +75,7 @@ Uncomment the agenix input and module import:
 
   outputs = { self, nixpkgs, agenix, ... }@inputs:
     # ...
-    nixosConfigurations.agent-host = nixpkgs.lib.nixosSystem {
+    nixosConfigurations.tentaflake = nixpkgs.lib.nixosSystem {
       modules = [
         inputs.agenix.nixosModules.age  # <-- add this
         ./configuration.nix
@@ -253,7 +253,7 @@ age.identityPaths = [
 ### 7. Rebuild
 
 ```bash
-sudo nixos-rebuild switch --flake /etc/nixos#agent-host
+sudo nixos-rebuild switch --flake /etc/nixos#tentaflake
 ```
 
 Agenix decrypts the `.age` files during activation and places plaintext at `/run/agenix/`. The Docker container mounts this as `--env-file`.
@@ -298,7 +298,7 @@ its `--env-file` at start:
 
 ```bash
 agenix -e secrets/hermes-coding.env.age           # replace the old key
-sudo nixos-rebuild switch --flake /etc/nixos#agent-host
+sudo nixos-rebuild switch --flake /etc/nixos#tentaflake
 tentaflake restart coding                          # pick up the new env file
 ```
 

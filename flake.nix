@@ -129,13 +129,15 @@
 
       # ── Checks (validates nixosConfigurations build) ──
       checks.${system} = {
-        agent-host = self.nixosConfigurations.agent-host.config.system.build.toplevel;
+        ${hostName} = self.nixosConfigurations.${hostName}.config.system.build.toplevel;
         tentaflake-auditd = self.packages.${system}.tentaflake-auditd;
         image-pinning = import ./lib/pinnedImage-test.nix { inherit pkgs; };
       };
 
-      # ── agent-host: Installed system, consumes my-agents.nix ──
-      nixosConfigurations.agent-host = nixpkgs.lib.nixosSystem {
+      # ── tentaflake: Installed system, consumes my-agents.nix ──
+      # Attr name is `hostName` so it always matches what `tentaflake rebuild`
+      # passes to `nixos-rebuild --flake .#<host>`.
+      nixosConfigurations.${hostName} = nixpkgs.lib.nixosSystem {
         inherit system;
         specialArgs = baseSpecialArgs // {
           profile = "installed";

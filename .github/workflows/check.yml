@@ -21,8 +21,8 @@ jobs:
       - name: nix flake check
         run: nix flake check
 
-      - name: nix build (agent-host toplevel)
-        run: nix build .#nixosConfigurations.agent-host.config.system.build.toplevel --no-link
+      - name: nix build (tentaflake toplevel)
+        run: nix build .#nixosConfigurations.tentaflake.config.system.build.toplevel --no-link
 
       - name: nix fmt check
         run: nix fmt -- --ci

@@ -1,6 +1,6 @@
 ---
 name: handle-the-host
-description: Connect to and operate a tentaflake-built machine via Tailscale SSH. Use when remoting into a deployed agent-host for maintenance, debugging, rebuilds, or inspection.
+description: Connect to and operate a tentaflake-built machine via Tailscale SSH. Use when remoting into a deployed tentaflake for maintenance, debugging, rebuilds, or inspection.
 version: 1.0.0
 ---
 
@@ -16,7 +16,7 @@ Tentaflake deploys NixOS with Tailscale pre-configured. Every target machine mus
 tailscale ssh <user>@<hostname>
 ```
 
-Replace `<user>` with the admin username set during installation (default: `admin`). Replace `<hostname>` with the hostname chosen during installation.
+Replace `<user>` with the admin username set during installation (default: `user`). Replace `<hostname>` with the hostname chosen during installation.
 
 > **Note:** `tailscale ssh` does **not** support the `-t` flag. For commands requiring a pseudo-TTY (e.g., `sudo` prompts), use raw SSH through Tailscale instead:
 > ```bash

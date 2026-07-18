@@ -390,9 +390,9 @@ Full guide: [`docs/04-agenix-secrets.md`](docs/04-agenix-secrets.md)
 ```bash
 git add my-agents.nix          # flakes only evaluate Git-tracked files
 nix flake check                # validates syntax + evaluation (like tsc --noEmit)
-sudo nixos-rebuild switch --flake .#agent-host
+sudo nixos-rebuild switch --flake .#tentaflake
 #     ^^^^^^^^^^^^^^^^       ^^^^^^^^^^^^^^^^^
-#     build + apply config   use host config named "agent-host" from flake
+#     build + apply config   use host config named "tentaflake" from flake
 #     "switch" activates it  (defined in flake.nix, change via tentaflake.hostName)
 ```
 
@@ -458,7 +458,7 @@ the same one-container-per-agent shape under a `zeroclaw-<name>` prefix.
 |---|---|
 | `boot.nix` | systemd-boot (boot-menu editor disabled), EFI |
 | `hardening.nix` | Sysctl + kernel-param hardening, LSM order, AppArmor, journald limits |
-| `locale.nix` | Timezone, locale, console keymap |
+| `locale.nix` | Timezone, locale, console keymap, and the physical console — kmscon (TTF fonts, full Unicode) instead of the 512-glyph legacy VT ([docs](docs/06-shell.md#physical-console-kmscon)) |
 | `networking.nix` | Hostname, nftables firewall, NetworkManager, opt-in egress allowlist (`tentaflake.networking.egress.enable` — covers agent containers too via host networking, [docs](docs/07-operations.md#egress-filtering-opt-in)) |
 | `nix-settings.nix` | Flakes, auto-GC, daemon hardening (allowed-users, strict sandbox, min-free/max-free), trusted-users, substituters |
 | `packages.nix` | curl, git, jq, tmux, vim, and more |
@@ -485,8 +485,8 @@ nix flake check                          # validate everything builds
 nix build .#installer-iso                # build installer ISO
 nix build .#live-agent-iso               # build live ISO
 nix build .#tentaflake-auditd            # build audit daemon package
-sudo nixos-rebuild switch --flake .#agent-host  # deploy config
-sudo nixos-rebuild dry-activate --flake .#agent-host  # dry-run
+sudo nixos-rebuild switch --flake .#tentaflake  # deploy config
+sudo nixos-rebuild dry-activate --flake .#tentaflake  # dry-run
 sudo nixos-rebuild switch --rollback     # undo last deploy
 tentaflake status                        # all agents, any runtime, with health
 tentaflake doctor                        # host health check (nonzero exit on problems)

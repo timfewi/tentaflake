@@ -96,7 +96,7 @@ Three machines are defined in `flake.nix`:
 
 | Configuration | Profile | Purpose |
 |---|---|---|
-| `agent-host` | `installed` | Default target machine. Consumes `my-agents.nix` for custom agents. Built-in host in the template. |
+| `tentaflake` | `installed` | Default target machine. Consumes `my-agents.nix` for custom agents. Built-in host in the template. |
 | `installer-iso` | `installer` | Bootable ISO → TUI wizard → partitions disk → installs NixOS. |
 | `live-agent` | `live` | Bootable ISO → runs agents in RAM + Piper TTS. Ephemeral. |
 
@@ -112,8 +112,8 @@ These are the knobs you turn in your host config.
 
 | Option | Type | Default | Description |
 |---|---|---|---|
-| `tentaflake.hostName` | `str` | `"agent-host"` | System hostname |
-| `tentaflake.adminUser` | `str` | `"admin"` | Primary admin username |
+| `tentaflake.hostName` | `str` | `"tentaflake"` | System hostname |
+| `tentaflake.adminUser` | `str` | `"user"` | Primary admin username |
 | `tentaflake.adminDescription` | `str` | `"System Administrator"` | Description for the admin user |
 | `tentaflake.adminShell` | `str` | (bash) | Shell for admin user |
 | `tentaflake.adminAuthorizedKeys` | `list of str` | `[]` | SSH public keys for admin |
@@ -295,8 +295,8 @@ constants = {
   stateVersion     = "26.05";
   defaultLocale    = "en_US.UTF-8";
   consoleKeyMap    = "us";
-  hostName         = "agent-host";
-  adminUser        = "admin";
+  hostName         = "tentaflake";
+  adminUser        = "user";
   adminShell       = "/run/current-system/sw/bin/bash";
   adminDescription = "System Administrator";
 };
@@ -521,7 +521,7 @@ golangci-lint run                 # Go lint (in pkgs/tentaflake-auditd/)
 
 ## Check (CI)
 
-The `checks.${system}.agent-host` target validates that the full toplevel builds. This runs in CI on every push via `.github/workflows/check.yml`.
+The `checks.${system}.tentaflake` target validates that the full toplevel builds. This runs in CI on every push via `.github/workflows/check.yml`.
 
 ## Nix Conventions
 

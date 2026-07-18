@@ -50,7 +50,7 @@ API key for research (input hidden, leave blank to abort): *********************
   secret: /var/lib/tentaflake/secrets/hermes-research.env (root:root 0600, key not in git)
 next: rebuild so the container is created from this config.
 Rebuild now? [y/N] y
-Applying system configuration — sudo nixos-rebuild switch --flake /etc/nixos#agent-host
+Applying system configuration — sudo nixos-rebuild switch --flake /etc/nixos#tentaflake
 ...
 ```
 

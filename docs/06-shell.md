@@ -114,7 +114,7 @@ and refreshes once a second — **no network port is opened**, so it fits the
 Tailscale-only, firewall-closed posture: you run it inside your SSH session.
 
 ```
-tentaflake-top  agent-host
+tentaflake-top  tentaflake
 3 events retained · window 5m · updated 12:04:31
 
   AGENT                  5m    TOTAL  LAST ACTIVITY
@@ -145,7 +145,7 @@ that group, so `tentaflake top` works **without sudo**. The daemon itself holds
 only `CAP_DAC_READ_SEARCH` (a read-only bypass to watch the agents' `0700`
 state dirs).
 
-Enable it (on by default for `agent-host`):
+Enable it (on by default for `tentaflake`):
 
 ```nix
 tentaflake.auditd.enable = true;
@@ -235,7 +235,7 @@ or by hand in your host config.
 
 ## Options
 
-The base shell options default to **on** for the installed `agent-host`:
+The base shell options default to **on** for the installed `tentaflake`:
 
 ```nix
 tentaflake.shell.enable = true;                # master toggle for everything below
@@ -265,11 +265,61 @@ nvf, the `nvf` flake input pinned to the ISO's revision + the editor module
 import). Everything stays editable afterward — flip a toggle and
 `sudo nixos-rebuild switch`.
 
+## Physical console (kmscon)
+
+Over SSH the banner and `btop` look the way they should, because your terminal
+emulator has a real font. On the machine's own screen they used not to: a Linux
+VT can map at most **512 glyphs**, and the kernel's built-in font ships 256
+CP437-era ones. Braille (the `tentaflake-status` logo, `btop`'s graphs) and most
+box drawing simply have no glyph there — you get boxes and garbage, and no
+`console.font` can fix it, because the ceiling is the VT itself.
+
+So the installed system replaces the VT with **kmscon**, a KMS/DRI terminal that
+renders real TTF fonts through pango: full Unicode, antialiasing, and a font size
+that suits the panel. The default font is **Cascadia Mono**, picked because it
+covers braille (U+2800–28FF) — most "modern" monospace fonts (JetBrains Mono,
+Hack, Fira Mono) do not.
+
+```nix
+tentaflake.modernConsole.enable = true;   # default
+tentaflake.modernConsole.fontSize = 20;   # points; raise on HiDPI panels
+
+# Swap the font — it must cover braille (Iosevka, DejaVu Sans Mono, Unifont do):
+# fonts.packages = [ pkgs.iosevka ];
+# services.kmscon.config.font-name = "Iosevka";
+```
+
+Turn it off on hardware where kmscon cannot grab the framebuffer:
+
+```nix
+tentaflake.modernConsole.enable = false;
+tentaflake.consoleFont = "ter-v32n";   # Terminus fallback for the legacy VT
+# tentaflake.consoleFont = null;       # or: leave the kernel font alone entirely
+```
+
+`consoleFont` only takes effect **when kmscon is off** — with kmscon running, its
+TTF font is what you see, so a `setfont` at boot would reconfigure fbcon for
+nothing. `null` skips the `setfont` altogether, which is what both ISOs do: on
+some Intel panels that extra reconfiguration shows up as a flickering console
+with `pipe A FIFO underrun` in the log (harmless, but ugly).
+
+The Terminus fallback still beats the kernel default — it has box drawing, so
+`btop` is readable — but braille stays unrenderable, so the banner logo will
+show blanks. The keymap follows `tentaflake.consoleKeyMap` either way (kmscon
+takes it via xkb, since it replaces getty).
+
+**Both ISOs keep the legacy VT on purpose.** kmscon hands the login a pty and
+owns the VT in graphics mode, but the installer auto-launches `installer.sh`
+from a `[ "$(tty)" = /dev/tty1 ]` guard, and the live ISO's firstboot wizard
+uses the same guard *and* writes straight to `/dev/tty1`. Under kmscon neither
+would trigger. Their `dialog` TUIs need no braille anyway — kmscon comes on with
+the system the installer writes to disk.
+
 ## Defaults across the ISOs
 
 | Profile | `shell.enable` | `motd.enable` | Why |
 |---|---|---|---|
-| `agent-host` (installed) | on | on | the system you SSH into day-to-day |
+| `tentaflake` (installed) | on | on | the system you SSH into day-to-day |
 | `live-agent` (live ISO) | on | **off** | the live profile ships its own static `users.motd`; the dynamic banner is disabled to avoid two stacked banners |
 | `installer-iso` | **off** | — | TTY1 only runs `installer.sh`; no agents exist yet |
 
