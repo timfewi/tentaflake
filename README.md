@@ -76,7 +76,8 @@ git clone https://github.com/timfewi/tentaflake
 cd tentaflake
 
 # Use the official Nix Docker image to build the ISO
-docker run --rm -v "$PWD:/build" -w /build nixos/nix \
+docker run --rm -v "$PWD:/build" -w /build \
+  nixos/nix:latest@sha256:377d4887aca98f0dfa12971c1ea6d6a625a435d8b610d4c95a436843da6fbfd1 \
   sh -c "nix build .#live-agent-iso --extra-experimental-features 'nix-command flakes'"
 
 # ISO appears at result/iso/tentaflake-live.iso
@@ -304,7 +305,7 @@ in [`my-agents.nix.example`](my-agents.nix.example).
 | `name` | `string` | *(required)* | Agent identifier |
 | `envFile` | `path` | `null` | Path to `.env` file with API keys |
 | `agenixFile` | `path` | `null` | Path to agenix-decrypted env file |
-| `image` | `string` | `nousresearch/hermes-agent:latest` | OCI container image |
+| `image` | `string` | `docker.io/nousresearch/hermes-agent:latest@sha256:4a2f23bd3ffaa6ee7b3be8a302a38be43ab0321a2988cd3fb16b7dd472dde812` | Digest-pinned OCI container image |
 | `seedDir` | `path` | `null` | Dir with SOUL.md, AGENTS.md, skills/ (skills are reusable capabilities — like plugins — that extend what an agent can do, e.g. web search, file operations) |
 | `settings` | `attrset` | `null` | Hermes config.yaml (model routing, toolsets, etc.) |
 | `autoStart` | `bool` | `true` | Auto-start with systemd |
@@ -336,7 +337,7 @@ Full option reference: [`.agents/skills/tentaflake-repo-guidance/SKILL.md`](.age
 |---|---|---|---|
 | `name` | `string` | *(required)* | Agent identifier |
 | `agenixFile` | `path` | *(required)* | Env file mounted into the container (`--env-file`) — API keys as `ZEROCLAW_<section>__<sub>__<key>` overrides |
-| `image` | `string` | `ghcr.io/zeroclaw-labs/zeroclaw:v0.8.2` | OCI container image |
+| `image` | `string` | `ghcr.io/zeroclaw-labs/zeroclaw:v0.8.2@sha256:eae321dac2d314bc282bdfb28b5378c9d527998f7e2fe0dee8315bfdcdf13a0c` | Digest-pinned OCI container image |
 | `hostPort` / `servePort` | `int` | *(required)* | Host loopback → container gateway port, and the tailnet HTTPS port `tailscale serve` publishes it on |
 | `settings` | `attrset` | `{ }` | ZeroClaw `config.toml` (model routing, runtime profiles, risk profiles, etc.) |
 | `seedDir` | `path` | `null` | Workspace dir copied in on first boot only, same no-clobber semantics as Hermes' `seedDir` |

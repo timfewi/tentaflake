@@ -96,8 +96,8 @@ sudo docker ps
 Expected output:
 
 ```
-CONTAINER ID   IMAGE                                        ...   NAMES
-abc123def456   ghcr.io/nousresearch/hermes-agent:latest     ...   hermes-coding
+CONTAINER ID   IMAGE                                             ...   NAMES
+abc123def456   docker.io/nousresearch/hermes-agent:latest@sha256:… ... hermes-coding
 ```
 
 If container not running:

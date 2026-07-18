@@ -261,23 +261,22 @@ echo "Backup: $BACKUP.tar.gz"
 
 ## Updating Containers
 
-Agent images are pinned in the flake. To update:
+The default agent images are pinned directly in their builders by OCI manifest
+digest. The image digests are independent of `flake.lock`, so update them
+deliberately:
 
 ```bash
-# Update flake lock (pulls latest hermes-agent image reference)
-nix flake update
+# Inspect the current upstream manifest digest
+docker buildx imagetools inspect docker.io/nousresearch/hermes-agent:latest
+docker buildx imagetools inspect ghcr.io/zeroclaw-labs/zeroclaw:v0.8.2
 
-# Rebuild to pull new images
+# Replace the matching tag and digest in lib/mk*Agent.nix, then rebuild
 sudo nixos-rebuild switch --flake /etc/nixos#<hostname>
 ```
 
-Docker images update automatically on rebuild when the tag changes.
-For `:latest` tag, force pull:
-
-```bash
-sudo docker pull ghcr.io/nousresearch/hermes-agent:latest
-sudo systemctl restart docker-hermes-coding
-```
+The rebuild pulls the new exact digest when it is not already local. If you
+override `image`, prefer `registry/repository:tag@sha256:digest`; a tag alone is
+mutable and can produce different deployments from the same Nix configuration.
 
 ---
 
@@ -441,7 +440,7 @@ recent conversation get compressed — losing identity and continuity.
 
 ### MCP Servers & Node.js
 
-The Hermes agent container (`ghcr.io/nousresearch/hermes-agent:latest`) is
+The default Hermes agent container (`docker.io/nousresearch/hermes-agent`) is
 **Python-based** and may not include Node.js. MCP servers using `npx`
 will fail with "command not found". Solutions:
 

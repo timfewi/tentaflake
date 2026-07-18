@@ -21,6 +21,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 - `tentaflake-auditd` hardening (#8): the audit DB now sets `secure_delete` and is capped at 10000 pages (~40 MB) so an agent flooding filesystem events cannot fill the host disk; inotify directory watches are capped at 10000 per daemon (with a one-time warning when hit); the console clamps `?limit=` to 1000 and every store read is bounded by a 5 s query timeout. (No `fs.inotify.max_user_watches` sysctl needed — nixpkgs already defaults it to 524288.)
+- Default Hermes and ZeroClaw container images, plus the documented Nix build image, are pinned to exact multi-platform OCI manifest digests. Identical configurations no longer resolve mutable tags to different image contents across machines or over time.
 
 ### Added
 - `tentaflake agent add|list|set-model|remove` — an interactive CLI wizard for declaring Hermes and ZeroClaw agents without writing Nix. Config lands in a flat, non-secret, git-tracked `agents.json` (schema v1: name/provider/model/base_url/ports/envFile path) read by `lib/agentsFromData.nix`, additive to a hand-written `my-agents.nix`. API keys are prompted for with `read -rs` and written only to a root-owned `0600` file at `/var/lib/tentaflake/secrets/<runtime>-<name>.env` — never into `agents.json` or the Nix store. See `docs/08-agent-cli.md`.

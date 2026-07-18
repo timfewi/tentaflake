@@ -204,7 +204,7 @@ Defined in `lib/mkHermesAgent.nix`. Creates one Hermes agent as a NixOS module.
 | `group` | str | `hermes-${name}` | System group name |
 | `uid` | int? | auto | Explicit UID for system user |
 | `gid` | int? | auto | Explicit GID for system group |
-| `image` | str | `nousresearch/hermes-agent:latest` | OCI container image |
+| `image` | str | `docker.io/nousresearch/hermes-agent:latest@sha256:4a2f23bd3ffaa6ee7b3be8a302a38be43ab0321a2988cd3fb16b7dd472dde812` | Digest-pinned OCI container image |
 | `envFile` | path? | `null` | Path to plaintext .env file on host |
 | `agenixFile` | path? | `null` | Path to agenix-decrypted .env file |
 | `seedDir` | path? | `null` | Directory of base files (SOUL.md, skills/) for first-boot seed |
@@ -265,7 +265,7 @@ Defined in `lib/mkZeroClawAgent.nix`. Creates one ZeroClaw agent as a NixOS modu
 |---|---|---|---|
 | `name` | str | **required** | Agent name (becomes `zeroclaw-<name>` container) |
 | `agenixFile` | path | **required** | Path to an agenix-decrypted `.env` file, passed via `--env-file` (no plaintext `envFile` option) |
-| `image` | str | `ghcr.io/zeroclaw-labs/zeroclaw:v0.8.2` | OCI container image |
+| `image` | str | `ghcr.io/zeroclaw-labs/zeroclaw:v0.8.2@sha256:eae321dac2d314bc282bdfb28b5378c9d527998f7e2fe0dee8315bfdcdf13a0c` | Digest-pinned OCI container image |
 | `stateDir` | str | `/var/lib/zeroclaw-${name}` | Agent state directory |
 | `seedDir` | path? | `null` | Directory of base files copied into the workspace on first boot |
 | `gatewayPort` | int | `42617` | In-container gateway port |

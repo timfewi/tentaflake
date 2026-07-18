@@ -41,11 +41,12 @@ in
   uid ? null,
   gid ? null,
 
-  # Container image. Default pulls the official hermes-agent image.
+  # Container image. The default is pinned to an exact multi-platform manifest.
+  # Update the digest deliberately when upgrading Hermes.
   # Override with any OCI-compatible image, e.g.:
   #   image = "ubuntu:24.04";
   # You can then install hermes-agent inside via a Dockerfile.
-  image ? "nousresearch/hermes-agent:latest",
+  image ? "docker.io/nousresearch/hermes-agent:latest@sha256:4a2f23bd3ffaa6ee7b3be8a302a38be43ab0321a2988cd3fb16b7dd472dde812",
 
   # Path to an env file (plaintext .env) on the host filesystem, e.g.:
   #   envFile = "/run/tentaflake/default.env";

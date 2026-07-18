@@ -3,7 +3,8 @@
 {
   name,
   agenixFile,
-  image ? "ghcr.io/zeroclaw-labs/zeroclaw:v0.8.2",
+  # Pinned multi-platform manifest; update tag and digest together.
+  image ? "ghcr.io/zeroclaw-labs/zeroclaw:v0.8.2@sha256:eae321dac2d314bc282bdfb28b5378c9d527998f7e2fe0dee8315bfdcdf13a0c",
   stateDir ? "/var/lib/zeroclaw-${name}",
   seedDir ? null,
   gatewayPort ? 42617,
