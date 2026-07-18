@@ -29,6 +29,10 @@ tentaflake top                 Live filesystem-activity TUI
 tentaflake backup <name>       Snapshot an agent's state dir to a .tar.gz here
 tentaflake doctor              Host health check (exits nonzero on problems)
 tentaflake console             Agent Console URL + how to publish it on the tailnet
+tentaflake agent list          List configured agents (from agents.json)
+tentaflake agent add           Add + configure an agent — interactive wizard, no Nix
+tentaflake agent set-model <n> Change an agent's model (interactive)
+tentaflake agent remove <n>    Remove an agent from agents.json
 tentaflake rebuild             Apply the system config (nixos-rebuild switch)
 tentaflake update              Update flake inputs, review, then rebuild
 tentaflake help                Show this help

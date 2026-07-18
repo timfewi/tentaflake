@@ -71,8 +71,10 @@ let
       pkgs.coreutils
       pkgs.diffutils
       pkgs.gawk
+      pkgs.gnugrep # env-file key matching in env_value + selftest assertions
       pkgs.jq
       pkgs.systemd
+      pkgs.util-linux # lsblk/mount/umount/findmnt for USB key import
       statusBanner
     ];
     text = ''
@@ -91,6 +93,18 @@ let
 
       bold=$(printf '\033[1m'); dim=$(printf '\033[2m'); reset=$(printf '\033[0m')
       red=$(printf '\033[31m'); green=$(printf '\033[32m'); yellow=$(printf '\033[33m')
+      cyan=$(printf '\033[36m')
+      # Gate colour once, globally: NO_COLOR, a non-tty stderr, or a terminal
+      # that cannot render. Blanking the vars degrades every later printf with
+      # no per-callsite `if`.
+      if [ -n "''${NO_COLOR:-}" ] || [ ! -t 2 ] || [ "''${TERM:-dumb}" = dumb ]; then
+        bold=""; dim=""; reset=""; red=""; green=""; yellow=""; cyan=""
+      fi
+      # fd 3 is the pinned header's write channel. Default /dev/null so hdr_emit
+      # is always safe; hdr_capable reopens it on /dev/tty when pinning is on.
+      # NOT stdout: ask()/pick() answers are captured with $(...) and one stray
+      # escape corrupts them. NOT stderr: it may be redirected to a log.
+      exec 3>/dev/null
 
       agent_records() {
         printf '%s\n' ${lib.escapeShellArg agentRecords}
@@ -340,7 +354,8 @@ let
       #
       # agents.json holds ONLY non-secret config (names/models/providers/ports/
       # envFile paths). The API key never touches this JSON, argv, or history —
-      # it is read with `read -rs` and written by root to a 0600 file.
+      # it is read with `read -rs` (or lifted verbatim out of a file on a USB
+      # stick, never sourced) and written by root to a 0600 file.
       #
       # The jq mutation primitives (aj_*) take the JSON path as $1 so they can be
       # smoke-tested against a scratch file. Manual check:
@@ -382,13 +397,14 @@ let
         local prompt="$1" def="''${2:-}" ans
         if [ -n "$def" ]; then printf '%s [%s]: ' "$prompt" "$def" >&2
         else printf '%s: ' "$prompt" >&2; fi
-        read -r ans || true
+        read -r ans || { echo "''${red}error:''${reset} unexpected end of input" >&2; return 1; }
         [ -n "$ans" ] || ans="$def"
         printf '%s' "$ans"
       }
 
-      # numbered menu; chosen option on stdout. Loops until a valid pick, so it
-      # never returns empty — callers' `[ -n "$x" ]` guards are belt-and-braces.
+      # numbered menu; chosen option on stdout. Loops until a valid pick or EOF.
+      # On EOF it returns 1, which under errexit aborts the `x=$(pick …)` caller
+      # — a piped run must not spin forever on an exhausted stdin.
       pick() {
         local prompt="$1"; shift
         local opts=("$@")
@@ -396,12 +412,311 @@ let
         for i in "''${!opts[@]}"; do printf '  %d) %s\n' "$((i + 1))" "''${opts[i]}" >&2; done
         while :; do
           printf '%s [1-%d]: ' "$prompt" "''${#opts[@]}" >&2
-          read -r choice || true
+          read -r choice || { echo "''${red}error:''${reset} unexpected end of input" >&2; return 1; }
           if [[ "$choice" =~ ^[0-9]+$ ]] && [ "$choice" -ge 1 ] && [ "$choice" -le "''${#opts[@]}" ]; then
             printf '%s' "''${opts[$((choice - 1))]}"; return
           fi
           echo "''${red}invalid choice''${reset}" >&2
         done
+      }
+
+      # ── pinned header: the terminal's own scroll region (DECSTBM) ──────────
+      # Paint the logo into the top N rows once, then CSI N+1;LINES r confines
+      # all scrolling below it. No curses, no tput: the installed console is
+      # kmscon, TERM=kmscon has no terminfo entry and `tput lines` exits 3
+      # there. Raw escapes + `stty size` (an ioctl) work on kmscon, the legacy
+      # VT and over SSH alike.
+      #
+      # ponytail: painted once, no SIGWINCH handling. A WINCH trap would EINTR
+      # the `read` in ask()/pick(), which returns the default and silently eats
+      # the user's answer — worse than a stale header. Upgrade path: repaint at
+      # the top of each step if resizing mid-wizard ever matters.
+      HDR_ROWS=0
+      HDR_LINES=0
+      TF_TMP=""
+      TF_MOUNTS=()
+      declare -A TF_VOLNAME=()
+      TF_CAND=()
+      TF_ROOTS=()
+      TF_CLEANED=""
+
+      # shellcheck disable=SC2059  # $1 is our own literal format, never user input
+      hdr_emit() { local f="$1"; shift; printf "$f" "$@" >&3 2>/dev/null || true; }
+
+      # Split out so __selftest can assert the degradation rules without a pty.
+      hdr_capable() {
+        [ -z "''${NO_COLOR:-}" ] || return 1
+        case "''${TERM:-dumb}" in dumb | "") return 1 ;; esac # must NOT reject kmscon
+        [ -t 0 ] && [ -t 2 ] || return 1
+        [ -r /dev/tty ] && [ -w /dev/tty ] || return 1
+        exec 3>/dev/tty
+      }
+
+      # Header height for a given LINES/COLUMNS. Pure — the testable bit.
+      # 15 = 14 braille logo rows + rule, and needs 24 lines to leave 9 rows to
+      # work in. ponytail: two sizes only; a cropped mid-size logo is the
+      # upgrade path if 12..23-row terminals turn out to be common.
+      hdr_plan() {
+        local big=15
+        # The legacy VT caps at 512 glyphs and has no braille block (see
+        # modules/locale.nix) — and the live ISO deliberately runs without
+        # kmscon, so the full logo would be 14 rows of boxes pinned in place.
+        case "''${TERM:-}" in linux | vt* | ansi) big=2 ;; esac
+        if [ "$1" -ge 24 ] && [ "$2" -ge 60 ]; then printf '%s' "$big"
+        elif [ "$1" -ge 12 ] && [ "$2" -ge 40 ]; then printf 2
+        else printf 0; fi
+      }
+
+      # Rows a discovery menu may use: total − header − banner − "type it
+      # myself" − prompt. A DECSTBM region has NO scrollback, so anything that
+      # scrolls past the top of it is gone for good.
+      # ponytail: floor of 3 so a headerless/tiny run still shows something.
+      cand_room() { local r=$(( $1 - $2 - 4 )); [ "$r" -ge 3 ] && printf '%s' "$r" || printf 3; }
+
+      # tr is byte-oriented and would mangle the multibyte rule char.
+      hdr_rule() { local s; s=$(printf '%*s' "$1" ""); printf '%s' "''${s// /─}"; }
+
+      hdr_init() {
+        local s l c rows i art=()
+        hdr_capable || return 0
+        s=$(stty size < /dev/tty 2>/dev/null) || return 0
+        [[ "$s" =~ ^[0-9]+\ [0-9]+$ ]] || return 0
+        l=''${s% *}; c=''${s#* }
+        HDR_LINES=$l
+        rows=$(hdr_plan "$l" "$c")
+        [ "$rows" -gt 0 ] || return 0
+        HDR_ROWS=$rows
+        hdr_emit '\033[?25l\033[2J\033[H'
+        if [ "$rows" -ge 15 ]; then
+          mapfile -t art <<< ${lib.escapeShellArg logo}
+          for i in "''${!art[@]}"; do hdr_emit '%s%s%s\n' "$cyan" "''${art[i]}" "$reset"; done
+        else
+          hdr_emit '  %stentaflake%s %sagent setup%s\n' "$bold" "$reset" "$dim" "$reset"
+        fi
+        hdr_emit '%s%s%s\n' "$dim" "$(hdr_rule "$c")" "$reset"
+        # ?25h: the hide above only suppresses caret flicker while the header is
+        # painted. Every prompt after this is typed by a human who needs to see
+        # a cursor; tf_cleanup's ?25h stays as the Ctrl-C/error restore.
+        hdr_emit '\033[%d;%dr\033[%d;1H\033[J\033[?25h' "$((rows + 1))" "$l" "$((rows + 1))"
+      }
+
+      tf_umount_all() {
+        local m
+        for m in "''${TF_MOUNTS[@]-}"; do
+          [ -n "$m" ] || continue
+          sudo umount "$m" 2>/dev/null || sudo umount -l "$m" 2>/dev/null || true
+          rmdir "$m" 2>/dev/null || true
+        done
+        TF_MOUNTS=()
+      }
+
+      # The ONLY thing that restores the terminal and releases the stick across
+      # cmd_agent_add's exit paths, a failed sudo, and Ctrl-C. Idempotent. Must
+      # end with a success status: under errexit a trap whose last command fails
+      # would change the script's exit status.
+      # shellcheck disable=SC2329  # invoked from the traps below
+      tf_cleanup() {
+        [ -n "$TF_CLEANED" ] && return 0
+        TF_CLEANED=1
+        # The staging temp holds the plaintext key. It must not outlive an
+        # abort, an errexit, or a Ctrl-C at the sudo password prompt.
+        [ -n "$TF_TMP" ] && { rm -f "$TF_TMP"; TF_TMP=""; }
+        tf_umount_all
+        if [ "$HDR_ROWS" -gt 0 ]; then
+          # 999 clamps to the real bottom row, so teardown needs no stored
+          # geometry and survives a resize.
+          hdr_emit '\033[r\033[999;1H\033[?25h\n'
+          HDR_ROWS=0
+        fi
+        [ -t 0 ] && { stty echo 2>/dev/null || true; } # `read -rs` may have died mid-read
+        return 0
+      }
+
+      trap 'tf_cleanup' EXIT
+      trap 'tf_cleanup; exit 130' INT
+      trap 'tf_cleanup; exit 143' TERM
+      trap 'tf_cleanup; exit 129' HUP
+
+      # ── key import from whatever stick is plugged in ───────────────────────
+      # No filesystem label and no filename convention required: the wizard
+      # searches, it does not demand an `mkfs -L`. The TENTAFLAKE_ENV label is
+      # NOT deprecated — it stays the deterministic marker for the live ISO's
+      # non-interactive boot (installer/firstboot.nix), which cannot prompt
+      # anybody. Here it only ranks a volume first.
+      #
+      # NOTHING found on removable media is ever sourced, eval'd or executed.
+      # Values are matched with a regex and taken as literal text.
+
+      # Strict, and deliberately so: this gates UNATTENDED discovery on removable
+      # media, where nothing is there to confirm a guess. The typed path treats
+      # it as a heuristic and lets a human override it — a self-hosted gateway
+      # token is allowed to look like anything.
+      plausible_key() {
+        local v="$1"
+        [ "''${#v}" -ge 16 ] && [ "''${#v}" -le 512 ] || return 1
+        [[ "$v" =~ ^[A-Za-z0-9_./:+=~-]+$ ]]
+      }
+
+      # The one non-overridable reject: control characters and newlines. Paste
+      # can carry them and they are what the security boundary actually cares
+      # about.
+      sane_key() {
+        [ -n "$1" ] && [ "''${#1}" -le 512 ] || return 1
+        [[ "$1" =~ ^[[:graph:]]+$ ]]
+      }
+
+      # Enough to recognise the key, never enough to leak it. $1 is a bash
+      # function argument, not an execve argv — it never reaches /proc.
+      mask_key() {
+        local k="$1" n=''${#1}
+        if [ "$n" -le 12 ]; then printf '%s (%d chars)' "''${k//?/*}" "$n"
+        else printf '%s…%s (%d chars)' "''${k:0:6}" "''${k: -4}" "$n"; fi
+      }
+
+      key_hint() {
+        case "$1" in
+          sk-or-*)  printf ' · looks like an OpenRouter key' ;;
+          sk-ant-*) printf ' · looks like an Anthropic key' ;;
+          sk-*)     printf ' · looks like an OpenAI key' ;;
+        esac
+      }
+
+      # $1=file $2=varname. docker --env-file syntax, the same format the
+      # live-ISO sticks already use. `export` and quotes tolerated, CRLF too.
+      env_value() {
+        local v
+        v=$(LC_ALL=C grep -a -m1 -E "^[[:space:]]*(export[[:space:]]+)?$2=" "$1" 2>/dev/null) || return 1
+        v=''${v#*=}; v=''${v%$'\r'}
+        v=''${v#[\"\']}; v=''${v%[\"\']}
+        plausible_key "$v" || return 1
+        printf '%s' "$v"
+      }
+
+      # A .txt/.key someone saved straight out of the provider's website.
+      bare_value() {
+        local v
+        [ "$(LC_ALL=C wc -l < "$1")" -le 1 ] || return 1
+        v=$(LC_ALL=C tr -d '\r\n' < "$1")
+        # `=` is in the plausible-key charset, so a malformed `KEY=` line would
+        # otherwise pass as a bare token. Keep this reject.
+        [[ "$v" =~ ^[A-Za-z_][A-Za-z0-9_]*= ]] && return 1
+        plausible_key "$v" || return 1
+        printf '%s' "$v"
+      }
+
+      # Cheap places first: on a desktop the stick is already auto-mounted and
+      # NO privileged mount happens at all. Labelled volumes sort first.
+      usb_scan_roots() {
+        local d lbl
+        for d in /run/media/*/* /media/*/* /media/* /mnt/*; do
+          [ -d "$d" ] && [ ! -L "$d" ] || continue
+          # /media/* also matches the per-user dir of the /media/$USER/$LABEL
+          # layout (Ubuntu/Mint udisks2), which /media/*/* already covers — that
+          # double hit turned one stick into two identical candidates and killed
+          # the friendly single-candidate [Y/n] path. Only a real mountpoint
+          # qualifies as a bare /media/* root. Note `case` lets * match `/`, so
+          # the deeper pattern must be listed first.
+          case "$d" in
+            /media/*/*) ;;
+            /media/*) [ "$(findmnt -no TARGET --target "$d" 2>/dev/null)" = "$d" ] || continue ;;
+          esac
+          lbl=$(findmnt -no LABEL --target "$d" 2>/dev/null || true)
+          case "$lbl" in
+            TENTAFLAKE_ENV | HERMES_ENV) printf '0\t%s\n' "$d" ;;
+            *) printf '1\t%s\n' "$d" ;;
+          esac
+        done | sort -u | cut -f2-
+      }
+
+      # Fallback: mount an unmounted REMOVABLE partition ourselves. On a
+      # headless agent host nothing auto-mounts, so this is usually THE path.
+      # An unknown filesystem is untrusted input to the KERNEL, not just to us:
+      # ro,nosuid,nodev,noexec. Never a fixed disk.
+      # lsblk -J + jq, not -rno: raw mode collapses empty fields and shifts
+      # LABEL into the MOUNTPOINT slot. jq is already a runtimeInput.
+      # Appends to TF_MOUNTS in THIS shell — a subshell would lose the list the
+      # cleanup trap has to unmount.
+      usb_mount_removable() {
+        command -v lsblk >/dev/null 2>&1 || return 0
+        local dev lbl fs mp opts
+        # LABEL goes LAST and is read last: tab is IFS *whitespace*, so `read`
+        # collapses a run of them and an empty middle field would shift every
+        # later field left. Trailing-empty is the only safe slot for it.
+        while IFS=$'\t' read -r dev fs lbl; do
+          [ -n "$dev" ] || continue
+          case "$fs" in vfat | exfat | ext2 | ext3 | ext4 | ntfs | ntfs3) ;; *) continue ;; esac
+          opts=ro,nosuid,nodev,noexec
+          case "$fs" in vfat | exfat | ntfs | ntfs3) opts="$opts,uid=$(id -u)" ;; esac
+          mp=$(mktemp -d); chmod 700 "$mp"
+          if sudo mount -o "$opts" "$dev" "$mp" 2>/dev/null; then
+            TF_MOUNTS+=("$mp")
+            # Provenance the human can act on: "MY STICK /dev/sdb1", never the
+            # mktemp basename they cannot tell two sticks apart by.
+            TF_VOLNAME["$mp"]="''${lbl:+$lbl }$dev"
+          else
+            rmdir "$mp" 2>/dev/null || true
+          fi
+        done < <(lsblk -J -o PATH,LABEL,MOUNTPOINT,RM,HOTPLUG,FSTYPE 2>/dev/null | jq -r '
+          [.blockdevices[] | recurse(.children[]?)] | .[]
+          | select(.fstype != null and .fstype != "swap")
+          | select(.rm == true or .hotplug == true)
+          | select((.mountpoint // .mountpoints[0]? // "") == "")
+          | [.path, .fstype, (.label // "")] | @tsv' 2>/dev/null || true)
+      }
+
+      # $1=keyvar. Fills the global TF_CAND with "value<TAB>provenance" lines.
+      # Global, not stdout: a $(...) capture would run the mounting in a
+      # subshell and strand the mounts past cleanup.
+      # ponytail: two globs deep, .env/.txt/.key only, 40 hits max — predictable
+      # and instant. A full-disk crawl is the upgrade path if people really bury
+      # the key. Globs, not `find`: findutils is not in runtimeInputs.
+      # Filenames and volume labels come off a stranger's stick. An ESC byte in
+      # one rewrites the masked-key preview and the provenance line the user
+      # relies on to decide whether to accept the key — same class as git's
+      # core.quotePath.
+      tf_plain() { LC_ALL=C tr -d '\000-\037\177'; }
+
+      # $1=root $2=keyvar. Appends to TF_CAND.
+      usb_scan_dir() {
+        local root="$1" f v vol
+        [ -n "$root" ] || return 0
+        # Name the human can act on, best first: the label we mounted it under,
+        # the volume label, the device node. The mktemp basename of a self-mount
+        # tells nobody which of two sticks this is.
+        vol=''${TF_VOLNAME[$root]-}
+        [ -n "$vol" ] || vol=$(findmnt -no LABEL --target "$root" 2>/dev/null) || vol=""
+        [ -n "$vol" ] || vol=$(basename "$(findmnt -no SOURCE --target "$root" 2>/dev/null || echo "$root")")
+        [ -n "$vol" ] || vol=$(basename "$root")
+        vol=$(printf '%s' "$vol" | tf_plain)
+        for f in "$root"/*.env "$root"/.env "$root"/*.txt "$root"/*.key \
+          "$root"/*/*.env "$root"/*/.env "$root"/*/*.txt "$root"/*/*.key; do
+          [ -f "$f" ] && [ -r "$f" ] || continue
+          # ponytail: a <=512-char key never lives in a >64K file. Without this
+          # bound bare_value pulls a 400MB single-line blob into a shell
+          # variable and the wizard just looks hung. 64K, not 4K: env_value
+          # legitimately greps one var out of a multi-var .env.
+          [ "$(stat -c%s "$f")" -le 65536 ] || continue
+          # Skip binaries: a .key holding DER/PKCS#12 (or a key pasted into
+          # Notepad and saved as UTF-16) otherwise reaches the null-byte read in
+          # bare_value and prints a bash `warning:` into the pinned TUI.
+          LC_ALL=C grep -qI "" "$f" 2>/dev/null || continue
+          [ "''${#TF_CAND[@]}" -lt 40 ] || return 0
+          v=$(env_value "$f" "$2") || v=$(bare_value "$f") || continue
+          TF_CAND+=("$v"$'\t'"$(basename "$f" | tf_plain) (on $vol)")
+        done
+      }
+
+      usb_candidates() {
+        local root
+        TF_CAND=()
+        mapfile -t TF_ROOTS < <(usb_scan_roots) # mapfile: volume names have spaces
+        for root in "''${TF_ROOTS[@]-}"; do usb_scan_dir "$root" "''${1:-}"; done
+        # Only now pay for a privileged mount: gate on finding no KEY, not on
+        # finding no directory. A stale /mnt/backup must not shadow the stick.
+        if [ "''${#TF_CAND[@]}" -eq 0 ]; then
+          usb_mount_removable
+          for root in "''${TF_MOUNTS[@]-}"; do usb_scan_dir "$root" "''${1:-}"; done
+        fi
       }
 
       cmd_agent_list() {
@@ -421,9 +736,60 @@ let
         done
       }
 
+      # Presents whatever is on plugged-in media and sets `apikey` if the user
+      # takes one. Reads $keyvar/$apikey from its caller via dynamic scope, and
+      # is called plainly — a $(...) capture would run the mounting in a
+      # subshell and strand the mounts past cleanup.
+      key_from_media() {
+        local labels=() choice i room
+        # Only offer discovery to a human: a piped run must fall straight
+        # through to the read path. No keyvar (zeroclaw+custom) still scans —
+        # bare_value needs no var name at all.
+        [ -t 0 ] || return 0
+        usb_candidates "''${keyvar:-}"
+        if [ "''${#TF_CAND[@]}" -eq 1 ]; then
+          printf '%sFound a key on connected media:%s\n' "$green" "$reset" >&2
+          printf '  %s%s\n  %s%s%s\n' \
+            "$(mask_key "''${TF_CAND[0]%%$'\t'*}")" "$(key_hint "''${TF_CAND[0]%%$'\t'*}")" \
+            "$dim" "''${TF_CAND[0]#*$'\t'}" "$reset" >&2
+          # No default arg: ask() would render its own "[y]" on top of the
+          # [Y/n] hint. Empty (just Enter) means yes.
+          case "$(ask "use it? [Y/n]")" in
+            n | N | no | NO) : ;;
+            *) apikey=''${TF_CAND[0]%%$'\t'*} ;;
+          esac
+        elif [ "''${#TF_CAND[@]}" -gt 1 ]; then
+          printf '%sFound %d keys on connected media:%s\n' "$green" "''${#TF_CAND[@]}" "$reset" >&2
+          room=$(cand_room "''${HDR_LINES:-24}" "$HDR_ROWS")
+          for i in "''${!TF_CAND[@]}"; do
+            [ "''${#labels[@]}" -lt "$room" ] || break
+            labels+=("$(mask_key "''${TF_CAND[i]%%$'\t'*}")  ←  ''${TF_CAND[i]#*$'\t'}")
+          done
+          [ "''${#labels[@]}" -eq "''${#TF_CAND[@]}" ] || printf '%s  … %d more found, not shown (small terminal)%s\n' \
+            "$dim" "$(( ''${#TF_CAND[@]} - ''${#labels[@]} ))" "$reset" >&2
+          labels+=("type or paste it myself")
+          choice=$(pick "use which key?" "''${labels[@]}")
+          for i in "''${!TF_CAND[@]}"; do
+            [ "$choice" = "''${labels[i]-}" ] && { apikey=''${TF_CAND[i]%%$'\t'*}; break; }
+          done
+        fi
+        TF_CAND=()
+        tf_umount_all # done reading; don't hold the stick for the rest
+        # Discoverability: the escape hatch is invisible to exactly the user who
+        # needs it — the one whose stick is still in their bag.
+        [ -n "$apikey" ] || printf '%sno key found on connected media — plug a stick in, then type r and press Enter to rescan%s\n' \
+          "$dim" "$reset" >&2
+        return 0
+      }
+
       cmd_agent_add() {
         agents_json_ensure
         local runtime name provider model base_url="" host="" serve="" keyvar keyline secret_file entry answer
+
+        # Get the sudo password prompt out of the way BEFORE the scroll region
+        # exists and before the USB scan needs mount(8).
+        sudo -v || true
+        hdr_init
 
         runtime=$(pick "runtime" hermes zeroclaw)
         [ -n "$runtime" ] || { echo "''${red}error:''${reset} cancelled" >&2; exit 1; }
@@ -464,12 +830,44 @@ let
 
         secret_file="$SECRET_BASE/$runtime-$name.env"
 
-        # Key: silent read, never echoed, never in argv/history.
-        local apikey=""
-        printf 'API key for %s (input hidden, leave blank to abort): ' "$name" >&2
-        read -rs apikey || true
-        printf '\n' >&2
-        [ -n "$apikey" ] || { echo "''${red}error:''${reset} no API key entered — aborting" >&2; exit 1; }
+        # Key: imported from plugged-in media if we can find one, otherwise a
+        # silent read. Either way it stays in this shell — never echoed
+        # unmasked, never in argv/history, never in git or the Nix store.
+        local apikey="" ok
+        key_from_media
+
+        # Typed/pasted — also the path when nothing is plugged in or the user
+        # declined. The masked echo-back is the point: `read -rs` gives zero
+        # feedback, so a paste that lost half the key looks identical to one
+        # that worked.
+        while [ -z "$apikey" ]; do
+          printf 'API key for %s (hidden — paste is fine, blank aborts): ' "$name" >&2
+          read -rs apikey || true
+          printf '\n' >&2
+          [ -n "$apikey" ] || { echo "''${red}error:''${reset} no API key entered — aborting" >&2; exit 1; }
+          # `r` = "the stick is in my bag" — rescan without losing every answer.
+          case "$apikey" in r | R) apikey=""; key_from_media; continue ;; esac
+          if ! sane_key "$apikey"; then
+            echo "''${red}that is not a usable key''${reset} — it contains spaces or control characters" >&2
+            apikey=""; continue
+          fi
+          if ! plausible_key "$apikey"; then
+            # ponytail: a heuristic, not a gate. A custom/self-hosted gateway
+            # key can be anything (LiteLLM ships `sk-1234`). Discovery keeps the
+            # strict form on purpose — nothing there has a human to confirm it.
+            if [ "''${#apikey}" -lt 16 ] || [ "''${#apikey}" -gt 512 ]; then
+              ok="it is ''${#apikey} characters long"
+            else
+              ok="it contains a character API keys normally don't"
+            fi
+            printf '  %sunusual API key%s — %s. Use it anyway? [y/N] ' "$yellow" "$reset" "$ok" >&2
+            read -r ok || true
+            case "$ok" in y | Y | yes | YES) ;; *) apikey=""; continue ;; esac
+          fi
+          printf '  got %s%s%s%s — correct? [Y/n] ' "$bold" "$(mask_key "$apikey")" "$reset" "$(key_hint "$apikey")" >&2
+          read -r ok || true
+          case "$ok" in n | N | no | NO) apikey="" ;; esac
+        done
 
         if [ "$runtime" = "zeroclaw" ]; then
           keyline="ZEROCLAW_providers__models__''${provider}__default__api_key=$apikey"
@@ -479,16 +877,18 @@ let
 
         # Stage to a 0600 temp owned by us, then let root install it. The key
         # goes via a file, so it never appears in any process's argv.
-        local tmp; tmp=$(mktemp)
-        chmod 600 "$tmp"
-        printf '%s\n' "$keyline" > "$tmp"
+        # File-scope, not local: the cleanup trap owns it, so a Ctrl-C at the
+        # sudo password prompt cannot leave the plaintext key in /tmp.
+        TF_TMP=$(mktemp)
+        chmod 600 "$TF_TMP"
+        printf '%s\n' "$keyline" > "$TF_TMP"
         unset apikey keyline
-        if ! sudo install -D -m 600 -o root -g root "$tmp" "$secret_file"; then
-          rm -f "$tmp"
+        if ! sudo install -D -m 600 -o root -g root "$TF_TMP" "$secret_file"; then
+          rm -f "$TF_TMP"; TF_TMP=""
           echo "''${red}error:''${reset} failed to write secret to $secret_file" >&2
           exit 1
         fi
-        rm -f "$tmp"
+        rm -f "$TF_TMP"; TF_TMP=""
 
         if [ "$runtime" = "hermes" ]; then
           entry=$(jq -n --arg name "$name" --arg provider "$provider" --arg model "$model" \
@@ -511,6 +911,9 @@ let
         echo "next: rebuild so the container is created from this config."
         printf 'Rebuild now? [y/N] '
         read -r answer || true
+        # Drop the scroll region first: nixos-rebuild's output should not be
+        # squeezed through the few rows left under the pinned logo.
+        tf_cleanup
         case "$answer" in y | Y | yes | YES) cmd_rebuild ;; *) echo "Apply later with: tentaflake rebuild" ;; esac
       }
 
@@ -570,6 +973,77 @@ let
         aj_remove "$f" t1
         aj_has "$f" t1 && { echo "FAIL: remove"; rm -f "$f"; exit 1; }
         [ "$(aj_get "$f" t2 name)" = "t2" ] || { echo "FAIL: t2 clobbered"; rm -f "$f"; exit 1; }
+
+        # ── key parsing: parse, NEVER execute ──
+        local d; d=$(mktemp -d)
+        printf 'X=1\n# comment\nexport OPENROUTER_API_KEY="sk-or-v1-abcdefghijklmnop"\r\n' > "$d/a.env"
+        printf 'sk-ant-api03-ZZZZZZZZZZZZZZZZZZZZ\n' > "$d/b.key"
+        # shellcheck disable=SC2016  # the $(...) MUST stay literal — that is the fixture
+        printf 'OPENROUTER_API_KEY=$(touch %s/pwned)aaaaaaaaaaaaaaaa\n' "$d" > "$d/c.env"
+        printf 'OPENROUTER_API_KEY=\n' > "$d/e.env"
+        printf 'OPENROUTER_API_KEY=short\n' > "$d/f.env"
+        printf 'OPENROUTER_API_KEY=has spaces and is quite long\n' > "$d/g.env"
+        [ "$(env_value "$d/a.env" OPENROUTER_API_KEY)" = "sk-or-v1-abcdefghijklmnop" ] || { echo "FAIL: env_value"; rm -rf "$d" "$f"; exit 1; }
+        env_value "$d/a.env" ANTHROPIC_API_KEY && { echo "FAIL: matched the wrong var"; rm -rf "$d" "$f"; exit 1; }
+        [ "$(bare_value "$d/b.key")" = "sk-ant-api03-ZZZZZZZZZZZZZZZZZZZZ" ] || { echo "FAIL: bare_value"; rm -rf "$d" "$f"; exit 1; }
+        bare_value "$d/e.env" && { echo "FAIL: bare_value took an empty env line as a token"; rm -rf "$d" "$f"; exit 1; }
+        env_value "$d/f.env" OPENROUTER_API_KEY && { echo "FAIL: accepted a 5-char value"; rm -rf "$d" "$f"; exit 1; }
+        env_value "$d/g.env" OPENROUTER_API_KEY && { echo "FAIL: accepted a value with spaces"; rm -rf "$d" "$f"; exit 1; }
+        env_value "$d/c.env" OPENROUTER_API_KEY >/dev/null 2>&1 || true
+        [ ! -e "$d/pwned" ] || { echo "FAIL: USB file content was EXECUTED"; rm -rf "$d" "$f"; exit 1; }
+        [ "$(mask_key sk-or-v1-abcdefghijklmnop)" = "sk-or-…mnop (25 chars)" ] || { echo "FAIL: mask_key"; rm -rf "$d" "$f"; exit 1; }
+        [ "$(key_hint sk-or-v1-x)" = " · looks like an OpenRouter key" ] || { echo "FAIL: key_hint"; rm -rf "$d" "$f"; exit 1; }
+        # strict for media / advisory for the typed path — must not silently merge
+        plausible_key "sk-1234" && { echo "FAIL: plausible_key took a short token"; rm -rf "$d" "$f"; exit 1; }
+        plausible_key 'p@ssw0rd-Very-Long-Token!' && { echo "FAIL: plausible_key took an odd charset"; rm -rf "$d" "$f"; exit 1; }
+        sane_key "sk-1234" || { echo "FAIL: sane_key rejected a short typed key"; rm -rf "$d" "$f"; exit 1; }
+        sane_key 'p@ssw0rd-Very-Long-Token!' || { echo "FAIL: sane_key rejected a gateway token"; rm -rf "$d" "$f"; exit 1; }
+        sane_key "has spaces" && { echo "FAIL: sane_key took spaces"; rm -rf "$d" "$f"; exit 1; }
+        sane_key "$(printf 'ab\tcd')" && { echo "FAIL: sane_key took a control char"; rm -rf "$d" "$f"; exit 1; }
+
+        # lsblk field order: tab is IFS *whitespace*, so `read` collapses a run
+        # of them. An unlabelled device must not shift fstype out of its slot.
+        local _ld lfs llbl
+        IFS=$'\t' read -r _ld lfs llbl < <(printf '/dev/sdc1\tvfat\t\n')
+        [ "$lfs" = vfat ] && [ -z "$llbl" ] || { echo "FAIL: empty LABEL collapsed the lsblk fields"; rm -rf "$d" "$f"; exit 1; }
+        IFS=$'\t' read -r _ld lfs llbl < <(printf '/dev/sdb1\tvfat\tMY STICK\n')
+        [ "$lfs" = vfat ] && [ "$llbl" = "MY STICK" ] || { echo "FAIL: lsblk LABEL with a space"; rm -rf "$d" "$f"; exit 1; }
+
+        # ── scan hygiene: huge/binary files must not be read or reported ──
+        local sd; sd=$(mktemp -d)
+        printf 'sk-or-v1-goodgoodgoodgood\n' > "$sd/good.txt"
+        head -c 200000 /dev/zero | tr '\0' 'a' > "$sd/big.txt"
+        head -c 300 /dev/urandom > "$sd/license.key"
+        printf 'sk-or-v1-esc\033injected\n' > "$sd/$(printf 'e\033vil').txt"
+        TF_CAND=(); usb_scan_dir "$sd" OPENROUTER_API_KEY
+        [ "''${#TF_CAND[@]}" -ge 1 ] || { echo "FAIL: usb_scan_dir found nothing"; rm -rf "$sd" "$d" "$f"; exit 1; }
+        printf '%s\n' "''${TF_CAND[@]}" | grep -q "$(printf '\033')" && { echo "FAIL: ESC byte survived into provenance"; rm -rf "$sd" "$d" "$f"; exit 1; }
+        printf '%s\n' "''${TF_CAND[@]}" | grep -q 'big\.txt' && { echo "FAIL: scanned an oversized file"; rm -rf "$sd" "$d" "$f"; exit 1; }
+        printf '%s\n' "''${TF_CAND[@]}" | grep -q 'license\.key' && { echo "FAIL: took a binary file as a key"; rm -rf "$sd" "$d" "$f"; exit 1; }
+        TF_CAND=(); rm -rf "$sd"
+        rm -rf "$d"
+
+        # ── header geometry + degradation + teardown ──
+        [ "$(hdr_plan 40 100)" = 15 ] || { echo "FAIL: hdr_plan full"; rm -f "$f"; exit 1; }
+        [ "$(hdr_plan 18 80)" = 2 ] || { echo "FAIL: hdr_plan compact"; rm -f "$f"; exit 1; }
+        [ "$(hdr_plan 10 30)" = 0 ] || { echo "FAIL: hdr_plan degrade"; rm -f "$f"; exit 1; }
+        [ "$(TERM=linux hdr_plan 40 100)" = 2 ] || { echo "FAIL: hdr_plan VT has no braille glyphs"; rm -f "$f"; exit 1; }
+        [ "$(cand_room 24 15)" = 5 ] || { echo "FAIL: cand_room 24x80"; rm -f "$f"; exit 1; }
+        [ "$(cand_room 40 15)" = 21 ] || { echo "FAIL: cand_room large"; rm -f "$f"; exit 1; }
+        [ "$(cand_room 12 15)" = 3 ] || { echo "FAIL: cand_room floor"; rm -f "$f"; exit 1; }
+        ( NO_COLOR=1; hdr_capable ) && { echo "FAIL: hdr_capable ignored NO_COLOR"; rm -f "$f"; exit 1; }
+        ( TERM=dumb; hdr_capable ) && { echo "FAIL: hdr_capable ignored TERM=dumb"; rm -f "$f"; exit 1; }
+        # teardown must emit the scroll-region reset, then be a no-op
+        local t; t=$(mktemp); exec 3>"$t"; HDR_ROWS=4; TF_CLEANED=""
+        TF_TMP=$(mktemp) # the plaintext-key staging file must not survive
+        local staged="$TF_TMP"
+        tf_cleanup; exec 3>/dev/null
+        [ ! -e "$staged" ] || { echo "FAIL: tf_cleanup left the staged key on disk"; rm -f "$f" "$t" "$staged"; exit 1; }
+        grep -q "$(printf '\033')\[r" "$t" || { echo "FAIL: tf_cleanup did not reset the scroll region"; rm -f "$f" "$t"; exit 1; }
+        [ "$HDR_ROWS" -eq 0 ] || { echo "FAIL: tf_cleanup not idempotent"; rm -f "$f" "$t"; exit 1; }
+        TF_CLEANED=""
+        rm -f "$t"
+
         rm -f "$f"
         echo "''${green}agent selftest OK''${reset}"
       }

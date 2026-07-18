@@ -364,6 +364,7 @@ Interactive shell experience for SSH/console operators. Features:
 - **`tentaflake` CLI** — agent management across every runtime (status, logs, restart, shell, exec)
 - **`tentaflake-status`** — dynamic login banner (host info + agent health, all runtimes)
 - **`tentaflake top`** — live filesystem activity TUI (requires audit daemon)
+- **`tentaflake agent add`** — no-Nix agent wizard; logo pinned via the terminal's own scroll region (DECSTBM), API key imported from any USB stick (no label required) or typed with a masked confirm. Hidden check: `tentaflake agent __selftest`
 - **bash** — completion, large deduped history, colored prompt (or Starship)
 - **zsh** — Oh My Zsh, autosuggestions, syntax highlight, fzf-tab
 - **Modern tools** — eza, bat, fd, ripgrep, fzf, htop, btop, jq, tree, ncdu
@@ -387,6 +388,11 @@ tentaflake top          # Live TUI (tentaflake-top, needs audit daemon)
 tentaflake backup <name>  # Snapshot an agent's state dir to a .tar.gz (0600)
 tentaflake doctor       # Host health check (exits nonzero on problems)
 tentaflake console      # Agent Console URL + tailnet publish hint
+tentaflake agent list   # List configured agents (agents.json)
+tentaflake agent add    # Interactive wizard: new agent, no Nix (pinned logo,
+                        #   USB key import, key → root 0600 file)
+tentaflake agent set-model <name>
+tentaflake agent remove <name>
 tentaflake rebuild      # Apply the system config (nixos-rebuild switch)
 tentaflake update       # Update flake inputs, review, then rebuild
 ```
