@@ -132,6 +132,12 @@
         ${hostName} = self.nixosConfigurations.${hostName}.config.system.build.toplevel;
         tentaflake-auditd = self.packages.${system}.tentaflake-auditd;
         image-pinning = import ./lib/pinnedImage-test.nix { inherit pkgs; };
+
+        # VM integration test: boots the host and asserts the runtime path
+        # (CLI, banner, audit daemon, agent unit/user/state dir). See tests/integration.nix.
+        vm-integration = pkgs.testers.runNixOSTest (
+          import ./tests/integration.nix { inherit self mkHermesAgent mkOpenCodeAgent; }
+        );
       };
 
       # ── tentaflake: Installed system, consumes my-agents.nix ──

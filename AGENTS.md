@@ -5,10 +5,11 @@ NixOS flake template for running isolated AI agents (Hermes, ZeroClaw) in Docker
 ## Build & Test
 
 ```bash
-nix flake check              # validate flake and build toplevel
+nix flake check              # validate flake, build toplevel, run the VM integration test
 nix build .#installer-iso    # build installer ISO
 nix build .#live-agent-iso   # build live agent ISO
-cd pkgs/tentaflake-auditd && go vet ./... && go test ./...
+nix build .#checks.x86_64-linux.vm-integration -L  # boot agent-host in a VM, assert runtime behavior
+cd pkgs/tentaflake-auditd && go vet ./... && go test ./... && golangci-lint run
 ./scripts/banner-test.sh     # preview tentaflake-status banner (fake fleet + self-checks)
 ```
 

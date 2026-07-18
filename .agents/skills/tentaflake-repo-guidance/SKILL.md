@@ -76,6 +76,9 @@ tentaflake/
 ├── scripts/
 │   └── build-iso.sh              # Convenience script for ISO builds
 │
+├── tests/
+│   └── integration.nix           # NixOS VM test (checks.vm-integration): boots agent-host, asserts runtime
+│
 ├── .agents/skills/                # Bundled skills (development agent + Hermes container)
 │   ├── handle-the-host/           # Remote host operations (Tailscale SSH, rebuild)
 │   ├── hermes-config-manager/     # Hermes config management
@@ -516,10 +519,11 @@ plain `envFile` option for that runtime.
 ## Build & Test Commands
 
 ```bash
-nix flake check                   # Validate flake + build toplevel + run Go tests
+nix flake check                   # Validate flake + build toplevel + VM integration test + Go tests
 nix build .#installer-iso         # Build installer ISO
 nix build .#live-agent-iso        # Build live agent ISO
 nix build .#tentaflake-auditd     # Build audit daemon package
+nix build .#checks.x86_64-linux.vm-integration -L  # Boot agent-host in a VM, assert runtime behavior
 nix fmt                           # Format Nix files (nixfmt-tree)
 cd pkgs/tentaflake-auditd && go test ./...  # Run Go tests
 golangci-lint run                 # Go lint (in pkgs/tentaflake-auditd/)
@@ -527,7 +531,14 @@ golangci-lint run                 # Go lint (in pkgs/tentaflake-auditd/)
 
 ## Check (CI)
 
-The `checks.${system}.tentaflake` target validates that the full toplevel builds. This runs in CI on every push via `.github/workflows/check.yml`.
+`checks.${system}` exposes four targets, all run by `nix flake check` and in CI (`.github/workflows/check.yml`):
+
+- `tentaflake` — validates the full toplevel builds.
+- `tentaflake-auditd` — builds the audit daemon package.
+- `image-pinning` — asserts `lib/pinnedImage.nix` rejects mutable/unsafe image refs.
+- `vm-integration` — boots the host in a VM and asserts the runtime path (`tentaflake` CLI runs, status banner renders, the audit daemon is active and has created its SQLite DB, a declared agent produces its systemd unit + system user + 0700 state dir). Defined in `tests/integration.nix`.
+
+CI additionally runs `nix fmt -- --ci`, `go build/vet/test`, `golangci-lint`, and `shellcheck` on every push.
 
 ## Nix Conventions
 

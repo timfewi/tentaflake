@@ -41,5 +41,11 @@ jobs:
       - name: go test
         run: cd pkgs/tentaflake-auditd && go test ./...
 
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v6
+        with:
+          version: latest
+          working-directory: pkgs/tentaflake-auditd
+
       - name: shellcheck
         run: shellcheck installer/*.sh scripts/*.sh
