@@ -441,6 +441,7 @@ let
       TF_CAND=()
       TF_ROOTS=()
       TF_CLEANED=""
+      TF_STTY_OFF="" # set only while a `read -rs` owns the terminal's echo bit
 
       # shellcheck disable=SC2059  # $1 is our own literal format, never user input
       hdr_emit() { local f="$1"; shift; printf "$f" "$@" >&3 2>/dev/null || true; }
@@ -530,7 +531,16 @@ let
           hdr_emit '\033[r\033[999;1H\033[?25h\n'
           HDR_ROWS=0
         fi
-        [ -t 0 ] && { stty echo 2>/dev/null || true; } # `read -rs` may have died mid-read
+        # Only if THIS process turned echo off: `read -rs` restores it itself on
+        # a normal return, so this covers a signal death mid-read and nothing
+        # else. Unconditional `stty echo` would enable echo on terminals that
+        # deliberately have it off (serial console, scripted pty, the NixOS test
+        # driver's backdoor), corrupting whatever is reading them.
+        # ponytail: no `[ -t 0 ]` guard — on a non-tty `stty` just fails into
+        # /dev/null, and dropping it keeps the __selftest assertion below
+        # meaningful when the selftest runs without a pty (as CI does).
+        [ -n "$TF_STTY_OFF" ] && { stty echo 2>/dev/null || true; }
+        TF_STTY_OFF=""
         return 0
       }
 
@@ -844,7 +854,7 @@ let
         # that worked.
         while [ -z "$apikey" ]; do
           printf 'API key for %s (hidden — paste is fine, blank aborts): ' "$name" >&2
-          read -rs apikey || true
+          TF_STTY_OFF=1; read -rs apikey || true; TF_STTY_OFF=""
           printf '\n' >&2
           [ -n "$apikey" ] || { echo "''${red}error:''${reset} no API key entered — aborting" >&2; exit 1; }
           # `r` = "the stick is in my bag" — rescan without losing every answer.
@@ -1044,6 +1054,14 @@ let
         grep -q "$(printf '\033')\[r" "$t" || { echo "FAIL: tf_cleanup did not reset the scroll region"; rm -f "$f" "$t"; exit 1; }
         [ "$HDR_ROWS" -eq 0 ] || { echo "FAIL: tf_cleanup not idempotent"; rm -f "$f" "$t"; exit 1; }
         TF_CLEANED=""
+        # A run that never masked input must not touch the terminal's echo bit.
+        stty() { echo "stty $*" >>"$t"; }
+        TF_STTY_OFF=""; tf_cleanup; TF_CLEANED=""
+        ! grep -q '^stty echo' "$t" || { echo "FAIL: tf_cleanup ran stty echo without a read -rs"; unset -f stty; rm -f "$f" "$t"; exit 1; }
+        # ...and it must still restore echo when a `read -rs` died mid-read.
+        TF_STTY_OFF=1; tf_cleanup; TF_CLEANED=""
+        grep -q '^stty echo' "$t" || { echo "FAIL: tf_cleanup did not restore echo after a masked read"; unset -f stty; rm -f "$f" "$t"; exit 1; }
+        unset -f stty
         rm -f "$t"
 
         rm -f "$f"
