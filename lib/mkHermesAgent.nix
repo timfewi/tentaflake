@@ -222,7 +222,18 @@ let
       serviceConfig = {
         Type = "oneshot";
         RemainAfterExit = true;
-        ExecStart = "${pkgs.bash}/bin/bash -c 'cp -rn ${seedDir}/* ${stateDir}/ 2>/dev/null || true'";
+        # A seedDir is typically a Nix store path (read-only, root-owned), and
+        # plain cp preserves both — so the agent (uid ${ownUid}) gets EACCES the
+        # first time it edits a seeded file (skills/, MEMORY.md, ...). Strip the
+        # source modes on copy, then re-own and re-enable writes on every boot so
+        # state dirs seeded before this fix are repaired too.
+        #
+        # The chown here is deliberately NOT left to hermes-${name}-heal-uid:
+        # that unit is ordered BEFORE this one, so it cannot heal a copy this
+        # unit has not made yet. Keeping ownership correct inside the same
+        # command makes the unit correct on its own, rather than dependent on
+        # an ordering declaration elsewhere.
+        ExecStart = "${pkgs.bash}/bin/bash -c 'cp -rn --no-preserve=mode,ownership ${seedDir}/* ${stateDir}/ 2>/dev/null || true; chown -R ${ownUid}:${ownGid} ${stateDir}; chmod -R u+w ${stateDir}'";
         User = "root";
       };
     };
