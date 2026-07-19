@@ -87,7 +87,7 @@ vm: iso
 # Cut a release tag. Update CHANGELOG.md FIRST, then: just tag v0.3.0
 # The git tag is the source of truth for the repo version.
 tag VERSION:
-    @git diff --quiet || { echo "working tree dirty — commit first"; exit 1; }
+    @test -z "$(git status --porcelain)" || { echo "working tree dirty (staged, unstaged or untracked) — commit first"; exit 1; }
     @grep -q "## \[{{ replace(VERSION, 'v', '') }}\]" CHANGELOG.md \
         || { echo "no CHANGELOG.md section for {{VERSION}} — write it first"; exit 1; }
     git tag -a {{VERSION}} -m "{{VERSION}}"
