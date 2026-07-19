@@ -226,7 +226,7 @@ sudo journalctl -u tentaflake-auditd
 ```
 
 Enable it with `tentaflake.auditd.enable = true;` (on by default for the
-`agent-host` config). See [`docs/06-shell.md`](06-shell.md#tentaflake-top--live-activity-dashboard).
+`tentaflake` config). See [`docs/06-shell.md`](06-shell.md#tentaflake-top--live-activity-dashboard).
 
 ---
 

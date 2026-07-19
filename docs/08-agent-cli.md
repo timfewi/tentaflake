@@ -27,6 +27,17 @@ below.
 
 ### Example: `tentaflake agent add`
 
+On a real terminal the tentaflake logo is pinned to the top of the screen for
+the whole wizard — it uses the terminal's own scroll region (DECSTBM), so only
+the prompts below it scroll. It is restored on exit, including on Ctrl-C. The
+full logo needs at least 24 rows × 60 columns; from 12–23 rows (and ≥40
+columns) you get a compact two-row header instead, and below that no header at
+all. A legacy Linux VT also gets the compact header, because it has no braille
+glyphs to draw the logo with. In a pipe, under `NO_COLOR`, or on a `dumb`
+terminal both the header and the colours are skipped and the wizard runs as
+plain sequential output — colour is gated on those three conditions only,
+never on window size.
+
 Runtime and provider are picked from a numbered menu (an `fzf` fuzzy-picker
 instead, if `fzf` is installed — see [06-shell.md](06-shell.md)); everything
 else is a plain prompt:
@@ -45,12 +56,13 @@ provider
   4) custom
 provider [1-4]: 1
 model id (concrete id, e.g. anthropic/claude-sonnet-4): anthropic/claude-sonnet-4
-API key for research (input hidden, leave blank to abort): ************************************
+API key for research (hidden — paste is fine, blank aborts):
+  got sk-or-…mnop (73 chars) · looks like an OpenRouter key — correct? [Y/n] y
 ✓ added hermes agent 'research' → /etc/nixos/agents.json
   secret: /var/lib/tentaflake/secrets/hermes-research.env (root:root 0600, key not in git)
 next: rebuild so the container is created from this config.
 Rebuild now? [y/N] y
-Applying system configuration — sudo nixos-rebuild switch --flake /etc/nixos#agent-host
+Applying system configuration — sudo nixos-rebuild switch --flake /etc/nixos#tentaflake
 ...
 ```
 
@@ -67,7 +79,8 @@ provider [1-4]: 1
 model id (concrete id, e.g. anthropic/claude-sonnet-4): anthropic/claude-haiku-4.5
 hostPort: 9246
 servePort: 9146
-API key for assistant (input hidden, leave blank to abort): ************************************
+API key for assistant (hidden — paste is fine, blank aborts):
+  got sk-or-…mnop (73 chars) · looks like an OpenRouter key — correct? [Y/n] y
 ✓ added zeroclaw agent 'assistant' → /etc/nixos/agents.json
   secret: /var/lib/tentaflake/secrets/zeroclaw-assistant.env (root:root 0600, key not in git)
 next: rebuild so the container is created from this config.
@@ -88,6 +101,63 @@ to a `0600` temp file and installed by `sudo install -D -m600 -o root -g
 root`, so the plaintext never exists at a predictable path first. The wizard
 also runs `git add agents.json` for you (staged, not committed) — review and
 commit it alongside the rest of your config the usual way.
+
+Because `read -rs` shows you nothing, the wizard echoes a **masked**
+confirmation afterwards — the first 6 and last 4 characters plus the total
+length — so you can tell a truncated paste from a good one, and say `n` to
+retry. That masked preview is the one thing about the key that ends up in
+your scrollback; the key itself never is.
+
+### Importing the key from a USB stick
+
+Nobody wants to type a 73-character OpenRouter key. If a stick is plugged in,
+`tentaflake agent add` offers the key it finds on it:
+
+```
+model id (concrete id, e.g. anthropic/claude-sonnet-4): anthropic/claude-sonnet-4
+Found a key on connected media:
+  sk-or-…mnop (73 chars) · looks like an OpenRouter key
+  openrouter.txt (on My Stick)
+use it? [Y/n]:
+```
+
+If it finds several, you get a numbered list — and "type or paste it myself"
+is always the last option. With no stick plugged in, nothing changes: the
+wizard says so and goes to the key prompt. If you only remember the stick once
+you are already there, plug it in and type `r` then Enter to rescan — none of
+your earlier answers are lost.
+
+**No filesystem label and no particular filename are required.** Use whatever
+stick you already own. The wizard looks for:
+
+- already-mounted media first — `/run/media/<user>/<volume>`, `/media/*`,
+  `/mnt/*`. On a desktop your stick is already there, and nothing privileged
+  happens at all.
+- only if that turns up **no key**, unmounted **removable** partitions (never a
+  fixed disk), which it mounts itself, read-only. A stale, key-less mountpoint
+  under `/mnt` therefore does not stop it from finding your stick.
+
+On each it searches the top level and one directory down for `.env` files
+containing the provider's `KEY=value` line, and for `.txt`/`.key` files
+holding a bare token.
+
+Safety properties, deliberately not traded away for the convenience:
+
+- Files on removable media are **parsed, never `source`d, `eval`d or
+  executed**. The value is matched with a regex and taken as literal text; a
+  file containing `OPENROUTER_API_KEY=$(rm -rf ~)` yields nothing runnable.
+- Anything the wizard mounts itself is mounted `ro,nosuid,nodev,noexec` and
+  unmounted again the moment the key has been read — including when you abort
+  or hit Ctrl-C.
+- The imported key takes exactly the same route as a typed one: into a `0600`
+  temp file, then `sudo install -D -m600 -o root -g root`. Never in argv,
+  never in `agents.json`, never in git, never in the Nix store.
+
+> **This does not replace the `TENTAFLAKE_ENV` label.** That label is still the
+> deterministic marker for the live ISO's *unattended* boot (see
+> [README.md](../README.md#skip-the-wizard-unattended-boot)), which has nobody
+> to ask. It is simply no longer required for the interactive wizard — where a
+> labelled volume just gets offered first.
 
 ### `tentaflake agent list`
 
@@ -253,6 +323,74 @@ Both files can define agents at the same time; give each agent a unique
 entry into the matching Nix attrset, add whatever `settings` you need, then
 run `tentaflake agent remove <name>` to drop it from `agents.json` so it
 isn't declared twice.
+
+## Troubleshooting
+
+### `infinite recursion encountered` on the first rebuild after `agent add`
+
+Machines installed before this was fixed hit this the moment they add their
+**first** agent:
+
+```
+… while evaluating the module argument `agentsFromData' in "…/configuration.nix":
+… noting that argument `agentsFromData` is not externally provided, so querying
+  `_module.args` instead, requiring `config`
+error: infinite recursion encountered
+```
+
+The flake the installer generated at `/etc/nixos/flake.nix` passes only
+`mkHermesAgent` and `constants` in `specialArgs`, but `configuration.nix` also
+takes `mkZeroClawAgent` and `agentsFromData` — and uses them inside `imports`.
+A missing module argument there does not fail loudly: Nix looks it up in
+`config._module.args`, which needs `config`, which needs `imports`, and the
+evaluation loops. Nothing surfaces until an `agents.json` exists, because
+`lib.optionals (builtins.pathExists ./agents.json)` keeps `agentsFromData`
+unforced on a fresh install — so the first `tentaflake agent add` trips it.
+
+Fix it in place — edit `/etc/nixos/flake.nix` and replace these two `let`
+bindings:
+
+```nix
+      constants = import ./lib/constants.nix;
+      mkHermesAgent = (import ./lib { inherit pkgs lib; }).mkHermesAgent;
+```
+
+with a single binding for the whole helper set:
+
+```nix
+      tfLib     = import ./lib { inherit pkgs lib; };
+```
+
+then change `specialArgs` from:
+
+```nix
+        specialArgs = {
+          inherit self inputs mkHermesAgent constants;
+          profile = "installed";
+        };
+```
+
+to:
+
+```nix
+        specialArgs = tfLib // {
+          inherit self inputs;
+          profile = "installed";
+        };
+```
+
+`/etc/nixos` is a git repo and flakes only evaluate committed or staged files,
+so commit before rebuilding:
+
+```bash
+sudo git -C /etc/nixos add -A
+sudo git -C /etc/nixos -c user.email=root@localhost -c user.name=root \
+  commit -m "fix: pass all agent helpers in specialArgs"
+sudo tentaflake rebuild
+```
+
+Machines installed from an ISO built after the fix generate the corrected flake
+already.
 
 ## See also
 

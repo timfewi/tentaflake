@@ -14,11 +14,18 @@
   defaultLocale = "en_US.UTF-8";
   consoleKeyMap = "us";
 
-  # Host name
-  hostName = "agent-host";
+  # TTY font. The kernel's built-in font has only 256 CP437-era glyphs, so box
+  # drawing (btop, the banner separator) renders as garbage on a bare console.
+  # Terminus covers those; bump to ter-v32n on HiDPI panels.
+  consoleFont = "ter-v16n";
+
+  # Host name. Doubles as the flake attribute name for the built-in host —
+  # `tentaflake rebuild` runs `nixos-rebuild --flake /etc/nixos#<hostName>`, so
+  # the two must not drift apart.
+  hostName = "tentaflake";
 
   # Default Admin name
-  adminUser = "admin";
+  adminUser = "user";
 
   # Default shell
   # NOTE: Override via tentaflake.adminShell to ${pkgs.bash}/bin/bash for portability

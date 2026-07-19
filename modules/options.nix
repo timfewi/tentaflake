@@ -7,6 +7,7 @@ let
     adminShell
     defaultLocale
     consoleKeyMap
+    consoleFont
     stateVersion
     ;
 in
@@ -53,6 +54,43 @@ in
       type = lib.types.str;
       default = consoleKeyMap;
       description = "Console keymap";
+    };
+    consoleFont = lib.mkOption {
+      type = lib.types.nullOr lib.types.str;
+      default = consoleFont;
+      example = "ter-v32n";
+      description = ''
+        Legacy VT font, used when `modernConsole.enable = false`: a terminus_font
+        name (ter-v16n, ter-v32n for HiDPI, …) or an absolute path to a
+        .psf/.psf.gz. The kernel default font lacks the box-drawing glyphs btop
+        and the login banner use.
+
+        `null` leaves the kernel's built-in font alone — no `setfont` at boot,
+        hence no fbcon reconfiguration. Both ISOs use that: their `dialog` TUIs
+        draw in plain ASCII, and on some Intel panels the extra modeset shows up
+        as a flickering console (`pipe A FIFO underrun`).
+      '';
+    };
+    modernConsole = {
+      enable = lib.mkOption {
+        type = lib.types.bool;
+        default = true;
+        description = ''
+          Render the physical console with kmscon (KMS/DRI + TTF fonts) instead
+          of the legacy Linux VT. The VT caps at 512 glyphs, so btop's graphs and
+          the braille logo in `tentaflake-status` are unrenderable there no
+          matter which console font is set.
+
+          Set to false on hardware where kmscon fails to grab the framebuffer;
+          the console then falls back to the VT with `consoleFont`.
+        '';
+      };
+      fontSize = lib.mkOption {
+        type = lib.types.ints.positive;
+        default = 14;
+        example = 20;
+        description = "kmscon font size in points. Raise it on HiDPI panels.";
+      };
     };
     stateVersion = lib.mkOption {
       type = lib.types.str;

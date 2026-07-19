@@ -13,16 +13,16 @@ default:
 # ── The gates ────────────────────────────────────────────────
 
 # Full local gate: everything CI runs + the two ISOs CI never builds
-ci: fmt-check lint shellcheck go-lint go check iso iso-installer
+ci: fmt-check lint shellcheck go-lint go check generated-flake iso iso-installer
     @echo "==> all green"
 
-# nix flake check (eval + agent-host toplevel + tentaflake-auditd)
+# nix flake check (eval + tentaflake toplevel + tentaflake-auditd)
 check:
     nix flake check
 
-# Build just the agent-host system (the toplevel CI builds), no symlink
+# Build just the tentaflake system (the toplevel CI builds), no symlink
 build:
-    nix build .#nixosConfigurations.agent-host.config.system.build.toplevel --no-link
+    nix build .#nixosConfigurations.tentaflake.config.system.build.toplevel --no-link
 
 # ── Formatting & lint ────────────────────────────────────────
 
@@ -58,6 +58,11 @@ shellcheck:
 # Preview the tentaflake-status login banner with a fake fleet (+ self-checks)
 banner:
     ./scripts/banner-test.sh
+
+# Evaluate the flake installer.sh generates for an installed machine, with an
+# agent configured — catches specialArgs drift that only bites after `agent add`
+generated-flake:
+    ./scripts/generated-flake-test.sh
 
 # ── ISOs ─────────────────────────────────────────────────────
 

@@ -96,7 +96,7 @@ Three machines are defined in `flake.nix`:
 
 | Configuration | Profile | Purpose |
 |---|---|---|
-| `agent-host` | `installed` | Default target machine. Consumes `my-agents.nix` for custom agents. Built-in host in the template. |
+| `tentaflake` | `installed` | Default target machine. Consumes `my-agents.nix` for custom agents. Built-in host in the template. |
 | `installer-iso` | `installer` | Bootable ISO → TUI wizard → partitions disk → installs NixOS. |
 | `live-agent` | `live` | Bootable ISO → runs agents in RAM + Piper TTS. Ephemeral. |
 
@@ -112,8 +112,8 @@ These are the knobs you turn in your host config.
 
 | Option | Type | Default | Description |
 |---|---|---|---|
-| `tentaflake.hostName` | `str` | `"agent-host"` | System hostname |
-| `tentaflake.adminUser` | `str` | `"admin"` | Primary admin username |
+| `tentaflake.hostName` | `str` | `"tentaflake"` | System hostname |
+| `tentaflake.adminUser` | `str` | `"user"` | Primary admin username |
 | `tentaflake.adminDescription` | `str` | `"System Administrator"` | Description for the admin user |
 | `tentaflake.adminShell` | `str` | (bash) | Shell for admin user |
 | `tentaflake.adminAuthorizedKeys` | `list of str` | `[]` | SSH public keys for admin |
@@ -295,8 +295,8 @@ constants = {
   stateVersion     = "26.05";
   defaultLocale    = "en_US.UTF-8";
   consoleKeyMap    = "us";
-  hostName         = "agent-host";
-  adminUser        = "admin";
+  hostName         = "tentaflake";
+  adminUser        = "user";
   adminShell       = "/run/current-system/sw/bin/bash";
   adminDescription = "System Administrator";
 };
@@ -364,6 +364,7 @@ Interactive shell experience for SSH/console operators. Features:
 - **`tentaflake` CLI** — agent management across every runtime (status, logs, restart, shell, exec)
 - **`tentaflake-status`** — dynamic login banner (host info + agent health, all runtimes)
 - **`tentaflake top`** — live filesystem activity TUI (requires audit daemon)
+- **`tentaflake agent add`** — no-Nix agent wizard; logo pinned via the terminal's own scroll region (DECSTBM), API key imported from any USB stick (no label required) or typed with a masked confirm. Hidden check: `tentaflake agent __selftest`
 - **bash** — completion, large deduped history, colored prompt (or Starship)
 - **zsh** — Oh My Zsh, autosuggestions, syntax highlight, fzf-tab
 - **Modern tools** — eza, bat, fd, ripgrep, fzf, htop, btop, jq, tree, ncdu
@@ -387,6 +388,11 @@ tentaflake top          # Live TUI (tentaflake-top, needs audit daemon)
 tentaflake backup <name>  # Snapshot an agent's state dir to a .tar.gz (0600)
 tentaflake doctor       # Host health check (exits nonzero on problems)
 tentaflake console      # Agent Console URL + tailnet publish hint
+tentaflake agent list   # List configured agents (agents.json)
+tentaflake agent add    # Interactive wizard: new agent, no Nix (pinned logo,
+                        #   USB key import, key → root 0600 file)
+tentaflake agent set-model <name>
+tentaflake agent remove <name>
 tentaflake rebuild      # Apply the system config (nixos-rebuild switch)
 tentaflake update       # Update flake inputs, review, then rebuild
 ```
@@ -521,7 +527,7 @@ golangci-lint run                 # Go lint (in pkgs/tentaflake-auditd/)
 
 ## Check (CI)
 
-The `checks.${system}.agent-host` target validates that the full toplevel builds. This runs in CI on every push via `.github/workflows/check.yml`.
+The `checks.${system}.tentaflake` target validates that the full toplevel builds. This runs in CI on every push via `.github/workflows/check.yml`.
 
 ## Nix Conventions
 

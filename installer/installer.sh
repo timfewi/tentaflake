@@ -90,7 +90,7 @@ We'll ask you 5 questions, then go." 14 60
 HOSTNAME=""
 while [ -z "$HOSTNAME" ]; do
   HOSTNAME=$(dialog --stdout --title "Hostname" \
-    --inputbox "Enter the hostname for this machine" 8 50 "agent-machine")
+    --inputbox "Enter the hostname for this machine" 8 50 "tentaflake")
   if [ -z "$HOSTNAME" ]; then
     dialog --title "Invalid" --msgbox "Hostname cannot be empty." 5 40
   # Restrict to RFC-1123 label chars. Anything else (e.g. " or #) would be
@@ -107,7 +107,7 @@ done
 USERNAME=""
 while [ -z "$USERNAME" ]; do
   USERNAME=$(dialog --stdout --title "Username" \
-    --inputbox "Enter the primary admin username" 8 50 "agent")
+    --inputbox "Enter the primary admin username" 8 50 "user")
   if [ -z "$USERNAME" ]; then
     dialog --title "Invalid" --msgbox "Username cannot be empty." 5 40
   # Restrict to a valid Linux user name (same as useradd's NAME_REGEX).
@@ -511,13 +511,18 @@ ${NVF_INPUT}  };
       pkgs      = nixpkgs.legacyPackages.\${system};
       lib       = nixpkgs.lib;
       uc        = import ./user-config.nix;
-      constants = import ./lib/constants.nix;
-      mkHermesAgent = (import ./lib { inherit pkgs lib; }).mkHermesAgent;
+      # Splat the whole helper set (mkHermesAgent, mkZeroClawAgent,
+      # agentsFromData, constants) instead of listing helpers by hand, so this
+      # generated flake cannot drift out of sync with what configuration.nix
+      # asks for. Drift does not fail loudly: configuration.nix consumes these
+      # inside imports, so a missing one sends Nix to config._module.args and
+      # the rebuild dies with "infinite recursion encountered" instead.
+      tfLib     = import ./lib { inherit pkgs lib; };
     in {
       nixosConfigurations.\${uc.hostName} = lib.nixosSystem {
         inherit system;
-        specialArgs = {
-          inherit self inputs mkHermesAgent constants;
+        specialArgs = tfLib // {
+          inherit self inputs;
           profile = "installed";
         };
         modules = [

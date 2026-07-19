@@ -6,8 +6,8 @@ Find and replace these before deploying your fork:
 |---|---|---|
 | GitHub handle | `timfewi` | your handle |
 | Repo name / Go module | `tentaflake` | your repo name |
-| Hostname | `agent-host` | your hostname |
-| Admin user | `admin` | your username |
+| Hostname | `tentaflake` | your hostname |
+| Admin user | `user` | your username |
 | Timezone | `UTC` | your tz |
 | Badges (README) | `timfewi/tentaflake` | your repo |
 | Tailscale auth key | (set at runtime) | your key |
@@ -43,7 +43,7 @@ nixpkgs flags as insecure, and only Go 1.24.
 ## Don't forget
 
 - Set `tentaflake.adminAuthorizedKeys = [ "ssh-ed25519 ..." ]` (or a
-  `hashedPassword`) — a fresh `agent-host` has no console password; remote access
+  `hashedPassword`) — a fresh `tentaflake` has no console password; remote access
   is via Tailscale SSH (`services.tailscale` with `--ssh`).
 - `tentaflake.containerBackend` defaults to `"docker"`; set `"podman"` for a
   rootless, daemonless setup.

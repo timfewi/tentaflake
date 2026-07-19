@@ -147,6 +147,12 @@ sudo mkfs.ext4 -L TENTAFLAKE_ENV /dev/sdY1     # label is what matters
 
 On boot the system auto-detects the label, copies env files in, starts agents **without prompting**.
 
+> The label is only needed for this *unattended* boot path — it is the marker
+> the ISO uses when there is nobody to ask. On an installed system,
+> `tentaflake agent add` finds an API key on **any** stick, with no label and
+> no particular filename required. See
+> [docs/08-agent-cli.md](docs/08-agent-cli.md#importing-the-key-from-a-usb-stick).
+
 ### Persist Data Across Reboots
 
 By design nothing survives a reboot. To keep agent memory and learned skills, attach a USB labeled `TENTAFLAKE_DATA` (legacy `HERMES_DATA` also works):
@@ -232,7 +238,8 @@ Then follow the [quickstart guide](docs/01-quickstart.md) to set up agent provid
 If you already have NixOS running (or just finished Path 2), define your agents with a **my-agents.nix** file and rebuild.
 
 > **Not a developer?** `tentaflake agent add` is an interactive wizard that
-> configures a Hermes or ZeroClaw agent for you — no Nix required, and API
+> configures a Hermes or ZeroClaw agent for you — no Nix required, no typing a
+> 73-character API key (it offers the one it finds on your USB stick), and API
 > keys never touch Git or the Nix store. See
 > [docs/08-agent-cli.md](docs/08-agent-cli.md). The rest of this section is
 > for the hand-written Nix path.
@@ -390,9 +397,9 @@ Full guide: [`docs/04-agenix-secrets.md`](docs/04-agenix-secrets.md)
 ```bash
 git add my-agents.nix          # flakes only evaluate Git-tracked files
 nix flake check                # validates syntax + evaluation (like tsc --noEmit)
-sudo nixos-rebuild switch --flake .#agent-host
+sudo nixos-rebuild switch --flake .#tentaflake
 #     ^^^^^^^^^^^^^^^^       ^^^^^^^^^^^^^^^^^
-#     build + apply config   use host config named "agent-host" from flake
+#     build + apply config   use host config named "tentaflake" from flake
 #     "switch" activates it  (defined in flake.nix, change via tentaflake.hostName)
 ```
 
@@ -458,7 +465,7 @@ the same one-container-per-agent shape under a `zeroclaw-<name>` prefix.
 |---|---|
 | `boot.nix` | systemd-boot (boot-menu editor disabled), EFI |
 | `hardening.nix` | Sysctl + kernel-param hardening, LSM order, AppArmor, journald limits |
-| `locale.nix` | Timezone, locale, console keymap |
+| `locale.nix` | Timezone, locale, console keymap, and the physical console — kmscon (TTF fonts, full Unicode) instead of the 512-glyph legacy VT ([docs](docs/06-shell.md#physical-console-kmscon)) |
 | `networking.nix` | Hostname, nftables firewall, NetworkManager, opt-in egress allowlist (`tentaflake.networking.egress.enable` — covers agent containers too via host networking, [docs](docs/07-operations.md#egress-filtering-opt-in)) |
 | `nix-settings.nix` | Flakes, auto-GC, daemon hardening (allowed-users, strict sandbox, min-free/max-free), trusted-users, substituters |
 | `packages.nix` | curl, git, jq, tmux, vim, and more |
@@ -485,8 +492,8 @@ nix flake check                          # validate everything builds
 nix build .#installer-iso                # build installer ISO
 nix build .#live-agent-iso               # build live ISO
 nix build .#tentaflake-auditd            # build audit daemon package
-sudo nixos-rebuild switch --flake .#agent-host  # deploy config
-sudo nixos-rebuild dry-activate --flake .#agent-host  # dry-run
+sudo nixos-rebuild switch --flake .#tentaflake  # deploy config
+sudo nixos-rebuild dry-activate --flake .#tentaflake  # dry-run
 sudo nixos-rebuild switch --rollback     # undo last deploy
 tentaflake status                        # all agents, any runtime, with health
 tentaflake doctor                        # host health check (nonzero exit on problems)
