@@ -71,6 +71,7 @@
       mkHermesAgent = (import ./lib { inherit pkgs lib; }).mkHermesAgent;
       mkZeroClawAgent = (import ./lib { inherit pkgs lib; }).mkZeroClawAgent;
       agentsFromData = (import ./lib { inherit pkgs lib; }).agentsFromData;
+      mkOpenCodeAgent = (import ./lib { inherit pkgs lib; }).mkOpenCodeAgent;
 
       # Module set imported by external consumers and built-in hosts
       tentaflakeModules = import ./modules/default.nix;
@@ -83,6 +84,7 @@
           mkHermesAgent
           mkZeroClawAgent
           agentsFromData
+          mkOpenCodeAgent
           repoRoot
           constants
           ;
@@ -105,6 +107,7 @@
         inherit
           mkHermesAgent
           mkZeroClawAgent
+          mkOpenCodeAgent
           agentsFromData
           constants
           ;
@@ -132,6 +135,12 @@
         ${hostName} = self.nixosConfigurations.${hostName}.config.system.build.toplevel;
         tentaflake-auditd = self.packages.${system}.tentaflake-auditd;
         image-pinning = import ./lib/pinnedImage-test.nix { inherit pkgs; };
+
+        # VM integration test: boots the host and asserts the runtime path
+        # (CLI, banner, audit daemon, agent unit/user/state dir). See tests/integration.nix.
+        vm-integration = pkgs.testers.runNixOSTest (
+          import ./tests/integration.nix { inherit self mkHermesAgent mkOpenCodeAgent; }
+        );
       };
 
       # ── tentaflake: Installed system, consumes my-agents.nix ──

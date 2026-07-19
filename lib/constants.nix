@@ -37,9 +37,9 @@
   # Agent container images — DIGEST-PINNED, never tags.
   #
   # A tag is a mutable pointer the registry owner can repoint at any time; a
-  # digest names exact bytes. mkHermesAgent/mkZeroClawAgent reject unpinned
-  # images outright (see lib/pinnedImage.nix). These are multi-arch OCI index
-  # digests, so they resolve on both amd64 and arm64.
+  # digest names exact bytes. mkHermesAgent/mkZeroClawAgent/mkOpenCodeAgent
+  # reject unpinned images outright (see lib/pinnedImage.nix). These are
+  # multi-arch OCI index digests, so they resolve on both amd64 and arm64.
   #
   # Refresh with ./scripts/update-agent-images.sh
   #
@@ -51,6 +51,8 @@
   # ghcr.io/zeroclaw-labs/zeroclaw:v0.8.2
   # (the tag is NOT part of the reference — podman/skopeo reject `repo:tag@digest`)
   zeroclawImage = "ghcr.io/zeroclaw-labs/zeroclaw@sha256:eae321dac2d314bc282bdfb28b5378c9d527998f7e2fe0dee8315bfdcdf13a0c";
+  # ghcr.io/anomalyco/opencode:latest as of 2026-07-19
+  opencodeImage = "ghcr.io/anomalyco/opencode@sha256:c2d5d6398df72aac85cb1bdc8f900c71a9b75a33fb7c0a76dc1484e4b126e41e";
 
   # UID/GID the official hermes-agent image runs its `hermes` user as. The host
   # state dir + any mounted data must be owned by this so the container (which

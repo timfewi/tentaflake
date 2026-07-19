@@ -18,12 +18,13 @@ let
   auditGroup = "hermes-audit";
 
   # Auto-discover the conventional state directory of every declarative AGENT
-  # container (hermes-*/zeroclaw-*) — only agent prefixes, so an unrelated
-  # oci-container never gets its /var/lib dir watched or console-exposed.
-  # Agents with a custom stateDir must list watchDirs by hand.
+  # container (hermes-*/zeroclaw-*/opencode-*) — only agent prefixes, so an
+  # unrelated oci-container never gets its /var/lib dir watched or console-
+  # exposed. Agents with a custom stateDir must list watchDirs by hand.
   discoveredDirs = lib.mapAttrsToList (name: _: "/var/lib/${name}") (
     lib.filterAttrs (
-      name: _: lib.hasPrefix "hermes-" name || lib.hasPrefix "zeroclaw-" name
+      name: _:
+      lib.hasPrefix "hermes-" name || lib.hasPrefix "zeroclaw-" name || lib.hasPrefix "opencode-" name
     ) config.virtualisation.oci-containers.containers
   );
   effectiveWatchDirs = if cfg.watchDirs != [ ] then cfg.watchDirs else discoveredDirs;

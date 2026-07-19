@@ -1,5 +1,10 @@
 name: Check
 
+permissions:
+  contents: read
+  # magic-nix-cache-action authenticates to FlakeHub Cache over OIDC.
+  id-token: write
+
 on:
   pull_request:
   push:
@@ -8,18 +13,32 @@ on:
 jobs:
   check:
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
-      - uses: DeterminateSystems/nix-installer-action@v22
+      - uses: DeterminateSystems/nix-installer-action@ef8a148080ab6020fd15196c2084a2eea5ff2d25 # v22
         with:
           extra-conf: |
             accept-flake-config = true
 
-      - uses: DeterminateSystems/magic-nix-cache-action@v14
+      - uses: DeterminateSystems/magic-nix-cache-action@908b263ff629f4cc17666315b7fd3ec127c6244d # v14
 
-      - name: nix flake check
-        run: nix flake check
+      # Eval-only: the VM test in `checks` needs /dev/kvm, which not every runner
+      # has. Evaluating still catches assertion/module errors; the VM is actually
+      # built in the separate `vm-test` job below.
+      - name: nix flake check (eval)
+        run: nix flake check --no-build
+
+      # `nix flake check` above is eval-only, so the non-VM checks still need an
+      # explicit build. tentaflake-auditd matters here: `go build` below uses
+      # GitHub's toolchain with network module fetch, so only this step catches a
+      # stale vendorHash or a broken pkgs/tentaflake-auditd/default.nix.
+      - name: nix build (non-VM checks)
+        run: |
+          nix build --no-link \
+            .#checks.x86_64-linux.image-pinning \
+            .#checks.x86_64-linux.tentaflake-auditd
 
       - name: nix build (tentaflake toplevel)
         run: nix build .#nixosConfigurations.tentaflake.config.system.build.toplevel --no-link
@@ -27,7 +46,7 @@ jobs:
       - name: nix fmt check
         run: nix fmt -- --ci
 
-      - uses: actions/setup-go@v6
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
         with:
           go-version-file: pkgs/tentaflake-auditd/go.mod
           cache-dependency-path: pkgs/tentaflake-auditd/go.sum
@@ -41,5 +60,33 @@ jobs:
       - name: go test
         run: cd pkgs/tentaflake-auditd && go test ./...
 
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
+        with:
+          version: v2.12.2
+          working-directory: pkgs/tentaflake-auditd
+
+      # Via the devShell, not the runner's apt shellcheck: the two versions
+      # disagree (Ubuntu's flags SC2015 where 0.11 does not), so an unpinned
+      # binary means "clean locally" and "clean in CI" are different claims.
+      # flake.lock pins this one, and it is the same one `nix develop` gives.
       - name: shellcheck
-        run: shellcheck installer/*.sh scripts/*.sh
+        run: nix develop --command shellcheck installer/*.sh scripts/*.sh
+
+  # Own job: the VM test derivation carries requiredSystemFeatures = kvm, so a
+  # KVM-less or slow runner degrades this one job instead of the whole check.
+  vm-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - uses: DeterminateSystems/nix-installer-action@ef8a148080ab6020fd15196c2084a2eea5ff2d25 # v22
+        with:
+          extra-conf: |
+            accept-flake-config = true
+
+      - uses: DeterminateSystems/magic-nix-cache-action@908b263ff629f4cc17666315b7fd3ec127c6244d # v14
+
+      - name: nix build (VM integration test)
+        run: nix build .#checks.x86_64-linux.vm-integration -L

@@ -269,9 +269,12 @@ const DefaultAgentPrefix = "/var/lib/hermes-"
 
 const zeroClawAgentPrefix = "/var/lib/zeroclaw-"
 
+const openCodeAgentPrefix = "/var/lib/opencode-"
+
 // agentNameFromPath extracts the agent name from a file path.
 // Convention: /var/lib/hermes-<name>/... → "name",
-// /var/lib/zeroclaw-<name>/... → "zeroclaw-<name>".
+// /var/lib/zeroclaw-<name>/... → "zeroclaw-<name>",
+// /var/lib/opencode-<name>/... → "opencode-<name>".
 // Unknown paths return "unknown".
 func agentNameFromPath(path string) string {
 	var prefix, label string
@@ -280,6 +283,8 @@ func agentNameFromPath(path string) string {
 		prefix, label = DefaultAgentPrefix, ""
 	case strings.HasPrefix(path, zeroClawAgentPrefix):
 		prefix, label = zeroClawAgentPrefix, "zeroclaw-"
+	case strings.HasPrefix(path, openCodeAgentPrefix):
+		prefix, label = openCodeAgentPrefix, "opencode-"
 	default:
 		return "unknown"
 	}

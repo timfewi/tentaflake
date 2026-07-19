@@ -51,6 +51,7 @@ let
     # the shipped defaults are pinned
     (accepts constants.hermesImage)
     (accepts constants.zeroclawImage)
+    (accepts constants.opencodeImage)
   ];
 
   failed = lib.length (lib.filter (ok: !ok) cases);

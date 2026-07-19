@@ -3,7 +3,7 @@
 > Deploy isolated AI agents on a single headless machine.
 > One NixOS brain · Many tentacles.
 
-> **What agents does this run?** Tentaflake supports two agent runtimes side by side: [Hermes](https://github.com/NousResearch/hermes-agent), an open-source AI agent daemon from Nous Research, and **ZeroClaw**, a second agent runtime you can declare with `mkZeroClawAgent`. Both connect to LLM providers (OpenRouter, Anthropic, OpenAI), run tools (terminal, web search, file access), and can be customized per agent. Tentaflake gives you a turnkey way to run one or many agents — of either runtime — on a dedicated machine.
+> **What agents does this run?** Tentaflake supports three agent runtimes side by side: [Hermes](https://github.com/NousResearch/hermes-agent), an open-source AI agent daemon from Nous Research (`mkHermesAgent`); **ZeroClaw**, a second agent runtime (`mkZeroClawAgent`); and [OpenCode](https://opencode.ai), a headless coding agent driven over an HTTP API (`mkOpenCodeAgent`). All connect to LLM providers (OpenRouter, Anthropic, OpenAI), run tools (terminal, web search, file access), and can be customized per agent. Tentaflake gives you a turnkey way to run one or many agents — of any runtime — on a dedicated machine.
 
 <p align="center">
   <a href="https://tentaflake.dev"><img src="https://img.shields.io/badge/tentaflake.dev-00d4ff?style=flat-square&labelColor=0a1628" alt="tentaflake.dev"/></a>
@@ -16,7 +16,7 @@
   <br/>
   <img src="public/_compressed/tentaflake-3d-realism-logo-wallpaper-16x9.png" alt="Tentaflake" width="720"/>
   <p align="center">
-    <i>Declaratively deploy & manage multiple isolated AI agents (Hermes, ZeroClaw)
+    <i>Declaratively deploy & manage multiple isolated AI agents (Hermes, ZeroClaw, OpenCode)
     on a single NixOS machine — each with its own secrets, skills, and personality.</i>
     <br/>
     <sub>Clone → configure → rebuild. Your swarm, your NixOS, your rules.</sub>
@@ -27,7 +27,7 @@
 
 ## What Is Tentaflake?
 
-**Tentaflake** is a **NixOS** (Linux distro configured entirely in code) template for running multiple isolated **AI agents** on one machine, across two supported runtimes — **Hermes** and **ZeroClaw**. Each agent lives in its own Docker container with its own secrets, skills, and personality. Hermes agents can also share a container as a team using **Hermes Profiles** — multiple personas, different skills, shared resources, all in a single container. Define all your agents in one file — the template handles servers, secrets, networking, and shells.
+**Tentaflake** is a **NixOS** (Linux distro configured entirely in code) template for running multiple isolated **AI agents** on one machine, across three supported runtimes — **Hermes**, **ZeroClaw**, and **OpenCode**. Each agent lives in its own Docker container with its own secrets, skills, and personality. Hermes agents can also share a container as a team using **Hermes Profiles** — multiple personas, different skills, shared resources, all in a single container. Define all your agents in one file — the template handles servers, secrets, networking, and shells.
 
 No SaaS, no third-party agent router — you host, you control. Clone → configure → rebuild.
 
@@ -258,7 +258,7 @@ Create `my-agents.nix` in the repo root. Here's a quick Nix syntax primer (it's 
 
 ```nix
 # my-agents.nix — each item in these lists becomes one isolated agent container
-{ mkHermesAgent, mkZeroClawAgent }:   # helpers that create agent modules, one per runtime
+{ mkHermesAgent, mkZeroClawAgent, mkOpenCodeAgent }:   # helpers that create agent modules, one per runtime
 
 let
   hermesAgents = [
@@ -285,12 +285,15 @@ let
   ];
 
   zeroclawAgents = [ ]; # mkZeroClawAgent {...} entries — see my-agents.nix.example
+  opencodeAgents = [ ]; # mkOpenCodeAgent {...} entries — see my-agents.nix.example
 in
-map mkHermesAgent hermesAgents ++ map mkZeroClawAgent zeroclawAgents
+map mkHermesAgent hermesAgents
+++ map mkZeroClawAgent zeroclawAgents
+++ map mkOpenCodeAgent opencodeAgents
 ```
 
-> Old single-arg `{ mkHermesAgent }: ...` files (no `zeroclawAgents`) keep working —
-> the runner only passes the builders your file actually asks for.
+> Old single-arg `{ mkHermesAgent }: ...` files (no `zeroclawAgents`/`opencodeAgents`) keep
+> working — the runner only passes the builders your file actually asks for.
 
 Each Hermes agent gets:
 - System user `hermes-<name>`
@@ -304,6 +307,15 @@ Each ZeroClaw agent (`mkZeroClawAgent`) gets the analogous layout under the
 `config.toml`, secrets via `agenixFile` (see [`zeroclaw.env.example`](zeroclaw.env.example)
 for the `ZEROCLAW_<section>__<sub>__<key>` env convention). Full reference
 in [`my-agents.nix.example`](my-agents.nix.example).
+
+Each OpenCode agent (`mkOpenCodeAgent`) runs a headless `opencode serve` under the
+`opencode-<name>` prefix — container `opencode-${name}`, state dir
+`/var/lib/opencode-${name}` (with a rw `/workspace`), config rendered from `settings`
+to a mounted `opencode.json`, secrets via `envFile`/`agenixFile`, and a loopback
+`hostPort` forwarded to the gateway (optionally published on the tailnet via
+`servePort`). External orchestrators (n8n, CI) drive it over OpenCode's documented
+HTTP API — `POST /session` then `POST /session/<id>/message`. Full reference in
+[`docs/08-opencode.md`](docs/08-opencode.md) and [`my-agents.nix.example`](my-agents.nix.example).
 
 ### Common `mkHermesAgent` Options
 
@@ -355,6 +367,38 @@ Full option reference: [`.agents/skills/tentaflake-repo-guidance/SKILL.md`](.age
 | `extraEnvironment` / `extraVolumes` | `attrset` / `list` | `{ }` / `[ ]` | Extra container env vars / `host:container:mode` mounts |
 
 See [`my-agents.nix.example`](my-agents.nix.example) and [`zeroclaw.env.example`](zeroclaw.env.example) for a fully-commented reference agent.
+
+### Common `mkOpenCodeAgent` Options
+
+| Option | Type | Default | Description |
+|---|---|---|---|
+| `name` | `string` | *(required)* | Agent identifier |
+| `hostPort` | `int` | *(required)* | Host loopback port forwarded to the container's `opencode serve` gateway (n8n / local callers hit this) |
+| `image` | `string` | `ghcr.io/anomalyco/opencode@sha256:c2d5d6398df72aac85cb1bdc8f900c71a9b75a33fb7c0a76dc1484e4b126e41e` | Digest-pinned OCI container image |
+| `allowMutableImage` | `bool` | `false` | Accept an unpinned `image` (e.g. a locally-built tag). Gives up reproducibility for this agent |
+| `servePort` | `int` | `null` | Optional tailnet HTTPS port published via `tailscale serve`; `null` = not published. Requires `OPENCODE_SERVER_PASSWORD` (see below); must differ from `hostPort` and from every other agent's `servePort` |
+| `allowUnauthenticatedServe` | `bool` | `false` | Opt out of the `servePort` credential check. Only sane when an auth proxy or tailnet ACLs gate access |
+| `gatewayPort` | `int` | `4096` | Port `opencode serve` listens on inside the container |
+| `envFile` / `agenixFile` | `path` | `null` | Env file(s) mounted via `--env-file` (`OPENCODE_SERVER_PASSWORD` + provider/proxy key) |
+| `authFile` | `path` | `null` | Optional provider `auth.json` mounted read-only into the data dir (reuse existing creds) |
+| `settings` | `attrset` | `{ }` | OpenCode `opencode.json` (model, provider base URLs, etc.) — lands in the world-readable Nix store, so reference keys as `{env:VAR}`, never a literal |
+| `seedDir` | `path` | `null` | Files copied into `/workspace` on first boot only (no-clobber) |
+| `autoStart` | `bool` | `true` | Auto-start with systemd |
+| `pidsLimit` | `int` | `512` | Container `--pids-limit` (fork-bomb ceiling); `null` disables |
+| `extraEnvironment` / `extraVolumes` | `attrset` / `list` | `{ }` / `[ ]` | Extra container env vars / `host:container:mode` mounts |
+
+> `opencode serve` binds `0.0.0.0` in the container, so `servePort` exposes the
+> session API to the **whole tailnet** — any peer could open a session and make
+> the agent run tool calls. Setting `servePort` without `envFile`/`agenixFile`
+> (which is where `OPENCODE_SERVER_PASSWORD` lives) fails at eval time, and the
+> serve unit refuses to start if the env file does not actually define that
+> variable; use `allowUnauthenticatedServe = true` only if access is gated some
+> other way. Teardown happens on `nixos-rebuild switch` (or when the container
+> stops) — after a `nixos-rebuild boot` + reboot, run
+> `tailscale serve --https=<servePort> off` by hand. See
+> [`docs/08-opencode.md`](docs/08-opencode.md).
+
+See [`docs/08-opencode.md`](docs/08-opencode.md) and [`my-agents.nix.example`](my-agents.nix.example) for a fully-commented reference agent.
 
 ### Secrets: Two Patterns
 
@@ -544,10 +588,11 @@ Add tentaflake as a dependency to your own flake — useful when you already hav
     system = "x86_64-linux";
     mkHermesAgent = tentaflake.lib.${system}.mkHermesAgent;
     mkZeroClawAgent = tentaflake.lib.${system}.mkZeroClawAgent;
+    mkOpenCodeAgent = tentaflake.lib.${system}.mkOpenCodeAgent;
   in {
     nixosConfigurations.my-host = nixpkgs.lib.nixosSystem {
       inherit system;
-      specialArgs = { inherit mkHermesAgent mkZeroClawAgent; };
+      specialArgs = { inherit mkHermesAgent mkZeroClawAgent mkOpenCodeAgent; };
       modules = [
         tentaflake.nixosModules.default    # all base modules
         {
@@ -556,21 +601,21 @@ Add tentaflake as a dependency to your own flake — useful when you already hav
           tentaflake.timeZone = "Europe/Vienna";
         }
         ./hardware-configuration.nix
-      ] ++ import ./my-agents.nix { inherit mkHermesAgent mkZeroClawAgent; };
+      ] ++ import ./my-agents.nix { inherit mkHermesAgent mkZeroClawAgent mkOpenCodeAgent; };
     };
   };
 }
 ```
 
-> The direct call above requires your `my-agents.nix` to accept both arguments
-> (`{ mkHermesAgent, mkZeroClawAgent }:` — or add `...`). An older
+> The direct call above requires your `my-agents.nix` to accept the builder arguments
+> (`{ mkHermesAgent, mkZeroClawAgent, mkOpenCodeAgent }:` — or add `...`). An older
 > `{ mkHermesAgent }:`-only file works unmodified inside this repo's
 > `configuration.nix` (it only passes what the function asks for), but for the
 > flake-input form shown here, pass only the builders your file declares.
 
 You get:
 - **`tentaflake.nixosModules.default`** — all NixOS modules with `tentaflake.*` options
-- **`tentaflake.lib.x86_64-linux.mkHermesAgent`** / **`mkZeroClawAgent`** — agent builder helpers, one per runtime
+- **`tentaflake.lib.x86_64-linux.mkHermesAgent`** / **`mkZeroClawAgent`** / **`mkOpenCodeAgent`** — agent builder helpers, one per runtime
 - **`tentaflake.lib.x86_64-linux.constants`** — default values (hostname, stateVersion, locale)
 
 See [`examples/consumer-flake.nix`](examples/consumer-flake.nix) for a full worked example including agenix and home-manager.
@@ -587,7 +632,7 @@ are deprecated and will be removed in a future release:
 |---|---|---|---|
 | Host operator CLI | `hermes` | `tentaflake` | shim warns on stderr, then forwards |
 | Shell option | `tentaflake.shell.hermesCli.enable` | `tentaflake.shell.tentaflakeCli.enable` | `mkRenamedOptionModule` eval warning |
-| `my-agents.nix` signature | `{ mkHermesAgent }:` | `{ mkHermesAgent, mkZeroClawAgent }:` | in-repo import passes only the args your file declares |
+| `my-agents.nix` signature | `{ mkHermesAgent }:` | `{ mkHermesAgent, mkZeroClawAgent, mkOpenCodeAgent }:` | in-repo import passes only the args your file declares |
 
 To migrate: switch scripts and habits to `tentaflake`, rename the option in your
 config, and move `my-agents.nix` to the two-list layout from

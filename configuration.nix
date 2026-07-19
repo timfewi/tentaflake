@@ -4,6 +4,7 @@
   pkgs,
   mkHermesAgent,
   mkZeroClawAgent,
+  mkOpenCodeAgent,
   agentsFromData,
   profile ? "installed",
   ...
@@ -19,7 +20,9 @@ let
     let
       f = import ./my-agents.nix;
     in
-    f (lib.intersectAttrs (lib.functionArgs f) { inherit mkHermesAgent mkZeroClawAgent; })
+    f (
+      lib.intersectAttrs (lib.functionArgs f) { inherit mkHermesAgent mkZeroClawAgent mkOpenCodeAgent; }
+    )
   );
 
   # agents.json — non-Nix config written by the `tentaflake` setup wizard, for

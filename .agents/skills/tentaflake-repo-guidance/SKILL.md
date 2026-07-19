@@ -8,7 +8,7 @@ version: 1.0.0
 
 ## Overview
 
-Tentaflake is a **generic NixOS flake template** for running isolated AI agent containers — Hermes and ZeroClaw — on a single headless machine. It is NOT domain-specific — no company config, real hostnames, API keys, or secrets belong here. Domain-specific work goes in forks.
+Tentaflake is a **generic NixOS flake template** for running isolated AI agent containers — Hermes, ZeroClaw and OpenCode — on a single headless machine. It is NOT domain-specific — no company config, real hostnames, API keys, or secrets belong here. Domain-specific work goes in forks.
 
 ## Repo Layout
 
@@ -34,22 +34,29 @@ tentaflake/
 │   ├── packages.nix              # System packages (curl, git)
 │   ├── users.nix                 # Admin user creation (wheel + networkmanager groups)
 │   ├── tailscale.nix             # Tailscale VPN with extraUpFlags
+│   ├── ssh.nix                   # Opt-in hardened OpenSSH + fail2ban (tentaflake.ssh.enable)
+│   ├── hive-research.nix         # Opt-in web-research MCP server (package comes from a flake input)
 │   ├── shell.nix                 # ★ Interactive shell: tentaflake CLI, banner, zsh, tools
 │   ├── tentaflake-auditd.nix     # ★ Filesystem audit daemon + tentaflake-top TUI (watches all runtimes)
 │   ├── piper-tts-server.nix      # ★ Piper TTS HTTP server (OpenAI-compatible)
 │   └── editor.nix                # Neovim (nvf) module (separate import)
 │
 ├── lib/
-│   ├── default.nix               # Exports: mkHermesAgent, mkZeroClawAgent, constants
-│   ├── constants.nix             # Template-wide defaults (hostName, adminUser, stateVersion...)
+│   ├── default.nix               # Exports: mkHermesAgent, mkZeroClawAgent, mkOpenCodeAgent, agentsFromData, constants
+│   ├── constants.nix             # Template-wide defaults (hostName, adminUser, stateVersion, pinned images...)
 │   ├── mkHermesAgent.nix         # ★ Builds one isolated Hermes agent as a NixOS module
-│   └── mkZeroClawAgent.nix       # ★ Builds one isolated ZeroClaw agent as a NixOS module
+│   ├── mkZeroClawAgent.nix       # ★ Builds one isolated ZeroClaw agent as a NixOS module
+│   ├── mkOpenCodeAgent.nix       # ★ Builds one isolated OpenCode agent (opencode serve) as a NixOS module
+│   ├── agentsFromData.nix        # Builds agents from the CLI wizard's agents.json
+│   ├── pinnedImage.nix           # Enforces digest-pinned + shell-safe image refs
+│   └── pinnedImage-test.nix      # Backs checks.<system>.image-pinning
 │
 ├── pkgs/
-│   ├── tentaflake-auditd/        # Go daemon: filesystem watcher + SQLite + HTTP/WS
+│   ├── tentaflake-auditd/        # Go daemon: filesystem watcher + SQLite (no socket)
 │   │   ├── cmd/tentaflake-auditd/ # Daemon binary
+│   │   ├── cmd/tentaflake-console/ # Agent Console HTTP server
 │   │   ├── cmd/tentaflake-top/   # TUI dashboard
-│   │   └── internal/             # config, watcher, store, event types
+│   │   └── internal/             # config, watcher, store, event types, web
 │   └── piper-voices/             # Bundled Piper voice ONNX models
 │
 ├── installer/
@@ -71,10 +78,19 @@ tentaflake/
 │   ├── 03-skill-index.md         # Bundled Hermes skills index
 │   ├── 04-agenix-secrets.md      # Agenix secrets guide
 │   ├── 05-fork-checklist.md      # What to change when forking
-│   └── 06-shell.md               # Shell/operator experience
+│   ├── 06-shell.md               # Shell/operator experience
+│   ├── 07-operations.md          # Backup/restore, egress filtering, log forwarding
+│   ├── 08-agent-cli.md           # `tentaflake agent` wizard guide
+│   └── 08-opencode.md            # OpenCode runtime guide
 │
 ├── scripts/
-│   └── build-iso.sh              # Convenience script for ISO builds
+│   ├── build-iso.sh              # Convenience script for ISO builds
+│   ├── banner-test.sh            # Renders tentaflake-status against a fake fleet + self-checks
+│   ├── generated-flake-test.sh   # Checks the flake installer.sh generates still evaluates
+│   └── update-agent-images.sh    # Prints upstream digests for the pinned agent images
+│
+├── tests/
+│   └── integration.nix           # NixOS VM test (checks.vm-integration): boots a VM from nixosModules.default
 │
 ├── .agents/skills/                # Bundled skills (development agent + Hermes container)
 │   ├── handle-the-host/           # Remote host operations (Tailscale SSH, rebuild)
@@ -82,10 +98,19 @@ tentaflake/
 │   ├── hermes-memory-personality/ # Memory & personality management
 │   ├── hermes-provider-setup/     # LLM provider configuration
 │   ├── hermes-tools-config/       # Tool/toolset configuration
+│   ├── tentaflake-change-review/  # REASON → VERIFY → SYNC gates for any change
 │   └── tentaflake-repo-guidance/  # This file — repo reference
 │
-├── .github/workflows/check.yml   # CI: nix flake check + Go tests
-├── .golangci.yaml                # Go lint config
+├── .github/workflows/
+│   ├── check.yml                 # CI: nix flake check + fmt + Go build/vet/test + lint + shellcheck
+│   ├── codeql.yml                # CodeQL analysis of the Go code
+│   ├── gitleaks.yml              # Full-history secret scanning
+│   └── update-flake-lock.yml     # Weekly flake.lock update PR
+│
+├── .golangci.yaml                # Go lint config (v2 format)
+├── .pre-commit-config.yaml       # Optional local hooks mirroring the CI gates
+├── CHANGELOG.md                  # Keep a Changelog; new entries go under [Unreleased]
+├── README.md                     # Project entry point
 ├── CONTRIBUTING.md               # PR process
 └── SECURITY.md                   # Security policy
 ```
@@ -120,6 +145,7 @@ These are the knobs you turn in your host config.
 | `tentaflake.timeZone` | `str` | `"UTC"` | System timezone |
 | `tentaflake.defaultLocale` | `str` | `"en_US.UTF-8"` | Default locale |
 | `tentaflake.consoleKeyMap` | `str` | `"us"` | Console keymap |
+| `tentaflake.consoleFont` | `str?` | `"ter-v16n"` | Legacy VT font; applies only when `modernConsole.enable = false` (`null` skips `setfont`) |
 | `tentaflake.stateVersion` | `str` | `"26.05"` | NixOS state version |
 | `tentaflake.profile` | enum | `"installed"` | `installed` / `installer` / `live` |
 | `tentaflake.allowUnfree` | `bool` | `false` | Allow unfree packages |
@@ -138,6 +164,9 @@ These are the knobs you turn in your host config.
 | `tentaflake.packages.enable` | `true` | curl + git system packages |
 | `tentaflake.users.enable` | `true` | Admin user creation (wheel + networkmanager) |
 | `tentaflake.tailscale.enable` | `true` | Tailscale VPN with `--advertise-tags=tag:agent --ssh` |
+| `tentaflake.ssh.enable` | `false` | Hardened OpenSSH (key-only, no root) + fail2ban, opens TCP 22 |
+| `tentaflake.networking.egress.enable` | `false` | nftables outbound allowlist (`allowedTCPPorts`/`allowedUDPPorts`) |
+| `tentaflake.modernConsole.enable` | `true` | kmscon on TTY1 (real TTF fonts + Unicode); `fontSize` default 14. Off ⇒ legacy VT with `consoleFont` |
 
 ### Shell Sub-options (`tentaflake.shell.*`)
 
@@ -159,7 +188,9 @@ These are the knobs you turn in your host config.
 |---|---|---|---|
 | `tentaflake.auditd.enable` | bool | — | Enable audit daemon |
 | `tentaflake.auditd.watchDirs` | list of str | `[]` | Auto-discovers from every declarative agent container (any runtime) |
-| `tentaflake.auditd.port` | port | `9090` | HTTP/WebSocket listen port |
+| `tentaflake.auditd.port` | port | `9090` | Passed as `AUDIT_PORT`; the daemon opens no socket (the console has its own `console.addr`) |
+| `tentaflake.auditd.console.enable` | bool | `false` | Agent Console: read-only web file explorer + live activity monitor |
+| `tentaflake.auditd.console.addr` | str | `127.0.0.1:9090` | Console listen address (loopback; publish via `tailscale serve`) |
 | `tentaflake.auditd.dbPath` | str | `/var/lib/hermes-audit/events.db` | SQLite DB path |
 | `tentaflake.auditd.retentionHours` | int | `24` | Event retention window |
 
@@ -286,6 +317,40 @@ Defined in `lib/mkZeroClawAgent.nix`. Creates one ZeroClaw agent as a NixOS modu
 - Secrets via `agenixFile` → `--env-file`; overrides use `ZEROCLAW_<section>__<sub>__<key>` env vars (double underscores between path segments)
 - A `tailscale serve` unit publishing `hostPort` on the tailnet at `servePort`
 
+### `mkOpenCodeAgent`
+
+Defined in `lib/mkOpenCodeAgent.nix`. Creates one [OpenCode](https://opencode.ai) agent as a NixOS module — the third supported runtime. Runs `opencode serve` (headless HTTP, documented OpenAPI 3.1), which makes it the cleanest runtime to drive from external orchestrators (n8n, CI, cron): `POST /session` then `POST /session/<id>/message`.
+
+**Usage in `my-agents.nix`:**
+
+```nix
+{ mkOpenCodeAgent }:
+[
+  (mkOpenCodeAgent {
+    name = "code";
+    hostPort = 4096;                 # http://127.0.0.1:4096
+    envFile = "/run/secrets/opencode-code.env"; # OPENCODE_SERVER_PASSWORD + key
+    settings = {
+      model = "anthropic/claude-haiku-4.5";
+      provider.anthropic.options.baseURL = "http://proxy.host:4000"; # local LLM proxy
+    };
+  })
+]
+```
+
+**Key parameters:** `name` (required), `hostPort` (required, host loopback → gateway), `image` (default `constants.opencodeImage`, digest-pinned), `allowMutableImage` (default `false`), `stateDir`, `workspaceDir` (mounted `/workspace`), `seedDir`, `gatewayPort` (default 4096), `servePort` (optional tailnet HTTPS, must differ from `hostPort`), `allowUnauthenticatedServe` (default `false`), `envFile`/`agenixFile` (secrets), `authFile` (opt-in read-only provider `auth.json`), `settings` (→ `opencode.json`, JSON, ro), `containerUid`/`containerGid` (default 65534), `autoStart`, `pidsLimit`, `extraEnvironment`, `extraVolumes`.
+
+**Credentials:** two patterns — a **local LLM proxy** (recommended; `settings` base_url + env-file key; host-portable, keeps agents isolated) or **reuse an `auth.json`** via `authFile` (must exist on the host; never mount the whole data dir — `opencode.db` can be many GB). Always set `OPENCODE_SERVER_PASSWORD` in the env file for HTTP basic auth (username defaults to `opencode`). Setting `servePort` **asserts** that an `envFile` or `agenixFile` is wired up, because the container runs `opencode serve --hostname 0.0.0.0` and would otherwise be published to the tailnet unauthenticated; `allowUnauthenticatedServe = true` is the explicit opt-out. The eval assertion only sees that a file is wired up; the `opencode-<name>-tailscale-serve` unit re-checks the file contents at start, tears down any stale publication, and refuses to publish if no non-empty `OPENCODE_SERVER_PASSWORD` is defined. Never put the password in `extraEnvironment` — that lands in the world-readable Nix store. Full guide: `docs/08-opencode.md`.
+
+**What each agent gets:** state dir `/var/lib/opencode-<name>` (0700, owned by the container uid), a `/workspace` project dir, `opencode.json` mounted read-only, `opencode serve` on `hostPort` (loopback), and an optional `tailscale serve` unit on `servePort` (with an `ExecStop` that removes the mapping when the agent stops).
+
+### `agentsFromData`
+
+Defined in `lib/agentsFromData.nix`. Turns the `tentaflake agent add` wizard's
+`agents.json` into agent modules, so CLI-declared agents compose with a
+hand-written `my-agents.nix`. Exported alongside the builders; `configuration.nix`
+only forces it when an `agents.json` exists.
+
 ### `constants`
 
 Defined in `lib/constants.nix`. Single source of truth for template-wide defaults:
@@ -295,10 +360,17 @@ constants = {
   stateVersion     = "26.05";
   defaultLocale    = "en_US.UTF-8";
   consoleKeyMap    = "us";
-  hostName         = "tentaflake";
+  consoleFont      = "ter-v16n";   # legacy VT only (kmscon off)
+  hostName         = "tentaflake"; # doubles as the built-in host's flake attr
   adminUser        = "user";
   adminShell       = "/run/current-system/sw/bin/bash";
   adminDescription = "System Administrator";
+  # Digest-pinned agent images (never tags) — see lib/pinnedImage.nix
+  hermesImage      = "docker.io/nousresearch/hermes-agent@sha256:...";
+  zeroclawImage    = "ghcr.io/zeroclaw-labs/zeroclaw@sha256:...";
+  opencodeImage    = "ghcr.io/anomalyco/opencode@sha256:...";
+  containerUid     = 10000;        # uid the hermes-agent image runs as
+  containerGid     = 10000;
 };
 ```
 
@@ -404,11 +476,14 @@ stderr and execs `tentaflake "$@"`.
 Filesystem audit daemon for agent activity tracking (all runtimes):
 - Go daemon watches agent state dirs via inotify
 - Records events to SQLite DB
-- Serves HTTP/WS on `tentaflake.auditd.port` (default 9090)
+- The daemon itself **opens no socket** — it only writes to SQLite. The HTTP surface is the
+  separate `tentaflake-console` service (`tentaflake.auditd.console.enable`, bound to
+  `console.addr`, default loopback `127.0.0.1:9090`)
 - `tentaflake-top` TUI reads the DB for live dashboard
 - Admin added to `hermes-audit` group for sudo-less access
-- Auto-discovers watch dirs from every declarative agent container — Hermes
-  and ZeroClaw alike
+- Auto-discovers watch dirs from every declarative agent container — Hermes,
+  ZeroClaw, and OpenCode alike (state-dir prefixes `hermes-`/`zeroclaw-`/`opencode-`;
+  the Go watcher's `agentNameFromPath` labels each accordingly)
 
 ### `piper-tts-server.nix`
 Local TTS HTTP server (OpenAI-compatible `/v1/audio/speech`):
@@ -419,12 +494,13 @@ Local TTS HTTP server (OpenAI-compatible `/v1/audio/speech`):
 
 ## Agent Configuration (`my-agents.nix`)
 
-Create a `my-agents.nix` in the repo root. It now takes both builders and
-returns two lists mapped through their respective builder — `hermesAgents`
-through `mkHermesAgent`, `zeroclawAgents` through `mkZeroClawAgent`:
+Create a `my-agents.nix` in the repo root. It takes the three builders and
+returns lists mapped through their respective builder — `hermesAgents`
+through `mkHermesAgent`, `zeroclawAgents` through `mkZeroClawAgent`, and
+`opencodeAgents` through `mkOpenCodeAgent`:
 
 ```nix
-{ mkHermesAgent, mkZeroClawAgent }:
+{ mkHermesAgent, mkZeroClawAgent, mkOpenCodeAgent }:
 let
   hermesAgents = [
     {
@@ -441,14 +517,21 @@ let
     }
   ];
   zeroclawAgents = [ ];
+  opencodeAgents = [
+    { name = "code"; hostPort = 4096; envFile = "/run/secrets/opencode-code.env"; }
+  ];
 in
-map mkHermesAgent hermesAgents ++ map mkZeroClawAgent zeroclawAgents
+map mkHermesAgent hermesAgents
+++ map mkZeroClawAgent zeroclawAgents
+++ map mkOpenCodeAgent opencodeAgents
 ```
 
-The `settings` attrset is serialized to `config.yaml` (Hermes) or `config.toml`
-(ZeroClaw), mounted read-only into the respective container.
+The `settings` attrset is serialized to `config.yaml` (Hermes), `config.toml`
+(ZeroClaw), or `opencode.json` (OpenCode), mounted read-only into the
+respective container.
 
-Old single-argument `{ mkHermesAgent }: ...` files still work — `configuration.nix`
+Old files taking fewer builders (e.g. `{ mkHermesAgent }: ...` or
+`{ mkHermesAgent, mkZeroClawAgent }: ...`) still work — `configuration.nix`
 passes only the args each `my-agents.nix` declares (`lib.intersectAttrs (lib.functionArgs f)`).
 
 The file is git-tracked. Check `my-agents.nix.example` for a complete reference.
@@ -482,7 +565,7 @@ The file is git-tracked. Check `my-agents.nix.example` for a complete reference.
 The recommended pattern (from `examples/consumer-flake.nix`):
 
 1. Import `tentaflake` as a flake input (follows `nixpkgs`)
-2. Import `tentaflake.lib.${system}.mkHermesAgent` / `.mkZeroClawAgent` for agent creation
+2. Import `tentaflake.lib.${system}.mkHermesAgent` / `.mkZeroClawAgent` / `.mkOpenCodeAgent` for agent creation
 3. Use `tentaflake.nixosModules.default` for the module set
 4. Set `tentaflake.*` options in your host config
 5. Define agents in a separate file or inline
@@ -498,6 +581,8 @@ tentaflake = {
 nixosModules.default  # Enable all base modules
 tentaflake.lib.x86_64-linux.mkHermesAgent    # Hermes agent helper
 tentaflake.lib.x86_64-linux.mkZeroClawAgent  # ZeroClaw agent helper
+tentaflake.lib.x86_64-linux.mkOpenCodeAgent  # OpenCode agent helper
+tentaflake.lib.x86_64-linux.agentsFromData   # Agents from the CLI wizard's agents.json
 tentaflake.lib.x86_64-linux.constants        # Default constants
 ```
 
@@ -516,18 +601,29 @@ plain `envFile` option for that runtime.
 ## Build & Test Commands
 
 ```bash
-nix flake check                   # Validate flake + build toplevel + run Go tests
+nix flake check                   # Validate flake + build toplevel + VM integration test + Go tests
 nix build .#installer-iso         # Build installer ISO
 nix build .#live-agent-iso        # Build live agent ISO
 nix build .#tentaflake-auditd     # Build audit daemon package
-nix fmt                           # Format Nix files (nixfmt-tree)
+nix build .#nixosConfigurations.tentaflake.config.system.build.toplevel --no-link  # Host config only
+nix build .#checks.x86_64-linux.vm-integration -L  # Boot a VM from nixosModules.default, assert runtime
+nix fmt                           # Format Nix files (nixfmt-tree; CI runs `nix fmt -- --ci`)
 cd pkgs/tentaflake-auditd && go test ./...  # Run Go tests
 golangci-lint run                 # Go lint (in pkgs/tentaflake-auditd/)
+shellcheck installer/*.sh scripts/*.sh     # Shell lint (same invocation as CI)
+./scripts/banner-test.sh          # Preview + self-check the tentaflake-status banner
 ```
 
 ## Check (CI)
 
-The `checks.${system}.tentaflake` target validates that the full toplevel builds. This runs in CI on every push via `.github/workflows/check.yml`.
+`checks.${system}` exposes four targets, all run by `nix flake check` and in CI (`.github/workflows/check.yml`):
+
+- `tentaflake` — validates the full toplevel builds. The attr name follows `constants.hostName`, so it moves if the default hostname does.
+- `tentaflake-auditd` — builds the audit daemon package.
+- `image-pinning` — asserts `lib/pinnedImage.nix` rejects mutable/unsafe image refs.
+- `vm-integration` — boots a VM built from `nixosModules.default` (not the `tentaflake` host config; the test node sets its own `hostName`/`adminUser`) and asserts the runtime path: the `tentaflake` CLI runs, the status banner renders and names the host, `tentaflake-auditd` is active and has created its SQLite DB, and each declared agent produces its systemd unit + `0700` state dir (Hermes also its system user). Defined in `tests/integration.nix`.
+
+CI additionally runs `nix fmt -- --ci`, `go build/vet/test`, `golangci-lint`, and `shellcheck` on every push.
 
 ## Nix Conventions
 
@@ -546,12 +642,14 @@ The `checks.${system}.tentaflake` target validates that the full toplevel builds
 
 ### `pkgs/tentaflake-auditd`
 Go application with:
-- `cmd/tentaflake-auditd/` — daemon binary (filesystem watcher + SQLite + HTTP/WS)
+- `cmd/tentaflake-auditd/` — daemon binary (filesystem watcher + SQLite; opens no socket)
+- `cmd/tentaflake-console/` — Agent Console HTTP server (the only network surface)
 - `cmd/tentaflake-top/` — TUI dashboard (reads audit DB)
 - `internal/config/` — configuration loading
-- `internal/watcher/` — inotify-based directory watcher
+- `internal/watcher/` — inotify-based directory watcher (`agentNameFromPath` attribution)
 - `internal/store/` — SQLite event store
 - `internal/event/` — event types
+- `internal/web/` — console handlers/templates
 
 Build via `pkgs.callPackage ./pkgs/tentaflake-auditd { }`.
 

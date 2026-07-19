@@ -53,13 +53,14 @@ let
     # so this stays generic (works for docker- and podman- backends and both
     # agent runtimes). Missing files get an empty placeholder; the firstboot
     # wizard later overwrites them with real keys and restarts the units. ──
-    for unit in $(systemctl list-unit-files --no-legend 'docker-hermes-*.service' 'podman-hermes-*.service' 'docker-zeroclaw-*.service' 'podman-zeroclaw-*.service' 2>/dev/null | awk '{print $1}'); do
+    for unit in $(systemctl list-unit-files --no-legend 'docker-hermes-*.service' 'podman-hermes-*.service' 'docker-zeroclaw-*.service' 'podman-zeroclaw-*.service' 'docker-opencode-*.service' 'podman-opencode-*.service' 2>/dev/null | awk '{print $1}'); do
       name=''${unit%.service}
       name=''${name#docker-}
       name=''${name#podman-}
       # Hermes env files keep their historical bare names (hermes-coding →
       # coding); other runtimes keep the runtime prefix (zeroclaw-scout stays
-      # zeroclaw-scout) — same labeling scheme as the audit daemon.
+      # zeroclaw-scout, opencode-code stays opencode-code) — same labeling
+      # scheme as the audit daemon.
       name=''${name#hermes-}
       envf="''${ENV_DIR}/''${name}.env"
       if [ ! -f "$envf" ]; then
@@ -82,17 +83,65 @@ let
     mkdir -p /mnt/tentaflake-data
     mount "$USB_DEV" /mnt/tentaflake-data 2>/dev/null || exit 0
 
-    # Symlink agent state dirs to USB for persistence (both runtimes)
-    for dir in /var/lib/hermes-* /var/lib/zeroclaw-*; do
+    # Move one agent state dir onto the USB, replacing it with a symlink.
+    # Every step is checked explicitly (errexit is disabled inside a function
+    # used as an `if` condition) and the original dir is only removed once the
+    # copy is verified — a full, read-only or ownership-less stick must degrade
+    # to "no persistence", never to "state deleted".
+    stage_to_usb() {
+      src=$1
+      dst=$2
+      owner=$(stat -c '%u:%g' "$src") || return 1
+      mode=$(stat -c '%a' "$src") || return 1
+
+      mkdir -p "$dst" || return 1
+      # mkdir gives root:root 0755; agents run as their own uid (hermes 10000,
+      # opencode 65534) with a 0700 state dir, so mirror the original. vfat and
+      # exfat carry no Unix ownership at all — the agent could never write
+      # there, so skip rather than break it.
+      if ! chown "$owner" "$dst" 2>/dev/null || ! chmod "$mode" "$dst" 2>/dev/null \
+        || [ "$(stat -c '%u:%g %a' "$dst")" != "$owner $mode" ]; then
+        echo "tentaflake-data-mount: ''${dst} has no Unix ownership (vfat/exfat?) — skipping ''${src}"
+        return 1
+      fi
+
+      # Three cases, and only two of them may touch $src:
+      #   USB empty            -> seed it from local state, verify, then swap.
+      #   local empty          -> USB state wins (the normal reboot path: tmpfiles
+      #                           recreated an empty dir); swap, nothing to lose.
+      #   both non-empty       -> REFUSE. Copying either way discards the other,
+      #                           and we cannot know which the operator wants.
+      if [ -z "$(ls -A "$dst")" ]; then
+        cp -a "$src/." "$dst/" || return 1
+        [ "$(find "$src" | wc -l)" = "$(find "$dst" | wc -l)" ] || return 1
+      elif [ -n "$(ls -A "$src")" ]; then
+        echo "tentaflake-data-mount: ''${src} and ''${dst} both hold state — refusing to discard either; resolve by hand"
+        return 1
+      fi
+
+      # Safe now: $src is either empty or byte-for-byte present on the stick.
+      rm -rf "$src" || return 1
+      # $src is gone from here on, so a failed symlink is NOT "kept local state".
+      # Return 2 so the caller reports it as the data-losing case it is.
+      if ! ln -s "$dst" "$src"; then
+        echo "tentaflake-data-mount: ERROR: ''${src} removed but symlink to ''${dst} failed — state is on the USB, relink by hand"
+        return 2
+      fi
+    }
+
+    # Symlink agent state dirs to USB for persistence (all runtimes)
+    for dir in /var/lib/hermes-* /var/lib/zeroclaw-* /var/lib/opencode-*; do
       [ -d "$dir" ] || continue
+      # Only migrate if not already a symlink
+      [ -L "$dir" ] && continue
       name=$(basename "$dir")
       usb_dir="/mnt/tentaflake-data/''${name}"
-      mkdir -p "$usb_dir"
-      # Only symlink if not already a symlink
-      if [ ! -L "$dir" ]; then
-        rm -rf "$dir"
-        ln -s "$usb_dir" "$dir"
+      stage_to_usb "$dir" "$usb_dir" && rc=0 || rc=$?
+      if [ "$rc" = 0 ]; then
         echo "tentaflake-data-mount: ''${dir} → ''${usb_dir}"
+      elif [ "$rc" != 2 ]; then
+        # rc=2 already reported itself accurately; anything else left $dir alone.
+        echo "tentaflake-data-mount: WARNING: could not persist ''${dir} — keeping local state, no USB persistence"
       fi
     done
   '';
@@ -105,6 +154,11 @@ in
     after = [ "local-fs.target" ];
     before = [ "docker.service" ];
     wantedBy = [ "multi-user.target" ];
+    # blkid/mount/umount + awk are not in the default service PATH.
+    path = [
+      pkgs.util-linux
+      pkgs.gawk
+    ];
     serviceConfig = {
       Type = "oneshot";
       RemainAfterExit = true;
@@ -127,6 +181,8 @@ in
     ];
     before = [ "docker.service" ];
     wantedBy = [ "multi-user.target" ];
+    # blkid/mount are not in the default service PATH.
+    path = [ pkgs.util-linux ];
     serviceConfig = {
       Type = "oneshot";
       RemainAfterExit = true;
