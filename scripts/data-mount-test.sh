@@ -67,7 +67,7 @@ echo a > "$dst/IMPORTANT.md"   # only the first file made it across
 chmod 700 "$src"
 stage_to_usb "$src" "$dst" && fail "case3b: accepted a partial copy as authoritative"
 [ ! -L "$src" ] || fail "case3b: local dir replaced by a symlink to a truncated copy"
-[ -f "$src/SOUL.md" ] && [ -f "$src/workspace/code.py" ] || fail "case3b: local data was lost"
+if [ ! -f "$src/SOUL.md" ] || [ ! -f "$src/workspace/code.py" ]; then fail "case3b: local data was lost"; fi
 
 # ── case 4: unwritable USB target -> refuse, leave local state untouched ──
 # Stands in for the vfat/exfat and read-only-stick paths: the ownership mirror
@@ -78,7 +78,7 @@ if [ "$(id -u)" -ne 0 ]; then
   echo local > "$src/d.txt"
   chmod 700 "$src"; chmod 500 "$tmp/c4/nope"
   stage_to_usb "$src" "$dst" && fail "case4: expected refusal on unwritable target"
-  [ -d "$src" ] && [ ! -L "$src" ] || fail "case4: local state dir was touched"
+  if [ ! -d "$src" ] || [ -L "$src" ]; then fail "case4: local state dir was touched"; fi
   [ "$(cat "$src/d.txt")" = local ] || fail "case4: local data was lost"
   chmod 700 "$tmp/c4/nope"
 else

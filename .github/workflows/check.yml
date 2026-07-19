@@ -66,8 +66,12 @@ jobs:
           version: v2.12.2
           working-directory: pkgs/tentaflake-auditd
 
+      # Via the devShell, not the runner's apt shellcheck: the two versions
+      # disagree (Ubuntu's flags SC2015 where 0.11 does not), so an unpinned
+      # binary means "clean locally" and "clean in CI" are different claims.
+      # flake.lock pins this one, and it is the same one `nix develop` gives.
       - name: shellcheck
-        run: shellcheck installer/*.sh scripts/*.sh
+        run: nix develop --command shellcheck installer/*.sh scripts/*.sh
 
   # Own job: the VM test derivation carries requiredSystemFeatures = kvm, so a
   # KVM-less or slow runner degrades this one job instead of the whole check.
