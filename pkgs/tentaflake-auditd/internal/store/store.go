@@ -261,6 +261,19 @@ func parseTimestamp(ts string) (time.Time, error) {
 	return time.Time{}, err
 }
 
+// Window comparisons format the boundary in RFC3339 UTC — the exact format
+// Insert writes — so the plain string compare is chronologically correct AND
+// idx_events_timestamp stays usable. Wrapping the column in datetime() instead
+// normalizes the same way but forces a full table scan per call, which is what
+// made the top TUI blow its 3s refresh deadline on a ~1M-row DB. Stats also
+// needs INDEXED BY: without it the planner picks idx_events_agent for the
+// GROUP BY and scans every row (measured 0.47s vs 0.002s on a live DB).
+// TestWindowQueriesUseTimestampIndex guards both.
+const (
+	statsQuery = `SELECT agent, COUNT(*) as cnt FROM events INDEXED BY idx_events_timestamp WHERE timestamp >= strftime('%Y-%m-%dT%H:%M:%SZ', 'now', ?) GROUP BY agent`
+	pruneQuery = `DELETE FROM events WHERE timestamp < strftime('%Y-%m-%dT%H:%M:%SZ', 'now', ?)`
+)
+
 // Stats returns event counts per agent in the given time window.
 // Window is a SQL expression like '-24 hours' or '-7 days'.
 func (s *Store) Stats(ctx context.Context, window string) (map[string]int, error) {
@@ -271,12 +284,7 @@ func (s *Store) Stats(ctx context.Context, window string) (map[string]int, error
 	}
 	ctx, cancel := context.WithTimeout(ctx, queryTimeout)
 	defer cancel()
-	// Wrap the stored column in datetime() so the comparison is format-agnostic:
-	// events are stored as RFC3339 ("…T…Z") but datetime('now', …) yields the
-	// space-separated form, and a raw string compare only agrees when the date
-	// differs. datetime() normalizes both sides to the same canonical format.
-	query := `SELECT agent, COUNT(*) as cnt FROM events WHERE datetime(timestamp) >= datetime('now', ?) GROUP BY agent`
-	rows, err := s.db.QueryContext(ctx, query, window)
+	rows, err := s.db.QueryContext(ctx, statsQuery, window)
 	if err != nil {
 		return nil, fmt.Errorf("stats query: %w", err)
 	}
@@ -300,11 +308,8 @@ func (s *Store) Stats(ctx context.Context, window string) (map[string]int, error
 
 // Prune deletes events older than the configured retention period.
 func (s *Store) Prune(ctx context.Context) error {
-	// datetime(timestamp) normalizes the stored RFC3339 value before comparison —
-	// see the note in Stats for why a raw string compare is unreliable here.
-	query := `DELETE FROM events WHERE datetime(timestamp) < datetime('now', ?)`
 	hours := fmt.Sprintf("-%d hours", s.retentionHours)
-	result, err := s.db.ExecContext(ctx, query, hours)
+	result, err := s.db.ExecContext(ctx, pruneQuery, hours)
 	if err != nil {
 		return fmt.Errorf("prune events: %w", err)
 	}
