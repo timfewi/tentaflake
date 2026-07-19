@@ -2,7 +2,7 @@
 
 buildGoModule {
   pname = "tentaflake-auditd";
-  version = "0.2.0";
+  version = "0.3.1";
   src = ./.;
   vendorHash = "sha256-+b+JmOmyut/bhwQSsmv49fpRfi4cW1qxrQoDbs9CMBE=";
   subPackages = [
