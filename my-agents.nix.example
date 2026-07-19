@@ -297,12 +297,18 @@ let
     {
       name = "code";
       hostPort = 4096; # http://127.0.0.1:4096 — n8n points here
-      # servePort = 4196; # optional: publish on the tailnet (must differ from hostPort)
+      # servePort = 4196; # optional: publish on the tailnet (must differ from
+      #                   # hostPort). Requires envFile/agenixFile carrying
+      #                   # OPENCODE_SERVER_PASSWORD — the whole tailnet can
+      #                   # reach the session API otherwise. Override with
+      #                   # allowUnauthenticatedServe = true.
       envFile = "/run/secrets/opencode-code.env"; # OPENCODE_SERVER_PASSWORD + provider key
       settings = {
         # OpenCode config (opencode.json). Point the model/provider at your
         # local proxy; the key is read from the env file via {env:...}.
-        model = "anthropic/claude-haiku-4.5";
+        # NOTE: OpenCode model ids use DASHES (claude-haiku-4-5), unlike the
+        # OpenRouter ids above (claude-haiku-4.5).
+        model = "anthropic/claude-haiku-4-5";
         provider.anthropic.options.baseURL = "http://host.example:4000";
       };
       # Reuse an existing auth.json instead of a proxy key (must exist on the host):
@@ -314,7 +320,7 @@ let
       hostPort = 4097; # second isolated agent on its own port + workspace
       envFile = "/run/secrets/opencode-ops.env";
       settings = {
-        model = "anthropic/claude-haiku-4.5";
+        model = "anthropic/claude-haiku-4-5";
         provider.anthropic.options.baseURL = "http://host.example:4000";
       };
     }

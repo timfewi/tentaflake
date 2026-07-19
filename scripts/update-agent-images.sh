@@ -11,6 +11,7 @@ set -euo pipefail
 IMAGES=(
   "docker://docker.io/nousresearch/hermes-agent:latest"
   "docker://ghcr.io/zeroclaw-labs/zeroclaw:v0.8.2"
+  "docker://ghcr.io/anomalyco/opencode:latest"
 )
 
 if command -v skopeo >/dev/null 2>&1; then

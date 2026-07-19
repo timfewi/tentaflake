@@ -374,16 +374,29 @@ See [`my-agents.nix.example`](my-agents.nix.example) and [`zeroclaw.env.example`
 |---|---|---|---|
 | `name` | `string` | *(required)* | Agent identifier |
 | `hostPort` | `int` | *(required)* | Host loopback port forwarded to the container's `opencode serve` gateway (n8n / local callers hit this) |
-| `image` | `string` | `ghcr.io/anomalyco/opencode:latest` | OCI container image |
-| `servePort` | `int` | `null` | Optional tailnet HTTPS port published via `tailscale serve`; `null` = not published |
+| `image` | `string` | `ghcr.io/anomalyco/opencode@sha256:c2d5d6398df72aac85cb1bdc8f900c71a9b75a33fb7c0a76dc1484e4b126e41e` | Digest-pinned OCI container image |
+| `allowMutableImage` | `bool` | `false` | Accept an unpinned `image` (e.g. a locally-built tag). Gives up reproducibility for this agent |
+| `servePort` | `int` | `null` | Optional tailnet HTTPS port published via `tailscale serve`; `null` = not published. Requires `OPENCODE_SERVER_PASSWORD` (see below); must differ from `hostPort` and from every other agent's `servePort` |
+| `allowUnauthenticatedServe` | `bool` | `false` | Opt out of the `servePort` credential check. Only sane when an auth proxy or tailnet ACLs gate access |
 | `gatewayPort` | `int` | `4096` | Port `opencode serve` listens on inside the container |
 | `envFile` / `agenixFile` | `path` | `null` | Env file(s) mounted via `--env-file` (`OPENCODE_SERVER_PASSWORD` + provider/proxy key) |
 | `authFile` | `path` | `null` | Optional provider `auth.json` mounted read-only into the data dir (reuse existing creds) |
-| `settings` | `attrset` | `{ }` | OpenCode `opencode.json` (model, provider base URLs, etc.) |
+| `settings` | `attrset` | `{ }` | OpenCode `opencode.json` (model, provider base URLs, etc.) — lands in the world-readable Nix store, so reference keys as `{env:VAR}`, never a literal |
 | `seedDir` | `path` | `null` | Files copied into `/workspace` on first boot only (no-clobber) |
 | `autoStart` | `bool` | `true` | Auto-start with systemd |
 | `pidsLimit` | `int` | `512` | Container `--pids-limit` (fork-bomb ceiling); `null` disables |
 | `extraEnvironment` / `extraVolumes` | `attrset` / `list` | `{ }` / `[ ]` | Extra container env vars / `host:container:mode` mounts |
+
+> `opencode serve` binds `0.0.0.0` in the container, so `servePort` exposes the
+> session API to the **whole tailnet** — any peer could open a session and make
+> the agent run tool calls. Setting `servePort` without `envFile`/`agenixFile`
+> (which is where `OPENCODE_SERVER_PASSWORD` lives) fails at eval time, and the
+> serve unit refuses to start if the env file does not actually define that
+> variable; use `allowUnauthenticatedServe = true` only if access is gated some
+> other way. Teardown happens on `nixos-rebuild switch` (or when the container
+> stops) — after a `nixos-rebuild boot` + reboot, run
+> `tailscale serve --https=<servePort> off` by hand. See
+> [`docs/08-opencode.md`](docs/08-opencode.md).
 
 See [`docs/08-opencode.md`](docs/08-opencode.md) and [`my-agents.nix.example`](my-agents.nix.example) for a fully-commented reference agent.
 

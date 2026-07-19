@@ -24,9 +24,7 @@ let
   discoveredDirs = lib.mapAttrsToList (name: _: "/var/lib/${name}") (
     lib.filterAttrs (
       name: _:
-      lib.hasPrefix "hermes-" name
-      || lib.hasPrefix "zeroclaw-" name
-      || lib.hasPrefix "opencode-" name
+      lib.hasPrefix "hermes-" name || lib.hasPrefix "zeroclaw-" name || lib.hasPrefix "opencode-" name
     ) config.virtualisation.oci-containers.containers
   );
   effectiveWatchDirs = if cfg.watchDirs != [ ] then cfg.watchDirs else discoveredDirs;
