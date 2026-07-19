@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -196,6 +197,39 @@ func TestPruneSameDayBoundary(t *testing.T) {
 	}
 	if events[0].File != "/new.txt" {
 		t.Errorf("expected /new.txt to remain, got %q", events[0].File)
+	}
+}
+
+// TestWindowQueriesUseTimestampIndex guards the perf fix behind the top TUI's
+// "context deadline exceeded": wrapping the timestamp column in datetime()
+// defeats idx_events_timestamp, so Stats and Prune full-scanned the table on
+// every call. The window queries must keep the column bare.
+func TestWindowQueriesUseTimestampIndex(t *testing.T) {
+	dbPath := newTempDB(t)
+	st, err := New(dbPath, 24)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+
+	for name, q := range map[string]string{"stats": statsQuery, "prune": pruneQuery} {
+		rows, err := st.db.Query("EXPLAIN QUERY PLAN "+q, "-1 hours")
+		if err != nil {
+			t.Fatalf("%s: explain: %v", name, err)
+		}
+		var plan string
+		for rows.Next() {
+			var id, parent, notused int
+			var detail string
+			if err := rows.Scan(&id, &parent, &notused, &detail); err != nil {
+				t.Fatalf("%s: scan: %v", name, err)
+			}
+			plan += detail + "\n"
+		}
+		rows.Close()
+		if !strings.Contains(plan, "idx_events_timestamp") {
+			t.Errorf("%s query does not use idx_events_timestamp; plan:\n%s", name, plan)
+		}
 	}
 }
 

@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- `store.go`: `Stats` and `Prune` no longer full-scan the events table on every call. The 0.1.x same-day-window fix wrapped the stored column in `datetime(timestamp)`, which made `idx_events_timestamp` unusable — on a busy host (~1M retained rows) each `Stats` call took seconds, and `tentaflake top` (refreshing every second under a 3 s query context) died with `agent rows query: context deadline exceeded`. The boundary is now formatted as RFC3339 UTC (`strftime('%Y-%m-%dT%H:%M:%SZ', 'now', ?)`) — the exact format `Insert` writes — so the plain string compare stays chronologically correct (same-day fix preserved, `TestPruneSameDayBoundary` still passes) while the index is used; `Stats` additionally pins `INDEXED BY idx_events_timestamp` because the planner otherwise prefers the agent index for the `GROUP BY` (measured 0.47 s → 0.002 s on a live 1.16M-row DB). Guarded by `TestWindowQueriesUseTimestampIndex` (asserts the query plan uses the timestamp index).
+
 ## [0.3.1] — 2026-07-19
 
 ### ⚠ Breaking
