@@ -976,7 +976,7 @@ let
 
         # ── key parsing: parse, NEVER execute ──
         local d; d=$(mktemp -d)
-        printf 'X=1\n# comment\nexport OPENROUTER_API_KEY="sk-or-v1-abcdefghijklmnop"\r\n' > "$d/a.env"
+        printf 'X=1\n# comment\nexport OPENROUTER_API_KEY="sk-or-v1-abcdefghijklmnop"\r\n' > "$d/a.env" # gitleaks:allow (fake fixture key for env_value test)
         printf 'sk-ant-api03-ZZZZZZZZZZZZZZZZZZZZ\n' > "$d/b.key"
         # shellcheck disable=SC2016  # the $(...) MUST stay literal — that is the fixture
         printf 'OPENROUTER_API_KEY=$(touch %s/pwned)aaaaaaaaaaaaaaaa\n' "$d" > "$d/c.env"
