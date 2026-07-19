@@ -55,11 +55,14 @@ applicable command from the repo's real toolchain:
 | Change touches | Verification |
 |---|---|
 | Any `.nix` (module/lib/config) | `nix flake check` |
-| Host config / new option | `nix build .#nixosConfigurations.agent-host.config.system.build.toplevel --no-link` |
+| Host config / new option | `nix build .#nixosConfigurations.tentaflake.config.system.build.toplevel --no-link` (the attr follows `constants.hostName`) |
+| Runtime behavior (unit, state dir, CLI) | `nix build .#checks.x86_64-linux.vm-integration -L` |
+| Container image pin | `nix build .#checks.x86_64-linux.image-pinning` |
 | Formatting | `nix fmt` (CI runs `nix fmt -- --ci`) |
 | Go (`pkgs/tentaflake-auditd`) | `go build ./... && go vet ./... && go test ./...`, then `golangci-lint run` |
 | Shell scripts | `shellcheck installer/*.sh scripts/*.sh` |
 | Login banner | `./scripts/banner-test.sh` |
+| Installer-generated flake | `./scripts/generated-flake-test.sh` |
 | ISO changes | `nix build .#installer-iso` / `nix build .#live-agent-iso` |
 
 Prefer a fresh check over self-grading: don't just assert "it builds" — paste
@@ -80,7 +83,9 @@ until its docs move in the same change. Check each surface:
   module reference (this is the map agents rely on; stale entries mislead).
 - Relevant `.agents/skills/` — if you touched a subsystem a skill documents.
 - `my-agents.nix.example` / `*.env.example` — if you changed agent args or env.
-- `CHANGELOG` entry if the repo keeps one.
+- `CHANGELOG.md` — add the entry under `## [Unreleased]`, in the section that
+  fits (`⚠ Breaking` / `Security` / `Added` / `Changed` / `Fixed`). This
+  changelog explains *why*, not just what — match the surrounding voice.
 
 ## Traceability (the through-line)
 
@@ -136,6 +141,10 @@ regardless of REASON/VERIFY/SYNC:
   with real values.
 - **Backward compatibility for options.** Renames use
   `mkRenamedOptionModule`; new options default to preserving current behavior.
+- **Container images stay digest-pinned.** `lib/pinnedImage.nix` rejects a
+  mutable tag at eval time for every runtime builder; a new default image goes
+  in `lib/constants.nix` as `repository@sha256:…` (no tag). `checks.image-pinning`
+  enforces this.
 
 ## PR checklist mapping
 

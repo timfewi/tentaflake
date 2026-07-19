@@ -1,6 +1,6 @@
 # Agent Instructions — tentaflake
 
-NixOS flake template for running isolated AI agents (Hermes, ZeroClaw) in Docker containers on a single machine.
+NixOS flake template for running isolated AI agents (Hermes, ZeroClaw, OpenCode) in Docker containers on a single machine.
 
 ## Build & Test
 
@@ -8,7 +8,7 @@ NixOS flake template for running isolated AI agents (Hermes, ZeroClaw) in Docker
 nix flake check              # validate flake, build toplevel, run the VM integration test
 nix build .#installer-iso    # build installer ISO
 nix build .#live-agent-iso   # build live agent ISO
-nix build .#checks.x86_64-linux.vm-integration -L  # boot agent-host in a VM, assert runtime behavior
+nix build .#checks.x86_64-linux.vm-integration -L  # boot a VM from nixosModules.default, assert runtime behavior
 cd pkgs/tentaflake-auditd && go vet ./... && go test ./... && golangci-lint run
 ./scripts/banner-test.sh     # preview tentaflake-status banner (fake fleet + self-checks)
 ```
@@ -37,8 +37,9 @@ still accurate before finishing — and update them in the same change:
 ## Module Boundaries
 
 - `modules/` — reusable NixOS modules (generic, composable via `tentaflake.*.enable` options)
-- `lib/` — helpers (`mkHermesAgent`, `mkZeroClawAgent`, `constants`)
+- `lib/` — helpers (`mkHermesAgent`, `mkZeroClawAgent`, `mkOpenCodeAgent`, `agentsFromData`, `pinnedImage`, `constants`)
 - `pkgs/` — standalone packages (`tentaflake-auditd`)
+- `tests/` — NixOS VM test backing `checks.<system>.vm-integration`
 - `installer/` — ISO installer and firstboot scripts
 - `examples/` — consumer-flake reference
 - `docs/` — user-facing documentation
