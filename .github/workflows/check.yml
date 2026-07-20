@@ -2,8 +2,6 @@ name: Check
 
 permissions:
   contents: read
-  # magic-nix-cache-action authenticates to FlakeHub Cache over OIDC.
-  id-token: write
 
 on:
   pull_request:
@@ -23,6 +21,9 @@ jobs:
             accept-flake-config = true
 
       - uses: DeterminateSystems/magic-nix-cache-action@908b263ff629f4cc17666315b7fd3ec127c6244d # v14
+        with:
+          # No FlakeHub account; skip the doomed OIDC login and use the GH cache.
+          use-flakehub: false
 
       # Eval-only: the VM test in `checks` needs /dev/kvm, which not every runner
       # has. Evaluating still catches assertion/module errors; the VM is actually
@@ -87,6 +88,8 @@ jobs:
             accept-flake-config = true
 
       - uses: DeterminateSystems/magic-nix-cache-action@908b263ff629f4cc17666315b7fd3ec127c6244d # v14
+        with:
+          use-flakehub: false
 
       - name: nix build (VM integration test)
         run: nix build .#checks.x86_64-linux.vm-integration -L
