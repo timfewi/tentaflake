@@ -1,0 +1,39 @@
+name: DCO
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  signoff:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+
+      - name: Check commit sign-offs
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          missing=0
+
+          while IFS= read -r commit; do
+            if ! git show -s --format=%B "$commit" | grep -Eq '^Signed-off-by: .+ <[^>]+>[[:space:]]*$'; then
+              echo "Missing Signed-off-by: $commit"
+              git show -s --format='%h %s' "$commit"
+              missing=1
+            fi
+          done < <(git rev-list --no-merges "$BASE_SHA..$HEAD_SHA")
+
+          if (( missing )); then
+            echo 'Every non-merge commit in this PR must include Signed-off-by:.'
+            echo 'Use: git commit -s, or git rebase --signoff '"$BASE_SHA"
+            exit 1
+          fi

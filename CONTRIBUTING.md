@@ -83,6 +83,7 @@ pre-commit install
 | Nix formatting | `nix fmt` (nixfmt) |
 | Go formatting | Standard `gofmt` |
 | Module boundary | Keep template generic — fork for specifics |
+| Sign-off | Every commit needs a `Signed-off-by:` line (DCO) — use `git commit -s` |
 
 ## Signing Commits and Tags
 
@@ -110,6 +111,39 @@ Release tags are signed:
 git tag -s vX.Y.Z -m "vX.Y.Z"
 ```
 
+## Licensing and the DCO
+
+tentaflake is MIT-licensed — see [`LICENSE`](LICENSE), Copyright © 2026 Tim Witter.
+
+By contributing you agree that your contribution is offered under the same MIT
+license. You keep the copyright to what you wrote; the MIT grant is what lets
+everyone — including the maintainer and downstream commercial users — use it.
+
+Every commit must carry a `Signed-off-by:` line certifying the
+[Developer Certificate of Origin 1.1](https://developercertificate.org/): that you
+wrote the contribution, or otherwise have the right to submit it under the
+project's license. The complete text is in [`DCO.txt`](DCO.txt). Git adds the
+line for you with `-s`:
+
+```bash
+git commit -s -m "feat: add thing"
+```
+
+Already committed without it? Sign off the whole branch at once:
+
+```bash
+git rebase --signoff main
+```
+
+The DCO workflow checks every non-merge commit in a PR. PRs are not merged
+until every checked commit is signed off.
+
+### Trademark
+
+The MIT license covers the **code**, not the **name**. *tentaflake* and the
+tentaflake logo are trademarks of Tim Witter — see [`TRADEMARK.md`](TRADEMARK.md).
+Contributing does not grant any right to use them, and forks need their own name.
+
 ## Pull Request Process
 
 1. Fork the repo and create a feature branch:
@@ -123,9 +157,9 @@ git tag -s vX.Y.Z -m "vX.Y.Z"
    cd pkgs/tentaflake-auditd && go vet ./... && go test ./...
    ```
 
-3. Commit using conventional commits:
+3. Commit using conventional commits, with a DCO sign-off (`-s`):
    ```bash
-   git commit -m "feat: add thing"
+   git commit -s -m "feat: add thing"
    ```
 
 4. Push and open a PR against `main`.

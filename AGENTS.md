@@ -18,6 +18,7 @@ cd pkgs/tentaflake-auditd && go vet ./... && go test ./... && golangci-lint run
 - Nix: `nix fmt` (nixfmt), 2-space indent
 - Go: `gofmt`, tabs, run `golangci-lint run` before push
 - Commits: Conventional Commits (`feat:`, `fix:`, `docs:`)
+- DCO: every non-merge PR commit needs `Signed-off-by:`; use `git commit -s`
 
 ## Template Rule
 
