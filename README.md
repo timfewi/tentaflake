@@ -669,7 +669,7 @@ This is a **generic template** — keep it that way. No domain-specific code, re
 
 1. Fork the repo
 2. Create a feature branch (`git checkout -b feat/amazing`)
-3. Commit using [Conventional Commits](https://www.conventionalcommits.org/) (`feat:`, `fix:`, `docs:`)
+3. Commit using [Conventional Commits](https://www.conventionalcommits.org/) (`feat:`, `fix:`, `docs:`) and sign off with `git commit -s`
 4. Run `nix flake check` and `go test ./...` in `pkgs/tentaflake-auditd/`
 5. Open a Pull Request
 
@@ -679,5 +679,18 @@ See [`CONTRIBUTING.md`](CONTRIBUTING.md) for full details.
 
 ## 📄 License
 
-MIT — see [LICENSE](LICENSE).
+MIT — see [LICENSE](LICENSE). Copyright © 2026 Tim Witter.
 Piper voice models distributed under their respective MIT licenses.
+
+---
+
+## ™️ Trademark
+
+**tentaflake** and the tentaflake logo are trademarks of Tim Witter.
+
+The code in this repository is MIT-licensed. **The name and the logo are not
+part of that license.** You may fork, modify, and use the code — including
+commercially — but you may not offer a product or service under the name
+*tentaflake*, or use the tentaflake logo, without written permission.
+
+In short: the code is free, the name is not. See [TRADEMARK.md](TRADEMARK.md).
