@@ -25,6 +25,8 @@ tentaflake stop <name>         Stop an agent
 tentaflake shell <name>        Open a shell inside an agent container
 tentaflake exec <name> -- cmd  Run a command inside an agent container
 tentaflake ps                  Show all declarative agent containers
+tentaflake stats               Fleet dashboard: CPU/memory per agent
+                               (live: watch -cn2 tentaflake stats)
 tentaflake top                 Live filesystem-activity TUI
 tentaflake backup <name>       Snapshot an agent's state dir to a .tar.gz here
 tentaflake doctor              Host health check (exits nonzero on problems)
@@ -36,6 +38,10 @@ tentaflake agent remove <n>    Remove an agent from agents.json
 tentaflake rebuild             Apply the system config (nixos-rebuild switch)
 tentaflake update              Update flake inputs, review, then rebuild
 tentaflake help                Show this help
+
+FLAGS
+  --hide, -H                   Redact host name, tailnet IP and agent names —
+                               safe to screenshot. Works on status and stats.
 ```
 
 A deprecated `hermes` shim still works for old scripts/muscle memory: it
@@ -76,10 +82,46 @@ and a failed agent adds a `tentaflake logs <name>` hint below the list:
 
 ```
   AGENTS (3 · 2 active · 1 inactive)
-    ● assistant             zeroclaw   active   3h 12m
-    ● coding                hermes     active   2d 4h
+    ● assistant             zeroclaw   active   3h 12m    306M █░░░░░  19%
+    ● coding                hermes     active   2d 4h     671M ██░░░░  43%
     ○ research              hermes     inactive
 ```
+
+The memory cell per active agent comes straight from the container's cgroup
+(`memory.current - inactive_file` — the same number `docker stats` reports,
+without its ~2s sample window), so the banner stays fast on every login. The
+bar percentage is usage against the container's memory limit, colored by the
+usual thresholds; agents without a readable cgroup simply get no cell.
+
+### `tentaflake stats` — the wide fleet dashboard
+
+`tentaflake stats` is the same renderer as the login banner (same logo, same
+header, same rows — the two can never drift apart), one density wider: a
+column header plus per-agent CPU, PID count, memory against its limit, and a
+fleet total against host RAM. CPU needs a delta, so only `stats` pays its
+0.4s sample window; the scale matches `docker stats` (100% = one busy core).
+For a live view: `watch -cn2 tentaflake stats`.
+
+```
+  AGENTS (3 · 2 active · 1 inactive)
+      AGENT                RUNTIME    STATE    UPTIME       CPU  PIDS  MEMORY
+    ● assistant            zeroclaw   active   3h 12m      0.4%    29    306M / 1.5G  █░░░░░░░  19%
+    ● coding               hermes     active   2d 4h      20.1%    31    671M / 1.5G  ███░░░░░  43%
+    ○ research             hermes     inactive
+
+    fleet 977M across 2 agents · 12% of 7.8G host ram
+```
+
+### `--hide` — screenshot-safe redaction
+
+`tentaflake --hide` (or `-H`, on `status` and `stats` alike) masks the three
+fields that identify the box: host name and tailnet IP become `redacted`,
+agent names become `agent-1`…`agent-N` (the failed-agents hint included).
+Telemetry — kernel, uptime, load, memory, disk, the CPU/MEMORY columns —
+stays, since it names nobody and is usually the point of the screenshot. A
+yellow `· redacted` marker in the header shows the view is masked.
+`tentaflake-status --selftest` renders the masked wide view and fails loudly
+if any identifying string leaks into it.
 
 ## Host management commands
 
