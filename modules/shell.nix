@@ -4,7 +4,8 @@
 # When you SSH into a freshly-installed Tentaflake host (over Tailscale SSH),
 # this module makes the landing experience useful instead of a bare prompt:
 #
-#   - `tentaflake-status`  dynamic login banner (host + agent health)
+#   - `tentaflake-status`  dynamic login banner (host + agent health), also
+#                          the `tentaflake stats` dashboard via `--stats`
 #   - `tentaflake`         backend-aware CLI to drive the agent containers
 #   - bash QoL             completion, history, colored prompt, aliases
 #   - modern CLI tools     eza, bat, fd, ripgrep, fzf, …  (optional)
@@ -125,6 +126,8 @@ let
         tentaflake shell <name>        Open a shell inside an agent container
         tentaflake exec <name> -- cmd  Run a command inside an agent container
         tentaflake ps                  Show all declarative agent containers
+        tentaflake stats               Fleet dashboard: CPU/memory per agent
+                                       (live: watch -cn2 tentaflake stats)
         tentaflake top                 Live filesystem-activity TUI
         tentaflake backup <name>       Snapshot an agent's state dir to a .tar.gz here
         tentaflake doctor              Host health check (exits nonzero on problems)
@@ -136,6 +139,11 @@ let
         tentaflake rebuild             Apply the system config (nixos-rebuild switch)
         tentaflake update              Update flake inputs, review, then rebuild
         tentaflake help                Show this help
+
+      ''${bold}FLAGS''${reset}
+        --hide, -H                     Redact host name, tailnet IP and agent
+                                       names — safe to screenshot. Works on
+                                       ''${bold}status''${reset} and ''${bold}stats''${reset}.
       EOF
       }
 
@@ -172,7 +180,7 @@ let
       }
 
       cmd_status() {
-        exec tentaflake-status
+        exec tentaflake-status "$@"
       }
 
       cmd_rebuild() {
@@ -1087,7 +1095,10 @@ let
       main() {
         local sub="''${1:-status}"
         case "$sub" in
-          status|ls|"") cmd_status ;;
+          status|ls|"") shift || true; cmd_status "$@" ;;
+          # A bare `tentaflake --hide` has no subcommand — without this it
+          # would fall through to *) and die as an unknown command.
+          --hide|-H) cmd_status "$@" ;;
           logs)
             require_name "''${2:-}"; local n="$2"; shift 2 || true
             # Resolve BEFORE exec — a failing $(…) inside exec's args is ignored,
@@ -1122,6 +1133,9 @@ let
             [ "''${#filters[@]}" -gt 0 ] || exit 0
             exec "$BACKEND" ps --all "''${filters[@]}"
             ;;
+          # Same renderer as the login banner, one density wider — so the
+          # dashboard can never drift away from what `tentaflake` shows.
+          stats) shift || true; cmd_status --stats "$@" ;;
           top)
             shift || true
             if ! command -v tentaflake-top >/dev/null 2>&1; then
@@ -1201,9 +1215,136 @@ let
         else printf '%dm' "$m"; fi
       }
 
+      # MiB → 671M / 1.5G
+      fmt_mib() {
+        if [ "$1" -ge 1024 ]; then awk -v m="$1" 'BEGIN { printf "%.1fG", m / 1024 }'
+        else printf '%dM' "$1"; fi
+      }
+
+      # 0-100 percent → filled/empty block bar of the given width
+      bar() {
+        local pct=$1 w=$2 f i out=""
+        f=$((pct * w / 100)); [ "$f" -gt "$w" ] && f=$w
+        for ((i = 0; i < w; i++)); do
+          if [ "$i" -lt "$f" ]; then out+="█"; else out+="░"; fi
+        done
+        printf '%s' "$out"
+      }
+
+      # `--stats` widens the agent table with CPU/PIDS and a fleet total. Same
+      # logo, same header, same rows — one renderer, two densities.
+      # `--hide` masks the three fields that identify this box in a screenshot:
+      # host name, tailnet IP, agent names. Telemetry (kernel/load/mem/disk)
+      # stays — it names nobody and is usually the reason for the screenshot.
+      wide=0; hide=0; selftest=0
+      for a in "$@"; do
+        case "$a" in
+          --stats) wide=1 ;;
+          --hide|-H) hide=1 ;;
+          --selftest) selftest=1 ;;
+        esac
+      done
+
+      # Prove --hide actually redacts: render the widest masked view and search
+      # it for every string it must not contain. A newly added identifying
+      # field that nobody remembered to mask fails here, not in a screenshot.
+      # (An agent named after a static label — "load", "disk" — would false-
+      # positive; renaming the label is the fix if that ever happens.)
+      if [ "$selftest" = 1 ]; then
+        out=$("$0" --stats --hide 2>&1 || true)
+        rc=0
+        check() {
+          [ -n "$1" ] || return 0
+          case "$out" in
+            *"$1"*) printf 'LEAK: %s leaked into --hide output\n' "$2" >&2; rc=1 ;;
+          esac
+        }
+        check "$(hostname 2>/dev/null || true)" "host name"
+        if command -v tailscale >/dev/null 2>&1; then
+          check "$(tailscale ip -4 2>/dev/null | head -n1 || true)" "tailnet IP"
+        fi
+        while IFS=$'\t' read -r _ n container _; do
+          check "$n" "agent name '$n'"
+          check "$container" "container '$container'"
+        done <<< ${lib.escapeShellArg agentRecords}
+        if [ "$rc" = 0 ]; then printf 'tentaflake-status: --hide selftest ok\n'; fi
+        exit "$rc"
+      fi
+
+      # ── Per-agent resources, read straight from each container's cgroup ──
+      # `${backend} stats` reports the same numbers but blocks ~2s waiting for
+      # its own sample window — far too slow for something on every login.
+      # `memory.current - inactive_file` is exactly what that command prints as
+      # usage. Where a container's cgroup lands depends on the backend and the
+      # cgroup driver, so try the known layouts and take the first readable
+      # one. An unknown layout leaves the column blank instead of erroring —
+      # and never falls back to the unit's own cgroup, which for docker holds
+      # only the short-lived `${backend} run` client, not the container.
+      declare -A cg_of mem_used mem_max pids_of cpu_pct
+      fleet_used=0; fleet_n=0
+
+      cgroup_dir() {
+        local id=$1 d
+        for d in \
+          /sys/fs/cgroup/system.slice/docker-"$id".scope \
+          /sys/fs/cgroup/machine.slice/libpod-"$id".scope \
+          /sys/fs/cgroup/machine.slice/libpod-"$id".scope/container \
+          /sys/fs/cgroup/system.slice/*/libpod-"$id".scope \
+          /sys/fs/cgroup/system.slice/*/libpod-"$id".scope/container; do
+          if [ -r "$d/memory.current" ]; then printf '%s' "$d"; return 0; fi
+        done
+        return 1
+      }
+
+      collect_cgroups() {
+        local id name d cur inact max
+        command -v ${backend} >/dev/null 2>&1 || return 0
+        while read -r id name; do
+          [ -n "$id" ] || continue
+          d=$(cgroup_dir "$id") || continue
+          cg_of[$name]=$d
+        done < <(${backend} ps --no-trunc --format '{{.ID}} {{.Names}}' 2>/dev/null || true)
+
+        for name in "''${!cg_of[@]}"; do
+          d=''${cg_of[$name]}
+          cur=$(cat "$d/memory.current" 2>/dev/null || echo 0)
+          inact=$(awk '/^inactive_file /{ print $2 }' "$d/memory.stat" 2>/dev/null || echo 0)
+          max=$(cat "$d/memory.max" 2>/dev/null || echo max)
+          mem_used[$name]=$(((cur - ''${inact:-0}) / 1048576))
+          if [ "$max" = max ]; then mem_max[$name]=0; else mem_max[$name]=$((max / 1048576)); fi
+          pids_of[$name]=$(cat "$d/pids.current" 2>/dev/null || echo "")
+        done
+      }
+
+      # CPU needs a delta, so this one costs a real 0.4s — only --stats pays it.
+      # Scale matches `${backend} stats`: 100% = one fully busy core.
+      collect_cpu() {
+        local name u0 u1 iv=0.4
+        declare -A t0
+        for name in "''${!cg_of[@]}"; do
+          t0[$name]=$(awk '/^usage_usec/{ print $2 }' "''${cg_of[$name]}/cpu.stat" 2>/dev/null || echo 0)
+        done
+        sleep "$iv"
+        for name in "''${!cg_of[@]}"; do
+          u1=$(awk '/^usage_usec/{ print $2 }' "''${cg_of[$name]}/cpu.stat" 2>/dev/null || echo 0)
+          u0=''${t0[$name]:-$u1}
+          cpu_pct[$name]=$(awk -v d="$((u1 - u0))" -v iv="$iv" 'BEGIN { printf "%.1f", d / (iv * 10000) }')
+        done
+      }
+
+      collect_cgroups
+      if [ "$wide" = 1 ]; then collect_cpu; fi
+
       # ── Header info (rendered right of the logo below) ──
-      info+=("$(printf '%b%btentaflake%b %b%s%b' "$bold" "$cyan" "$reset" "$bold" "$(hostname)" "$reset")")
-      info+=("$(printf '%bmulti-runtime agent host · ${backend}%b' "$dim" "$reset")")
+      if [ "$hide" = 1 ]; then
+        host_label=redacted
+        hide_note=$(printf ' %b· redacted%b' "$yellow" "$reset")
+      else
+        host_label=$(hostname)
+        hide_note=""
+      fi
+      info+=("$(printf '%b%btentaflake%b %b%s%b' "$bold" "$cyan" "$reset" "$bold" "$host_label" "$reset")")
+      info+=("$(printf '%bmulti-runtime agent host · ${backend}%b%s' "$dim" "$reset" "$hide_note")")
       info+=("")
 
       # ── System facts ──
@@ -1230,7 +1371,9 @@ let
 
       if command -v tailscale >/dev/null 2>&1; then
         ts=$(tailscale ip -4 2>/dev/null | head -n1 || true)
-        if [ -n "$ts" ]; then
+        if [ -n "$ts" ] && [ "$hide" = 1 ]; then
+          kv "tailnet" "''${dim}redacted''${reset}"
+        elif [ -n "$ts" ]; then
           kv "tailnet" "$ts"
         else
           kv "tailnet" "''${yellow}not connected (sudo tailscale up)''${reset}"
@@ -1282,11 +1425,39 @@ let
             esac
           done < <(systemctl show -p ActiveState -p ActiveEnterTimestamp "$unit" 2>/dev/null || true)
           total=$((total + 1))
+          # Mask the display name only — $container and $unit stay real, so the
+          # cgroup and systemctl lookups are untouched. This single site covers
+          # every path that prints a name, the failed-agents hint included.
+          if [ "$hide" = 1 ]; then n="agent-$total"; fi
           case "$runtime" in
             hermes) rcolor=$yellow ;;
             zeroclaw) rcolor=$blue ;;
             *) rcolor=$magenta ;;
           esac
+
+          # Resource cell, rendered last in the row because its colors make
+          # the field width unprintf-able for anything following it.
+          memcell=""
+          u=''${mem_used[$container]-}
+          if [ -n "$u" ]; then
+            fleet_used=$((fleet_used + u)); fleet_n=$((fleet_n + 1))
+            mx=''${mem_max[$container]:-0}
+            if [ "$mx" -gt 0 ]; then mp=$((u * 100 / mx)); else mp=0; fi
+            mc=$(pct_color "$mp")
+            if [ "$wide" = 1 ]; then
+              cpu=''${cpu_pct[$container]:-}
+              [ -n "$cpu" ] && cpu="$cpu%"
+              memcell=$(printf '%b%6s%b %b%5s%b  %6s / %-5s %b%s %3d%%%b' \
+                "$cyan" "$cpu" "$reset" \
+                "$dim" "''${pids_of[$container]:-}" "$reset" \
+                "$(fmt_mib "$u")" "$(fmt_mib "$mx")" \
+                "$mc" "$(bar "$mp" 8)" "$mp" "$reset")
+            else
+              memcell=$(printf '%b%6s%b %b%s %3d%%%b' \
+                "$bold" "$(fmt_mib "$u")" "$reset" "$mc" "$(bar "$mp" 6)" "$mp" "$reset")
+            fi
+          fi
+
           case "$st" in
             active)
               n_active=$((n_active + 1))
@@ -1295,9 +1466,9 @@ let
                 since_s=$(date -d "$since" +%s 2>/dev/null || true)
                 [ -n "$since_s" ] && age=$(fmt_dur $(($(date +%s) - since_s)))
               fi
-              rows+=("$(printf '    %b●%b %-20s %b%-10s%b %b%-8s%b %b%s%b' \
+              rows+=("$(printf '    %b●%b %-20s %b%-10s%b %b%-8s%b %b%-9s%b %s' \
                 "$rcolor" "$reset" "$n" "$rcolor" "$runtime" "$reset" \
-                "$rcolor" "$st" "$reset" "$dim" "$age" "$reset")")
+                "$rcolor" "$st" "$reset" "$dim" "$age" "$reset" "$memcell")")
               ;;
             failed)
               n_failed=$((n_failed + 1)); failed_names+=("$n")
@@ -1322,7 +1493,19 @@ let
           "$green" "$n_active" "$reset" \
           "$dim" "$n_inactive" \
           "$failed_part" "$dim" "$reset"
+        if [ "$wide" = 1 ]; then
+          printf '      %b%-20s %-10s %-8s %-9s %6s %5s  %s%b\n' "$dim" \
+            AGENT RUNTIME STATE UPTIME CPU PIDS MEMORY "$reset"
+        fi
         printf '%s\n' "''${rows[@]}"
+        if [ "$wide" = 1 ] && [ "$fleet_used" -gt 0 ]; then
+          host_mib=$(awk '/^MemTotal:/ { print int($2 / 1024) }' /proc/meminfo)
+          fleet_pct=$((fleet_used * 100 / host_mib))
+          printf '\n    %bfleet%b %s %bacross %d agents · %b%d%%%b %bof %s host ram%b\n' \
+            "$dim" "$reset" "$(fmt_mib "$fleet_used")" \
+            "$dim" "$fleet_n" "$(pct_color "$fleet_pct")" "$fleet_pct" "$reset" \
+            "$dim" "$(fmt_mib "$host_mib")" "$reset"
+        fi
         if [ "$n_failed" -gt 0 ]; then
           joined=$(printf '%s, ' "''${failed_names[@]}"); joined=''${joined%, }
           printf '\n    %b⚠ failed: %s — tentaflake logs %s%b\n' \

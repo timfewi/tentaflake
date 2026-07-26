@@ -6,8 +6,19 @@
 # banner can be eyeballed and regression-checked on any dev machine — no
 # NixOS host or agent containers needed. Keep in sync with modules/shell.nix.
 #
-# Usage: ./scripts/banner-test.sh   (exits non-zero if a self-check fails)
+# Usage: ./scripts/banner-test.sh [--stats] [--hide]
+#        (exits non-zero if a self-check fails)
 set -euo pipefail
+
+# Same flags the real banner takes: --stats is the wide `tentaflake stats`
+# dashboard, --hide redacts everything that identifies the host.
+wide=0; hide=0
+for a in "$@"; do
+  case "$a" in
+    --stats) wide=1 ;;
+    --hide|-H) hide=1 ;;
+  esac
+done
 
 REPO=$(cd -- "$(dirname -- "$0")/.." && pwd)
 LOGO_FILE=$REPO/public/tentaflake-shell-logo.txt
@@ -26,6 +37,16 @@ systemctl() {
 }
 hostname() { echo agent-hub; }
 backend=docker
+ts_ip=100.73.54.21
+
+# The real banner fills these from each running container's cgroup. There are
+# no containers on a dev box, so pin fixtures instead — deterministic numbers
+# that still exercise fmt_mib, bar, the colour thresholds and the fleet total.
+declare -A mem_used=( [hermes-atlas-core]=671 [zeroclaw-data-scout]=306 [hermes-log-analyst]=1900 )
+declare -A mem_max=(  [hermes-atlas-core]=1536 [zeroclaw-data-scout]=1536 [hermes-log-analyst]=2048 )
+declare -A pids_of=(  [hermes-atlas-core]=31 [zeroclaw-data-scout]=29 [hermes-log-analyst]=44 )
+declare -A cpu_pct=(  [hermes-atlas-core]=20.1 [zeroclaw-data-scout]=0.4 [hermes-log-analyst]=88.6 )
+fleet_used=0; fleet_n=0
 
 # ── Mirror of modules/shell.nix statusBanner from here on ──
 bold=$(printf '\033[1m'); dim=$(printf '\033[2m'); reset=$(printf '\033[0m')
@@ -53,9 +74,32 @@ fmt_dur() {
   else printf '%dm' "$m"; fi
 }
 
+# MiB → 671M / 1.5G
+fmt_mib() {
+  if [ "$1" -ge 1024 ]; then awk -v m="$1" 'BEGIN { printf "%.1fG", m / 1024 }'
+  else printf '%dM' "$1"; fi
+}
+
+# 0-100 percent → filled/empty block bar of the given width
+bar() {
+  local pct=$1 w=$2 f i out=""
+  f=$((pct * w / 100)); [ "$f" -gt "$w" ] && f=$w
+  for ((i = 0; i < w; i++)); do
+    if [ "$i" -lt "$f" ]; then out+="█"; else out+="░"; fi
+  done
+  printf '%s' "$out"
+}
+
 # ── Header info (rendered right of the logo below) ──
-info+=("$(printf '%b%btentaflake%b %b%s%b' "$bold" "$cyan" "$reset" "$bold" "$(hostname)" "$reset")")
-info+=("$(printf '%bmulti-runtime agent host · %s%b' "$dim" "$backend" "$reset")")
+if [ "$hide" = 1 ]; then
+  host_label=redacted
+  hide_note=$(printf ' %b· redacted%b' "$yellow" "$reset")
+else
+  host_label=$(hostname)
+  hide_note=""
+fi
+info+=("$(printf '%b%btentaflake%b %b%s%b' "$bold" "$cyan" "$reset" "$bold" "$host_label" "$reset")")
+info+=("$(printf '%bmulti-runtime agent host · %s%b%s' "$dim" "$backend" "$reset" "$hide_note")")
 info+=("")
 
 # ── System facts ──
@@ -79,7 +123,11 @@ if [ -n "$disk" ] && [ -n "$disk_pct" ]; then
 elif [ -n "$disk" ]; then
   kv "disk /" "$disk"
 fi
-kv "tailnet" "100.73.54.21"
+if [ "$hide" = 1 ]; then
+  kv "tailnet" "${dim}redacted${reset}"
+else
+  kv "tailnet" "$ts_ip"
+fi
 
 # ── Render: logo left, info column right ──
 # The module indents the logo 2 spaces at build time; sed replicates that.
@@ -126,11 +174,37 @@ else
       esac
     done < <(systemctl show -p ActiveState -p ActiveEnterTimestamp "$unit" 2>/dev/null || true)
     total=$((total + 1))
+    # Mask the display name only — $container and $unit stay real.
+    if [ "$hide" = 1 ]; then n="agent-$total"; fi
     case "$runtime" in
       hermes) rcolor=$yellow ;;
       zeroclaw) rcolor=$blue ;;
       *) rcolor=$magenta ;;
     esac
+
+    # Resource cell, rendered last in the row because its colors make
+    # the field width unprintf-able for anything following it.
+    memcell=""
+    u=${mem_used[$container]-}
+    if [ -n "$u" ]; then
+      fleet_used=$((fleet_used + u)); fleet_n=$((fleet_n + 1))
+      mx=${mem_max[$container]:-0}
+      if [ "$mx" -gt 0 ]; then mp=$((u * 100 / mx)); else mp=0; fi
+      mc=$(pct_color "$mp")
+      if [ "$wide" = 1 ]; then
+        cpu=${cpu_pct[$container]:-}
+        [ -n "$cpu" ] && cpu="$cpu%"
+        memcell=$(printf '%b%6s%b %b%5s%b  %6s / %-5s %b%s %3d%%%b' \
+          "$cyan" "$cpu" "$reset" \
+          "$dim" "${pids_of[$container]:-}" "$reset" \
+          "$(fmt_mib "$u")" "$(fmt_mib "$mx")" \
+          "$mc" "$(bar "$mp" 8)" "$mp" "$reset")
+      else
+        memcell=$(printf '%b%6s%b %b%s %3d%%%b' \
+          "$bold" "$(fmt_mib "$u")" "$reset" "$mc" "$(bar "$mp" 6)" "$mp" "$reset")
+      fi
+    fi
+
     case "$st" in
       active)
         n_active=$((n_active + 1))
@@ -139,9 +213,9 @@ else
           since_s=$(date -d "$since" +%s 2>/dev/null || true)
           [ -n "$since_s" ] && age=$(fmt_dur $(($(date +%s) - since_s)))
         fi
-        agent_rows+=("$(printf '    %b●%b %-20s %b%-10s%b %b%-8s%b %b%s%b' \
+        agent_rows+=("$(printf '    %b●%b %-20s %b%-10s%b %b%-8s%b %b%-9s%b %s' \
           "$rcolor" "$reset" "$n" "$rcolor" "$runtime" "$reset" \
-          "$rcolor" "$st" "$reset" "$dim" "$age" "$reset")")
+          "$rcolor" "$st" "$reset" "$dim" "$age" "$reset" "$memcell")")
         ;;
       failed)
         n_failed=$((n_failed + 1)); failed_names+=("$n")
@@ -166,7 +240,19 @@ else
     "$green" "$n_active" "$reset" \
     "$dim" "$n_inactive" \
     "$failed_part" "$dim" "$reset"
+  if [ "$wide" = 1 ]; then
+    printf '      %b%-20s %-10s %-8s %-9s %6s %5s  %s%b\n' "$dim" \
+      AGENT RUNTIME STATE UPTIME CPU PIDS MEMORY "$reset"
+  fi
   printf '%s\n' "${agent_rows[@]}"
+  if [ "$wide" = 1 ] && [ "$fleet_used" -gt 0 ]; then
+    host_mib=$(awk '/^MemTotal:/ { print int($2 / 1024) }' /proc/meminfo)
+    fleet_pct=$((fleet_used * 100 / host_mib))
+    printf '\n    %bfleet%b %s %bacross %d agents · %b%d%%%b %bof %s host ram%b\n' \
+      "$dim" "$reset" "$(fmt_mib "$fleet_used")" \
+      "$dim" "$fleet_n" "$(pct_color "$fleet_pct")" "$fleet_pct" "$reset" \
+      "$dim" "$(fmt_mib "$host_mib")" "$reset"
+  fi
   if [ "$n_failed" -gt 0 ]; then
     joined=$(printf '%s, ' "${failed_names[@]}"); joined=${joined%, }
     printf '\n    %b⚠ failed: %s — tentaflake logs %s%b\n' \
@@ -185,16 +271,39 @@ fi
 if ! { [ "$(fmt_dur 180000)" = "2d 2h" ] && [ "$(fmt_dur 11520)" = "3h 12m" ] && [ "$(fmt_dur 2700)" = "45m" ]; }; then
   echo "fmt_dur MISMATCH"; exit 1
 fi
+if ! { [ "$(fmt_mib 671)" = "671M" ] && [ "$(fmt_mib 1024)" = "1.0G" ] && [ "$(fmt_mib 1536)" = "1.5G" ]; }; then
+  echo "fmt_mib MISMATCH"; exit 1
+fi
+# bar never overflows its width, even past 100%
+if ! { [ "$(bar 50 8)" = "████░░░░" ] && [ "$(bar 0 4)" = "░░░░" ] && [ "$(bar 140 4)" = "████" ]; }; then
+  echo "bar MISMATCH: $(bar 50 8) / $(bar 0 4) / $(bar 140 4)"; exit 1
+fi
+# only agents with a cgroup entry contribute to the fleet total
+if ! { [ "$fleet_used" -eq 2877 ] && [ "$fleet_n" -eq 3 ]; }; then
+  echo "FLEET MISMATCH: used=$fleet_used n=$fleet_n (want 2877 / 3)"; exit 1
+fi
 # logo loaded and non-trivial
 if ! { [ "${#art[@]}" -ge 1 ] && [ "$w" -gt 0 ]; }; then echo "LOGO NOT LOADED"; exit 1; fi
 # info column alignment: title, tagline, and kernel must start at column w+4
 # shellcheck disable=SC2001  # regex strip needs sed; ${var//…} can't do [0-9;]*
 plain=$(sed -e $'s/\x1b\[[0-9;]*m//g' <<< "$header")
-c_title=$(awk '/tentaflake agent-hub/ {print index($0, "tentaflake"); exit}' <<< "$plain")
+c_title=$(awk -v h="tentaflake $host_label" 'index($0, h) {print index($0, "tentaflake"); exit}' <<< "$plain")
 c_tag=$(awk '/multi-runtime/ {print index($0, "multi-runtime"); exit}' <<< "$plain")
 c_kern=$(awk '/kernel/ {print index($0, "kernel"); exit}' <<< "$plain")
 expected=$((w + 4))
 if ! { [ "$c_title" = "$expected" ] && [ "$c_tag" = "$expected" ] && [ "$c_kern" = "$expected" ]; }; then
   echo "ALIGNMENT MISMATCH: title=$c_title tag=$c_tag kernel=$c_kern expected=$expected (w=$w)"; exit 1
 fi
+# --hide must leave nothing that identifies the host. Re-runs this script in
+# its widest mode rather than duplicating the render; the env var stops the
+# child from recursing back into this block.
+if [ -z "${BANNER_TEST_CHILD:-}" ]; then
+  masked=$(BANNER_TEST_CHILD=1 "$0" --stats --hide 2>&1)
+  leaked=""
+  for s in "$(hostname)" "$ts_ip" atlas-core data-scout flux-reporter log-analyst metric-lens; do
+    case "$masked" in *"$s"*) leaked="$leaked $s" ;; esac
+  done
+  if [ -n "$leaked" ]; then echo "REDACTION LEAK:$leaked"; exit 1; fi
+fi
+
 echo "self-check OK (logo ${#art[@]} rows × $w cols, info column at $expected)"
