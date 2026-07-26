@@ -90,8 +90,8 @@ func (watcher *Watcher) addRecursive(dir string) error {
 }
 
 // Start begins watching directories and returns a receive-only channel
-// of event.Event values. Events are debounced per file within a 100ms
-// window. The goroutine exits when ctx is cancelled.
+// of event.Event values. Events are debounced per file within
+// debounceWindow. The goroutine exits when ctx is cancelled.
 func (watcher *Watcher) Start(ctx context.Context) <-chan event.Event {
 	out := make(chan event.Event, 100)
 
@@ -106,7 +106,13 @@ type debounceEntry struct {
 	timer *time.Timer
 }
 
-const debounceWindow = 100 * time.Millisecond
+// debounceWindow is how long events for one path coalesce before the newest
+// one is emitted. A var, not a const, only so the coalescing tests can widen
+// it — 100ms is short enough that a loaded machine can hand the watcher
+// goroutine the last inotify event after the window has already flushed,
+// which looks like a coalescing failure but is only scheduling. Same override
+// pattern as maxWatchedDirs.
+var debounceWindow = 100 * time.Millisecond
 
 // debounceMap manages pending debounced events with a mutex.
 type debounceMap struct {
