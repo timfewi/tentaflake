@@ -117,18 +117,8 @@
       formatter.${system} = nixpkgs.legacyPackages.${system}.nixfmt-tree;
 
       # ── Dev shell for contributors ──
-      devShells.${system}.default = pkgs.mkShell {
-        packages = with pkgs; [
-          just
-          nixfmt-rfc-style
-          statix
-          deadnix
-          nil
-          gotools
-          golangci-lint
-          shellcheck
-        ];
-      };
+      # Toolchain plus the entry banner; see lib/devshell.nix.
+      devShells.${system}.default = import ./lib/devshell.nix { inherit pkgs; };
 
       # ── Checks (validates nixosConfigurations build) ──
       checks.${system} = {

@@ -20,7 +20,18 @@ All such content belongs in a **fork** or a private project repo.
 # Clone
 git clone https://github.com/timfewi/tentaflake
 cd tentaflake
+
+# Enter the dev shell (or `direnv allow` once, if you use direnv)
+nix develop
 ```
+
+Entering it prints the tentaflake logo alongside your branch, HEAD, working-tree
+state and Nix version, plus the handful of `just` recipes worth knowing, and
+switches the prompt to a `(tentaflake)` marker so you can tell at a glance which
+shell you are in. The banner stays silent when stdout is not a terminal (so
+`nix develop --command …` in CI is unaffected); set `TENTAFLAKE_NO_BANNER=1` to
+turn it off for good. It lives in [`lib/devshell.nix`](lib/devshell.nix) and
+reads the same `public/tentaflake-shell-logo.txt` as the host login banner.
 
 All the commands below are wrapped as `just` recipes (`just` is in the dev
 shell). Run `just` to list them; `just ci` runs the full local gate — every

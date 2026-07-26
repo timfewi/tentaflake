@@ -669,9 +669,10 @@ This is a **generic template** — keep it that way. No domain-specific code, re
 
 1. Fork the repo
 2. Create a feature branch (`git checkout -b feat/amazing`)
-3. Commit using [Conventional Commits](https://www.conventionalcommits.org/) (`feat:`, `fix:`, `docs:`) and sign off with `git commit -s`
-4. Run `nix flake check` and `go test ./...` in `pkgs/tentaflake-auditd/`
-5. Open a Pull Request
+3. Enter the dev shell — `nix develop` (or `direnv allow`) drops you into a branded prompt with `just` and the full toolchain
+4. Commit using [Conventional Commits](https://www.conventionalcommits.org/) (`feat:`, `fix:`, `docs:`) and sign off with `git commit -s`
+5. Run `nix flake check` and `go test ./...` in `pkgs/tentaflake-auditd/`
+6. Open a Pull Request
 
 See [`CONTRIBUTING.md`](CONTRIBUTING.md) for full details.
 
