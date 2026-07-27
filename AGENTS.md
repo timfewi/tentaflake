@@ -38,7 +38,7 @@ still accurate before finishing — and update them in the same change:
 ## Module Boundaries
 
 - `modules/` — reusable NixOS modules (generic, composable via `tentaflake.*.enable` options)
-- `lib/` — helpers (`mkHermesAgent`, `mkZeroClawAgent`, `mkOpenCodeAgent`, `agentsFromData`, `pinnedImage`, `constants`)
+- `lib/` — helpers (`mkHermesAgent`, `mkZeroClawAgent`, `mkOpenCodeAgent`, `agentsFromData`, `pinnedImage`, `constants`, `devshell`)
 - `pkgs/` — standalone packages (`tentaflake-auditd`)
 - `tests/` — NixOS VM test backing `checks.<system>.vm-integration`
 - `installer/` — ISO installer and firstboot scripts
