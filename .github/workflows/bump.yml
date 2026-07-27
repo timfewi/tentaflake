@@ -1,0 +1,43 @@
+# Every merge to main gets the next patch tag (v0.3.1 -> v0.3.2) automatically.
+#
+# Tag-based on purpose: this repo versions by git tag, not by a version file,
+# so there is nothing to edit and no commit-back — which also means no
+# workflow-trigger loop to guard against. The escape hatch for deliberate
+# minor/major/rc releases is pushing the tag yourself: a merge whose HEAD
+# already carries a v* tag is left untouched, and the automation continues
+# patch-bumping from whatever you tagged.
+#
+# Prerelease tags (v0.4.0-rc.1) are ignored when picking the latest version,
+# so an rc never becomes the base of an automatic patch bump.
+#
+# Ceiling: pkgs/tentaflake-auditd version stays manual — it only moves when
+# auditd itself changes, not on every repo merge.
+name: Bump patch
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  tag:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # tags need history
+
+      - name: Tag next patch version
+        run: |
+          if [ -n "$(git tag --points-at HEAD 'v*')" ]; then
+            echo "HEAD already tagged — manual release, skipping" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          latest=$(git tag --list 'v*' | sed '/-/d' | sort -V | tail -1)
+          base=${latest#v}; base=${base:-0.0.0}
+          next="v${base%.*}.$(( ${base##*.} + 1 ))"
+          git tag "$next"
+          git push origin "$next"
+          echo "tagged $next" >> "$GITHUB_STEP_SUMMARY"

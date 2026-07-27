@@ -8,6 +8,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- `tentaflake stats` — fleet dashboard sharing the login banner's renderer (same logo, header and rows, so the two cannot drift), one density wider: per-agent CPU%, PID count, memory against the container limit, and a fleet total against host RAM. CPU is a 0.4 s cgroup delta on the `docker stats` scale (100% = one busy core); for a live view, `watch -cn2 tentaflake stats`.
+- Per-agent memory column in the login banner. Read straight from each container's cgroup (`memory.current - inactive_file`, the exact number `docker stats` reports) instead of `docker stats`' ~2 s sample window, so login stays fast. Known docker and podman cgroup layouts are probed; an agent without a readable cgroup simply gets no cell.
+- `--hide` / `-H` on `status` and `stats`: masks host name, tailnet IP and agent names (`agent-1`…`agent-N`, the failed-agents hint included) for screenshot-safe output, with a yellow `· redacted` header marker. Telemetry stays. `tentaflake-status --selftest` renders the masked wide view and exits nonzero if any identifying string leaks.
 - DCO enforcement for pull requests: every non-merge commit must include a `Signed-off-by:` line; see `DCO.txt` and `CONTRIBUTING.md`.
 - `nix develop` now greets you: the dev shell prints the tentaflake logo with branch/HEAD/working-tree/Nix-version rows and a short `just` cheat sheet, and sets a `(tentaflake)` prompt marker. Same braille art and layout as the host login banner — both read `public/tentaflake-shell-logo.txt`. The banner is skipped when stdout is not a TTY (`nix develop --command …` in CI stays clean) and `TENTAFLAKE_NO_BANNER=1` disables it entirely. The dev shell moved from an inline `pkgs.mkShell` in `flake.nix` to `lib/devshell.nix`; the package set is unchanged, and the banner script is built with `writeShellApplication`, so `nix flake check` shellchecks it.
 

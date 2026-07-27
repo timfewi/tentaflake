@@ -58,19 +58,34 @@ func assertEventIn(t *testing.T, ch <-chan event.Event, ops []string, file strin
 			t.Errorf("expected file %q, got %q", file, evt.File)
 		}
 		return evt
-	case <-time.After(2 * time.Second):
+	// Generous: the coalescing tests widen debounceWindow, so a legitimate
+	// event can be a second or more out.
+	case <-time.After(3 * time.Second):
 		t.Fatalf("timeout waiting for event: ops=%v file=%q", ops, file)
 		return event.Event{}
 	}
 }
 
-func assertNoEvent(t *testing.T, ch <-chan event.Event, label string) {
+// assertNoEvent fails if any event arrives within wait. Callers that widened
+// debounceWindow must pass a wait longer than that window, or a second
+// pending entry would flush after the check has already returned.
+func assertNoEvent(t *testing.T, ch <-chan event.Event, label string, wait time.Duration) {
 	t.Helper()
 	select {
 	case evt := <-ch:
 		t.Errorf("unexpected event for %s: %+v", label, evt)
-	case <-time.After(500 * time.Millisecond):
+	case <-time.After(wait):
 	}
+}
+
+// withDebounceWindow widens the coalescing window for one test and restores
+// it afterwards. Tests in this package run sequentially, so mutating the
+// package var is safe. Same override pattern as TestWatcherDirCap.
+func withDebounceWindow(t *testing.T, d time.Duration) {
+	t.Helper()
+	old := debounceWindow
+	debounceWindow = d
+	t.Cleanup(func() { debounceWindow = old })
 }
 
 func TestWatcherCreateFile(t *testing.T) {
@@ -137,10 +152,18 @@ func TestWatcherIgnoreDB(t *testing.T) {
 	// Create a .db file — should be ignored
 	writeFile(t, filepath.Join(dir, "events.db"))
 
-	assertNoEvent(t, ch, "events.db")
+	assertNoEvent(t, ch, "events.db", 500*time.Millisecond)
 }
 
 func TestWatcherDebounce(t *testing.T) {
+	// What is under test is that three writes coalesce into one event — not
+	// that inotify delivers all three inside 100ms. Those are separable, and
+	// on a loaded CI runner the second is not guaranteed: the third event can
+	// reach the watcher goroutine after the window has already flushed, which
+	// correctly opens a fresh window and emits a second event. Widen the
+	// window so only the coalescing property can fail here.
+	withDebounceWindow(t, time.Second)
+
 	dir := newTempDir(t)
 
 	w, err := NewWatcher([]string{dir})
@@ -166,8 +189,9 @@ func TestWatcherDebounce(t *testing.T) {
 	// Should produce exactly 1 event after debounce
 	assertEventIn(t, ch, []string{"create", "write"}, testFile)
 
-	// No second event
-	assertNoEvent(t, ch, "second debounce event")
+	// No second event — waited out past the widened window, so a second
+	// pending entry would have flushed by now.
+	assertNoEvent(t, ch, "second debounce event", 1500*time.Millisecond)
 }
 
 func TestWatcherMultipleDirs(t *testing.T) {
@@ -230,7 +254,7 @@ func TestWatcherIgnoreGitDir(t *testing.T) {
 
 	// Writing within .git should not produce events
 	writeFile(t, filepath.Join(gitDir, "HEAD"))
-	assertNoEvent(t, ch, ".git/HEAD")
+	assertNoEvent(t, ch, ".git/HEAD", 500*time.Millisecond)
 }
 
 func TestAgentNameFromPath(t *testing.T) {
@@ -293,6 +317,8 @@ func TestIsIgnored(t *testing.T) {
 // TestWatcherDebounceWriteAfterCreate verifies that creating then
 // immediately writing a file produces only one debounced event.
 func TestWatcherDebounceWriteAfterCreate(t *testing.T) {
+	withDebounceWindow(t, time.Second) // see TestWatcherDebounce
+
 	dir := newTempDir(t)
 
 	w, err := NewWatcher([]string{dir})
@@ -315,7 +341,7 @@ func TestWatcherDebounceWriteAfterCreate(t *testing.T) {
 
 	// Should coalesce into 1 event
 	assertEventIn(t, ch, []string{"create", "write"}, testFile)
-	assertNoEvent(t, ch, "second event after coalesce")
+	assertNoEvent(t, ch, "second event after coalesce", 1500*time.Millisecond)
 }
 
 // TestWatcherDirCap verifies that addRecursive stops adding inotify watches
