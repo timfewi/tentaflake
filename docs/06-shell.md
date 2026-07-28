@@ -27,6 +27,8 @@ tentaflake exec <name> -- cmd  Run a command inside an agent container
 tentaflake ps                  Show all declarative agent containers
 tentaflake stats               Fleet dashboard: CPU/memory per agent
                                (live: watch -cn2 tentaflake stats)
+tentaflake health              Host vitals dashboard: CPU/memory/swap/disk/temp
+                               bars + checks (--live to refresh in place)
 tentaflake top                 Live filesystem-activity TUI
 tentaflake backup <name>       Snapshot an agent's state dir to a .tar.gz here
 tentaflake doctor              Host health check (exits nonzero on problems)
@@ -41,7 +43,10 @@ tentaflake help                Show this help
 
 FLAGS
   --hide, -H                   Redact host name, tailnet IP and agent names —
-                               safe to screenshot. Works on status and stats.
+                               safe to screenshot. Works on status, stats and
+                               health.
+  --live[=SECS]                health only: redraw in place every SECS
+                               (default 2). Ctrl-C to exit.
 ```
 
 A deprecated `hermes` shim still works for old scripts/muscle memory: it
@@ -112,16 +117,64 @@ For a live view: `watch -cn2 tentaflake stats`.
     fleet 977M across 2 agents · 12% of 7.8G host ram
 ```
 
+### `tentaflake health` — the host vitals dashboard
+
+Where `stats` looks at the fleet, `health` looks at the **machine underneath
+it**. Same renderer again (same logo, same header, same bar and colour
+thresholds), with two sections below the header:
+
+- **VITALS** — a 24-cell bar per resource: CPU busy (a 0.4s `/proc/stat`
+  delta, 100% = every core busy), memory and swap in use, the hottest thermal
+  zone in °C when the box exposes one, and every block-device filesystem
+  (first four by mount point). Bars are green / yellow ≥75% / red ≥90%.
+- **CHECKS** — the ground `doctor` covers, one line each: failed systemd
+  units, agents active/failed, Tailscale connectivity.
+
+The header carries the verdict — `● healthy`, `▲ degraded` or `✗ critical` —
+which is the worst of everything below, on the same thresholds the bars are
+painted with, so a red bar and a red verdict always agree.
+
+```
+                                tentaflake agent-hub
+                                host health · ✗ critical
+  <logo>
+                                kernel     Linux 6.12.30
+                                uptime     2d 4h
+                                load       1.45, 0.92, 0.72
+                                tailnet    100.73.54.21
+
+  VITALS
+    cpu       ██░░░░░░░░░░░░░░░░░░░░░░    11%  16 cores
+    memory    ███░░░░░░░░░░░░░░░░░░░░░    16%  10.0G / 60.7G
+    swap      ░░░░░░░░░░░░░░░░░░░░░░░░     0%  0M / 8.8G
+    temp      ████████████████░░░░░░░░   69°C  hottest thermal zone
+    /         ████████░░░░░░░░░░░░░░░░    34%  586G / 1.8T
+
+  CHECKS
+    ✗ failed systemd units: docker-hermes-flux-reporter.service
+    ✗ 1 of 6 agents failed — tentaflake status
+    ✓ tailscale connected (100.73.54.21)
+```
+
+`tentaflake health --live` redraws it in place (default every 2s, `--live=5`
+for a slower cadence) on the alternate screen, so quitting with Ctrl-C leaves
+your scrollback exactly as it was. Unlike `watch`, colours survive.
+
+`health` is the dashboard and always exits 0 — **`tentaflake doctor` stays the
+scriptable check** with the nonzero exit and the per-problem fix commands.
+
 ### `--hide` — screenshot-safe redaction
 
-`tentaflake --hide` (or `-H`, on `status` and `stats` alike) masks the three
-fields that identify the box: host name and tailnet IP become `redacted`,
-agent names become `agent-1`…`agent-N` (the failed-agents hint included).
-Telemetry — kernel, uptime, load, memory, disk, the CPU/MEMORY columns —
-stays, since it names nobody and is usually the point of the screenshot. A
-yellow `· redacted` marker in the header shows the view is masked.
-`tentaflake-status --selftest` renders the masked wide view and fails loudly
-if any identifying string leaks into it.
+`tentaflake --hide` (or `-H`, on `status`, `stats` and `health` alike) masks
+the fields that identify the box: host name and tailnet IP become `redacted`,
+agent names become `agent-1`…`agent-N` (the failed-agents hint included), and
+`health` prints a *count* of failed units rather than their names, since a
+unit name carries the container's. Telemetry — kernel, uptime, load, memory,
+disk, temperature, the CPU/MEMORY columns — stays, since it names nobody and
+is usually the point of the screenshot. A yellow `· redacted` marker in the
+header shows the view is masked. `tentaflake-status --selftest` renders both
+the masked wide view and the masked health view, and fails loudly if any
+identifying string leaks into either.
 
 ## Host management commands
 
