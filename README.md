@@ -541,6 +541,7 @@ sudo nixos-rebuild dry-activate --flake .#tentaflake  # dry-run
 sudo nixos-rebuild switch --rollback     # undo last deploy
 tentaflake status                        # all agents, any runtime, with health
 tentaflake stats                         # fleet dashboard: CPU/memory per agent
+tentaflake health --live                 # host vitals: CPU/mem/swap/disk/temp bars, live
 tentaflake --hide                        # same, but screenshot-safe (names/IP redacted)
 tentaflake doctor                        # host health check (nonzero exit on problems)
 tentaflake backup coding                 # snapshot an agent's state dir to ./

@@ -5,7 +5,8 @@
 # this module makes the landing experience useful instead of a bare prompt:
 #
 #   - `tentaflake-status`  dynamic login banner (host + agent health), also
-#                          the `tentaflake stats` dashboard via `--stats`
+#                          the `tentaflake stats` dashboard via `--stats` and
+#                          the `tentaflake health` vitals view via `--health`
 #   - `tentaflake`         backend-aware CLI to drive the agent containers
 #   - bash QoL             completion, history, colored prompt, aliases
 #   - modern CLI tools     eza, bat, fd, ripgrep, fzf, …  (optional)
@@ -128,6 +129,8 @@ let
         tentaflake ps                  Show all declarative agent containers
         tentaflake stats               Fleet dashboard: CPU/memory per agent
                                        (live: watch -cn2 tentaflake stats)
+        tentaflake health              Host vitals dashboard: CPU/memory/swap/
+                                       disk/temp bars + checks (--live to refresh)
         tentaflake top                 Live filesystem-activity TUI
         tentaflake backup <name>       Snapshot an agent's state dir to a .tar.gz here
         tentaflake doctor              Host health check (exits nonzero on problems)
@@ -143,7 +146,9 @@ let
       ''${bold}FLAGS''${reset}
         --hide, -H                     Redact host name, tailnet IP and agent
                                        names — safe to screenshot. Works on
-                                       ''${bold}status''${reset} and ''${bold}stats''${reset}.
+                                       ''${bold}status''${reset}, ''${bold}stats''${reset} and ''${bold}health''${reset}.
+        --live[=SECS]                  ''${bold}health''${reset} only: redraw in place every SECS
+                                       (default 2). Ctrl-C to exit.
       EOF
       }
 
@@ -1136,6 +1141,9 @@ let
           # Same renderer as the login banner, one density wider — so the
           # dashboard can never drift away from what `tentaflake` shows.
           stats) shift || true; cmd_status --stats "$@" ;;
+          # Host vitals, same renderer again — `doctor` stays the scriptable
+          # check (nonzero exit); this one is the dashboard and always exits 0.
+          health) shift || true; cmd_status --health "$@" ;;
           top)
             shift || true
             if ! command -v tentaflake-top >/dev/null 2>&1; then
@@ -1231,19 +1239,49 @@ let
         printf '%s' "$out"
       }
 
+      # Render: logo left, the collected `info` column right. Every view starts
+      # with this, so none of them can drift on the header.
+      # ''${#l} counts characters, not bytes (braille is multibyte) — needs the
+      # UTF-8 locale NixOS sets by default.
+      render_header() {
+        mapfile -t art <<< ${lib.escapeShellArg logo}
+        w=0
+        for l in "''${art[@]}"; do [ "''${#l}" -gt "$w" ] && w=''${#l}; done
+        pad=2 # blank rows above the info column, for rough vertical centering
+        rows=''${#art[@]}
+        [ $((''${#info[@]} + pad)) -gt "$rows" ] && rows=$((''${#info[@]} + pad))
+        printf '\n'
+        for ((i = 0; i < rows; i++)); do
+          l=''${art[i]-}
+          j=$((i - pad))
+          if [ "$j" -ge 0 ] && [ -n "''${info[j]-}" ]; then
+            printf '%b%s%b%*s   %s\n' "$cyan" "$l" "$reset" "$((w - ''${#l}))" "" "''${info[j]}"
+          else
+            printf '%b%s%b\n' "$cyan" "$l" "$reset"
+          fi
+        done
+      }
+
       # `--stats` widens the agent table with CPU/PIDS and a fleet total. Same
       # logo, same header, same rows — one renderer, two densities.
       # `--hide` masks the three fields that identify this box in a screenshot:
       # host name, tailnet IP, agent names. Telemetry (kernel/load/mem/disk)
       # stays — it names nobody and is usually the reason for the screenshot.
-      wide=0; hide=0; selftest=0
+      wide=0; hide=0; selftest=0; health=0; live=0; iv=2
       for a in "$@"; do
         case "$a" in
           --stats) wide=1 ;;
+          --health) health=1 ;;
+          --live) live=1 ;;
+          --live=*) live=1; iv=''${a#*=} ;;
           --hide|-H) hide=1 ;;
           --selftest) selftest=1 ;;
         esac
       done
+      # $iv is handed to sleep — reject anything that isn't a plain positive int.
+      case "$iv" in
+        ""|*[!0-9]*|0) printf 'error: --live interval must be a positive integer\n' >&2; exit 2 ;;
+      esac
 
       # Prove --hide actually redacts: render the widest masked view and search
       # it for every string it must not contain. A newly added identifying
@@ -1251,7 +1289,10 @@ let
       # (An agent named after a static label — "load", "disk" — would false-
       # positive; renaming the label is the fix if that ever happens.)
       if [ "$selftest" = 1 ]; then
+        # Both masked views concatenated — one set of assertions covers the
+        # wide fleet dashboard and the health dashboard alike.
         out=$("$0" --stats --hide 2>&1 || true)
+        out="$out$("$0" --health --hide 2>&1 || true)"
         rc=0
         check() {
           [ -n "$1" ] || return 0
@@ -1269,6 +1310,214 @@ let
         done <<< ${lib.escapeShellArg agentRecords}
         if [ "$rc" = 0 ]; then printf 'tentaflake-status: --hide selftest ok\n'; fi
         exit "$rc"
+      fi
+
+      # ── Host identity, shared by every view below ──
+      if [ "$hide" = 1 ]; then
+        host_label=redacted
+        hide_note=$(printf ' %b· redacted%b' "$yellow" "$reset")
+      else
+        host_label=$(hostname)
+        hide_note=""
+      fi
+      tailnet_ip=""
+      if command -v tailscale >/dev/null 2>&1; then
+        tailnet_ip=$(tailscale ip -4 2>/dev/null | head -n1 || true)
+      fi
+
+      # ── `--health`: host vitals as bars, plus the checks doctor covers ──
+      # Lives here and not in the CLI so it reuses bar/pct_color/fmt_*/the logo
+      # header — a threshold tuned for the banner moves with it. `tentaflake
+      # doctor` stays the scriptable check with the nonzero exit; this is the
+      # dashboard and always exits 0.
+
+      # /proc/stat delta: 100% = every core busy. Costs the sample interval.
+      cpu_busy_pct() {
+        local a b s=0.4
+        a=$(awk '/^cpu /{ t = 0; for (i = 2; i <= NF; i++) t += $i; print t, $5 }' /proc/stat)
+        sleep "$s"
+        b=$(awk '/^cpu /{ t = 0; for (i = 2; i <= NF; i++) t += $i; print t, $5 }' /proc/stat)
+        awk -v a="$a" -v b="$b" 'BEGIN {
+          split(a, x); split(b, y)
+          dt = y[1] - x[1]; di = y[2] - x[2]
+          p = (dt > 0) ? (dt - di) * 100 / dt : 0
+          printf "%d", (p < 0 ? 0 : (p > 100 ? 100 : p))
+        }'
+      }
+
+      # One vitals row: label, bar percent, printed value, detail. Percent and
+      # printed value are separate arguments so °C can share the row shape.
+      hrow() {
+        # printf pads %5s by bytes and "69°C" is multibyte — pad by chars here.
+        local val=$3
+        while [ "''${#val}" -lt 5 ]; do val=" $val"; done
+        printf '    %b%-9s%b %b%s%b %b%s%b  %b%s%b\n' \
+          "$dim" "$1" "$reset" \
+          "$(pct_color "$2")" "$(bar "$2" 24)" "$reset" \
+          "$bold" "$val" "$reset" "$dim" "$4" "$reset"
+      }
+
+      render_health() {
+        local cpu cores mem_t mem_a mem_u mem_p sw_t sw_f sw_u sw_p
+        local temp z t pct used size verdict up
+        local checks=() vitals=()
+        local failed_units n_failed agents_total agents_active agents_failed unit st
+        vs=0 # 0 healthy · 1 degraded · 2 critical — the worst finding wins
+
+        # ck <level> <text> — one check line, which also raises the verdict.
+        ck() {
+          local sym col
+          case "$1" in
+            0) sym="✓"; col=$green ;;
+            1) sym="▲"; col=$yellow ;;
+            *) sym="✗"; col=$red ;;
+          esac
+          [ "$1" -gt "$vs" ] && vs=$1
+          checks+=("$(printf '    %b%s%b %s' "$col" "$sym" "$reset" "$2")")
+        }
+        # A usage percent moves the verdict on the same thresholds pct_color
+        # paints with, so a red bar and a red verdict always agree.
+        rate() {
+          if [ "$1" -ge 90 ]; then vs=2
+          elif [ "$1" -ge 75 ] && [ "$vs" -lt 1 ]; then vs=1
+          fi
+        }
+
+        cores=$(nproc 2>/dev/null || echo 1)
+        cpu=$(cpu_busy_pct)
+        # A busy CPU is agents doing their job, not a fault — no rate() here.
+        vitals+=("$(hrow cpu "$cpu" "$cpu%" "$cores cores")")
+
+        read -r mem_t mem_a sw_t sw_f < <(awk '
+          /^MemTotal:/ { t = $2 } /^MemAvailable:/ { a = $2 }
+          /^SwapTotal:/ { st = $2 } /^SwapFree:/ { sf = $2 }
+          END { print int(t / 1024), int(a / 1024), int(st / 1024), int(sf / 1024) }
+        ' /proc/meminfo)
+        mem_u=$((mem_t - mem_a)); mem_p=0
+        [ "$mem_t" -gt 0 ] && mem_p=$((mem_u * 100 / mem_t))
+        rate "$mem_p"
+        vitals+=("$(hrow memory "$mem_p" "$mem_p%" "$(fmt_mib "$mem_u") / $(fmt_mib "$mem_t")")")
+
+        if [ "$sw_t" -gt 0 ]; then
+          sw_u=$((sw_t - sw_f)); sw_p=$((sw_u * 100 / sw_t))
+          rate "$sw_p"
+          vitals+=("$(hrow swap "$sw_p" "$sw_p%" "$(fmt_mib "$sw_u") / $(fmt_mib "$sw_t")")")
+        fi
+
+        # Hottest thermal zone, when the box exposes any. Bar scale is 0-100 °C.
+        temp=""
+        for z in /sys/class/thermal/thermal_zone*/temp; do
+          [ -r "$z" ] || continue
+          t=$(cat "$z" 2>/dev/null || echo "")
+          case "$t" in "" | *[!0-9]*) continue ;; esac
+          t=$((t / 1000))
+          if [ -z "$temp" ] || [ "$t" -gt "$temp" ]; then temp=$t; fi
+        done
+        if [ -n "$temp" ]; then
+          vitals+=("$(hrow temp "$temp" "$temp°C" "hottest thermal zone")")
+        fi
+
+        # Real block-device filesystems only — tmpfs/overlay is noise here.
+        # ponytail: first four by mount point, so a live frame keeps a fixed
+        # height; widen the head if a host ever needs more.
+        while read -r _ size used _ pct _mnt; do
+          pct=''${pct%\%}
+          rate "$pct"
+          vitals+=("$(hrow "$_mnt" "$pct" "$pct%" "$used / $size")")
+        done < <(df -Ph 2>/dev/null | awk '$1 ~ /^\/dev\//' | sort -k6 | head -4)
+
+        # ── Checks: the same ground `tentaflake doctor` covers, one line each ──
+        failed_units=$(systemctl --failed --no-legend --plain 2>/dev/null | awk '{ print $1 }' | paste -sd' ' - || true)
+        n_failed=$(printf '%s' "$failed_units" | wc -w)
+        if [ "$n_failed" -gt 0 ]; then
+          # Unit names carry container (so agent) names — count only when masked.
+          if [ "$hide" = 1 ]; then
+            ck 2 "$n_failed failed systemd unit(s)"
+          else
+            ck 2 "failed systemd units: $failed_units"
+          fi
+        else
+          ck 0 "no failed systemd units"
+        fi
+
+        agents_total=0; agents_active=0; agents_failed=0
+        while IFS=$'\t' read -r _ _ container unit _; do
+          [ -n "$container" ] || continue
+          agents_total=$((agents_total + 1))
+          st=$(systemctl is-active "$unit" 2>/dev/null || true)
+          case "$st" in
+            active) agents_active=$((agents_active + 1)) ;;
+            failed) agents_failed=$((agents_failed + 1)) ;;
+          esac
+        done <<< ${lib.escapeShellArg agentRecords}
+        if [ "$agents_total" = 0 ]; then
+          ck 0 "no agents defined"
+        elif [ "$agents_failed" -gt 0 ]; then
+          ck 2 "$agents_failed of $agents_total agents failed — tentaflake status"
+        elif [ "$agents_active" -lt "$agents_total" ]; then
+          ck 1 "$agents_active of $agents_total agents active"
+        else
+          ck 0 "all $agents_total agents active"
+        fi
+
+        if command -v tailscale >/dev/null 2>&1; then
+          if [ -z "$tailnet_ip" ]; then
+            ck 1 "tailscale not connected — sudo tailscale up"
+          elif [ "$hide" = 1 ]; then
+            ck 0 "tailscale connected"
+          else
+            ck 0 "tailscale connected ($tailnet_ip)"
+          fi
+        fi
+
+        case "$vs" in
+          0) verdict=$(printf '%b● healthy%b' "$green" "$reset") ;;
+          1) verdict=$(printf '%b▲ degraded%b' "$yellow" "$reset") ;;
+          *) verdict=$(printf '%b✗ critical%b' "$red" "$reset") ;;
+        esac
+
+        info=()
+        info+=("$(printf '%b%btentaflake%b %b%s%b' "$bold" "$cyan" "$reset" "$bold" "$host_label" "$reset")")
+        info+=("$(printf '%bhost health%b · %s%s' "$dim" "$reset" "$verdict" "$hide_note")")
+        info+=("")
+        kv "kernel" "$(uname -sr)"
+        up=$(awk '{ print int($1) }' /proc/uptime 2>/dev/null || true)
+        [ -n "$up" ] && kv "uptime" "$(fmt_dur "$up")"
+        kv "load" "$(awk '{ print $1", "$2", "$3 }' /proc/loadavg 2>/dev/null || true)"
+        if [ -n "$tailnet_ip" ] && [ "$hide" = 1 ]; then
+          kv "tailnet" "''${dim}redacted''${reset}"
+        elif [ -n "$tailnet_ip" ]; then
+          kv "tailnet" "$tailnet_ip"
+        fi
+
+        render_header
+        printf '\n  %b──────────────────────────────────────────────%b\n' "$dim" "$reset"
+        printf '\n  %bVITALS%b\n' "$bold$cyan" "$reset"
+        printf '%s\n' "''${vitals[@]}"
+        printf '\n  %bCHECKS%b\n' "$bold$cyan" "$reset"
+        printf '%s\n' "''${checks[@]}"
+      }
+
+      if [ "$health" = 1 ]; then
+        if [ "$live" = 1 ] && [ -t 1 ]; then
+          # Alt screen + hidden cursor so the dashboard never eats the
+          # scrollback. Restoring hangs off EXIT so every path unwinds it;
+          # ctrl-c needs its own trap to *exit* — a bare INT handler would
+          # restore the terminal and then keep looping.
+          printf '\033[?1049h\033[?25l'
+          trap 'printf "\033[?25h\033[?1049l"' EXIT
+          trap 'exit 0' INT TERM
+          while :; do
+            # Render fully, then repaint in one write — no half-drawn frames.
+            frame=$(render_health)
+            printf '\033[H\033[2J%s\n\n  %blive · every %ss · ctrl-c to exit%b\n' \
+              "$frame" "$dim" "$iv" "$reset"
+            sleep "$iv"
+          done
+        fi
+        render_health
+        printf '\n  %blive view: %btentaflake health --live%b\n\n' "$dim" "$reset$cyan" "$reset"
+        exit 0
       fi
 
       # ── Per-agent resources, read straight from each container's cgroup ──
@@ -1336,13 +1585,6 @@ let
       if [ "$wide" = 1 ]; then collect_cpu; fi
 
       # ── Header info (rendered right of the logo below) ──
-      if [ "$hide" = 1 ]; then
-        host_label=redacted
-        hide_note=$(printf ' %b· redacted%b' "$yellow" "$reset")
-      else
-        host_label=$(hostname)
-        hide_note=""
-      fi
       info+=("$(printf '%b%btentaflake%b %b%s%b' "$bold" "$cyan" "$reset" "$bold" "$host_label" "$reset")")
       info+=("$(printf '%bmulti-runtime agent host · ${backend}%b%s' "$dim" "$reset" "$hide_note")")
       info+=("")
@@ -1370,7 +1612,7 @@ let
       fi
 
       if command -v tailscale >/dev/null 2>&1; then
-        ts=$(tailscale ip -4 2>/dev/null | head -n1 || true)
+        ts=$tailnet_ip
         if [ -n "$ts" ] && [ "$hide" = 1 ]; then
           kv "tailnet" "''${dim}redacted''${reset}"
         elif [ -n "$ts" ]; then
@@ -1380,26 +1622,7 @@ let
         fi
       fi
 
-      # ── Render: logo left, info column right ──
-      # ''${#l} counts characters, not bytes (braille is multibyte) — needs the
-      # UTF-8 locale NixOS sets by default.
-      mapfile -t art <<< ${lib.escapeShellArg logo}
-      w=0
-      for l in "''${art[@]}"; do [ "''${#l}" -gt "$w" ] && w=''${#l}; done
-      pad=2 # blank rows above the info column, for rough vertical centering
-      rows=''${#art[@]}
-      [ $((''${#info[@]} + pad)) -gt "$rows" ] && rows=$((''${#info[@]} + pad))
-      printf '\n'
-      for ((i = 0; i < rows; i++)); do
-        l=''${art[i]-}
-        j=$((i - pad))
-        if [ "$j" -ge 0 ] && [ -n "''${info[j]-}" ]; then
-          printf '%b%s%b%*s   %s\n' "$cyan" "$l" "$reset" "$((w - ''${#l}))" "" "''${info[j]}"
-        else
-          printf '%b%s%b\n' "$cyan" "$l" "$reset"
-        fi
-      done
-
+      render_header
       printf '\n  %b──────────────────────────────────────────────%b\n' "$dim" "$reset"
 
       # ── Agents ──

@@ -55,9 +55,10 @@ go-lint:
 shellcheck:
     shellcheck installer/*.sh scripts/*.sh
 
-# Preview the tentaflake-status login banner with a fake fleet (+ self-checks)
-banner:
-    ./scripts/banner-test.sh
+# Preview a tentaflake-status view with a fake fleet (+ self-checks).
+# No args = the login banner; pass --stats or --health for the other two.
+banner *ARGS:
+    ./scripts/banner-test.sh {{ARGS}}
 
 # Evaluate the flake installer.sh generates for an installed machine, with an
 # agent configured — catches specialArgs drift that only bites after `agent add`
