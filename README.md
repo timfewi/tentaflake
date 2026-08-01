@@ -514,7 +514,7 @@ the same one-container-per-agent shape under a `zeroclaw-<name>` prefix.
 | `nix-settings.nix` | Flakes, auto-GC, daemon hardening (allowed-users, strict sandbox, min-free/max-free), trusted-users, substituters |
 | `packages.nix` | curl, git, jq, tmux, vim, and more |
 | `users.nix` | Admin user (wheel + networkmanager groups) |
-| `shell.nix` | SSH/console operator experience — `tentaflake` CLI (deprecated `hermes` shim still works), login banner, prompt, zsh/oh-my-zsh, zoxide, lazygit, modern CLI tools ([docs](docs/06-shell.md)) |
+| `shell.nix` | SSH/console operator experience — `tentaflake` CLI (deprecated `hermes` shim still works), login banner with every physical disk, prompt, zsh/oh-my-zsh, zoxide, lazygit, modern CLI tools ([docs](docs/06-shell.md)) |
 | `editor.nix` | Optional Neovim via nvf (LSP, treesitter, telescope) — `tentaflake.editor.nvf.enable`, exported as `nixosModules.editor` ([docs](docs/06-shell.md#zsh-zoxide-lazygit-neovim)) |
 | `ssh.nix` | Opt-in hardened OpenSSH (key-only, no root login, max 3 auth tries) + fail2ban, opens TCP 22 — off by default, Tailscale SSH is the primary access path |
 | `tailscale.nix` | Tailscale with SSH + tag:auto (optional) |
@@ -539,7 +539,7 @@ nix build .#tentaflake-auditd            # build audit daemon package
 sudo nixos-rebuild switch --flake .#tentaflake  # deploy config
 sudo nixos-rebuild dry-activate --flake .#tentaflake  # dry-run
 sudo nixos-rebuild switch --rollback     # undo last deploy
-tentaflake status                        # all agents, any runtime, with health
+tentaflake status                        # host disks + all agents, any runtime
 tentaflake stats                         # fleet dashboard: CPU/memory per agent
 tentaflake health --live                 # host vitals: CPU/mem/swap/disk/temp bars, live
 tentaflake --hide                        # same, but screenshot-safe (names/IP redacted)

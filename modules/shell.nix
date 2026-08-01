@@ -1196,6 +1196,7 @@ let
       pkgs.gnused
       pkgs.procps
       pkgs.systemd
+      pkgs.util-linux
     ];
     text = ''
       bold=$(printf '\033[1m'); dim=$(printf '\033[2m'); reset=$(printf '\033[0m')
@@ -1237,6 +1238,44 @@ let
           if [ "$i" -lt "$f" ]; then out+="█"; else out+="░"; fi
         done
         printf '%s' "$out"
+      }
+
+      # One row per physical, non-empty disk. Prefer its root mount; otherwise
+      # use the first data-like mount below it. This keeps /boot and bind mounts
+      # from masquerading as separate disks while still showing an unmounted
+      # drive instead of silently hiding capacity from the operator.
+      disk_rows() {
+        local lsblk_bin="''${1:-lsblk}" df_bin="''${2:-df}"
+        local device bytes type mountpoint df_line used total pct size
+
+        while read -r device bytes type; do
+          [ "$type" = disk ] || continue
+          [ "''${bytes:-0}" -gt 0 ] 2>/dev/null || continue
+          case "$device" in
+            /dev/loop*|/dev/ram*|/dev/zram*) continue ;;
+          esac
+
+          mountpoint=$("$lsblk_bin" -nrpo MOUNTPOINT "$device" 2>/dev/null | awk '
+            $0 == "/" { print; found = 1; exit }
+            /^\// && $0 != "/boot" && $0 !~ /^\/nix\/store/ && candidate == "" { candidate = $0 }
+            END { if (!found && candidate != "") print candidate }
+          ' || true)
+
+          if [ -n "$mountpoint" ]; then
+            df_line=$("$df_bin" -Ph -- "$mountpoint" 2>/dev/null | awk '
+              NR == 2 { sub(/%/, "", $5); print $3 "\t" $2 "\t" $5 }
+            ' || true)
+            if [ -n "$df_line" ]; then
+              IFS=$'\t' read -r used total pct <<< "$df_line"
+              printf '%s\t%s / %s\t%s\n' "$mountpoint" "$used" "$total" "$pct"
+              continue
+            fi
+          fi
+
+          size=$(numfmt --to=iec --suffix=B --format='%.1f' "$bytes" 2>/dev/null || true)
+          [ -n "$size" ] || size="$bytes bytes"
+          printf '%s\t%s unmounted\n' "''${device##*/}" "$size"
+        done < <("$lsblk_bin" -bdnrpo NAME,SIZE,TYPE 2>/dev/null || true)
       }
 
       # Render: logo left, the collected `info` column right. Every view starts
@@ -1300,14 +1339,54 @@ let
             *"$1"*) printf 'LEAK: %s leaked into --hide output\n' "$2" >&2; rc=1 ;;
           esac
         }
+        check_token() {
+          [ -n "$1" ] || return 0
+          case "$out" in
+            *[![:alnum:]_-]"$1"[![:alnum:]_-]*)
+              printf 'LEAK: %s leaked into --hide output\n' "$2" >&2
+              rc=1
+              ;;
+          esac
+        }
         check "$(hostname 2>/dev/null || true)" "host name"
         if command -v tailscale >/dev/null 2>&1; then
           check "$(tailscale ip -4 2>/dev/null | head -n1 || true)" "tailnet IP"
         fi
         while IFS=$'\t' read -r _ n container _; do
-          check "$n" "agent name '$n'"
-          check "$container" "container '$container'"
+          # Match complete identifiers: an agent called `code` must not be a
+          # false positive merely because the generic runtime says `opencode`.
+          check_token "$n" "agent name '$n'"
+          check_token "$container" "container '$container'"
         done <<< ${lib.escapeShellArg agentRecords}
+
+        test_dir=$(mktemp -d)
+        trap 'rm -rf "$test_dir"' EXIT
+        cat > "$test_dir/lsblk" <<'EOF'
+      #!/usr/bin/env bash
+      case "$*" in
+        "-bdnrpo NAME,SIZE,TYPE")
+          printf '/dev/sda 120040980480 disk\n/dev/sdb 1000204886016 disk\n/dev/sdc 500107862016 disk\n/dev/zram0 8360296448 disk\n'
+          ;;
+        "-nrpo MOUNTPOINT /dev/sda") printf '\n/boot\n/nix/store\n/\n' ;;
+        "-nrpo MOUNTPOINT /dev/sdb") printf '\n/srv/data\n' ;;
+        "-nrpo MOUNTPOINT /dev/sdc"|"-nrpo MOUNTPOINT /dev/zram0") printf '\n' ;;
+      esac
+      EOF
+        cat > "$test_dir/df" <<'EOF'
+      #!/usr/bin/env bash
+      printf 'Filesystem Size Used Avail Use%% Mounted on\n'
+      case "''${*: -1}" in
+        /) printf '/dev/mapper/root 109G 15G 94G 14%% /\n' ;;
+        /srv/data) printf '/dev/mapper/data 932G 100G 832G 11%% /srv/data\n' ;;
+      esac
+      EOF
+        chmod +x "$test_dir/lsblk" "$test_dir/df"
+        disk_test=$(disk_rows "$test_dir/lsblk" "$test_dir/df")
+        expected=$'/\t15G / 109G\t14\n/srv/data\t100G / 932G\t11\nsdc\t465.8GB unmounted'
+        if [ "$disk_test" != "$expected" ]; then
+          printf 'disk inventory selftest failed\nexpected:\n%s\nactual:\n%s\n' "$expected" "$disk_test" >&2
+          rc=1
+        fi
         if [ "$rc" = 0 ]; then printf 'tentaflake-status: --hide selftest ok\n'; fi
         exit "$rc"
       fi
@@ -1603,13 +1682,14 @@ let
         kv "memory" "$mem"
       fi
 
-      disk=$(df -Ph / 2>/dev/null | awk 'NR==2 {print $3" / "$2}' || true)
-      disk_pct=$(df -P / 2>/dev/null | awk 'NR==2 {sub(/%/,"",$5); print $5}' || true)
-      if [ -n "$disk" ] && [ -n "$disk_pct" ]; then
-        kv "disk /" "$disk ($(pct_color "$disk_pct")$disk_pct% used$reset)"
-      elif [ -n "$disk" ]; then
-        kv "disk /" "$disk"
-      fi
+      while IFS=$'\t' read -r disk_name disk_usage disk_pct; do
+        [ -n "$disk_name" ] || continue
+        if [ -n "$disk_pct" ]; then
+          kv "disk $disk_name" "$disk_usage ($(pct_color "$disk_pct")$disk_pct% used$reset)"
+        else
+          kv "disk $disk_name" "$disk_usage"
+        fi
+      done < <(disk_rows)
 
       if command -v tailscale >/dev/null 2>&1; then
         ts=$tailnet_ip
