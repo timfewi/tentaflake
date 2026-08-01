@@ -101,6 +101,42 @@ bar() {
   printf '%s' "$out"
 }
 
+# Keep this inventory logic in sync with modules/shell.nix. Report each
+# physical, non-empty disk once, preferring its root or first data-like mount.
+disk_rows() {
+  local lsblk_bin="${1:-lsblk}" df_bin="${2:-df}"
+  local device bytes type mountpoint df_line used total pct size
+
+  while read -r device bytes type; do
+    [ "$type" = disk ] || continue
+    [ "${bytes:-0}" -gt 0 ] 2>/dev/null || continue
+    case "$device" in
+      /dev/loop*|/dev/ram*|/dev/zram*) continue ;;
+    esac
+
+    mountpoint=$("$lsblk_bin" -nrpo MOUNTPOINT "$device" 2>/dev/null | awk '
+      $0 == "/" { print; found = 1; exit }
+      /^\// && $0 != "/boot" && $0 !~ /^\/nix\/store/ && candidate == "" { candidate = $0 }
+      END { if (!found && candidate != "") print candidate }
+    ' || true)
+
+    if [ -n "$mountpoint" ]; then
+      df_line=$("$df_bin" -Ph -- "$mountpoint" 2>/dev/null | awk '
+        NR == 2 { sub(/%/, "", $5); print $3 "\t" $2 "\t" $5 }
+      ' || true)
+      if [ -n "$df_line" ]; then
+        IFS=$'\t' read -r used total pct <<< "$df_line"
+        printf '%s\t%s / %s\t%s\n' "$mountpoint" "$used" "$total" "$pct"
+        continue
+      fi
+    fi
+
+    size=$(numfmt --to=iec --suffix=B --format='%.1f' "$bytes" 2>/dev/null || true)
+    [ -n "$size" ] || size="$bytes bytes"
+    printf '%s\t%s unmounted\n' "${device##*/}" "$size"
+  done < <("$lsblk_bin" -bdnrpo NAME,SIZE,TYPE 2>/dev/null || true)
+}
+
 # Render: logo left, the collected `info` column right. Every view starts with
 # this, so none of them can drift on the header. The module indents the logo 2
 # spaces at build time; sed replicates that.
@@ -365,13 +401,14 @@ elif [ -n "$mem" ]; then
   kv "memory" "$mem"
 fi
 
-disk=$(df -Ph / 2>/dev/null | awk 'NR==2 {print $3" / "$2}' || true)
-disk_pct=$(df -P / 2>/dev/null | awk 'NR==2 {sub(/%/,"",$5); print $5}' || true)
-if [ -n "$disk" ] && [ -n "$disk_pct" ]; then
-  kv "disk /" "$disk ($(pct_color "$disk_pct")$disk_pct% used$reset)"
-elif [ -n "$disk" ]; then
-  kv "disk /" "$disk"
-fi
+while IFS=$'\t' read -r disk_name disk_usage disk_pct; do
+  [ -n "$disk_name" ] || continue
+  if [ -n "$disk_pct" ]; then
+    kv "disk $disk_name" "$disk_usage ($(pct_color "$disk_pct")$disk_pct% used$reset)"
+  else
+    kv "disk $disk_name" "$disk_usage"
+  fi
+done < <(disk_rows)
 if [ "$hide" = 1 ]; then
   kv "tailnet" "${dim}redacted${reset}"
 else

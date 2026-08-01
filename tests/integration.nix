@@ -93,6 +93,8 @@
     with subtest("status banner renders and names the host"):
         banner = machine.succeed("tentaflake-status")
         assert "agent-host" in banner, f"hostname missing from banner:\n{banner}"
+        assert "disk /" in banner, f"root disk missing from banner:\n{banner}"
+        machine.succeed("tentaflake-status --selftest")
 
     with subtest("audit daemon is up and opened its event DB"):
         # The daemon opens no socket — it writes events to SQLite and the

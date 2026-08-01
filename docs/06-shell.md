@@ -9,7 +9,7 @@ agent; it reflects whatever you defined in `my-agents.nix`.
 
 | Feature | Description |
 |---|---|
-| **Login banner** | `tentaflake-status` runs once per SSH/console login: host facts (kernel, uptime, load, memory/disk with usage-colored percentages), Tailscale IP, an agent count (total · active · inactive · failed), and a health line per agent colored by runtime — with per-agent uptime for active agents, dimmed inactive agents, and a `tentaflake logs` hint when one has failed. |
+| **Login banner** | `tentaflake-status` runs once per SSH/console login: host facts (kernel, uptime, load, memory, and every physical disk with usage-colored percentages), Tailscale IP, an agent count (total · active · inactive · failed), and a health line per agent colored by runtime — with per-agent uptime for active agents, dimmed inactive agents, and a `tentaflake logs` hint when one has failed. Mounted disks are identified by `/` or their first data mount; an unmounted disk is still listed by device name and capacity. |
 | **`tentaflake` CLI** | One command to drive agent containers across every runtime (Hermes, ZeroClaw) — backend-aware (works for `docker` or `podman`). A deprecated `hermes` shim still works, with a warning. |
 | **Bash QoL** | Completion, large deduped history, a colored prompt, and sensible aliases. |
 | **Modern CLI tools** | `eza`, `bat`, `fd`, `ripgrep`, `fzf`, `htop`, `btop`, `jq`, `tree`, `ncdu`, `tmux`, `dnsutils`. |
