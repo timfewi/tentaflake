@@ -1,22 +1,25 @@
 # Agent Instructions — tentaflake
 
-NixOS flake template for running isolated AI agents (Hermes, ZeroClaw, OpenCode) in Docker containers on a single machine.
+NixOS flake template for running isolated AI agents (Hermes and ZeroClaw) in Docker containers on a single machine.
 
 ## Build & Test
 
 ```bash
-nix flake check              # validate flake, build toplevel, run the VM integration test
-nix build .#installer-iso    # build installer ISO
-nix build .#live-agent-iso   # build live agent ISO
-nix build .#checks.x86_64-linux.vm-integration -L  # boot a VM from nixosModules.default, assert runtime behavior
-cd pkgs/tentaflake-auditd && go vet ./... && go test ./... && golangci-lint run
-./scripts/banner-test.sh     # preview tentaflake-status banner (fake fleet + self-checks)
+nix flake check
+nix build .#installer-iso
+nix build \
+  .#checks.x86_64-linux.vm-integration \
+  -L
+cargo fmt --all -- --check
+cargo clippy --workspace \
+  --all-targets -- -D warnings
+cargo test --workspace
 ```
 
 ## Conventions
 
 - Nix: `nix fmt` (nixfmt), 2-space indent
-- Go: `gofmt`, tabs, run `golangci-lint run` before push
+- Rust: `cargo fmt`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace`
 - Commits: Conventional Commits (`feat:`, `fix:`, `docs:`)
 - DCO: every non-merge PR commit needs `Signed-off-by:`; use `git commit -s`
 
@@ -37,11 +40,15 @@ still accurate before finishing — and update them in the same change:
 
 ## Module Boundaries
 
-- `modules/` — reusable NixOS modules (generic, composable via `tentaflake.*.enable` options)
-- `lib/` — helpers (`mkHermesAgent`, `mkZeroClawAgent`, `mkOpenCodeAgent`, `agentsFromData`, `pinnedImage`, `constants`, `devshell`)
-- `pkgs/` — standalone packages (`tentaflake-auditd`)
+- `modules/` — reusable NixOS modules, including security, brokered egress,
+  image-provenance gates, disposable workers, workspace quotas, encrypted
+  backup, and generic options
+- `lib/` — helpers (`mkHermesAgent`, `mkZeroClawAgent`, `agentsFromData`, `pinnedImage`, `constants`, `devshell`)
+- `crates/` and `pkgs/` — Rust CLI/broker/worker workspace and Nix packages
+- A balanced agent with `autoStart = true` requires its exact broker, worker,
+  and workspace-quota declarations; stopped scaffolds remain `network=none`.
 - `tests/` — NixOS VM test backing `checks.<system>.vm-integration`
-- `installer/` — ISO installer and firstboot scripts
+- `installer/` — installer ISO and disk-install scripts
 - `examples/` — consumer-flake reference
 - `docs/` — user-facing documentation
 - `.agents/skills/` — bundled Hermes skills (also development agent instructions for this repo)
