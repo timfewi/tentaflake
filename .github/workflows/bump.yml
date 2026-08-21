@@ -10,8 +10,7 @@
 # Prerelease tags (v0.4.0-rc.1) are ignored when picking the latest version,
 # so an rc never becomes the base of an automatic patch bump.
 #
-# Ceiling: pkgs/tentaflake-auditd version stays manual — it only moves when
-# auditd itself changes, not on every repo merge.
+# Package versions remain manual; Git tags version the repository release.
 name: Bump patch
 
 on:

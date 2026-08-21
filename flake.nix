@@ -1,23 +1,16 @@
 {
-  description = "Generic NixOS flake template for running multiple isolated AI agents (Hermes, ZeroClaw, …) on one headless machine";
+  description = "Generic NixOS flake template for running isolated Hermes and ZeroClaw agents on one headless machine";
 
   inputs = {
     # Tracks nixos-unstable, pinned to an exact revision by the committed flake.lock
     # (so builds are reproducible — run `nix flake update` to bump deliberately).
-    # Unstable is required here: it is the only channel that currently provides BOTH
-    # a non-vulnerable docker (29.x) AND Go >= 1.25 (needed by tentaflake-auditd's
-    # modernc.org/sqlite). The 25.11 stable ships docker 28.5.2, flagged insecure.
+    # The pinned revision provides the container and Rust toolchains used by the
+    # host and the workspace CLI.
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
 
     # Optional: use hermes-agent NixOS module for single-agent setups or container images
     hermes-agent = {
       url = "github:NousResearch/hermes-agent";
-      inputs.nixpkgs.follows = "nixpkgs";
-    };
-
-    # Neovim distribution (consumed by modules/editor.nix → tentaflake.editor.nvf)
-    nvf = {
-      url = "github:NotAShelf/nvf";
       inputs.nixpkgs.follows = "nixpkgs";
     };
 
@@ -71,7 +64,6 @@
       mkHermesAgent = (import ./lib { inherit pkgs lib; }).mkHermesAgent;
       mkZeroClawAgent = (import ./lib { inherit pkgs lib; }).mkZeroClawAgent;
       agentsFromData = (import ./lib { inherit pkgs lib; }).agentsFromData;
-      mkOpenCodeAgent = (import ./lib { inherit pkgs lib; }).mkOpenCodeAgent;
 
       # Module set imported by external consumers and built-in hosts
       tentaflakeModules = import ./modules/default.nix;
@@ -84,7 +76,6 @@
           mkHermesAgent
           mkZeroClawAgent
           agentsFromData
-          mkOpenCodeAgent
           repoRoot
           constants
           ;
@@ -94,20 +85,20 @@
       # ── Exported module set ──
       nixosModules.default = tentaflakeModules;
 
-      # Also export installer-specific modules so consumers can compose them
+      # Installer and optional profiles/integrations are exported explicitly;
+      # none of them enlarge nixosModules.default.
       nixosModules.installer = import ./installer/iso.nix;
-      nixosModules.live = import ./installer/live-iso.nix;
-
-      # Optional Neovim (nvf) module. Kept out of nixosModules.default because it
-      # needs the `nvf` flake input; consumers add that input and import this.
-      nixosModules.editor = import ./modules/editor.nix;
+      nixosModules.editor = import ./modules/optional/editor.nix;
+      nixosModules.hiveResearch = import ./modules/optional/hive-research.nix;
+      nixosModules.piperTts = import ./modules/optional/piper-tts-server.nix;
+      nixosModules.observability = import ./modules/profiles/observability.nix;
+      nixosModules.falco = import ./modules/profiles/falco.nix;
 
       # ── Exported helpers ──
       lib.${system} = {
         inherit
           mkHermesAgent
           mkZeroClawAgent
-          mkOpenCodeAgent
           agentsFromData
           constants
           ;
@@ -123,13 +114,19 @@
       # ── Checks (validates nixosConfigurations build) ──
       checks.${system} = {
         ${hostName} = self.nixosConfigurations.${hostName}.config.system.build.toplevel;
-        tentaflake-auditd = self.packages.${system}.tentaflake-auditd;
+        tentaflake-cli = self.packages.${system}.tentaflake-cli;
+        tentaflake-broker = self.packages.${system}.tentaflake-broker;
+        tentaflake-worker = self.packages.${system}.tentaflake-worker;
+        tentaflake-worker-image = self.packages.${system}.tentaflake-worker-image;
         image-pinning = import ./lib/pinnedImage-test.nix { inherit pkgs; };
+        module-evaluation =
+          assert import ./tests/module-eval.nix { nixpkgsPath = nixpkgs.outPath; };
+          pkgs.runCommand "tentaflake-module-evaluation" { } "touch $out";
 
         # VM integration test: boots the host and asserts the runtime path
-        # (CLI, banner, audit daemon, agent unit/user/state dir). See tests/integration.nix.
+        # (Rust CLI, status, and agent unit/user/state dir).
         vm-integration = pkgs.testers.runNixOSTest (
-          import ./tests/integration.nix { inherit self mkHermesAgent mkOpenCodeAgent; }
+          import ./tests/integration.nix { inherit self mkHermesAgent mkZeroClawAgent; }
         );
       };
 
@@ -166,13 +163,8 @@
             tentaflake.shell.zoxide.enable = true;
             tentaflake.shell.lazygit.enable = true;
             tentaflake.shell.tmux.enable = true;
-            tentaflake.editor.nvf.enable = true;
-            # Audit daemon: records agent filesystem activity for `tentaflake top`.
-            # watchDirs auto-derives from the agents defined in my-agents.nix.
-            tentaflake.auditd.enable = true;
           }
           self.nixosModules.default
-          self.nixosModules.editor
           ./configuration.nix
         ];
       };
@@ -184,60 +176,24 @@
           profile = "installer";
         };
         modules = [
+          {
+            # The ISO installs an agent host but does not run untrusted agents
+            # itself, so it does not need the balanced gVisor capsule closure.
+            tentaflake.security.profile = "dev";
+          }
           self.nixosModules.default
           ./configuration.nix
           ./installer/iso.nix
         ];
       };
 
-      # ── live-agent: Boot-and-run appliance, auto-starts agents + Piper ──
-      nixosConfigurations.live-agent = nixpkgs.lib.nixosSystem {
-        inherit system;
-        specialArgs = baseSpecialArgs // {
-          profile = "live";
-        };
-        modules = [
-          {
-            tentaflake.hostName = "live-agent";
-            tentaflake.adminUser = adminUser;
-            tentaflake.adminDescription = adminDescription;
-            tentaflake.adminShell = "/run/current-system/sw/bin/bash";
-            tentaflake.timeZone = "UTC";
-            tentaflake.defaultLocale = defaultLocale;
-            tentaflake.consoleKeyMap = consoleKeyMap;
-            tentaflake.stateVersion = stateVersion;
-            tentaflake.allowUnfree = false;
-            tentaflake.boot.enable = true;
-            tentaflake.hardening.enable = true;
-            tentaflake.locale.enable = true;
-            tentaflake.networking.enable = true;
-            tentaflake.nixSettings.enable = true;
-            tentaflake.packages.enable = true;
-            tentaflake.users.enable = true;
-            tentaflake.tailscale.enable = true;
-            # Shell extras are useful on the live ISO too, but the live profile
-            # ships its own static users.motd — disable the dynamic banner so
-            # operators don't see two banners stacked on every login.
-            tentaflake.shell.enable = true;
-            tentaflake.shell.motd.enable = false;
-            tentaflake.shell.tmux.enable = true;
-            # Audit daemon on too, so `tentaflake top` works on the live appliance —
-            # watchDirs auto-derives from the live agents (default + research).
-            tentaflake.auditd.enable = true;
-          }
-          self.nixosModules.default
-          ./configuration.nix
-          ./installer/live-iso.nix
-        ];
-      };
-
       # ── Convenience packages ──
       packages.${system} = rec {
-        tentaflake-auditd = pkgs.callPackage ./pkgs/tentaflake-auditd { };
-        # Deprecated alias for the pre-rename attr name; remove in a future release.
-        hermes-auditd = tentaflake-auditd;
+        tentaflake-cli = pkgs.callPackage ./pkgs/tentaflake-cli { };
+        tentaflake-broker = pkgs.callPackage ./pkgs/tentaflake-broker { };
+        tentaflake-worker = pkgs.callPackage ./pkgs/tentaflake-worker { };
+        tentaflake-worker-image = pkgs.callPackage ./pkgs/tentaflake-worker/image.nix { };
         installer-iso = self.nixosConfigurations.installer-iso.config.system.build.isoImage;
-        live-agent-iso = self.nixosConfigurations.live-agent.config.system.build.isoImage;
         piper-voices = pkgs.callPackage ./pkgs/piper-voices { };
       };
     };

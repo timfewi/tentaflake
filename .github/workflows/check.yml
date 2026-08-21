@@ -32,14 +32,16 @@ jobs:
         run: nix flake check --no-build
 
       # `nix flake check` above is eval-only, so the non-VM checks still need an
-      # explicit build. tentaflake-auditd matters here: `go build` below uses
-      # GitHub's toolchain with network module fetch, so only this step catches a
-      # stale vendorHash or a broken pkgs/tentaflake-auditd/default.nix.
+      # explicit build. The Rust package check proves the workspace also builds
+      # through the pinned Nix toolchain, not only the runner toolchain below.
       - name: nix build (non-VM checks)
         run: |
           nix build --no-link \
             .#checks.x86_64-linux.image-pinning \
-            .#checks.x86_64-linux.tentaflake-auditd
+            .#checks.x86_64-linux.tentaflake-broker \
+            .#checks.x86_64-linux.tentaflake-cli \
+            .#checks.x86_64-linux.tentaflake-worker \
+            .#checks.x86_64-linux.tentaflake-worker-image
 
       - name: nix build (tentaflake toplevel)
         run: nix build .#nixosConfigurations.tentaflake.config.system.build.toplevel --no-link
@@ -47,25 +49,19 @@ jobs:
       - name: nix fmt check
         run: nix fmt -- --ci
 
-      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
-        with:
-          go-version-file: pkgs/tentaflake-auditd/go.mod
-          cache-dependency-path: pkgs/tentaflake-auditd/go.sum
+      - name: Nix lint
+        run: |
+          nix develop --command statix check .
+          nix develop --command deadnix --fail .
 
-      - name: go build
-        run: cd pkgs/tentaflake-auditd && go build ./...
+      - name: cargo fmt
+        run: nix develop --command cargo fmt --all -- --check
 
-      - name: go vet
-        run: cd pkgs/tentaflake-auditd && go vet ./...
+      - name: cargo clippy
+        run: nix develop --command cargo clippy --workspace --all-targets -- -D warnings
 
-      - name: go test
-        run: cd pkgs/tentaflake-auditd && go test ./...
-
-      - name: golangci-lint
-        uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
-        with:
-          version: v2.12.2
-          working-directory: pkgs/tentaflake-auditd
+      - name: cargo test
+        run: nix develop --command cargo test --workspace
 
       # Via the devShell, not the runner's apt shellcheck: the two versions
       # disagree (Ubuntu's flags SC2015 where 0.11 does not), so an unpinned
