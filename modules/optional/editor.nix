@@ -6,9 +6,9 @@
 #
 # This module is deliberately NOT part of modules/default.nix: it needs the
 # `nvf` flake input, which external consumers of nixosModules.default may not
-# have. The template wires it into its own hosts and exports it as
-# nixosModules.editor; consumers opt in by adding the nvf input and importing
-# this module. Toggle with tentaflake.editor.nvf.enable.
+# have. The template only exports it as nixosModules.editor; consumers opt in
+# by adding the nvf input, passing their inputs through specialArgs, and
+# importing this module. Toggle with tentaflake.editor.nvf.enable.
 # ────────────────────────────────────────────────────────────
 {
   config,

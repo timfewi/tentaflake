@@ -10,8 +10,9 @@
 # Serves normalized research_* MCP tools (research_search,
 # research_extract, research_crawl, research_contacts) over MCP
 # Streamable HTTP, aggregating Brave Search, Tavily, FireCrawl,
-# Hunter.io and Spider Cloud with ordered failover. Hermes agents
-# (via host networking) reach it on 127.0.0.1.
+# Hunter.io and Spider Cloud with ordered failover. This is an optional
+# host-side integration. A balanced/strict capsule cannot reach host loopback;
+# use tentaflake's broker fetch gateway for untrusted-agent web access instead.
 #
 # The server is not bundled with tentaflake — bring it as a flake
 # input and pass its package:
@@ -33,7 +34,7 @@
 #     };
 #   };
 #
-# Hermes config.yaml (per profile) to use it:
+# A dev-profile Hermes config.yaml can use it explicitly:
 #   mcp_servers:
 #     hive-research:
 #       url: "http://127.0.0.1:7815/mcp"
@@ -66,9 +67,9 @@ in
       type = lib.types.str;
       default = "127.0.0.1";
       description = ''
-        Bind address. Loopback reaches Hermes containers using host
-        networking (the default). Binding wider exposes a key-bearing
-        endpoint — change deliberately and firewall accordingly.
+        Bind address. The default keeps this key-bearing optional service on
+        host loopback. Secure capsules cannot reach host loopback; binding it
+        wider is not a supported substitute for the broker fetch gateway.
       '';
     };
 

@@ -34,7 +34,7 @@ stdenvNoCC.mkDerivation {
     )}
   '';
   meta = {
-    description = "MIT-licensed Piper TTS voice models for live ISO";
+    description = "MIT-licensed Piper TTS voice models for the optional integration";
     license = lib.licenses.mit;
     homepage = "https://github.com/rhasspy/piper";
     platforms = lib.platforms.all;
