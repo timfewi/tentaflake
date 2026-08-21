@@ -1,0 +1,7 @@
+[workspace]
+members = [
+  "crates/tentaflake-broker",
+  "crates/tentaflake-cli",
+  "crates/tentaflake-worker",
+]
+resolver = "2"

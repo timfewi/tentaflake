@@ -1,7 +1,7 @@
 # ────────────────────────────────────────────────────────────
 # devshell.nix — the contributor environment behind `nix develop`
 #
-# Same visual language as the login banner (modules/shell.nix): braille logo in
+# Contributor banner: braille logo in
 # cyan on the left, a dim key/value column on the right. The facts differ —
 # a contributor cares about the checkout and the gates, not fleet health.
 # ────────────────────────────────────────────────────────────
@@ -11,13 +11,12 @@ let
   inherit (pkgs) lib;
 
   # Single source of truth for the art is public/tentaflake-shell-logo.txt —
-  # the same file the login banner reads. Indented at build time so the banner
-  # script stays a plain render loop.
+  # retained as the contributor-shell identity and rendered below.
   logo = lib.concatMapStringsSep "\n" (line: "  " + line) (
     lib.splitString "\n" (lib.removeSuffix "\n" (builtins.readFile ../public/tentaflake-shell-logo.txt))
   );
 
-  # The cheat sheet mirrors the justfile — the five recipes worth knowing on
+  # The cheat sheet mirrors the justfile — the four recipes worth knowing on
   # entry. `just` itself lists the rest, so this never has to grow.
   commands = [
     {
@@ -26,7 +25,7 @@ let
     }
     {
       cmd = "just ci";
-      what = "full local gate (CI + both ISOs)";
+      what = "full local gate (CI + installer ISO)";
     }
     {
       cmd = "just check";
@@ -35,10 +34,6 @@ let
     {
       cmd = "just fmt";
       what = "format the tree with nixfmt";
-    }
-    {
-      cmd = "just banner";
-      what = "preview the login banner";
     }
   ];
 
@@ -119,8 +114,10 @@ pkgs.mkShell {
     statix
     deadnix
     nil
-    gotools
-    golangci-lint
+    cargo
+    clippy
+    rustc
+    rustfmt
     shellcheck
   ];
 
