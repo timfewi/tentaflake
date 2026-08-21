@@ -25,6 +25,7 @@ agenix -e secrets/hermes-MYAGENT.env.age
 # Wire it in my-agents.nix
 mkHermesAgent {
   name       = "MYAGENT";
+  # Dev compatibility only. Balanced loads real keys into a broker, not agent.
   agenixFile = "/run/agenix/hermes-MYAGENT-env";
 }
 

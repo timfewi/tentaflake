@@ -46,11 +46,10 @@
       lib = nixpkgs.lib;
 
       # ── Import tentaflake helpers ──
-      # (zeroclaw / opencode agents work the same way: pass defs to
-      #  mkZeroClawAgent / mkOpenCodeAgent)
+      # ZeroClaw agents work the same way: pass definitions to
+      # mkZeroClawAgent.
       mkHermesAgent = tentaflake.lib.${system}.mkHermesAgent;
       mkZeroClawAgent = tentaflake.lib.${system}.mkZeroClawAgent;
-      mkOpenCodeAgent = tentaflake.lib.${system}.mkOpenCodeAgent;
       constants = tentaflake.lib.${system}.constants;
 
       # ── Shared specialArgs for all hosts ──
@@ -59,7 +58,6 @@
           self
           mkHermesAgent
           mkZeroClawAgent
-          mkOpenCodeAgent
           constants
           ;
       };

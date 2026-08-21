@@ -1,93 +1,67 @@
-# Security Policy
+# Security policy
 
-## Supported Versions
+## Supported versions
 
-This project is currently in early development. Security updates are provided
-for the latest commit on `main`.
+Security updates apply to the latest commit on `main`.
 
-| Version | Supported          |
-| ------- | ------------------ |
-| main    | :white_check_mark: |
-| < v0.1  | :x:                |
+## Report a vulnerability
 
-## Reporting a Vulnerability
-
-**Do not open a public issue for security vulnerabilities.**
-
-Instead, report them privately:
-
-1. **GitHub Security Advisories:** Go to the [Security tab](https://github.com/timfewi/tentaflake/security/advisories) and click "Report a vulnerability".
-
-2. **What to include:**
-   - Description of the vulnerability
-   - Steps to reproduce
-   - Affected components (Nix modules, Go daemon, installer, etc.)
-   - Potential impact
-   - Suggested fix (if any)
-
-You will receive a response within **72 hours**. We will work with you to
-understand, validate, and address the issue.
+Do not open a public issue. Use the repository's GitHub Security Advisory
+workflow and include the affected component, reproduction, impact, and any
+suggested mitigation. The project aims to acknowledge reports within 72 hours.
 
 ## Scope
 
-Security concerns relevant to this project include:
+Relevant areas include:
 
-| Area | Concern |
-|------|---------|
-| **Secrets handling** | API keys, tokens, env files — leakage through Nix store, logs, or Git |
-| **Container isolation** | Docker container breakout, volume mounts, privilege escalation |
-| **Agent sandboxing** | File access, network access, and tool restrictions per agent |
-| **Installer** | Disk wiping safety, password handling, input validation |
-| **Go daemon (tentaflake-auditd)** | SQLite injection, file descriptor leaks, resource exhaustion |
-| **Nix evaluation** | Supply chain, IFD (import from derivation), secrets in store |
+| Area | Examples |
+|---|---|
+| Secrets | Nix-store, log, environment, or Git leakage |
+| Containers | Breakout, mounts, users, capabilities |
+| Agent policy | Files, tools, network, repository access |
+| Installer | Target resolution and disk-wipe safety |
+| Rust CLI | Argument handling and privileged commands |
+| Observability | Dashboard exposure and log sensitivity |
+| Falco | eBPF privileges, rules, event handling |
+| Nix | Supply chain, evaluation, and pinning |
 
-## Disclosure Policy
+## Deployment practices
 
-- Reporter will be acknowledged in the advisory (unless they request anonymity)
-- Fix will be developed in a private fork
-- Once fixed, a GitHub Security Advisory will be published
-- CVE will be requested for critical vulnerabilities
+- Never commit environment files or literal secret values.
+- Use runtime secret files such as agenix outputs.
+- Enable only the tools, mounts, and network access an agent needs.
+- Treat Docker group membership as root-equivalent.
+- Keep Grafana, Prometheus, Loki, and Alloy loopback-only unless an
+  authenticated private publishing path is deliberately configured.
+- Treat Falco as detection, not prevention or container isolation.
+- Keep installed agent hosts on the `balanced` profile. `dev` is a deliberate
+  compatibility path, and `strict` is not implemented.
+- Install a restrictive tailnet grants/SSH policy for `tag:agent-host` before
+  relying on Tailscale; private transport does not replace authorization.
+- Do not work around balanced `network=none` by injecting provider credentials.
+  Use the per-agent broker path; the agent receives only a virtual key and a
+  network with host/FORWARD firewall restrictions.
 
-## Best Practices for Users
+The detailed security model is split between the
+[threat model](docs/15-threat-model.md) and
+[security profiles and broker migration](docs/10-security-profiles.md).
 
-When deploying this template:
+## Incident response
 
-1. **Never commit `.env` files** — use `secrets/` with agenix or external secret management
-2. **Set `HERMES_SANDBOX=strict`** in agent config for maximum isolation
-3. **Audit agent `toolsets`** — only enable what each agent needs
-4. **Keep the template generic** — domain-specific config goes in your fork, not here
-
-## Incident Response
-
-Generic runbook for operators who suspect an agent is compromised (leaked
-credentials, unexpected pushes, suspicious filesystem activity):
-
-1. **Isolate the agent** — stop its container:
-
-   ```bash
-   sudo systemctl stop docker-hermes-<name>   # podman backend: podman-hermes-<name>
-   tentaflake stop <name>                     # backend-aware equivalent
-   ```
-
-2. **Revoke the agent's provider API keys** at the provider — stopping the
-   container does not stop a key that already leaked.
-
-3. **Inspect the audit trail** — `tentaflake-auditd` logs filesystem activity for
-   every watched agent to a SQLite database:
+1. Stop the exact affected unit after resolving its backend and name:
 
    ```bash
-   sqlite3 /var/lib/hermes-audit/events.db \
-     "SELECT timestamp, agent, op, file FROM events ORDER BY id DESC LIMIT 200;"
+   tentaflake stop <agent>
    ```
 
-   Timestamps are stored in **UTC** — account for that when correlating with
-   local logs.
+2. Revoke provider and repository credentials. Stopping a container does not
+   invalidate an already leaked key.
+3. Preserve relevant journald logs, Falco output when enabled, and a read-only
+   copy of the agent state directory before cleanup.
+4. Inspect the declared mounts, tools, network policy, and recent changes.
+5. Rotate runtime secrets and build the repaired configuration.
+6. Activate only after reviewing the target and build result.
 
-4. **Preserve evidence** — copy the agent's `stateDir`
-   (default `/var/lib/hermes-<name>`) somewhere safe *before* wiping or
-   reseeding anything.
-
-5. **Rotate secrets and rebuild** — re-encrypt affected secrets (see the
-   rotation and recovery section of
-   [`docs/04-agenix-secrets.md`](docs/04-agenix-secrets.md)), then
-   `nixos-rebuild switch` to bring the agent back with fresh credentials.
+Tentaflake does not maintain a private SQLite audit database or custom web
+console. Host and container-unit evidence is available through journald;
+the optional Loki/Alloy profile can retain and query it.

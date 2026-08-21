@@ -1,120 +1,76 @@
-# Tentaflake — Install Guide
+# Tentaflake install guide
 
-Build the ISO and write it to a USB stick. Two options depending on what you
-want:
+Tentaflake ships one bootable image: the installer ISO. The former live-agent
+ISO and firstboot agent environment were removed from the core.
 
-| ISO | Command | What it does |
-|-----|---------|-------------|
-| **Live Agent ISO** | `nix build .#live-agent-iso` | Boots straight into Hermes agents + Piper TTS in RAM. **No install.** Pull the USB and every trace is gone. |
-| **Installer ISO** | `nix build .#installer-iso` | Boots into a TUI wizard that formats a disk and installs Tentaflake permanently. |
+## Build
 
----
-
-## 1. Build the ISO
-
-From the repo root:
+From the repository root:
 
 ```bash
-# Live agent ISO (run in RAM, no disk touch)
-nix build .#live-agent-iso
-
-# OR installer ISO (permanent install to disk)
 nix build .#installer-iso
 ```
 
-Or use the convenience script:
+Or use the wrapper:
 
 ```bash
-./scripts/build-iso.sh              # live-agent-iso (default)
-./scripts/build-iso.sh installer    # installer-iso
+./scripts/build-iso.sh installer
 ```
 
-When done, the ISO is at:
+The image is written below `result/iso/`.
 
-| ISO | Path |
-|-----|------|
-| Live | `result/iso/tentaflake-live.iso` |
-| Installer | `result/iso/tentaflake.iso` |
+## Resolve the USB device
 
----
-
-## 2. Identify your USB stick
+List block devices and identify the USB drive by size and transport:
 
 ```bash
-lsblk
+lsblk -o NAME,SIZE,TYPE,TRAN,MOUNTPOINTS
 ```
 
-Look for your USB device by size and label — typically `/dev/sda`, `/dev/sdb`,
-or `/dev/nvme0n1` (rare for USB). **Triple-check** — the wrong device gets
-wiped.
+Do not infer the target from an example device name. The next step destroys
+all data on the selected device.
 
-```
-NAME   MAJ:MIN RM   SIZE RO TYPE MOUNTPOINTS
-sda      8:0    1  28.7G  0 disk            ← your USB (28 GB)
-└─sda1   8:1    1  28.7G  0 part
-nvme0n1 259:0    0 931.5G  0 disk           ← your system disk (DO NOT TOUCH)
-```
-
-Unmount any mounted partitions first:
+Unmount its mounted partitions, substituting the exact partition:
 
 ```bash
-sudo umount /dev/sdX1 2>/dev/null || true
+sudo umount /dev/sdX1
 ```
 
----
+## Write the image
 
-## 3. Write the ISO to USB
-
-> ⚠️ **Destructive.** This wipes everything on the target device.
+Resolve the exact ISO filename first:
 
 ```bash
-sudo dd if=result/iso/tentaflake-live.iso of=/dev/sdX bs=4M status=progress oflag=sync
+find result/iso -maxdepth 1 -name '*.iso'
 ```
 
-Replace `/dev/sdX` with your actual USB device from step 2 (e.g. `/dev/sdb`).
-Same command works for both ISOs — just swap the `.iso` filename.
-
-The image is a **UEFI + legacy-BIOS hybrid**, so it boots on both modern and
-older machines.
-
----
-
-## 4. Verify the write
+Then write it to the verified whole device, not a partition:
 
 ```bash
-sync
-sudo blkid /dev/sdX
+sudo dd \
+  if=result/iso/tentaflake.iso \
+  of=/dev/sdX \
+  bs=4M \
+  status=progress \
+  oflag=sync
 ```
 
-Expect a filesystem type like `iso9660` or similar — confirms the ISO landed.
+Replace `/dev/sdX` only after checking it again with `lsblk`.
 
----
+## Boot and install
 
-## 5. Boot from USB
+Boot the target machine from the USB device. The installer auto-logs into its
+local console and starts the `dialog`-based installer. It asks before
+partitioning and runs `nixos-install` only after the selected disk is shown.
 
-1. Insert the USB into the target machine.
-2. Enter the boot menu (usually `F10`/`F12`/`Esc` during POST).
-3. Select the USB device (UEFI or legacy-BIOS, either works).
-4. Save and boot.
+Disk formatting and installation are runtime mutations. A successful ISO build
+does not authorize either operation.
 
-### Live ISO boots into a firstboot wizard
+After installation and reboot, continue with
+[the quick start](01-quickstart.md).
 
-Auto-logs into TTY1 and prompts for API keys. Enter at minimum an OpenRouter
-key. Piper TTS is already serving on `http://localhost:5001/v1`.
-
-> **Unattended boot?** Put `.env` files on a second USB labeled `TENTAFLAKE_ENV`
-> (legacy `HERMES_ENV` also accepted) and the wizard is skipped automatically. See
-> [README.md](../README.md#skip-the-wizard-unattended-boot) for details.
-
-### Installer ISO boots into a TUI installer
-
-A `dialog`-based wizard walks through partitioning, hardware config, and
-`nixos-install`. Takes 10–15 minutes.
-
----
-
-## Next Steps
-
-Once booted (live) or after install + reboot, follow the post-install guide:
-
-➡️ [01-quickstart.md](01-quickstart.md) — set up agents, configure providers, start chatting
+The installer environment itself uses the dev profile because it runs no
+agents. The generated installed host uses the default `balanced` profile. Old
+direct-secret/port agent definitions therefore require the explicit migration
+described in [security profiles](10-security-profiles.md); installation never
+silently downgrades the target to dev.

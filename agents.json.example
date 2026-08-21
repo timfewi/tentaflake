@@ -1,4 +1,5 @@
 {
+  "_securityNote": "This compatibility schema requires tentaflake.security.profile=dev because it passes real env files and ports to agents.",
   "hermes": [
     {
       "name": "example",

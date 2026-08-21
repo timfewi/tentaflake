@@ -1,5 +1,49 @@
 # Agenix Secrets — Encrypted Agent Credentials
 
+> **Security-profile boundary:** agenix keeps plaintext out of Git and the Nix
+> store, but passing a decrypted file into an agent still gives that agent the
+> real credential. `balanced` and `strict` reject `envFile` and `agenixFile`.
+> The direct-agent examples below are retained only for the explicit `dev`
+> compatibility profile. Secure profiles use agenix for host-side brokers,
+> Grafana credentials, Git auto-push, and backup credentials; the agent should
+> receive only a scoped, revocable virtual broker key.
+
+For a balanced agent, declare the decrypted provider value as a single secret
+file and point only the LLM broker at it:
+
+```nix
+age.secrets.openai-key = {
+  file = ./secrets/openai-key.age;
+  owner = "root";
+  group = "root";
+  mode = "0400";
+};
+
+tentaflake.broker.agents.hermes-coding = {
+  enable = true;
+  subnet = "10.203.20.0/30";
+  gateway = "10.203.20.1";
+  llm = {
+    enable = true;
+    upstreamBaseUrl =
+      "https://api.openai.com/v1/";
+    providerCredentialFile =
+      config.age.secrets.openai-key.path;
+    allowedModels = [
+      {
+        name = "gpt-5-mini";
+        inputMicrousdPerMillion = 250000;
+        outputMicrousdPerMillion = 2000000;
+      }
+    ];
+  };
+};
+```
+
+systemd copies the value into the broker's private credential directory. The
+agent receives only its random virtual key. The longer direct-container
+environment examples below apply only to `dev`.
+
 This guide covers encrypting agent API keys and tokens — for either the Hermes or ZeroClaw runtime — with [agenix](https://github.com/ryantm/agenix) so they can be committed to Git safely and decrypted only at NixOS activation time.
 
 ## Why Agenix?
@@ -13,7 +57,7 @@ This guide covers encrypting agent API keys and tokens — for either the Hermes
 
 Agenix gives you the best balance: secrets encrypted in Git, decrypted only at activation, never in the Nix store, and no external vault dependency.
 
-## Architecture
+## Dev-only direct-container architecture
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
@@ -180,6 +224,12 @@ echo "ZEROCLAW_providers__models__openrouter__default__api_key=sk-or-..." \
 
 ### 5. Wire Agenix Secrets to Agents
 
+This section applies only when the host explicitly selects:
+
+```nix
+tentaflake.security.profile = "dev";
+```
+
 In `my-agents.nix`, use `agenixFile` instead of `envFile`. Both runtimes accept
 it the same way — `mkHermesAgent` and `mkZeroClawAgent`:
 
@@ -256,7 +306,10 @@ age.identityPaths = [
 sudo nixos-rebuild switch --flake /etc/nixos#tentaflake
 ```
 
-Agenix decrypts the `.age` files during activation and places plaintext at `/run/agenix/`. The Docker container mounts this as `--env-file`.
+Agenix decrypts the `.age` files during activation and places plaintext at
+`/run/agenix/`. Only the explicitly selected `dev` compatibility profile passes
+such a file to an agent as `--env-file`; balanced supplies individual files to
+host-side services through systemd credentials instead.
 
 ## Verification
 

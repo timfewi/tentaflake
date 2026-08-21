@@ -1,332 +1,74 @@
-{ mkHermesAgent, mkZeroClawAgent, mkOpenCodeAgent }:
+{ mkHermesAgent, mkZeroClawAgent }:
 
-# ════════════════════════════════════════════════════════════════════
-# Non-developer? You don't need this file. Run `tentaflake agent add`
-# for an interactive wizard that writes agents.json instead — no Nix
-# required. See docs/08-agent-cli.md. The two coexist; this file is
-# for power users who want the full `settings` surface below.
-# ════════════════════════════════════════════════════════════════════
-#
-# my-agents.nix — define every agent that runs on THIS host, across all
-# three runtimes: Hermes (`hermesAgents`), ZeroClaw (`zeroclawAgents`),
-# and OpenCode (`opencodeAgents`).
-#
-# Setup:
-#   cp my-agents.nix.example my-agents.nix
-#   $EDITOR my-agents.nix
-#   git add my-agents.nix        # auto-imported by configuration.nix when present
-#
-# How it works:
-#   Each entry in `hermesAgents` is one argument set passed to mkHermesAgent,
-#   which turns it into a NixOS module (system user + isolated state dir at
-#   /var/lib/hermes-<name> + auto-starting Docker container). Entries in
-#   `zeroclawAgents` go through mkZeroClawAgent the same way (state dir at
-#   /var/lib/zeroclaw-<name>). The final expression maps both lists to the
-#   modules that configuration.nix splices into its `imports`.
-#
-#   To add an agent: append another attrset to the matching list and rebuild.
-#   Adding it here is enough — the audit daemon's watchDirs auto-derive
-#   from these names too.
-#
-# Reference: docs/02-agent-tips.md (settings deep-dive),
-#            docs/04-agenix-secrets.md (encrypted credentials).
-# ════════════════════════════════════════════════════════════════════
+# Installed systems use the balanced security profile by default. These
+# examples create fail-closed capsules and do not inject provider credentials
+# or publish services. They stay stopped until an exact broker policy is
+# declared and the operator explicitly starts them.
+[
+  (mkHermesAgent {
+    name = "coding";
+    autoStart = false;
+    gitIdentity = {
+      name = "coding-bot";
+      email = "coding@example.invalid";
+    };
 
-let
-  hermesAgents = [
+    # Host-side push is optional. The token never enters the agent, and both
+    # remote and branch must match exactly after canonicalization.
+    # gitAutoPush = {
+    #   tokenEnvFile = "/run/agenix/github-coding";
+    #   allowedRemotes = [
+    #     "https://github.com/example/coding.git"
+    #   ];
+    #   allowedBranches = [ "main" ];
+    # };
+  })
 
-    # ──────────────────────────────────────────────────────────
-    # Minimal agent — all you NEED to get started.
-    # A name + an env file holding the API key. Everything else
-    # uses Hermes' built-in defaults; the LLM provider is set up
-    # interactively (`hermes setup --portal`) inside the container.
-    # ──────────────────────────────────────────────────────────
-    {
-      name = "coding";
-      # Plaintext .env on tmpfs (simplest). Prefer `agenixFile` for
-      # encrypted secrets — see the reference agent below.
-      envFile = "/run/secrets/hermes-coding.env";
-    }
+  (mkZeroClawAgent {
+    name = "assistant";
+    autoStart = false;
+    settings.schema_version = 3;
+  })
 
-    # ══════════════════════════════════════════════════════════
-    # Fully-configured reference agent (COMMENTED OUT).
-    # Uncomment, rename, and trim to taste to add a second agent
-    # that is fully declared in Nix instead of configured by hand.
-    #
-    # Everything under `settings` is serialized to a config.yaml that
-    # is mounted read-only into the container — so these are exactly
-    # the keys you would otherwise set with `hermes config set ...`.
-    # ══════════════════════════════════════════════════════════
-    # {
-    #   name = "assistant";
-    #
-    #   # ── Secrets: use exactly ONE of envFile / agenixFile ──
-    #   #   envFile    = "/run/secrets/hermes-assistant.env"  # plaintext on tmpfs
-    #   #   agenixFile = "/run/agenix/hermes-assistant-env"   # agenix-decrypted (recommended)
-    #   agenixFile = "/run/agenix/hermes-assistant-env";
-    #
-    #   # ── Seed files (optional) ──
-    #   # Copied into the state dir on FIRST boot only (no-clobber):
-    #   # SOUL.md, AGENTS.md, BRAND.md, skills/. Runtime edits survive rebuilds.
-    #   # seedDir = "/etc/nixos/seeds/assistant";
-    #
-    #   # ── Hermes configuration (becomes config.yaml) ──
-    #   settings = {
-    #     # Primary model. `provider` is REQUIRED — it is NOT inferred from the name.
-    #     model = {
-    #       default = "anthropic/claude-haiku-4.5";
-    #       provider = "openrouter";
-    #       # For provider = "custom" / any OpenAI-compatible endpoint, set base_url
-    #       # EXPLICITLY and make sure the matching <NAME>_API_KEY is in the env file.
-    #       # A wrong/absent base_url is the #1 cause of silent 401s that surface as
-    #       # "agent crashed / protocol violation" — see `providerHealthcheck` below.
-    #       # base_url = "https://api.example.com/v1";
-    #       # Tried in order if the default errors/times out:
-    #       fallbacks = [
-    #         {
-    #           provider = "openrouter";
-    #           model = "google/gemini-2.5-flash-lite";
-    #         }
-    #       ];
-    #     };
-    #
-    #     # Auxiliary models — route specific internal tasks to cheaper/specialized
-    #     # models. Omit any entry to fall back to `model.default`.
-    #     auxiliary = {
-    #       vision.model = "anthropic/claude-haiku-4.5";
-    #       vision.provider = "openrouter";
-    #       web_extract.model = "anthropic/claude-haiku-4.5";
-    #       web_extract.provider = "openrouter";
-    #       compression.model = "anthropic/claude-haiku-4.5";
-    #       compression.provider = "openrouter";
-    #       approval.model = "anthropic/claude-haiku-4.5";
-    #       approval.provider = "openrouter";
-    #     };
-    #
-    #     # Context compression. protect_* keep the system prompt and recent turns
-    #     # verbatim — without them the agent loses its identity and continuity.
-    #     compression = {
-    #       enabled = true;
-    #       threshold = 0.50; # start compressing at 50% context fill
-    #       target_ratio = 0.20; # compress down to ~20% of original size
-    #       protect_last_n = 20; # keep the last 20 messages uncompressed
-    #       protect_first_n = 3; # keep the first 3 (system prompt) uncompressed
-    #     };
-    #
-    #     # Long-term memory + per-user profiles.
-    #     memory = {
-    #       memory_enabled = true;
-    #       user_profile_enabled = true;
-    #     };
-    #
-    #     # Max agentic turns per task before the agent stops on its own.
-    #     agent.max_turns = 50;
-    #
-    #     display = {
-    #       tool_progress = "off";
-    #       busy_input_mode = "queue"; # queue input while the agent is working
-    #     };
-    #
-    #     # Terminal backend. "none" locks the agent out of shell access (MCP-only);
-    #     # otherwise it can run commands inside its container.
-    #     terminal.backend = "none";
-    #
-    #     # Web backend: "firecrawl" (needs FIRECRAWL_API_KEY) or "disabled".
-    #     web.backend = "firecrawl";
-    #
-    #     # Approval policy for risky tool calls: "smart" | "always" | "never".
-    #     approvals.mode = "smart";
-    #
-    #     # Explicit toolsets — prefer this over ["all"], which also enables risky
-    #     # tools (Docker, package management, system operations).
-    #     toolsets = [
-    #       "terminal"
-    #       "web"
-    #       "memory"
-    #       "file"
-    #       "skills"
-    #     ];
-    #
-    #     # Caps so a huge file/tool result can't blow the context window.
-    #     file_read_max_chars = 100000;
-    #     tool_output = {
-    #       max_bytes = 150000;
-    #       max_lines = 5000;
-    #     };
-    #
-    #     # Provider timeouts (raise for slow / long-generation models).
-    #     providers.openrouter = {
-    #       request_timeout_seconds = 1800;
-    #       stale_timeout_seconds = 300;
-    #     };
-    #
-    #     # Timezone for cron / scheduled tasks.
-    #     cron.timezone = "UTC";
-    #
-    #     # Text-to-speech (optional). Local Piper via OpenAI-compatible endpoint —
-    #     # see modules/piper-tts-server.nix. Set tts.provider = "edge" for online, no files.
-    #     # tts = {
-    #     #   provider = "openai";
-    #     #   openai = {
-    #     #     base_url = "http://localhost:5001/v1";
-    #     #     model = "piper";
-    #     #     voice = "en_US-amy-medium";
-    #     #   };
-    #     # };
-    #
-    #     # Speech-to-text (optional). Groq Whisper needs GROQ_API_KEY.
-    #     # stt = {
-    #     #   enabled = true;
-    #     #   provider = "groq";
-    #     #   groq.model = "whisper-large-v3-turbo";
-    #     # };
-    #   };
-    #
-    #   # ── Extra Docker volumes (host:container:mode) ──
-    #   # e.g. mount Piper voice files, or Node for npx-based MCP servers.
-    #   # extraVolumes = [ "/usr/share/piper-voices:/usr/share/piper-voices:ro" ];
-    #
-    #   # ── Extra environment variables inside the container ──
-    #   # extraEnvironment = { HERMES_TIMEZONE = "UTC"; };
-    #
-    #   # ── Extra OCI/Docker options (resource limits, etc.) ──
-    #   # extraContainerConfig = { extraOptions = [ "--memory=4g" ]; };
-    #
-    #   # ══════════════════════════════════════════════════════════
-    #   # Operational hardening (all optional, default-off).
-    #   # See docs/07-operations.md for the why behind each.
-    #   # ══════════════════════════════════════════════════════════
-    #
-    #   # Fail-loud provider preflight. POSTs a 1-token completion at boot and logs
-    #   # PASS/FAIL + HTTP status to the journal, so a bad base_url / API key is an
-    #   # obvious auth error instead of a downstream "agent crashed" mystery.
-    #   # providerHealthcheck = {
-    #   #   url       = "https://api.example.com/v1";  # the model.base_url
-    #   #   model     = "anthropic/claude-haiku-4.5";
-    #   #   apiKeyEnv = "OPENROUTER_API_KEY";          # value stays in the container
-    #   # };
-    #
-    #   # Chown extra mounted data dirs to the container uid each boot (rebuilds
-    #   # heal ownership instead of breaking $HERMES_HOME writes).
-    #   # healDataDirs = [ "/srv/agent-data/assistant" ];
-    #
-    #   # Git identity inside the container (re-applied each boot — survives the
-    #   # ephemeral in-container $HOME being wiped on recreate).
-    #   # gitIdentity = { name = "assistant-bot"; email = "assistant@example.com"; };
-    #
-    #   # Push the agent's repos from the HOST with a token the agent never sees
-    #   # (Hermes strips secrets from the agent terminal — the agent commits, the
-    #   # host pushes). Targets GitHub https remotes under <stateDir>/workspace.
-    #   # gitAutoPush = { tokenEnvFile = "/run/agenix/hermes-assistant-env"; };
-    #
-    #   # Publish the agent's web dashboard on the tailnet (TLS, tailnet-only).
-    #   # `port` = in-container bind; `tailnetPort` = external HTTPS (keep them
-    #   # different under host networking — convention: internal = external + 100).
-    #   # dashboard = { port = 9219; tailnetPort = 9119; };
-    #
-    #   # Expose agent-built web apps durably (auto-restart, optional tailnet serve).
-    #   # services.knowledge-base = {
-    #   #   startCommand = "cd $HERMES_HOME/workspace/kb && exec ./.venv/bin/python app.py";
-    #   #   port = 9191; tailnetPort = 9122;
-    #   # };
-    # }
-
-  ];
-
-  zeroclawAgents = [
-
-    # ──────────────────────────────────────────────────────────
-    # ZeroClaw agent (COMMENTED OUT) — uncomment and adapt to run
-    # a ZeroClaw runtime next to the Hermes agents above.
-    # `settings` is serialized to the config.toml mounted read-only
-    # into the container.
-    # ──────────────────────────────────────────────────────────
-    # {
-    #   name = "assistant";
-    #   # Env file with API keys, passed as --env-file. agenix-decrypted path
-    #   # recommended; a plaintext /run/secrets/... file also works.
-    #   # Key naming: ZeroClaw reads config overrides from env as
-    #   # ZEROCLAW_<section>__<sub>__<key> (double underscores), e.g.
-    #   # ZEROCLAW_providers__models__<provider>__default__api_key.
-    #   agenixFile = "/run/agenix/zeroclaw-assistant-env";
-    #   # seedDir = "/etc/nixos/seeds/zeroclaw-assistant";  # workspace seed, first boot only
-    #   hostPort = 9246;   # host loopback → container gateway port
-    #   servePort = 9145;  # tailnet HTTPS port (tailscale serve)
-    #   settings = {
-    #     # schema_version is REQUIRED. Without it the loader treats the file as v1
-    #     # and runs the v1->v2->v3 migration, which silently drops v3-only fields
-    #     # (e.g. providers.models.*.model/uri read back <unset>).
-    #     schema_version = 3;
-    #     # A concrete model id is required — catch-all ids like "openrouter/auto"
-    #     # are rejected (`zeroclaw doctor`: "no model configured").
-    #     # Provider/uri/key setup is per ZeroClaw's docs; openrouter shown here.
-    #     providers.models.openrouter.default.model = "anthropic/claude-haiku-4.5";
-    #     # The default runtime profile is agentic=false / max_tool_iterations=0 —
-    #     # without this the agent can observe but never act.
-    #     runtime_profiles.default = {
-    #       agentic = true;
-    #       max_tool_iterations = 25;
-    #     };
-    #     agents.main = {
-    #       model_provider = "openrouter.default";
-    #       risk_profile = "default";
-    #       runtime_profile = "default";
-    #     };
-    #     risk_profiles.default.level = "supervised";
-    #   };
-    # }
-
-  ];
-
-  opencodeAgents = [
-
-    # ══════════════════════════════════════════════════════════
-    # OpenCode agents — two headless `opencode serve` instances,
-    # ideal for external orchestrators (n8n, CI) that submit work
-    # over OpenCode's documented HTTP API:
-    #   POST http://127.0.0.1:<hostPort>/session          -> { id }
-    #   POST http://127.0.0.1:<hostPort>/session/<id>/message
-    #        { "parts": [ { "type": "text", "text": "<task>" } ] }
-    #
-    # Credentials — recommended pattern is a LOCAL LLM PROXY (host-
-    # portable, keeps agents isolated): point `settings` at the proxy
-    # and put its key + a server password in the env file. Alternative:
-    # set `authFile` to a provider auth.json to reuse existing creds.
-    # See docs/08-opencode.md.
-    # ══════════════════════════════════════════════════════════
-    {
-      name = "code";
-      hostPort = 4096; # http://127.0.0.1:4096 — n8n points here
-      # servePort = 4196; # optional: publish on the tailnet (must differ from
-      #                   # hostPort). Requires envFile/agenixFile carrying
-      #                   # OPENCODE_SERVER_PASSWORD — the whole tailnet can
-      #                   # reach the session API otherwise. Override with
-      #                   # allowUnauthenticatedServe = true.
-      envFile = "/run/secrets/opencode-code.env"; # OPENCODE_SERVER_PASSWORD + provider key
-      settings = {
-        # OpenCode config (opencode.json). Point the model/provider at your
-        # local proxy; the key is read from the env file via {env:...}.
-        # NOTE: OpenCode model ids use DASHES (claude-haiku-4-5), unlike the
-        # OpenRouter ids above (claude-haiku-4.5).
-        model = "anthropic/claude-haiku-4-5";
-        provider.anthropic.options.baseURL = "http://host.example:4000";
+  # Disposable no-egress execution queues. The exact key, workspace, and
+  # numeric user are checked against each builder during evaluation.
+  {
+    tentaflake.worker.agents = {
+      hermes-coding = {
+        enable = true;
+        workspace = "/var/lib/hermes-coding/workspace";
       };
-      # Reuse an existing auth.json instead of a proxy key (must exist on the host):
-      # authFile = "/run/secrets/opencode-auth.json";
-    }
-
-    {
-      name = "ops";
-      hostPort = 4097; # second isolated agent on its own port + workspace
-      envFile = "/run/secrets/opencode-ops.env";
-      settings = {
-        model = "anthropic/claude-haiku-4-5";
-        provider.anthropic.options.baseURL = "http://host.example:4000";
+      zeroclaw-assistant = {
+        enable = true;
+        workspace = "/var/lib/zeroclaw-assistant/data";
+        containerUid = 65534;
+        containerGid = 65534;
       };
-    }
+    };
 
-  ];
-in
-map mkHermesAgent hermesAgents
-++ map mkZeroClawAgent zeroclawAgents
-++ map mkOpenCodeAgent opencodeAgents
+    # Fixed-size persistent ext4 workspaces. Enabling these on a non-empty
+    # existing workspace fails closed; follow the migration guide first.
+    tentaflake.workspaceQuota.agents = {
+      hermes-coding = {
+        enable = true;
+        workspace = "/var/lib/hermes-coding/workspace";
+        sizeMiB = 8192;
+      };
+      zeroclaw-assistant = {
+        enable = true;
+        workspace = "/var/lib/zeroclaw-assistant/data";
+        sizeMiB = 8192;
+        ownerUid = 65534;
+        ownerGid = 65534;
+      };
+    };
+  }
+]
+
+# Compatibility migration for a trusted development host:
+#
+#   tentaflake.security.profile = "dev";
+#
+# Only under that explicit host profile may builders accept envFile,
+# agenixFile, host networking, published loopback ports, dashboards, or
+# mutable local image tags. Do not use dev for untrusted 24/7 agents.

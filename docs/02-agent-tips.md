@@ -1,5 +1,12 @@
 # Tentaflake — Agent Management Guide
 
+> This guide contains historical direct-network and direct-secret development
+> examples. They require the explicit `dev` security profile. Installed hosts
+> now default to `balanced`, where shared policy enforces gVisor, non-root
+> execution, read-only root, no published services, and no real credential
+> files. Networking is `none` unless an exact broker policy is declared. See
+> [security profiles](10-security-profiles.md) before copying an example.
+
 Day-to-day operations for your Hermes agents: state, logs, secrets,
 updates, security.
 
@@ -108,7 +115,9 @@ sudo docker inspect hermes-coding | jq '.[0].Mounts'
    commented reference entry in `my-agents.nix.example` and
    `zeroclaw.env.example` for its env-file convention.
 
-2. Create env file:
+2. For the explicit `dev` profile only, create its direct env file. Balanced
+   rejects real provider env files and uses the broker flow in
+   [brokered egress](12-brokered-egress.md):
 
    ```bash
    sudo cp /etc/nixos/hermes.env.example /run/secrets/hermes-personal.env
@@ -133,44 +142,36 @@ sudo groupdel hermes-<name>
 
 ---
 
-## Secrets Rotation
+## Secrets rotation
 
-Env files live at `/run/secrets/hermes-<name>.env` (tmpfs — never on disk).
-
-**Rotate a key:**
-
-```bash
-sudo vi /run/secrets/hermes-coding.env
-# Edit the key, save
-sudo chmod 600 /run/secrets/hermes-coding.env
-sudo systemctl restart docker-hermes-coding
-```
-
-Container re-reads env file on restart. No rebuild needed for key changes.
-
-**Verify new key loaded:**
-
-```bash
-sudo docker exec hermes-coding env | grep API_KEY
-```
+In `balanced`, rotate the broker-owned provider credential through the
+deployment's runtime secret mechanism, then restart only the exact LLM broker.
+The controller retains its revocable virtual key and never receives the real
+provider value. Verify `/healthz` and audit readiness; do not print the key or
+inspect it through the agent environment. Direct `/run/secrets/*.env` rotation
+is a compatibility procedure for explicitly selected `dev` systems only.
 
 ---
 
 ## Multiple Agents
 
-Each agent is fully isolated:
+Each balanced agent receives a separate, policy-bounded capsule. This reduces
+cross-agent authority; it is not a claim of complete isolation from kernel,
+runtime, or image vulnerabilities.
 
 | Aspect | Isolation |
 |--------|-----------|
 | **Container** | Separate Docker container |
 | **System user** | `hermes-<name>` with own UID/GID |
 | **State dir** | `/var/lib/hermes-<name>` (0700) |
-| **API keys** | Separate env file per agent |
+| **Credentials** | Per-agent virtual broker key; real provider key stays host-side |
 | **Configuration** | Separate HERMES_HOME |
-| **Network** | Host networking — all agents share host net |
+| **Network** | `network=none` or one dedicated internal broker network |
 
 Run agents of any type: coding, research, personal, automation, monitoring.
-They cannot read each other's state or context.
+The generated mount policy and private host permissions deny direct access to
+another agent's state. `dev` may deliberately weaken these properties and must
+not be treated as an untrusted 24/7 boundary.
 
 ---
 
@@ -199,34 +200,12 @@ sudo docker exec hermes-coding cat $HERMES_HOME/logs/errors.log
 sudo docker exec hermes-coding cat $HERMES_HOME/logs/gateway.log
 ```
 
-### Audit daemon (if enabled)
+### Local observability
 
-The `tentaflake-auditd` service records **filesystem changes** inside every
-declarative agent container's state dir — `/var/lib/hermes-<name>/` and
-`/var/lib/zeroclaw-<name>/` alike, auto-discovered from whatever's defined in
-`my-agents.nix` — which files an agent creates, writes, removes, renames, or
-chmods, with a timestamp and size. (It does *not* capture the agent's
-conversation or commands — for that, use `tentaflake logs <name>`.)
-
-The fastest way to see this is the live dashboard:
-
-```bash
-tentaflake top     # live TUI: per-agent activity + scrolling event log
-```
-
-Prefer a browser? Enable the **Agent Console** (`tentaflake.auditd.console.enable`)
-for a tailnet-served web page that pairs a read-only, secrets-excluded file explorer
-across all agents with the same live activity feed — no per-agent dashboard logins.
-See [`docs/06-shell.md`](06-shell.md#agent-console--web-file-explorer--live-monitor).
-
-The daemon's own service log:
-
-```bash
-sudo journalctl -u tentaflake-auditd
-```
-
-Enable it with `tentaflake.auditd.enable = true;` (on by default for the
-`tentaflake` config). See [`docs/06-shell.md`](06-shell.md#tentaflake-top--live-activity-dashboard).
+The optional observability profile sends the systemd journal to local Loki via
+Alloy and provisions Grafana with Loki and Prometheus data sources. It replaces
+the removed custom audit database and web console without enlarging the core.
+See [observability and detection](09-observability.md).
 
 ---
 
@@ -291,8 +270,9 @@ Docker references with both a tag and digest are currently not supported
 Since `tentaflake.containerBackend` supports podman, the tag-plus-digest form
 would break those hosts; keep the version in a comment instead.
 
-For an image you build locally, there is no registry digest to pin to. Set
-`allowMutableImage = true;` on that agent to acknowledge it is not reproducible:
+For an image you build locally, there is no registry digest to pin to. On an
+explicitly selected `dev` host only, set `allowMutableImage = true;` to
+acknowledge it is not reproducible. Balanced/strict reject this escape hatch:
 
 ```nix
 (mkHermesAgent {
@@ -308,56 +288,42 @@ For an image you build locally, there is no registry digest to pin to. Set
 
 ### Memory limits
 
-Set container memory limits via `extraContainerConfig` in `my-agents.nix`:
+For `balanced`, set the shared enforced limits in the security profile. The
+container policy appends these flags after caller configuration, so
+`extraContainerConfig` cannot weaken or replace them:
 
 ```nix
-(mkHermesAgent {
-  name    = "coding";
-  envFile = "/run/secrets/hermes-coding.env";
-  extraContainerConfig = {
-    memory = "4g";
-    memorySwap = "2g";
-    cpuPeriod = 100000;
-    cpuQuota = 50000;  # ~0.5 CPU core
-  };
-})
+tentaflake.security.resources = {
+  memory = "4g";
+  memorySwap = "4g"; # no additional swap
+  cpus = "0.5";
+  nofile = 4096;
+};
 ```
+
+`extraContainerConfig` resource overrides are a `dev` compatibility technique,
+not a way to tune a secure capsule.
 
 ### Process limits
 
 Every agent container gets `--pids-limit=512` by default — a fork-bomb ceiling
-generous enough for compile jobs. Tune it (or disable with `null`) via the
-`pidsLimit` parameter on `mkHermesAgent`/`mkZeroClawAgent`:
+generous enough for compile jobs. A balanced agent may raise it only to another
+positive ceiling; `null` (unlimited) is rejected by the secure profile:
 
 ```nix
 (mkHermesAgent {
   name      = "coding";
-  envFile   = "/run/secrets/hermes-coding.env";
-  pidsLimit = 1024;   # heavy parallel builds; null = unlimited
+  pidsLimit = 1024;   # heavy parallel builds; must stay positive in balanced
 })
 ```
 
-### Dropping capabilities (opt-in)
+### Capabilities
 
-For agents that never need root-style operations inside the container, drop
-all Linux capabilities via `extraContainerConfig`:
-
-```nix
-extraContainerConfig = {
-  # Overriding extraOptions replaces the default network flag, so restate it.
-  # (--env-file, --security-opt and --pids-limit are appended after the merge
-  # and survive this override.)
-  extraOptions = [
-    "--network=host"
-    "--cap-drop=ALL"
-  ];
-};
-```
-
-> **Warning:** agents that run `sudo`, `apt install`, or otherwise install
-> packages inside the container need capabilities (`CAP_SETUID`,
-> `CAP_CHOWN`, …) — `--cap-drop=ALL` will break them. That's why this is
-> opt-in, not the default.
+`balanced` always enforces `cap-drop=ALL`; it is not opt-in and cannot be
+removed with `extraContainerConfig`. Build dependencies into a reviewed,
+digest-pinned image or run them through the disposable worker rather than
+granting Linux capabilities to a long-lived controller. The `dev` profile is
+the only compatibility path for experiments requiring broader authority.
 
 ### Resource monitoring
 
@@ -380,23 +346,31 @@ du -sh /var/lib/hermes-*/
 
 ## Security Notes
 
-### Env files on tmpfs
+### Env files and credentials
 
-`/run/secrets/` is a tmpfs mount — contents never written to disk.
-Files persist only until reboot. Recreate after each boot via:
-- Manual copy from `/etc/nixos/hermes.env.example`
-- Or automate via systemd tmpfiles / agenix
+`/run/secrets/` is a tmpfs mount — contents never written to disk. It is a
+valid location for the **broker's** Agenix-decrypted provider credentials, but
+not for credentials mounted into a `balanced` or `strict` agent. Such agents
+receive only their revocable virtual broker key and use the configured broker
+endpoint; the broker retains the real provider, GitHub, and fetch credentials.
 
-Do NOT store env files in `/etc/nixos/` (ends up in Nix store, world-readable).
+Direct agent env files are a `dev`-profile compatibility path only. They are
+lost at reboot unless recreated by Agenix or another secret manager. Never put
+them in `/etc/nixos/`: that can put their contents in the world-readable Nix
+store.
 
 ### Docker isolation
 
-Containers run with:
-- Host networking (`--network=host`)
-- Non-root inside the container — the image's built-in `hermes` user (no host `--user` override)
-- Read-only state dir permissions (0700, owner only)
-- No privilege escalation (`--security-opt=no-new-privileges:true`)
-- A process ceiling (`--pids-limit=512`, tunable via `pidsLimit`)
+`balanced` agents run in their own internal capsule network, not with host
+networking. The shared builders enforce an explicit non-root uid/gid,
+`cap-drop=ALL`, `no-new-privileges`, a read-only root filesystem, gVisor
+`runsc`, private tmpfs paths, and CPU/RAM/swap/PID/file limits. Only the
+agent's State and Workspace mounts are writable. The broker is the only
+configured external authority.
+
+The `dev` profile intentionally retains a compatibility path with broader OCI
+options. It is not suitable for an untrusted 24/7 agent and must never be used
+as an implicit fallback from `balanced`.
 
 ### System user security
 
@@ -405,16 +379,11 @@ Each agent has its own system user `hermes-<name>` with:
 - Home directory = state dir
 - No sudo access
 
-### Audit trail
+### Detection and evidence
 
-If `tentaflake-auditd` is enabled, every filesystem change in the agents' state
-dirs (across all runtimes) is recorded to a SQLite database (24h retention by
-default, size capped at ~40 MB so an event flood cannot fill the disk).
-Review it live with `tentaflake top`, or inspect the daemon's own log:
-
-```bash
-sudo journalctl -u tentaflake-auditd --since today
-```
+Journald is the primary host and container-unit evidence source. The optional
+observability profile retains it in Loki; the separate Falco profile adds
+kernel runtime detection. Neither profile is container isolation.
 
 ---
 
@@ -422,17 +391,20 @@ sudo journalctl -u tentaflake-auditd --since today
 
 When using the `settings` parameter on `mkHermesAgent`, keep these in mind.
 
-### Required API keys by feature
+### Provider configuration
 
-| Setting | API key needed |
-|---------|---------------|
+For `balanced`, define the permitted provider/models and real credentials in
+`tentaflake.broker.agents.<name>` and configure the runtime to use that local
+LLM endpoint with its virtual agent key. Do not add OpenRouter, Groq,
+Firecrawl, GitHub, or other real provider keys to an agent env file.
+
+The following direct variables are legacy `dev` configuration only:
+
+| Setting | Direct variable |
+|---------|-----------------|
 | `model.provider = "openrouter"` | `OPENROUTER_API_KEY` |
 | `stt.provider = "groq"` | `GROQ_API_KEY` |
 | `web.backend = "firecrawl"` | `FIRECRAWL_API_KEY` |
-| `tts.provider = "piper"` | None (local, but needs voice files) |
-| `tts.provider = "edge"` | None (built into container) |
-
-Set these in `/run/secrets/hermes-<name>.env`.
 
 ### Model provider
 
@@ -470,14 +442,16 @@ will fail with "command not found". Solutions:
 
 1. **Build a custom Docker image** extending the Hermes one with Node.js
 2. **Use a Python-based MCP server** (e.g. `mcp-server-filesystem` Python package)
-3. **Mount Node from host**: `extraVolumes = [ "/usr/bin/node:/usr/bin/node:ro" ]`
+3. **Build a pinned custom agent image** containing Node.js when it is
+   required. Do not bind-mount `/usr/bin/node` or other host binaries into a
+   secure capsule.
 
-4. **Run the MCP server on the host** — no Node.js or subprocess needed in
-   the container at all. Because agents use host networking, an HTTP MCP
-   server on the host is reachable at `127.0.0.1`. Tentaflake ships a
-   module for [hive-research](modules/hive-research.nix), a unified
-   web-research MCP server (search / extract / crawl / contacts across
-   Brave, Tavily, FireCrawl, Hunter.io and Spider Cloud with failover):
+4. **Use the broker fetch gateway** for web retrieval in `balanced`. It
+   constrains destinations, redirects, DNS answers, response size, and
+   provenance. The optional Hive Research module
+   (`modules/optional/hive-research.nix`) is outside the core and may be used
+   by an operator or an explicit `dev` integration, but a balanced capsule
+   cannot reach host loopback and must not be given its key-bearing endpoint:
 
    ```nix
    services.hive-research = {
@@ -487,7 +461,7 @@ will fail with "command not found". Solutions:
    };
    ```
 
-   Then in each agent profile's `config.yaml`:
+   A `dev`-profile agent can explicitly configure its MCP client with:
 
    ```yaml
    mcp_servers:
@@ -495,12 +469,12 @@ will fail with "command not found". Solutions:
        url: "http://127.0.0.1:7815/mcp"
    ```
 
-### TTS Piper voice files
+### Optional Piper voice files
 
-Piper TTS needs voice model files on disk. They are not in the container
-by default. Either:
-- **Mount from host**: `extraVolumes = [ "/usr/share/piper-voices:/usr/share/piper-voices:ro" ]`
-- **Switch to Edge TTS**: `tts.provider = "edge"` (no files needed, online)
+Piper is not part of the core. A secure agent image must contain any required
+voice assets at build time and be pinned by digest; mounting host voice paths
+is a `dev`-only compatibility option. Online TTS also needs an explicit
+brokered/policy-controlled integration rather than direct agent egress.
 
 ### Toolsets
 
