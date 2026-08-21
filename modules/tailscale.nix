@@ -12,7 +12,7 @@ lib.mkIf cfg.tailscale.enable {
     enable = true;
     openFirewall = true;
     extraUpFlags = [
-      "--advertise-tags=tag:agent"
+      "--advertise-tags=tag:agent-host"
       "--hostname=${cfg.hostName}"
       "--ssh"
     ];

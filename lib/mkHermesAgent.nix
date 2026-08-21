@@ -9,18 +9,16 @@
 #   [
 #     (mkHermesAgent {
 #       name    = "coding";
-#       envFile = "/run/secrets/hermes-coding.env";
+#       autoStart = false;
 #     })
 #   ]
 #
 # Each agent gets:
 #   - System user  hermes-<name>
 #   - State dir    /var/lib/hermes-<name>  (0700, owned by the container uid)
-#   - Docker container  hermes-<name>      (host networking, auto-start)
+#   - OCI container hermes-<name> (balanced: network=none + gVisor)
 #   - HERMES_HOME pointing to its isolated state dir
-#   - Hardened container defaults: --security-opt=no-new-privileges:true
-#     (no setuid/setgid privilege escalation inside the container) and
-#     --pids-limit=512 (fork-bomb ceiling; tune or disable via `pidsLimit`)
+#   - Shared security-profile policy applied after caller overrides
 #
 # Optional operational hardening (all default-off): UID alignment + ownership
 # self-heal, a fail-loud provider preflight, in-container git identity,
@@ -31,6 +29,7 @@
 let
   constants = import ./constants.nix;
   pinnedImage = import ./pinnedImage.nix { inherit lib; };
+  containerSecurity = import ./containerSecurity.nix { inherit lib; };
 in
 {
   name,
@@ -49,19 +48,18 @@ in
   #   image = "ubuntu@sha256:<64 hex digest>";
   image ? constants.hermesImage,
 
-  # Escape hatch for locally-built images, which have no registry digest to pin
-  # to. Setting this to true gives up reproducibility for this agent.
+  # Dev-only escape hatch for locally-built images without a registry digest.
   allowMutableImage ? false,
 
   # Path to an env file (plaintext .env) on the host filesystem, e.g.:
   #   envFile = "/run/tentaflake/default.env";
   # The file is passed to Docker via --env-file and loaded at container start.
-  # Useful for live ISO / non-agenix setups where secrets are on tmpfs.
+  # Dev-only compatibility path. Secure profiles reject real agent credentials.
   envFile ? null,
 
   # Path to an agenix-decrypted env file, e.g.:
   #   agenixFile = "/run/agenix/<name>-env";
-  # The file is passed to Docker via --env-file and loaded at container start.
+  # Dev-only compatibility path. Secure profiles reject real agent credentials.
   agenixFile ? null,
 
   # Optional: path to a directory of base reference files (SOUL.md, AGENTS.md, BRAND.md, skills/)
@@ -81,9 +79,9 @@ in
   # is set.
   cmd ? null,
 
-  # Network mode for the container. "host" shares host networking.
-  # "bridge" isolates the container (requires port mappings in extraContainerConfig).
-  networkMode ? "host",
+  # Compatibility override for the dev profile. Secure profiles select
+  # network=none until the brokered network from Phase B is configured.
+  networkMode ? null,
 
   # Max number of processes in the container (--pids-limit). Caps fork bombs
   # without starving real work — agents compile code, so 200 would be too
@@ -131,8 +129,8 @@ in
   # so the agent commits locally and the host pushes). Targets GitHub https
   # remotes. null = skip. Example:
   #   gitAutoPush = { tokenEnvFile = "/run/agenix/hermes-<name>-env"; };
-  # Optional fields: reposRoot (default "<stateDir>/workspace"),
-  # tokenEnvVar (default "GH_TOKEN"), interval (default "2min").
+  # Required: tokenEnvFile and allowedRemotes. Optional: allowedBranches
+  # (default [ "main" ]), reposRoot, tokenEnvVar, and interval.
   gitAutoPush ? null,
 
   # Expose the agent's web dashboard. Launches `hermes dashboard` inside the
@@ -140,8 +138,8 @@ in
   # null = skip. Example:
   #   dashboard = { port = 9219; tailnetPort = 9119; };
   # `port` is the in-container bind port; `tailnetPort` (optional) is the external
-  # HTTPS port `tailscale serve` listens on. Under host networking keep them
-  # different to avoid a bind collision (the convention is internal = external+100).
+  # HTTPS port `tailscale serve` listens on. Dev-only: secure profiles reject
+  # dashboard and service publication.
   dashboard ? null,
 
   # Expose additional agent-built web services durably (survive restart/recreate)
@@ -170,7 +168,36 @@ in
 let
   # Container runtime binary (docker or podman, per oci-containers backend)
   backend = config.virtualisation.oci-containers.backend;
+  securityProfile = config.tentaflake.security.profile;
+  secure = containerSecurity.isSecure securityProfile;
+  containerName = "hermes-${name}";
+  brokerCfg = lib.attrByPath [ containerName ] null config.tentaflake.broker.agents;
+  brokerEnabled = brokerCfg != null && brokerCfg.enable;
+  workerCfg = lib.attrByPath [ containerName ] null config.tentaflake.worker.agents;
+  workerEnabled = workerCfg != null && workerCfg.enable;
+  workerResultsDir = "/var/lib/tentaflake-worker-${containerName}/results";
+  workerResultsMount = "/run/tentaflake-worker/results";
+  quotaCfg = lib.attrByPath [ containerName ] null config.tentaflake.workspaceQuota.agents;
+  quotaEnabled = quotaCfg != null && quotaCfg.enable;
+  quotaUnit = "tentaflake-workspace-quota-${containerName}.service";
+  brokerEnvironmentFile = "/run/tentaflake-broker/${containerName}/agent.env";
+  brokerUnits =
+    lib.optional brokerEnabled "tentaflake-broker-network-${containerName}.service"
+    ++ lib.optional (
+      brokerEnabled && brokerCfg.llm.enable
+    ) "tentaflake-broker-llm-${containerName}.service"
+    ++ lib.optional (
+      brokerEnabled && brokerCfg.fetch.enable
+    ) "tentaflake-broker-fetch-${containerName}.service";
+  runtimeDependencies = brokerUnits ++ lib.optional quotaEnabled quotaUnit;
+  secureUnitPolicy = {
+    startLimitIntervalSec = 300;
+    startLimitBurst = 5;
+    serviceConfig.RestartSec = "10s";
+  };
+  securityResources = config.tentaflake.security.resources;
   ctrBin = "${pkgs.${backend}}/bin/${backend}";
+  tentaflakeCli = pkgs.callPackage ../pkgs/tentaflake-cli { };
 
   ownUid = toString containerUid;
   ownGid = toString containerGid;
@@ -182,6 +209,7 @@ let
   ctrExec = "${ctrBin} exec -u ${ownUid}:${ownGid}";
 
   ctrService = "${backend}-hermes-${name}.service";
+  ctrServiceAttr = lib.removeSuffix ".service" ctrService;
 
   # Generate config.yaml derivation when settings are provided
   yamlFormat = pkgs.formats.yaml { };
@@ -222,20 +250,15 @@ let
       serviceConfig = {
         Type = "oneshot";
         RemainAfterExit = true;
-        # A seedDir is typically a Nix store path (read-only, root-owned), and
-        # plain cp preserves both — so the agent (uid ${ownUid}) gets EACCES the
-        # first time it edits a seeded file (skills/, MEMORY.md, ...). Strip the
-        # source modes on copy, then re-own and re-enable writes on every boot so
-        # state dirs seeded before this fix are repaired too.
-        #
-        # The chown here is deliberately NOT left to hermes-${name}-heal-uid:
-        # that unit is ordered BEFORE this one, so it cannot heal a copy this
-        # unit has not made yet. Keeping ownership correct inside the same
-        # command makes the unit correct on its own, rather than dependent on
-        # an ordering declaration elsewhere.
-        ExecStart = "${pkgs.bash}/bin/bash -c 'cp -rn --no-preserve=mode,ownership ${seedDir}/* ${stateDir}/ 2>/dev/null || true; chown -R ${ownUid}:${ownGid} ${stateDir}; chmod -R u+w ${stateDir}'";
-        User = "root";
+        User = ownUid;
+        Group = ownGid;
+        UMask = "0077";
       };
+      script = ''
+        ${pkgs.coreutils}/bin/cp -rn --no-preserve=mode,ownership \
+          ${lib.escapeShellArg "${seedDir}/."} ${lib.escapeShellArg "${stateDir}/"}
+        ${pkgs.coreutils}/bin/chmod -R u+rwX ${lib.escapeShellArg stateDir}
+      '';
     };
   };
 
@@ -255,7 +278,7 @@ let
       };
       script = ''
         for d in ${lib.escapeShellArgs healDirs}; do
-          [ -d "$d" ] && chown -R ${ownUid}:${ownGid} "$d" 2>/dev/null || true
+          [ ! -e "$d" ] || chown -hR ${ownUid}:${ownGid} "$d"
         done
       '';
     };
@@ -272,13 +295,10 @@ let
         RemainAfterExit = true;
       };
       script = ''
-        ${ctrExec} hermes-${name} sh -c '
-          git config --global user.name "${gitIdentity.name}"
-          git config --global user.email "${gitIdentity.email}"
-          git config --global init.defaultBranch main
-          git config --global safe.directory "*"
-          git config --global push.autoSetupRemote true
-        ' || true
+        ${ctrExec} hermes-${name} git config --global user.name ${lib.escapeShellArg gitIdentity.name}
+        ${ctrExec} hermes-${name} git config --global user.email ${lib.escapeShellArg gitIdentity.email}
+        ${ctrExec} hermes-${name} git config --global init.defaultBranch main
+        ${ctrExec} hermes-${name} git config --global push.autoSetupRemote true
       '';
     };
   };
@@ -287,6 +307,8 @@ let
     let
       reposRoot = gitAutoPush.reposRoot or "${stateDir}/workspace";
       tokenEnvVar = gitAutoPush.tokenEnvVar or "GH_TOKEN";
+      allowedRemotes = gitAutoPush.allowedRemotes or [ ];
+      allowedBranches = gitAutoPush.allowedBranches or [ "main" ];
     in
     {
       "hermes-${name}-autopush" = {
@@ -299,20 +321,50 @@ let
         ];
         serviceConfig = {
           Type = "oneshot";
-          EnvironmentFile = gitAutoPush.tokenEnvFile;
+          EnvironmentFile = gitAutoPush.tokenEnvFile or "/dev/null";
         };
         script = ''
-          root='${reposRoot}'
+          root=${lib.escapeShellArg reposRoot}
           [ -d "$root" ] || exit 0
           helper='!f() { echo username=x-access-token; echo "password=''$${tokenEnvVar}"; }; f'
-          for gd in $(find "$root" -maxdepth 4 -name .git -type d 2>/dev/null); do
+          rc=0
+          while IFS= read -r -d "" gd; do
             repo=$(dirname "$gd")
-            url=$(git -C "$repo" remote get-url origin 2>/dev/null) || continue
-            case "$url" in *github.com*) ;; *) continue ;; esac
-            git -C "$repo" -c safe.directory='*' \
-              -c url."https://github.com/".insteadOf="git@github.com:" \
-              -c credential.helper="$helper" push origin HEAD 2>/dev/null || true
-          done
+            url=$(git -C "$repo" -c safe.directory="$repo" remote get-url origin 2>/dev/null) || {
+              printf 'git-autopush DENY agent=%q repo=%q reason=no-origin\n' ${lib.escapeShellArg name} "$repo" >&2
+              rc=1
+              continue
+            }
+            if ! ${lib.getExe tentaflakeCli} remote-check "$url" ${lib.escapeShellArgs allowedRemotes}; then
+              printf 'git-autopush DENY agent=%q repo=%q remote=%q reason=remote-policy\n' ${lib.escapeShellArg name} "$repo" "$url" >&2
+              rc=1
+              continue
+            fi
+            branch=$(git -C "$repo" -c safe.directory="$repo" symbolic-ref --quiet --short HEAD) || {
+              printf 'git-autopush DENY agent=%q repo=%q reason=detached-head\n' ${lib.escapeShellArg name} "$repo" >&2
+              rc=1
+              continue
+            }
+            branch_ok=false
+            for allowed_branch in ${lib.escapeShellArgs allowedBranches}; do
+              if [ "$branch" = "$allowed_branch" ]; then
+                branch_ok=true
+                break
+              fi
+            done
+            if [ "$branch_ok" != true ]; then
+              printf 'git-autopush DENY agent=%q repo=%q branch=%q reason=branch-policy\n' ${lib.escapeShellArg name} "$repo" "$branch" >&2
+              rc=1
+              continue
+            fi
+            printf 'git-autopush ALLOW agent=%q repo=%q remote=%q branch=%q\n' ${lib.escapeShellArg name} "$repo" "$url" "$branch"
+            if ! git -C "$repo" -c safe.directory="$repo" \
+              -c credential.helper="$helper" push origin "HEAD:refs/heads/$branch"; then
+              printf 'git-autopush ERROR agent=%q repo=%q branch=%q reason=push-failed\n' ${lib.escapeShellArg name} "$repo" "$branch" >&2
+              rc=1
+            fi
+          done < <(find "$root" -maxdepth 4 -name .git \( -type d -o -type f \) -print0 2>/dev/null)
+          exit "$rc"
         '';
       };
     }
@@ -420,8 +472,149 @@ let
     )
   ) { } (lib.attrNames services);
 
+  baseContainer = {
+    inherit autoStart;
+    networks = lib.optional brokerEnabled brokerCfg.networkName;
+    image = pinnedImage name allowMutableImage image;
+    cmd = resolvedCmd;
+    volumes = [
+      "${stateDir}:${stateDir}:rw"
+    ]
+    ++ lib.optional workerEnabled "${workerResultsDir}:${workerResultsMount}:ro"
+    ++ lib.optional (configYaml != null) "${configYaml}:${stateDir}/config.yaml:ro"
+    ++ extraVolumes;
+    environment = {
+      HERMES_HOME = stateDir;
+      HERMES_AGENT_NAME = name;
+    }
+    // extraEnvironment;
+    environmentFiles = lib.optional brokerEnabled brokerEnvironmentFile;
+    extraOptions =
+      lib.optional (!secure) "--network=${if networkMode == null then "host" else networkMode}"
+      ++ lib.optional (!secure && envFile != null) "--env-file=${envFile}"
+      ++ lib.optional (!secure && agenixFile != null) "--env-file=${agenixFile}"
+      ++ lib.optional (!secure) "--security-opt=no-new-privileges:true"
+      ++ lib.optional (!secure && pidsLimit != null) "--pids-limit=${toString pidsLimit}";
+  };
+
+  securityResult = containerSecurity.apply {
+    profile = securityProfile;
+    inherit backend pidsLimit;
+    name = "hermes-${name}";
+    owner = "${ownUid}:${ownGid}";
+    baseConfig = baseContainer;
+    overrides = extraContainerConfig;
+    allowedWritableSources = [ stateDir ];
+    allowedWritableDestinations = [ stateDir ];
+    resources = securityResources;
+    brokerNetwork = if brokerEnabled then brokerCfg.networkName else null;
+    approvedEnvironmentFiles = lib.optional brokerEnabled brokerEnvironmentFile;
+    approvedReadOnlySources = lib.optional workerEnabled workerResultsDir;
+    approvedReadOnlyDestinations = lib.optional workerEnabled workerResultsMount;
+    automaticStart = autoStart;
+    brokerPolicyEnabled = brokerEnabled;
+    inherit workerEnabled;
+    workspaceQuotaEnabled = quotaEnabled;
+  };
+
 in
 {
+  assertions =
+    securityResult.assertions
+    ++ lib.optionals (gitAutoPush != null) [
+      {
+        assertion = gitAutoPush ? tokenEnvFile;
+        message = "tentaflake: Hermes agent ${name} gitAutoPush requires tokenEnvFile pointing to a runtime-only host credential file.";
+      }
+      {
+        assertion = (gitAutoPush.allowedRemotes or [ ]) != [ ];
+        message = "tentaflake: Hermes agent ${name} gitAutoPush requires a non-empty allowedRemotes list of full canonical HTTPS repository URLs.";
+      }
+      {
+        assertion = (gitAutoPush.allowedBranches or [ "main" ]) != [ ];
+        message = "tentaflake: Hermes agent ${name} gitAutoPush requires at least one allowed branch.";
+      }
+      {
+        assertion = lib.match "^[A-Z_][A-Z0-9_]*$" (gitAutoPush.tokenEnvVar or "GH_TOKEN") != null;
+        message = "tentaflake: Hermes agent ${name} gitAutoPush tokenEnvVar is not a safe environment variable name.";
+      }
+      {
+        assertion = lib.match "^/run/[A-Za-z0-9._+/-]+$" (gitAutoPush.tokenEnvFile or "") != null;
+        message = "tentaflake: Hermes agent ${name} gitAutoPush tokenEnvFile must be an absolute, shell-safe runtime path below /run.";
+      }
+      {
+        assertion =
+          let
+            workspaceRoot = "${stateDir}/workspace";
+            reposRoot = gitAutoPush.reposRoot or workspaceRoot;
+          in
+          reposRoot == workspaceRoot || lib.hasPrefix "${workspaceRoot}/" reposRoot;
+        message = "tentaflake: Hermes agent ${name} gitAutoPush reposRoot must stay inside its own workspace.";
+      }
+      {
+        assertion = lib.all (
+          remote:
+          lib.match "^https://github[.]com/[A-Za-z0-9._-]+/[A-Za-z0-9._-]+([.]git)?$" remote != null
+          && !(lib.hasSuffix ".git.git" remote)
+        ) (gitAutoPush.allowedRemotes or [ ]);
+        message = "tentaflake: Hermes agent ${name} gitAutoPush allowedRemotes must contain canonical github.com HTTPS repository URLs.";
+      }
+    ]
+    ++ lib.optionals secure [
+      {
+        assertion = !allowMutableImage;
+        message = "tentaflake: secure Hermes agent ${name} requires a digest-pinned image; allowMutableImage is dev-only.";
+      }
+      {
+        assertion = networkMode == null || networkMode == "none";
+        message = "tentaflake: secure Hermes agent ${name} may not override networkMode; brokered networking is not configured yet.";
+      }
+      {
+        assertion = envFile == null && agenixFile == null;
+        message = "tentaflake: secure Hermes agent ${name} may not receive an env-file with real credentials; use the broker path once configured.";
+      }
+      {
+        assertion = !(containerSecurity.containsSensitiveValue extraEnvironment);
+        message = "tentaflake: secure Hermes agent ${name} has a secret-like extraEnvironment key, which would enter the Nix store.";
+      }
+      {
+        assertion =
+          !(containerSecurity.containsSensitiveValue (if settings == null then { } else settings));
+        message = "tentaflake: secure Hermes agent ${name} has a secret-like settings key, which would enter the Nix store.";
+      }
+      {
+        assertion = dashboard == null && services == { };
+        message = "tentaflake: secure Hermes agent ${name} may not publish dashboards or agent-built services before an authenticated broker boundary exists.";
+      }
+      {
+        assertion = providerHealthcheck == null;
+        message = "tentaflake: secure Hermes agent ${name} may not run a provider check with a real provider credential inside the container.";
+      }
+      {
+        assertion = healDataDirs == [ ];
+        message = "tentaflake: secure Hermes agent ${name} may not recursively re-own caller-supplied host paths through healDataDirs.";
+      }
+      {
+        assertion = !workerEnabled || workerCfg.workspace == "${stateDir}/workspace";
+        message = "tentaflake: worker workspace for ${containerName} must exactly match ${stateDir}/workspace.";
+      }
+      {
+        assertion =
+          !workerEnabled
+          || (workerCfg.containerUid == containerUid && workerCfg.containerGid == containerGid);
+        message = "tentaflake: worker uid/gid for ${containerName} must match the controller container.";
+      }
+      {
+        assertion = !quotaEnabled || quotaCfg.workspace == "${stateDir}/workspace";
+        message = "tentaflake: workspaceQuota for ${containerName} must exactly mount ${stateDir}/workspace.";
+      }
+      {
+        assertion =
+          !quotaEnabled || (quotaCfg.ownerUid == containerUid && quotaCfg.ownerGid == containerGid);
+        message = "tentaflake: workspaceQuota owner for ${containerName} must match the controller container.";
+      }
+    ];
+
   # ── System user ──
   users.users = lib.mkIf createUser {
     ${user} = {
@@ -462,6 +655,15 @@ in
     providerHealthcheckSvc
     dashboardServe
     servicesServe
+    (lib.optionalAttrs secure {
+      ${ctrServiceAttr} = secureUnitPolicy;
+    })
+    (lib.optionalAttrs (runtimeDependencies != [ ]) {
+      ${ctrServiceAttr} = {
+        requires = runtimeDependencies;
+        after = runtimeDependencies;
+      };
+    })
   ];
 
   # ── systemd timers (git auto-push) ──
@@ -477,49 +679,7 @@ in
     })
   ];
 
-  # ── OCI container ──
-  # Build base config, then merge caller overrides, then append env-file and
-  # hardening options (extraOptions from extraContainerConfig is preserved;
-  # --env-file / --security-opt / --pids-limit are appended after the merge so
-  # they're never lost to a caller's extraOptions override)
-  virtualisation.oci-containers.containers."hermes-${name}" =
-    let
-      baseConfig = {
-        inherit image autoStart;
-        cmd = resolvedCmd;
-
-        volumes = [
-          "${stateDir}:${stateDir}:rw"
-        ]
-        ++ lib.optional (configYaml != null) "${configYaml}:${stateDir}/config.yaml:ro"
-        ++ extraVolumes;
-
-        environment = {
-          HERMES_HOME = stateDir;
-          HERMES_AGENT_NAME = name;
-        }
-        // extraEnvironment;
-
-        extraOptions = [
-          "--network=${networkMode}"
-        ];
-      };
-
-      # Merge caller's extraContainerConfig on top
-      merged = lib.recursiveUpdate baseConfig extraContainerConfig;
-    in
-    merged
-    // {
-      # Digest-check AFTER the merge: extraContainerConfig can override `image`,
-      # so checking the argument alone would leave a bypass.
-      image = pinnedImage name allowMutableImage merged.image;
-
-      # Append --env-file and hardening flags AFTER the merge so they're never lost
-      extraOptions =
-        merged.extraOptions
-        ++ lib.optional (envFile != null) "--env-file=${envFile}"
-        ++ lib.optional (agenixFile != null) "--env-file=${agenixFile}"
-        ++ [ "--security-opt=no-new-privileges:true" ]
-        ++ lib.optional (pidsLimit != null) "--pids-limit=${toString pidsLimit}";
-    };
+  virtualisation.oci-containers.containers."hermes-${name}" = securityResult.container // {
+    image = pinnedImage name allowMutableImage securityResult.container.image;
+  };
 }
