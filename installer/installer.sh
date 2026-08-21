@@ -170,16 +170,15 @@ TIMEZONE=$(dialog --stdout --title "Timezone" \
 [ -z "$TIMEZONE" ] && TIMEZONE="UTC"
 
 # ════════════════════════════════════════════════════════════
-# STEP 6b: Optional shell / editor features
+# STEP 6b: Optional shell features
 # ════════════════════════════════════════════════════════════
 # A checklist of opt-in extras; each maps to a tentaflake.* toggle written into
 # the generated flake further down. Defaults are all "on" — uncheck to skip.
 # `|| FEATURES=""` keeps `set -e` from aborting if the user cancels the dialog.
 FEATURES=$(dialog --stdout --title "Optional Features" --checklist \
-  "Choose extras to install.\nSPACE toggles an item, ENTER confirms." 18 78 6 \
+  "Choose extras to install.\nSPACE toggles an item, ENTER confirms." 18 78 5 \
   zsh "Zsh + Oh My Zsh (autosuggestions, syntax highlight, fzf-tab)" on \
   zoxide "zoxide — smart 'cd' that learns your frequent directories" on \
-  nvf "Neovim (nvf) — LSP, treesitter, telescope, git, completion" on \
   lazygit "lazygit — a fast terminal UI for git" on \
   tmux "tmux — terminal multiplexer (persistent sessions over SSH)" on \
   tools "Modern CLI tools (eza, bat, fd, ripgrep, fzf, htop, btop)" on) || FEATURES=""
@@ -194,8 +193,6 @@ has_feature() { case " $FEATURES " in *" $1 "*) return 0 ;; *) return 1 ;; esac 
 # shellcheck disable=SC2016  # ${pkgs...} is literal Nix, must NOT expand in bash
 ADMIN_SHELL='"${pkgs.bash}/bin/bash"'
 TF_TOGGLES=""
-NVF_INPUT=""
-NVF_MODULE_LINE=""
 
 if has_feature zsh; then
   # shellcheck disable=SC2016  # literal Nix interpolation, not bash
@@ -214,18 +211,6 @@ fi
 if ! has_feature tools; then
   TF_TOGGLES+="            tentaflake.shell.tools.enable = false;"$'\n'
 fi
-if has_feature nvf; then
-  TF_TOGGLES+="            tentaflake.editor.nvf.enable = true;"$'\n'
-  # Pin nvf to the rev this ISO was built from (guaranteed to exist + cached).
-  NVF_REV=$(jq -r '.nodes.nvf.locked.rev' "$REPO_DIR/flake.lock" 2>/dev/null)
-  if [ -n "$NVF_REV" ] && [ "$NVF_REV" != "null" ]; then
-    NVF_INPUT="    nvf = { url = \"github:NotAShelf/nvf/${NVF_REV}\"; inputs.nixpkgs.follows = \"nixpkgs\"; };"$'\n'
-  else
-    NVF_INPUT="    nvf = { url = \"github:NotAShelf/nvf\"; inputs.nixpkgs.follows = \"nixpkgs\"; };"$'\n'
-  fi
-  NVF_MODULE_LINE=$'\n          ./modules/editor.nix'
-fi
-
 FEATURE_SUMMARY="${FEATURES:-(none)}"
 
 # ════════════════════════════════════════════════════════════
@@ -465,16 +450,13 @@ dialog --infobox "Creating system configuration ..." 4 50
 
 TARGET_NIXOS="/mnt/etc/nixos"
 
-# Copy modules, lib, pkgs, and configuration.nix from the embedded repo
+# Copy the declarative system and Rust CLI workspace from the embedded repo.
 cp -r "$REPO_DIR/modules" "$TARGET_NIXOS/modules"
 cp -r "$REPO_DIR/lib" "$TARGET_NIXOS/lib"
 cp -r "$REPO_DIR/pkgs" "$TARGET_NIXOS/pkgs"
-# modules/shell.nix reads ../public/tentaflake-shell-logo.txt at eval time.
-# Copy just that file — the rest of public/ is multi-MB imagery that would
-# bloat every installed system's config repo and nix store.
-mkdir -p "$TARGET_NIXOS/public"
-cp "$REPO_DIR/public/tentaflake-shell-logo.txt" "$TARGET_NIXOS/public/" ||
-  die "Failed to copy shell logo (modules/shell.nix needs it)"
+cp -r "$REPO_DIR/crates" "$TARGET_NIXOS/crates"
+cp "$REPO_DIR/Cargo.toml" "$TARGET_NIXOS/Cargo.toml"
+cp "$REPO_DIR/Cargo.lock" "$TARGET_NIXOS/Cargo.lock"
 cp "$REPO_DIR/configuration.nix" "$TARGET_NIXOS/configuration.nix"
 cp "$REPO_DIR/my-agents.nix" "$TARGET_NIXOS/my-agents.nix" 2>/dev/null || echo '{ mkHermesAgent }: [ ]' >"$TARGET_NIXOS/my-agents.nix"
 
@@ -504,7 +486,7 @@ cat >"$TARGET_NIXOS/flake.nix" <<FLAKEEOF
   description = "NixOS Agent Machine — ${HOSTNAME}";
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/${NIXPKGS_REV}";
-${NVF_INPUT}  };
+  };
   outputs = { self, nixpkgs, ... }@inputs:
     let
       system    = "x86_64-linux";
@@ -533,7 +515,7 @@ ${NVF_INPUT}  };
             tentaflake.timeZone   = uc.timeZone;
 ${TF_TOGGLES}          }
           ./modules
-          ./configuration.nix${NVF_MODULE_LINE}
+          ./configuration.nix
         ];
       };
     };

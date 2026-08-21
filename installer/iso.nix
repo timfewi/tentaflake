@@ -9,7 +9,7 @@
 
 # ────────────────────────────────────────────────────────────
 # Tentaflake — Installer ISO
-# Bootable live ISO that auto-launches installer.sh on TTY1.
+# Bootable installer ISO that auto-launches installer.sh on TTY1.
 # Embeds the full repo at /etc/tentaflake/
 # ────────────────────────────────────────────────────────────
 
