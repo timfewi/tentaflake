@@ -20,11 +20,20 @@ TARGET_NIXOS="$WORK/nixos"
 mkdir -p "$TARGET_NIXOS"
 
 # ── Mirror installer.sh's file layout (STEP 10) ──
-cp -r "$REPO_DIR/lib" "$REPO_DIR/modules" "$TARGET_NIXOS/"
-mkdir -p "$TARGET_NIXOS/public"
-cp "$REPO_DIR/public/tentaflake-shell-logo.txt" "$TARGET_NIXOS/public/"
+cp -r "$REPO_DIR/lib" "$REPO_DIR/modules" \
+  "$REPO_DIR/pkgs" "$REPO_DIR/crates" \
+  "$TARGET_NIXOS/"
+cp "$REPO_DIR/Cargo.toml" \
+  "$REPO_DIR/Cargo.lock" \
+  "$TARGET_NIXOS/"
 cp "$REPO_DIR/configuration.nix" "$TARGET_NIXOS/configuration.nix"
-echo '{ mkHermesAgent }: [ ]' >"$TARGET_NIXOS/my-agents.nix"
+cat >"$TARGET_NIXOS/my-agents.nix" <<'EOF'
+{ mkHermesAgent }:
+[
+  # agents.json is the explicit dev-only compatibility schema.
+  { tentaflake.security.profile = "dev"; }
+]
+EOF
 
 HOSTNAME_T="tentaflake"
 cat >"$TARGET_NIXOS/user-config.nix" <<EOF
@@ -45,7 +54,7 @@ cat >"$TARGET_NIXOS/hardware-configuration.nix" <<'EOF'
 }
 EOF
 
-# The trigger: one agent, shaped exactly like `tentaflake agent add` writes it.
+# The trigger: one declarative JSON agent fixture.
 cat >"$TARGET_NIXOS/agents.json" <<'EOF'
 {
   "hermes": [
@@ -91,7 +100,7 @@ git -C "$TARGET_NIXOS" init -q
 git -C "$TARGET_NIXOS" add -A
 git -C "$TARGET_NIXOS" -c user.email=t@t -c user.name=t commit -q -m generated
 
-echo "Evaluating generated flake (agents.json present) ..."
+echo "Evaluating generated flake (dev compatibility agents.json present) ..."
 if nix eval --no-write-lock-file \
   "$TARGET_NIXOS#nixosConfigurations.$HOSTNAME_T.config.system.build.toplevel.drvPath" \
   >"$WORK/out" 2>"$WORK/err"; then
