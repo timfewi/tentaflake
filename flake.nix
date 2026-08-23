@@ -67,6 +67,26 @@
       # Module set imported by external consumers and built-in hosts
       tentaflakeModules = import ./modules/default.nix;
 
+      # Contributor E2E tooling can move ahead of the nixpkgs package while
+      # remaining source- and dependency-hash pinned.
+      devcontainerCli = import ./lib/devcontainer-cli.nix { inherit pkgs; };
+
+      # Security tools use the locked nixpkgs revisions; rule updates are
+      # separate, reviewable hash bumps instead of live registry downloads.
+      securityTools = pkgs.symlinkJoin {
+        name = "tentaflake-security-tools";
+        paths = [
+          pkgs.osv-scanner
+          pkgs.semgrep
+        ];
+      };
+      semgrepRules = pkgs.fetchFromGitHub {
+        owner = "semgrep";
+        repo = "semgrep-rules";
+        rev = "40b8c63f75dc7c22c8a77482d73bfb864b146f7e";
+        hash = "sha256-VtPavzFGDmRzdG9wTFc+yp7TbI1gT1/IaF//K1m3OT0=";
+      };
+
       # Shared specialArgs — no host-specific params here
       baseSpecialArgs = {
         inherit
@@ -119,6 +139,7 @@
         tentaflake-broker = self.packages.${system}.tentaflake-broker;
         tentaflake-worker = self.packages.${system}.tentaflake-worker;
         tentaflake-worker-image = self.packages.${system}.tentaflake-worker-image;
+        devcontainer-cli = self.packages.${system}.devcontainer-cli;
         image-pinning = import ./lib/pinnedImage-test.nix { inherit pkgs; };
         module-evaluation =
           assert import ./tests/module-eval.nix { nixpkgsPath = nixpkgs.outPath; };
@@ -196,6 +217,9 @@
 
       # ── Convenience packages ──
       packages.${system} = rec {
+        devcontainer-cli = devcontainerCli;
+        security-tools = securityTools;
+        semgrep-rules = semgrepRules;
         tentaflake-cli = pkgs.callPackage ./pkgs/tentaflake-cli { };
         tentaflake-broker = pkgs.callPackage ./pkgs/tentaflake-broker { };
         tentaflake-worker = pkgs.callPackage ./pkgs/tentaflake-worker { };
