@@ -2,7 +2,7 @@
 let
   system = "x86_64-linux";
   pkgs = import nixpkgsPath { inherit system; };
-  lib = pkgs.lib;
+  inherit (pkgs) lib;
   evalConfig = import (nixpkgsPath + "/nixos/lib/eval-config.nix");
   eval =
     modules:
@@ -416,31 +416,35 @@ let
       autoStart = false;
     })
     {
-      tentaflake.networking.enable = lib.mkForce true;
-      tentaflake.broker.agents.hermes-worker = {
-        enable = true;
-        networkName = "tf-hermes-worker";
-        subnet = "10.203.22.0/30";
-        gateway = "10.203.22.1";
-        fetch = {
+      tentaflake = {
+        networking.enable = lib.mkForce true;
+        broker.agents.hermes-worker = {
           enable = true;
-          allowedHosts = [ "docs.example.com" ];
+          networkName = "tf-hermes-worker";
+          subnet = "10.203.22.0/30";
+          gateway = "10.203.22.1";
+          fetch = {
+            enable = true;
+            allowedHosts = [ "docs.example.com" ];
+          };
         };
-      };
-      tentaflake.worker.agents.hermes-worker = {
-        enable = true;
-        workspace = "/var/lib/hermes-worker/workspace";
-      };
-      tentaflake.worker.agents.zeroclaw-worker = {
-        enable = true;
-        workspace = "/var/lib/zeroclaw-worker/data";
-        containerUid = 65534;
-        containerGid = 65534;
-      };
-      tentaflake.workspaceQuota.agents.hermes-worker = {
-        enable = true;
-        workspace = "/var/lib/hermes-worker/workspace";
-        sizeMiB = 32;
+        worker.agents = {
+          hermes-worker = {
+            enable = true;
+            workspace = "/var/lib/hermes-worker/workspace";
+          };
+          zeroclaw-worker = {
+            enable = true;
+            workspace = "/var/lib/zeroclaw-worker/data";
+            containerUid = 65534;
+            containerGid = 65534;
+          };
+        };
+        workspaceQuota.agents.hermes-worker = {
+          enable = true;
+          workspace = "/var/lib/hermes-worker/workspace";
+          sizeMiB = 32;
+        };
       };
     }
   ];
@@ -555,28 +559,30 @@ let
       autoStart = false;
     })
     {
-      tentaflake.profiles.observability = {
-        enable = true;
-        grafanaSecretKeyFile = "/run/credentials/grafana-secret-key";
-        grafanaAdminPasswordFile = "/run/credentials/grafana-admin-password";
-      };
-      tentaflake.networking.enable = lib.mkForce true;
-      tentaflake.broker.agents.hermes-observed = {
-        enable = true;
-        networkName = "tf-hermes-observed";
-        subnet = "10.203.30.0/30";
-        gateway = "10.203.30.1";
-        llm = {
+      tentaflake = {
+        profiles.observability = {
           enable = true;
-          upstreamBaseUrl = "https://api.example.com/v1/";
-          providerCredentialFile = "/run/agenix/example-provider";
-          allowedModels = [
-            {
-              name = "example/model";
-              inputMicrousdPerMillion = 1;
-              outputMicrousdPerMillion = 1;
-            }
-          ];
+          grafanaSecretKeyFile = "/run/credentials/grafana-secret-key";
+          grafanaAdminPasswordFile = "/run/credentials/grafana-admin-password";
+        };
+        networking.enable = lib.mkForce true;
+        broker.agents.hermes-observed = {
+          enable = true;
+          networkName = "tf-hermes-observed";
+          subnet = "10.203.30.0/30";
+          gateway = "10.203.30.1";
+          llm = {
+            enable = true;
+            upstreamBaseUrl = "https://api.example.com/v1/";
+            providerCredentialFile = "/run/agenix/example-provider";
+            allowedModels = [
+              {
+                name = "example/model";
+                inputMicrousdPerMillion = 1;
+                outputMicrousdPerMillion = 1;
+              }
+            ];
+          };
         };
       };
     }
@@ -609,19 +615,19 @@ assert !(builtins.hasAttr "hive-research" core.options.services);
 assert !(builtins.hasAttr "piper-tts-server" core.options.services);
 assert capsuleAttempt.success;
 assert provenanceAttempt.success;
-assert !(missingProvenanceAttempt.success);
+assert !missingProvenanceAttempt.success;
 assert lib.hasInfix "cosign verify --certificate-identity"
   provenanceService.serviceConfig.ExecStart;
 assert lib.elem "tentaflake-image-verify-hermes-signed.service"
   provenanceCapsule.config.systemd.services.docker-hermes-signed.requires;
 assert podmanAttempt.success;
-assert !(strictAttempt.success);
-assert !(unlimitedResourceAttempt.success);
-assert !(missingManagementAttempt.success);
-assert !(publicSshAttempt.success);
+assert !strictAttempt.success;
+assert !unlimitedResourceAttempt.success;
+assert !missingManagementAttempt.success;
+assert !publicSshAttempt.success;
 assert gitAttempt.success;
-assert !(unsafeGitAttempt.success);
-assert !(unsafeGitRootAttempt.success);
+assert !unsafeGitAttempt.success;
+assert !unsafeGitRootAttempt.success;
 assert lib.hasInfix "remote-check" gitScript;
 assert lib.hasInfix "safe.directory=\"$repo\"" gitScript;
 assert !(lib.hasInfix "safe.directory='*'" gitScript);
@@ -649,10 +655,10 @@ assert !(lib.all (item: item.assertion) unsafeMountPolicy.assertions);
 assert !(lib.all (item: item.assertion) unsafeSharedMountPolicy.assertions);
 assert !(lib.all (item: item.assertion) unsafeImageArchivePolicy.assertions);
 assert !(lib.all (item: item.assertion) unsafeDevNamePolicy.assertions);
-assert !(mutableImageAttempt.success);
-assert !(publishedPortAttempt.success);
-assert !(rootHermesAttempt.success);
-assert !(unsafeHealAttempt.success);
+assert !mutableImageAttempt.success;
+assert !publishedPortAttempt.success;
+assert !rootHermesAttempt.success;
+assert !unsafeHealAttempt.success;
 assert seededAttempt.success;
 assert
   seededCapsule.config.systemd.services."seed-hermes-seeded-hermes".serviceConfig.User == "10000";
@@ -665,12 +671,12 @@ assert lib.elem "--env-file=/run/tentaflake/dev.env" devContainer.extraOptions;
 assert !(lib.elem "--runtime=runsc" devContainer.extraOptions);
 assert brokerAttempt.success;
 assert workerAttempt.success;
-assert !(incompleteAutostartAttempt.success);
-assert !(unsafeWorkerAttempt.success);
-assert !(unsafeQuotaAttempt.success);
-assert !(unsafeBrokerAttempt.success);
+assert !incompleteAutostartAttempt.success;
+assert !unsafeWorkerAttempt.success;
+assert !unsafeQuotaAttempt.success;
+assert !unsafeBrokerAttempt.success;
 assert backupAttempt.success;
-assert !(unsafeBackupAttempt.success);
+assert !unsafeBackupAttempt.success;
 assert backup.config.services.restic.backups.tentaflake.runCheck;
 assert backup.config.services.restic.backups.tentaflake.inhibitsSleep;
 assert

@@ -22,198 +22,211 @@
 {
   name = "tentaflake-integration";
 
-  nodes.machine =
-    { pkgs, ... }:
-    let
-      brokerPackage = pkgs.callPackage ../pkgs/tentaflake-broker { };
-      networkTestImage = pkgs.dockerTools.buildLayeredImage {
-        name = "tentaflake-network-test";
-        tag = "latest";
-        contents = pkgs.buildEnv {
-          name = "tentaflake-network-test-root";
-          paths = [
-            pkgs.bash
-            pkgs.busybox
-            pkgs.coreutils
-            pkgs.curl
-          ];
-          pathsToLink = [ "/bin" ];
-        };
-        config = {
-          Cmd = [ "/bin/sh" ];
-          Env = [ "PATH=/bin" ];
-          User = "65534:65534";
-        };
-      };
-
-    in
-    {
-      imports = [
-        self.nixosModules.default
-        # One declarative Hermes agent, kept stopped so no image pull happens.
-        (mkHermesAgent {
-          name = "test";
-          autoStart = false;
-        })
-        # One ZeroClaw agent (second runtime), also stopped — exercises the
-        # mkZeroClawAgent builder and multi-runtime discovery.
-        (mkZeroClawAgent {
-          name = "assistant";
-          autoStart = false;
-        })
-      ];
-
-      # OCI backend + docker are wired in the template's configuration.nix, which
-      # we don't import here (it pulls in hardware config / my-agents.nix); set
-      # the pieces the agent unit needs directly.
-      virtualisation.oci-containers.backend = "docker";
-      virtualisation.docker.enable = true;
-
-      environment.etc."tentaflake/network-test-image".source = networkTestImage;
-      environment.systemPackages = [
-        pkgs.git
-        pkgs.python3
-        pkgs.restic
-        brokerPackage
-      ];
-
-      tentaflake = {
-        hostName = "agent-host";
-        adminUser = "admin";
-        # The VM test harness owns the bootloader and networking to the tailnet;
-        # disable the template's versions so they don't fight the test rig.
-        boot.enable = false;
-        # The test harness defines nixpkgs.config read-only; leaving this on
-        # would redefine allowUnfree and break evaluation.
-        nixSettings.enable = false;
-        shell.enable = true;
-        broker.agents.zeroclaw-assistant = {
-          enable = true;
-          subnet = "10.203.30.0/30";
-          gateway = "10.203.30.1";
-          fetch = {
-            enable = true;
-            allowedHosts = [
-              "169.254.169.254"
-              "example.com"
+  nodes = {
+    machine =
+      { pkgs, ... }:
+      let
+        brokerPackage = pkgs.callPackage ../pkgs/tentaflake-broker { };
+        networkTestImage = pkgs.dockerTools.buildLayeredImage {
+          name = "tentaflake-network-test";
+          tag = "latest";
+          contents = pkgs.buildEnv {
+            name = "tentaflake-network-test-root";
+            paths = [
+              pkgs.bash
+              pkgs.busybox
+              pkgs.coreutils
+              pkgs.curl
             ];
+            pathsToLink = [ "/bin" ];
+          };
+          config = {
+            Cmd = [ "/bin/sh" ];
+            Env = [ "PATH=/bin" ];
+            User = "65534:65534";
           };
         };
-        backup = {
-          enable = true;
-          paths = [ "/var/lib/hermes-test" ];
-          repositoryFile = "/run/tentaflake-backup/repository";
-          passwordFile = "/run/tentaflake-backup/password";
-          initialize = true;
-          timerConfig = null;
-          pruneOpts = [ ];
-          checkOpts = [ "--read-data" ];
-        };
-        worker = {
-          image = networkTestImage;
-          imageReference = "tentaflake-network-test:latest";
-          agents.hermes-test = {
+
+      in
+      {
+        imports = [
+          self.nixosModules.default
+          # One declarative Hermes agent, kept stopped so no image pull happens.
+          (mkHermesAgent {
+            name = "test";
+            autoStart = false;
+          })
+          # One ZeroClaw agent (second runtime), also stopped — exercises the
+          # mkZeroClawAgent builder and multi-runtime discovery.
+          (mkZeroClawAgent {
+            name = "assistant";
+            autoStart = false;
+          })
+        ];
+
+        # OCI backend + docker are wired in the template's configuration.nix, which
+        # we don't import here (it pulls in hardware config / my-agents.nix); set
+        # the pieces the agent unit needs directly.
+        virtualisation.oci-containers.backend = "docker";
+        virtualisation.docker.enable = true;
+
+        # The stopped controller does not pull in its broker at boot. Make the
+        # fetch broker an explicit fixture service so the reboot subtest can
+        # verify its credential, network, and health restoration independently.
+        systemd.services."tentaflake-broker-fetch-zeroclaw-assistant".wantedBy = [
+          "multi-user.target"
+        ];
+
+        environment.etc."tentaflake/network-test-image".source = networkTestImage;
+        environment.systemPackages = [
+          pkgs.git
+          pkgs.python3
+          pkgs.restic
+          brokerPackage
+        ];
+
+        tentaflake = {
+          hostName = "agent-host";
+          adminUser = "admin";
+          # The VM test harness owns the bootloader and networking to the tailnet;
+          # disable the template's versions so they don't fight the test rig.
+          boot.enable = false;
+          # This test exercises the headless runtime, not a physical console.
+          # kmscon is unreliable on QEMU's synthetic bochs DRM device.
+          modernConsole.enable = false;
+          # The test harness defines nixpkgs.config read-only; leaving this on
+          # would redefine allowUnfree and break evaluation.
+          nixSettings.enable = false;
+          shell.enable = true;
+          broker.agents.zeroclaw-assistant = {
             enable = true;
-            workspace = "/var/lib/hermes-test/workspace";
-            maxSnapshotBytes = 16 * 1024 * 1024;
-            maxSnapshotEntries = 1000;
-            maxTimeoutSeconds = 10;
-            cpus = "0.5";
-            workspaceTmpfsSize = "8m";
-            tmpTmpfsSize = "4m";
+            subnet = "10.203.30.0/30";
+            gateway = "10.203.30.1";
+            fetch = {
+              enable = true;
+              allowedHosts = [
+                "169.254.169.254"
+                "example.com"
+              ];
+            };
           };
-          agents.zeroclaw-assistant = {
+          backup = {
             enable = true;
-            workspace = "/var/lib/zeroclaw-assistant/data";
-            containerUid = 65534;
-            containerGid = 65534;
-            maxSnapshotBytes = 16 * 1024 * 1024;
-            maxSnapshotEntries = 1000;
-            maxTimeoutSeconds = 10;
-            cpus = "0.5";
-            workspaceTmpfsSize = "8m";
-            tmpTmpfsSize = "4m";
+            paths = [ "/var/lib/hermes-test" ];
+            repositoryFile = "/run/tentaflake-backup/repository";
+            passwordFile = "/run/tentaflake-backup/password";
+            initialize = true;
+            timerConfig = null;
+            pruneOpts = [ ];
+            checkOpts = [ "--read-data" ];
           };
-        };
-        workspaceQuota.agents = {
-          hermes-test = {
-            enable = true;
-            workspace = "/var/lib/hermes-test/workspace";
-            sizeMiB = 32;
+          worker = {
+            image = networkTestImage;
+            imageReference = "tentaflake-network-test:latest";
+            agents.hermes-test = {
+              enable = true;
+              workspace = "/var/lib/hermes-test/workspace";
+              maxSnapshotBytes = 16 * 1024 * 1024;
+              maxSnapshotEntries = 1000;
+              maxTimeoutSeconds = 10;
+              cpus = "0.5";
+              workspaceTmpfsSize = "8m";
+              tmpTmpfsSize = "4m";
+            };
+            agents.zeroclaw-assistant = {
+              enable = true;
+              workspace = "/var/lib/zeroclaw-assistant/data";
+              containerUid = 65534;
+              containerGid = 65534;
+              maxSnapshotBytes = 16 * 1024 * 1024;
+              maxSnapshotEntries = 1000;
+              maxTimeoutSeconds = 10;
+              cpus = "0.5";
+              workspaceTmpfsSize = "8m";
+              tmpTmpfsSize = "4m";
+            };
           };
-          zeroclaw-assistant = {
-            enable = true;
-            workspace = "/var/lib/zeroclaw-assistant/data";
-            sizeMiB = 32;
-            ownerUid = 65534;
-            ownerGid = 65534;
+          workspaceQuota.agents = {
+            hermes-test = {
+              enable = true;
+              workspace = "/var/lib/hermes-test/workspace";
+              sizeMiB = 32;
+            };
+            zeroclaw-assistant = {
+              enable = true;
+              workspace = "/var/lib/zeroclaw-assistant/data";
+              sizeMiB = 32;
+              ownerUid = 65534;
+              ownerGid = 65534;
+            };
           };
         };
       };
-    };
 
-  nodes.attacker =
-    { pkgs, ... }:
-    {
-      environment.systemPackages = [ pkgs.curl ];
-      networking.firewall.enable = false;
-      system.stateVersion = "26.05";
-    };
-
-  nodes.podman =
-    { pkgs, ... }:
-    let
-      podmanTestImage = pkgs.dockerTools.buildLayeredImage {
-        name = "tentaflake-podman-test";
-        tag = "latest";
-        contents = pkgs.buildEnv {
-          name = "tentaflake-podman-test-root";
-          paths = [
-            pkgs.bash
-            pkgs.busybox
-            pkgs.coreutils
-            pkgs.curl
-          ];
-          pathsToLink = [ "/bin" ];
-        };
-        config = {
-          Cmd = [ "/bin/sh" ];
-          Env = [ "PATH=/bin" ];
-          User = "65534:65534";
-        };
+    attacker =
+      { pkgs, ... }:
+      {
+        environment.systemPackages = [ pkgs.curl ];
+        networking.firewall.enable = false;
+        system.stateVersion = "26.05";
       };
-    in
-    {
-      imports = [
-        self.nixosModules.default
-        (mkZeroClawAgent {
-          name = "podman";
-          autoStart = false;
-        })
-      ];
 
-      virtualisation.oci-containers.backend = "podman";
-      virtualisation.podman.enable = true;
-      environment.etc."tentaflake/podman-test-image".source = podmanTestImage;
+    podman =
+      { pkgs, ... }:
+      let
+        podmanTestImage = pkgs.dockerTools.buildLayeredImage {
+          name = "tentaflake-podman-test";
+          tag = "latest";
+          contents = pkgs.buildEnv {
+            name = "tentaflake-podman-test-root";
+            paths = [
+              pkgs.bash
+              pkgs.busybox
+              pkgs.coreutils
+              pkgs.curl
+            ];
+            pathsToLink = [ "/bin" ];
+          };
+          config = {
+            Cmd = [ "/bin/sh" ];
+            Env = [ "PATH=/bin" ];
+            User = "65534:65534";
+          };
+        };
+      in
+      {
+        imports = [
+          self.nixosModules.default
+          (mkZeroClawAgent {
+            name = "podman";
+            autoStart = false;
+          })
+        ];
 
-      tentaflake = {
-        hostName = "podman-host";
-        adminUser = "admin";
-        boot.enable = false;
-        nixSettings.enable = false;
-        shell.enable = true;
-        broker.agents.zeroclaw-podman = {
-          enable = true;
-          networkName = "tf-zeroclaw-podman";
-          subnet = "10.203.50.0/30";
-          gateway = "10.203.50.1";
-          fetch = {
+        virtualisation.oci-containers.backend = "podman";
+        virtualisation.podman.enable = true;
+        environment.etc."tentaflake/podman-test-image".source = podmanTestImage;
+
+        tentaflake = {
+          hostName = "podman-host";
+          adminUser = "admin";
+          boot.enable = false;
+          modernConsole.enable = false;
+          nixSettings.enable = false;
+          shell.enable = true;
+          broker.agents.zeroclaw-podman = {
             enable = true;
-            allowedHosts = [ "example.com" ];
+            networkName = "tf-zeroclaw-podman";
+            subnet = "10.203.50.0/30";
+            gateway = "10.203.50.1";
+            fetch = {
+              enable = true;
+              allowedHosts = [ "example.com" ];
+            };
           };
         };
       };
-    };
+  };
 
   testScript = ''
     # runsc's sandbox helpers share the container PID cgroup. A limit of 16
@@ -280,6 +293,9 @@
                 f"worker {unit} failed before publishing {path}"
             )
 
+    # The final subtest exercises a real reboot. Start this node explicitly so
+    # the test driver does not add QEMU's `-no-reboot` default.
+    machine.start(allow_reboot=True)
     machine.wait_for_unit("multi-user.target")
     attacker.wait_for_unit("multi-user.target")
     podman.wait_for_unit("multi-user.target")
@@ -1030,7 +1046,11 @@
         boot_id = machine.succeed(
             "cat /proc/sys/kernel/random/boot_id"
         ).strip()
-        machine.reboot()
+        # `machine.reboot()` only sends Ctrl-Alt-Delete, which kmscon consumes
+        # before the guest can act on it. Ask systemd for the controlled reboot
+        # and prepare the test driver's persistent virtio shell to reconnect.
+        machine.execute("systemctl reboot >&2 &", check_return=False)
+        machine.connected = False
         machine.wait_for_unit("multi-user.target")
         machine.wait_for_unit("docker.service")
         machine.succeed("test -L /var/run")
