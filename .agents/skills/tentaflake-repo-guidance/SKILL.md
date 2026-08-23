@@ -20,6 +20,9 @@ disk operations, secret changes, or VM mutation.
 
 ```text
 tentaflake/
+├── .devcontainer/
+│   ├── devcontainer.json
+│   └── devcontainer-lock.json
 ├── flake.nix
 ├── configuration.nix
 ├── Cargo.toml
@@ -316,6 +319,10 @@ and installing NixOS are destructive runtime operations and need an exact,
 confirmed target.
 
 ## Verification
+
+The optional contributor Dev Container installs Nix only; `flake.lock` and
+`lib/devshell.nix` remain the toolchain source of truth. Its base image and Nix
+Feature are digest-locked, and it must not mount runtime sockets or credentials.
 
 Focused Rust gate:
 

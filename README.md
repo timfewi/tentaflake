@@ -54,6 +54,11 @@ Run the full flake check when Nix daemon access is available:
 nix flake check
 ```
 
+Alternatively, open the checkout in a Dev Container-compatible editor. The
+committed `.devcontainer` installs the repository's Nix version, then warms the
+same lock-file-backed `nix develop` environment used above. It does not mount a
+container runtime socket or inject credentials.
+
 Build the installer ISO:
 
 ```bash

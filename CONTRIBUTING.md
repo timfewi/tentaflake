@@ -16,6 +16,13 @@ nix develop
 The development shell provides Nix tooling, Rust, Cargo, Clippy, Rustfmt,
 ShellCheck, Statix, Deadnix, and `just`.
 
+As an alternative to installing Nix on the host, open the repository in a
+Dev Container-compatible editor and select **Reopen in Container**. The
+container installs Nix and preloads this same `nix develop` environment. Its
+base image and Nix feature are digest-locked; update
+`.devcontainer/devcontainer-lock.json` together with intentional feature
+updates. No container-runtime socket or credentials are mounted automatically.
+
 ## Required checks
 
 Rust workspace:
