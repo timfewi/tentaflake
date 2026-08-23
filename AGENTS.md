@@ -14,6 +14,11 @@ cargo fmt --all -- --check
 cargo clippy --workspace \
   --all-targets -- -D warnings
 cargo test --workspace
+just e2e
+just e2e-devcontainer
+just e2e-installer
+just e2e-run-vm
+just security
 ```
 
 ## Conventions

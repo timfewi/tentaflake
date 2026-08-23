@@ -185,7 +185,12 @@ FEATURES=$(dialog --stdout --title "Optional Features" --checklist \
 # Some dialog builds wrap each tag in quotes; strip them so matching is simple.
 FEATURES=${FEATURES//\"/}
 
-has_feature() { case " $FEATURES " in *" $1 "*) return 0 ;; *) return 1 ;; esac }
+has_feature() {
+  case " $FEATURES " in
+    *" $1 "*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
 
 # ── Translate selections into fragments injected into the generated flake ──
 # ADMIN_SHELL/TF_TOGGLES hold literal Nix; the heredoc expands the bash var once
@@ -211,7 +216,11 @@ fi
 if ! has_feature tools; then
   TF_TOGGLES+="            tentaflake.shell.tools.enable = false;"$'\n'
 fi
-FEATURE_SUMMARY="${FEATURES:-(none)}"
+if [[ -n "$FEATURES" ]]; then
+  FEATURE_SUMMARY=$FEATURES
+else
+  FEATURE_SUMMARY="(none)"
+fi
 
 # ════════════════════════════════════════════════════════════
 # STEP 7: Summary + confirm

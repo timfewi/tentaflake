@@ -323,6 +323,20 @@ confirmed target.
 The optional contributor Dev Container installs Nix only; `flake.lock` and
 `lib/devshell.nix` remain the toolchain source of truth. Its base image and Nix
 Feature are digest-locked, and it must not mount runtime sockets or credentials.
+`just e2e-devcontainer` builds the source- and dependency-hash-pinned
+`.#devcontainer-cli`, rebuilds the container from the frozen Feature lock, and
+runs the Nix lint smoke test inside it.
+
+`just e2e` aliases the complete automated local gate. `just e2e-installer`
+builds the ISO and starts a UEFI VM with only a contributor-owned sparse QCOW2
+disk below `/var/tmp/tentaflake-e2e-<user>/`; it never passes a host block
+device. `just e2e-run-vm` reboots that installed test disk without the ISO.
+The wrappers deliberately do not delete or reset VM state.
+
+`just security` runs source- and rule-pinned Semgrep without registry access or
+metrics, then scans the Rust and Dev Containers CLI lockfiles against OSV's
+current advisory database. It needs network access for OSV and is intentionally
+separate from the reproducible `just ci` gate.
 
 Focused Rust gate:
 

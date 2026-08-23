@@ -69,6 +69,20 @@ The result is written below `result/iso/`. Writing it to a block device is
 destructive; follow [the install guide](docs/00-install.md) and resolve the
 target device explicitly.
 
+Contributor end-to-end entry points keep the pinned tool and VM setup behind
+short recipes:
+
+```bash
+just e2e                 # complete automated local gate
+just e2e-devcontainer    # rebuild and smoke-test the locked Dev Container
+just security            # Semgrep source scan + OSV dependency scan
+just e2e-installer       # install into one isolated UEFI/QCOW2 VM
+just e2e-run-vm          # boot that installed VM again
+```
+
+The installer VM never receives a host block device. Its persistent test disk
+and UEFI variables live below `/var/tmp/tentaflake-e2e-<user>/`.
+
 ## Define agents
 
 Copy the example and keep it generic in this repository:

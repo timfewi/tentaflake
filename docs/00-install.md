@@ -19,6 +19,28 @@ Or use the wrapper:
 
 The image is written below `result/iso/`.
 
+## Test in a disposable VM
+
+From the contributor shell, the repository can build the ISO, resolve its
+pinned QEMU and OVMF tools, create one 32 GiB sparse QCOW2 disk, and start the
+interactive UEFI installer:
+
+```bash
+just e2e-installer
+```
+
+The VM receives no host block device. The installer can erase only
+`/var/tmp/tentaflake-e2e-<user>/tentaflake.qcow2`, and still asks for
+confirmation in its TUI. The first boot uses the ISO once and then prefers the
+installed disk. To boot the installed VM again without the ISO:
+
+```bash
+just e2e-run-vm
+```
+
+Set `TENTAFLAKE_E2E_DIR` to an absolute path to keep this disposable VM state
+elsewhere. The scripts deliberately provide no automatic reset or deletion.
+
 ## Resolve the USB device
 
 List block devices and identify the USB drive by size and transport:

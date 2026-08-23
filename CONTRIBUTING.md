@@ -53,6 +53,20 @@ nix build .#installer-iso
 `just ci` mirrors the local gate and adds the installer build. GitHub-only
 security services may add checks that cannot be reproduced locally.
 
+`just security` runs the pinned Semgrep CLI and rule snapshot against tracked
+source, then checks both `Cargo.lock` and the patched Dev Containers CLI
+`yarn.lock` against OSV's current advisory database. Semgrep does not contact
+its registry or send metrics; the OSV portion needs network access for current
+advisories, so it remains a separate pre-PR gate rather than part of `just ci`.
+
+For end-to-end verification, `just e2e` runs that complete automated gate,
+`just e2e-devcontainer` uses the source- and dependency-hash-pinned
+`.#devcontainer-cli`, rebuilds the frozen Dev Container, and runs its Nix lint
+smoke test. `just e2e-installer` starts the interactive installer with one
+isolated QCOW2 disk; afterward, `just e2e-run-vm` boots the same VM without
+the ISO. The VM state is contributor-owned below
+`/var/tmp/tentaflake-e2e-<user>/`; no host block device is passed to QEMU.
+
 Keep source evaluation, builds, activation, and live-runtime verification
 separate. Contributions must not activate NixOS, deploy, or mutate a VM as a
 side effect of testing.

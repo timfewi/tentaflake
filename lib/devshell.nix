@@ -16,7 +16,7 @@ let
     lib.splitString "\n" (lib.removeSuffix "\n" (builtins.readFile ../public/tentaflake-shell-logo.txt))
   );
 
-  # The cheat sheet mirrors the justfile — the four recipes worth knowing on
+  # The cheat sheet mirrors the justfile — the five recipes worth knowing on
   # entry. `just` itself lists the rest, so this never has to grow.
   commands = [
     {
@@ -28,14 +28,26 @@ let
       what = "full local gate (CI + installer ISO)";
     }
     {
-      cmd = "just check";
-      what = "nix flake check";
+      cmd = "just e2e-devcontainer";
+      what = "verify the locked contributor container";
     }
     {
-      cmd = "just fmt";
-      what = "format the tree with nixfmt";
+      cmd = "just security";
+      what = "scan source and locked dependencies";
+    }
+    {
+      cmd = "just e2e-installer";
+      what = "install into a disposable UEFI VM";
     }
   ];
+  commandColumnWidth =
+    lib.foldl' (width: command: lib.max width (builtins.stringLength command.cmd)) 0 commands + 3;
+  commandDescriptionWidth = lib.foldl' (
+    width: command: lib.max width (builtins.stringLength command.what)
+  ) 0 commands;
+  commandRule = lib.concatStrings (
+    lib.replicate (3 + commandColumnWidth + commandDescriptionWidth) "─"
+  );
 
   # writeShellApplication shellchecks at build time, so building the dev shell
   # lints this script — same guarantee `just shellcheck` gives scripts/*.sh.
@@ -95,12 +107,12 @@ let
         fi
       done
 
-      printf '\n  %b──────────────────────────────────────────────%b\n' "$dim" "$reset"
+      printf '\n  %b%s%b\n' "$dim" ${lib.escapeShellArg commandRule} "$reset"
 
       printf '\n  %bCOMMANDS%b\n' "$bold$cyan" "$reset"
       ${lib.concatMapStringsSep "\n" (
         c:
-        "printf '    %b%-16s%b %b%s%b\\n' \"$bold\" ${lib.escapeShellArg c.cmd} \"$reset\" \"$dim\" ${lib.escapeShellArg c.what} \"$reset\""
+        "printf '    %b%-${toString commandColumnWidth}s%b %b%s%b\\n' \"$bold\" ${lib.escapeShellArg c.cmd} \"$reset\" \"$dim\" ${lib.escapeShellArg c.what} \"$reset\""
       ) commands}
 
       printf '\n  %bevery commit needs a DCO sign-off:%b git commit -s\n\n' "$dim" "$reset"

@@ -13,6 +13,25 @@ default:
 ci: fmt-check lint shellcheck rust check generated-flake iso-installer
     @echo "==> all green"
 
+# Automated end-to-end gate (alias for the complete local CI path)
+e2e: ci
+
+# Rebuild the locked Dev Container and run its contributor-shell smoke test
+e2e-devcontainer:
+    ./scripts/e2e-devcontainer.sh
+
+# Scan tracked source and locked dependencies for security findings
+security:
+    ./scripts/security-scan.sh
+
+# Build and boot the installer ISO with one isolated QCOW2 disk
+e2e-installer:
+    ./scripts/e2e-installer-vm.sh install
+
+# Boot the disposable VM created by `just e2e-installer`
+e2e-run-vm:
+    ./scripts/e2e-installer-vm.sh boot
+
 # nix flake check (eval + host + Rust packages + VM test)
 check:
     nix flake check

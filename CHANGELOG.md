@@ -8,12 +8,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- `just security` now combines a pinned, telemetry-free Semgrep source scan
+  with current OSV checks for the Rust and Dev Containers CLI dependency
+  lockfiles; GitHub Actions referenced by scanned workflows are commit-pinned.
+- Contributor E2E recipes now cover the complete automated gate, a frozen-lock
+  Dev Container smoke test, and an interactive installer/installed-system UEFI
+  VM backed only by an isolated persistent QCOW2 file.
 - A digest-pinned Dev Container can bootstrap Nix and preload the repository's
   lock-file-backed development shell without mounting runtime sockets or
   credentials, giving local editors and Codespaces the same contributor
   toolchain as `nix develop`.
 
 ### Fixed
+- Contributor E2E now uses a source- and dependency-hash-pinned Dev Containers
+  CLI 0.88.0 with the upstream `proxy-from-env` WHATWG URL parsing change
+  backported for its CommonJS consumer, removing the legacy `url.parse()` path
+  that produced Node.js `DEP0169` security deprecation warnings.
 - The installer ISO now embeds its repository below
   `/etc/tentaflake/source`, avoiding a parent-path collision with generated
   runtime manifests such as `/etc/tentaflake/security.tsv`.
