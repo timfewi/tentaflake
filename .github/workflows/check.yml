@@ -9,6 +9,30 @@ on:
     branches: [main]
 
 jobs:
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      vm: ${{ steps.filter.outputs.vm }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      # Keep the required VM job visible, but avoid its expensive build when a
+      # change only touches Markdown documentation.
+      - name: Detect VM-relevant changes
+        id: filter
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          HEAD_SHA: ${{ github.sha }}
+        run: |
+          files=$(git diff --name-only "$BASE_SHA" "$HEAD_SHA")
+          if printf '%s\n' "$files" | grep -qEv '(^docs/|\.md$)'; then
+            echo "vm=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "vm=false" >> "$GITHUB_OUTPUT"
+          fi
+
   check:
     runs-on: ubuntu-latest
     timeout-minutes: 60
@@ -73,6 +97,8 @@ jobs:
   # Own job: the VM test derivation carries requiredSystemFeatures = kvm, so a
   # KVM-less or slow runner degrades this one job instead of the whole check.
   vm-test:
+    needs: changes
+    if: needs.changes.outputs.vm == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:

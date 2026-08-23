@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- GitHub Actions now skips the expensive VM integration build for
+  documentation-only changes while retaining the visible `vm-test` job for
+  branch-protection compatibility. Every non-Markdown path remains
+  conservatively VM-relevant.
+
 ### Added
 - `just security` now combines a pinned, telemetry-free Semgrep source scan
   with current OSV checks for the Rust and Dev Containers CLI dependency
