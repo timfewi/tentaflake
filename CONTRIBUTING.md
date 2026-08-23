@@ -53,6 +53,10 @@ nix build .#installer-iso
 `just ci` mirrors the local gate and adds the installer build. GitHub-only
 security services may add checks that cannot be reproduced locally.
 
+The GitHub VM integration job is skipped when a pull request or push changes
+only Markdown documentation. It continues to run conservatively for every
+other path, including Nix, Rust, tests, installer, and workflow changes.
+
 `just security` runs the pinned Semgrep CLI and rule snapshot against tracked
 source, then checks both `Cargo.lock` and the patched Dev Containers CLI
 `yarn.lock` against OSV's current advisory database. Semgrep does not contact

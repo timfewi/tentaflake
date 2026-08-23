@@ -6,9 +6,59 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+### Changed
+### Added
+### Fixed
+### Breaking
+
+
 
 ## [0.4.0] - 2026-08-23
 
+### Changed
+- GitHub Actions now skips the expensive VM integration build for
+  documentation-only changes while retaining the visible `vm-test` job for
+  branch-protection compatibility. Every non-Markdown path remains
+  conservatively VM-relevant.
+
+### Added
+- `just security` now combines a pinned, telemetry-free Semgrep source scan
+  with current OSV checks for the Rust and Dev Containers CLI dependency
+  lockfiles; GitHub Actions referenced by scanned workflows are commit-pinned.
+- Contributor E2E recipes now cover the complete automated gate, a frozen-lock
+  Dev Container smoke test, and an interactive installer/installed-system UEFI
+  VM backed only by an isolated persistent QCOW2 file.
+- A digest-pinned Dev Container can bootstrap Nix and preload the repository's
+  lock-file-backed development shell without mounting runtime sockets or
+  credentials, giving local editors and Codespaces the same contributor
+  toolchain as `nix develop`.
+
+### Fixed
+- Contributor E2E now uses a source- and dependency-hash-pinned Dev Containers
+  CLI 0.88.0 with the upstream `proxy-from-env` WHATWG URL parsing change
+  backported for its CommonJS consumer, removing the legacy `url.parse()` path
+  that produced Node.js `DEP0169` security deprecation warnings.
+- The installer ISO now embeds its repository below
+  `/etc/tentaflake/source`, avoiding a parent-path collision with generated
+  runtime manifests such as `/etc/tentaflake/security.tsv`.
+- The development shell now uses the canonical `nixfmt` package instead of its
+  deprecated `nixfmt-rfc-style` alias, removing the flake evaluation warning.
+- The local `just ci` gate no longer stops on existing Statix and Deadnix
+  findings; repeated Nix attribute paths are grouped and unused arguments are
+  removed without changing their resulting module options.
+- Security-manifest generation now records an OCI container with no configured
+  user as not non-root instead of passing its `null` user to a string matcher
+  and failing evaluation in the `dev` compatibility profile.
+- The VM integration test now starts its rebooted node with QEMU reboot support
+  enabled and asks systemd to reboot directly instead of relying on a virtual
+  key combination. Its headless agent fixtures also omit kmscon, which can
+  crash on QEMU's synthetic bochs DRM device, and the stopped-controller
+  fixture now declares the broker that its reboot assertion expects to return.
+  The controlled-reboot assertion no longer waits indefinitely or checks an
+  undeclared boot service.
+
+
+## [0.4.0-dev] - 2021-08-21
 ### Breaking
 - OpenCode support is removed completely: its builder, image pin, generated
   services, CLI discovery, examples, tests, and current documentation are no
