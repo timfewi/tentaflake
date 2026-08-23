@@ -116,7 +116,7 @@ let
       agent = name;
       inherit backend runtime;
       image = cfg.imageReference;
-      workspace = agent.workspace;
+      inherit (agent) workspace;
       state_dir = stateDir name;
       container_uid = agent.containerUid;
       container_gid = agent.containerGid;
@@ -318,40 +318,42 @@ in
       }
     ) enabledAgents;
 
-    systemd.tmpfiles.rules = lib.concatLists (
-      lib.mapAttrsToList (
-        name: agent:
-        let
-          group = workerGroup agent;
-        in
-        [
-          "d ${stateDir name} 0750 root ${group} -"
-          "d ${stateDir name}/pending 0700 root root -"
-          "d ${stateDir name}/approvals 0700 root root -"
-          "d ${stateDir name}/jobs 0700 root root -"
-          "d ${resultDir name} 2750 root ${group} 14d"
-          "d ${agent.workspace}/.tentaflake-worker 0700 ${toString agent.containerUid} ${group} -"
-          "d ${agent.workspace}/.tentaflake-worker/inbox 0770 ${toString agent.containerUid} ${group} -"
-        ]
-      ) enabledAgents
-    );
+    systemd = {
+      tmpfiles.rules = lib.concatLists (
+        lib.mapAttrsToList (
+          name: agent:
+          let
+            group = workerGroup agent;
+          in
+          [
+            "d ${stateDir name} 0750 root ${group} -"
+            "d ${stateDir name}/pending 0700 root root -"
+            "d ${stateDir name}/approvals 0700 root root -"
+            "d ${stateDir name}/jobs 0700 root root -"
+            "d ${resultDir name} 2750 root ${group} 14d"
+            "d ${agent.workspace}/.tentaflake-worker 0700 ${toString agent.containerUid} ${group} -"
+            "d ${agent.workspace}/.tentaflake-worker/inbox 0770 ${toString agent.containerUid} ${group} -"
+          ]
+        ) enabledAgents
+      );
 
-    systemd.services =
-      allServices
-      // lib.optionalAttrs (enabledAgents != { }) {
-        tentaflake-worker-image = {
-          description = "Load the Nix-built tentaflake disposable worker image";
-          wantedBy = [ "multi-user.target" ];
-          requires = backendUnits;
-          after = backendUnits;
-          before = lib.mapAttrsToList (name: _: "tentaflake-worker-${name}.service") enabledAgents;
-          serviceConfig = {
-            Type = "oneshot";
-            RemainAfterExit = true;
-            ExecStart = "${runtime} load --input ${cfg.image}";
+      services =
+        allServices
+        // lib.optionalAttrs (enabledAgents != { }) {
+          tentaflake-worker-image = {
+            description = "Load the Nix-built tentaflake disposable worker image";
+            wantedBy = [ "multi-user.target" ];
+            requires = backendUnits;
+            after = backendUnits;
+            before = lib.mapAttrsToList (name: _: "tentaflake-worker-${name}.service") enabledAgents;
+            serviceConfig = {
+              Type = "oneshot";
+              RemainAfterExit = true;
+              ExecStart = "${runtime} load --input ${cfg.image}";
+            };
           };
         };
-      };
-    systemd.paths = allPaths;
+      paths = allPaths;
+    };
   };
 }

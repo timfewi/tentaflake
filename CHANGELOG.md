@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- A digest-pinned Dev Container can bootstrap Nix and preload the repository's
+  lock-file-backed development shell without mounting runtime sockets or
+  credentials, giving local editors and Codespaces the same contributor
+  toolchain as `nix develop`.
+
+### Fixed
+- The installer ISO now embeds its repository below
+  `/etc/tentaflake/source`, avoiding a parent-path collision with generated
+  runtime manifests such as `/etc/tentaflake/security.tsv`.
+- The development shell now uses the canonical `nixfmt` package instead of its
+  deprecated `nixfmt-rfc-style` alias, removing the flake evaluation warning.
+- The local `just ci` gate no longer stops on existing Statix and Deadnix
+  findings; repeated Nix attribute paths are grouped and unused arguments are
+  removed without changing their resulting module options.
+- Security-manifest generation now records an OCI container with no configured
+  user as not non-root instead of passing its `null` user to a string matcher
+  and failing evaluation in the `dev` compatibility profile.
+- The VM integration test now starts its rebooted node with QEMU reboot support
+  enabled and asks systemd to reboot directly instead of relying on a virtual
+  key combination. Its headless agent fixtures also omit kmscon, which can
+  crash on QEMU's synthetic bochs DRM device, and the stopped-controller
+  fixture now declares the broker that its reboot assertion expects to return.
+  The controlled-reboot assertion no longer waits indefinitely or checks an
+  undeclared boot service.
+
 ## [0.4.0] - 2026-08-21
 
 ### Breaking

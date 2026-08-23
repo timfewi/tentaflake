@@ -195,38 +195,40 @@ in
       ]) enabledAgents
     );
 
-    systemd.tmpfiles.rules = [ "d ${volumeRoot} 0700 root root -" ];
+    systemd = {
+      tmpfiles.rules = [ "d ${volumeRoot} 0700 root root -" ];
 
-    systemd.services = lib.foldlAttrs (
-      services: name: agent:
-      services
-      // {
-        "tentaflake-workspace-quota-prepare-${name}" = prepareService name agent;
-        "tentaflake-workspace-quota-${name}" = ownerService name agent;
-      }
-    ) { } enabledAgents;
+      services = lib.foldlAttrs (
+        services: name: agent:
+        services
+        // {
+          "tentaflake-workspace-quota-prepare-${name}" = prepareService name agent;
+          "tentaflake-workspace-quota-${name}" = ownerService name agent;
+        }
+      ) { } enabledAgents;
 
-    systemd.mounts = lib.mapAttrsToList (name: agent: {
-      description = "Fixed-size persistent workspace for ${name}";
-      what = imagePath name;
-      where = agent.workspace;
-      type = "ext4";
-      options = "loop,nodev,nosuid,noatime";
-      requires = [ (prepareUnit name) ];
-      after = [
-        "local-fs.target"
-        (prepareUnit name)
-      ];
-      before = [
-        (ownerUnit name)
-        "umount.target"
-      ];
-      conflicts = [ "umount.target" ];
-      wantedBy = [ "multi-user.target" ];
-      # This managed image is intentionally mounted after the ordinary local
-      # filesystems. Disable mount-unit defaults that would otherwise force it
-      # back before local-fs.target and create an ordering cycle with prepare.
-      unitConfig.DefaultDependencies = false;
-    }) enabledAgents;
+      mounts = lib.mapAttrsToList (name: agent: {
+        description = "Fixed-size persistent workspace for ${name}";
+        what = imagePath name;
+        where = agent.workspace;
+        type = "ext4";
+        options = "loop,nodev,nosuid,noatime";
+        requires = [ (prepareUnit name) ];
+        after = [
+          "local-fs.target"
+          (prepareUnit name)
+        ];
+        before = [
+          (ownerUnit name)
+          "umount.target"
+        ];
+        conflicts = [ "umount.target" ];
+        wantedBy = [ "multi-user.target" ];
+        # This managed image is intentionally mounted after the ordinary local
+        # filesystems. Disable mount-unit defaults that would otherwise force it
+        # back before local-fs.target and create an ordering cycle with prepare.
+        unitConfig.DefaultDependencies = false;
+      }) enabledAgents;
+    };
   };
 }

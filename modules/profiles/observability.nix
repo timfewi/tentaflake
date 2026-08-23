@@ -148,128 +148,192 @@ in
       }
     ];
 
-    services.prometheus = {
-      enable = true;
-      listenAddress = "127.0.0.1";
-      port = cfg.prometheusPort;
-      retentionTime = cfg.retention;
-      exporters.node = {
+    services = {
+      prometheus = {
         enable = true;
         listenAddress = "127.0.0.1";
-        port = 9100;
-        enabledCollectors = [
-          "systemd"
-          "textfile"
+        port = cfg.prometheusPort;
+        retentionTime = cfg.retention;
+        exporters.node = {
+          enable = true;
+          listenAddress = "127.0.0.1";
+          port = 9100;
+          enabledCollectors = [
+            "systemd"
+            "textfile"
+          ];
+          extraFlags = [ "--collector.textfile.directory=${metricsDirectory}" ];
+        };
+        rules = [
+          ''
+            groups:
+              - name: tentaflake
+                rules:
+                  - alert: TentaflakeRootDiskCritical
+                    expr: (node_filesystem_avail_bytes{mountpoint="/"} / node_filesystem_size_bytes{mountpoint="/"}) < 0.10
+                    for: 5m
+                    labels:
+                      severity: critical
+                    annotations:
+                      summary: Tentaflake root filesystem has less than 10 percent free
+                  - alert: TentaflakeAgentRestartFlapping
+                    expr: changes(node_systemd_unit_state{name=~"(docker|podman|tentaflake).*",state="active"}[15m]) > 4
+                    for: 5m
+                    labels:
+                      severity: warning
+                    annotations:
+                      summary: Tentaflake service repeatedly changed active state
+                  - alert: TentaflakePolicyDenials
+                    expr: tentaflake_broker_policy_denials_5m > 0
+                    for: 5m
+                    labels:
+                      severity: warning
+                    annotations:
+                      summary: Broker policy denied one or more recent requests
+                  - alert: TentaflakeUnusualFetchDenials
+                    expr: tentaflake_broker_fetch_denials_5m > 10
+                    for: 5m
+                    labels:
+                      severity: warning
+                    annotations:
+                      summary: Fetch broker shows an unusual denial burst
+                  - alert: TentaflakeRequestBudgetNearLimit
+                    expr: tentaflake_broker_budget_requests / tentaflake_broker_budget_request_limit > 0.90
+                    for: 5m
+                    labels:
+                      severity: warning
+                    annotations:
+                      summary: Broker daily request budget is above 90 percent
+                  - alert: TentaflakeTokenBudgetNearLimit
+                    expr: tentaflake_broker_budget_tokens / tentaflake_broker_budget_token_limit > 0.90
+                    for: 5m
+                    labels:
+                      severity: warning
+                    annotations:
+                      summary: Broker daily token budget is above 90 percent
+                  - alert: TentaflakeCostBudgetNearLimit
+                    expr: tentaflake_broker_budget_cost_microusd / tentaflake_broker_budget_cost_limit_microusd > 0.90
+                    for: 5m
+                    labels:
+                      severity: warning
+                    annotations:
+                      summary: Broker daily cost budget is above 90 percent
+          ''
         ];
-        extraFlags = [ "--collector.textfile.directory=${metricsDirectory}" ];
-      };
-      rules = [
-        ''
-          groups:
-            - name: tentaflake
-              rules:
-                - alert: TentaflakeRootDiskCritical
-                  expr: (node_filesystem_avail_bytes{mountpoint="/"} / node_filesystem_size_bytes{mountpoint="/"}) < 0.10
-                  for: 5m
-                  labels:
-                    severity: critical
-                  annotations:
-                    summary: Tentaflake root filesystem has less than 10 percent free
-                - alert: TentaflakeAgentRestartFlapping
-                  expr: changes(node_systemd_unit_state{name=~"(docker|podman|tentaflake).*",state="active"}[15m]) > 4
-                  for: 5m
-                  labels:
-                    severity: warning
-                  annotations:
-                    summary: Tentaflake service repeatedly changed active state
-                - alert: TentaflakePolicyDenials
-                  expr: tentaflake_broker_policy_denials_5m > 0
-                  for: 5m
-                  labels:
-                    severity: warning
-                  annotations:
-                    summary: Broker policy denied one or more recent requests
-                - alert: TentaflakeUnusualFetchDenials
-                  expr: tentaflake_broker_fetch_denials_5m > 10
-                  for: 5m
-                  labels:
-                    severity: warning
-                  annotations:
-                    summary: Fetch broker shows an unusual denial burst
-                - alert: TentaflakeRequestBudgetNearLimit
-                  expr: tentaflake_broker_budget_requests / tentaflake_broker_budget_request_limit > 0.90
-                  for: 5m
-                  labels:
-                    severity: warning
-                  annotations:
-                    summary: Broker daily request budget is above 90 percent
-                - alert: TentaflakeTokenBudgetNearLimit
-                  expr: tentaflake_broker_budget_tokens / tentaflake_broker_budget_token_limit > 0.90
-                  for: 5m
-                  labels:
-                    severity: warning
-                  annotations:
-                    summary: Broker daily token budget is above 90 percent
-                - alert: TentaflakeCostBudgetNearLimit
-                  expr: tentaflake_broker_budget_cost_microusd / tentaflake_broker_budget_cost_limit_microusd > 0.90
-                  for: 5m
-                  labels:
-                    severity: warning
-                  annotations:
-                    summary: Broker daily cost budget is above 90 percent
-        ''
-      ];
-      scrapeConfigs = [
-        {
-          job_name = "tentaflake-host";
-          static_configs = [
-            { targets = [ "127.0.0.1:9100" ]; }
-          ];
-        }
-        {
-          job_name = "prometheus";
-          static_configs = [
-            { targets = [ "127.0.0.1:${toString cfg.prometheusPort}" ]; }
-          ];
-        }
-      ];
-    };
-
-    services.loki = {
-      enable = true;
-      configuration = {
-        auth_enabled = false;
-        server = {
-          http_listen_address = "127.0.0.1";
-          http_listen_port = cfg.lokiPort;
-        };
-        common = {
-          path_prefix = "/var/lib/loki";
-          replication_factor = 1;
-          ring.kvstore.store = "inmemory";
-        };
-        schema_config.configs = [
+        scrapeConfigs = [
           {
-            from = "2024-01-01";
-            store = "tsdb";
-            object_store = "filesystem";
-            schema = "v13";
-            index = {
-              prefix = "index_";
-              period = "24h";
-            };
+            job_name = "tentaflake-host";
+            static_configs = [
+              { targets = [ "127.0.0.1:9100" ]; }
+            ];
+          }
+          {
+            job_name = "prometheus";
+            static_configs = [
+              { targets = [ "127.0.0.1:${toString cfg.prometheusPort}" ]; }
+            ];
           }
         ];
-        storage_config.filesystem = {
-          chunks_directory = "/var/lib/loki/chunks";
-          rules_directory = "/var/lib/loki/rules";
+      };
+
+      loki = {
+        enable = true;
+        configuration = {
+          auth_enabled = false;
+          server = {
+            http_listen_address = "127.0.0.1";
+            http_listen_port = cfg.lokiPort;
+          };
+          common = {
+            path_prefix = "/var/lib/loki";
+            replication_factor = 1;
+            ring.kvstore.store = "inmemory";
+          };
+          schema_config.configs = [
+            {
+              from = "2024-01-01";
+              store = "tsdb";
+              object_store = "filesystem";
+              schema = "v13";
+              index = {
+                prefix = "index_";
+                period = "24h";
+              };
+            }
+          ];
+          storage_config.filesystem = {
+            chunks_directory = "/var/lib/loki/chunks";
+            rules_directory = "/var/lib/loki/rules";
+          };
+          compactor = {
+            working_directory = "/var/lib/loki/compactor";
+            retention_enabled = true;
+            delete_request_store = "filesystem";
+          };
+          limits_config.retention_period = cfg.retention;
         };
-        compactor = {
-          working_directory = "/var/lib/loki/compactor";
-          retention_enabled = true;
-          delete_request_store = "filesystem";
+      };
+
+      alloy = {
+        enable = true;
+        configPath = "/etc/alloy";
+        extraFlags = [
+          "--server.http.listen-addr=127.0.0.1:${toString cfg.alloyPort}"
+          "--disable-reporting"
+        ];
+      };
+
+      grafana = {
+        enable = true;
+        openFirewall = false;
+        settings = {
+          server = {
+            http_addr = "127.0.0.1";
+            http_port = cfg.grafanaPort;
+          };
+          security = {
+            admin_password = "$__file{/run/credentials/grafana.service/admin-password}";
+            secret_key = "$__file{/run/credentials/grafana.service/secret-key}";
+            disable_gravatar = true;
+            cookie_samesite = "strict";
+          };
+          users = {
+            allow_sign_up = false;
+            allow_org_create = false;
+          };
+          analytics = {
+            reporting_enabled = false;
+            check_for_updates = false;
+            check_for_plugin_updates = false;
+            feedback_links_enabled = false;
+          };
         };
-        limits_config.retention_period = cfg.retention;
+        provision = {
+          enable = true;
+          datasources.settings = {
+            apiVersion = 1;
+            prune = true;
+            datasources = [
+              {
+                name = "Prometheus";
+                uid = "prometheus";
+                type = "prometheus";
+                access = "proxy";
+                url = "http://127.0.0.1:${toString cfg.prometheusPort}";
+                editable = false;
+                isDefault = true;
+              }
+              {
+                name = "Loki";
+                uid = "loki";
+                type = "loki";
+                access = "proxy";
+                url = "http://127.0.0.1:${toString cfg.lokiPort}";
+                editable = false;
+              }
+            ];
+          };
+        };
       };
     };
 
@@ -287,114 +351,56 @@ in
       }
     '';
 
-    services.alloy = {
-      enable = true;
-      configPath = "/etc/alloy";
-      extraFlags = [
-        "--server.http.listen-addr=127.0.0.1:${toString cfg.alloyPort}"
-        "--disable-reporting"
-      ];
-    };
+    systemd = {
+      services = {
+        grafana.serviceConfig.LoadCredential = [
+          "secret-key:${cfg.grafanaSecretKeyFile}"
+          "admin-password:${cfg.grafanaAdminPasswordFile}"
+        ];
 
-    services.grafana = {
-      enable = true;
-      openFirewall = false;
-      settings = {
-        server = {
-          http_addr = "127.0.0.1";
-          http_port = cfg.grafanaPort;
-        };
-        security = {
-          admin_password = "$__file{/run/credentials/grafana.service/admin-password}";
-          secret_key = "$__file{/run/credentials/grafana.service/secret-key}";
-          disable_gravatar = true;
-          cookie_samesite = "strict";
-        };
-        users = {
-          allow_sign_up = false;
-          allow_org_create = false;
-        };
-        analytics = {
-          reporting_enabled = false;
-          check_for_updates = false;
-          check_for_plugin_updates = false;
-          feedback_links_enabled = false;
-        };
-      };
-      provision = {
-        enable = true;
-        datasources.settings = {
-          apiVersion = 1;
-          prune = true;
-          datasources = [
-            {
-              name = "Prometheus";
-              uid = "prometheus";
-              type = "prometheus";
-              access = "proxy";
-              url = "http://127.0.0.1:${toString cfg.prometheusPort}";
-              editable = false;
-              isDefault = true;
-            }
-            {
-              name = "Loki";
-              uid = "loki";
-              type = "loki";
-              access = "proxy";
-              url = "http://127.0.0.1:${toString cfg.lokiPort}";
-              editable = false;
-            }
-          ];
+        tentaflake-observability-metrics = {
+          description = "Export Tentaflake broker policy and budget metrics";
+          serviceConfig = {
+            Type = "oneshot";
+            User = "root";
+            UMask = "0022";
+            NoNewPrivileges = true;
+            PrivateDevices = true;
+            PrivateTmp = true;
+            ProtectSystem = "strict";
+            ProtectHome = true;
+            ReadWritePaths = [ metricsDirectory ];
+            RestrictAddressFamilies = [ "AF_UNIX" ];
+            CapabilityBoundingSet = [ "CAP_DAC_READ_SEARCH" ];
+            LockPersonality = true;
+            MemoryDenyWriteExecute = true;
+            RestrictRealtime = true;
+            SystemCallArchitectures = "native";
+          };
+          script = ''
+            set -euo pipefail
+            tmp=${metricsDirectory}/tentaflake.prom.tmp
+            final=${metricsDirectory}/tentaflake.prom
+            cutoff=$((${pkgs.coreutils}/bin/date +%s - 300))
+            : > "$tmp"
+            ${lib.concatMapStringsSep "\n" renderBrokerSignal brokerSignals}
+            ${pkgs.coreutils}/bin/chmod 0644 "$tmp"
+            ${pkgs.coreutils}/bin/mv -f "$tmp" "$final"
+          '';
         };
       };
-    };
 
-    systemd.services.grafana.serviceConfig.LoadCredential = [
-      "secret-key:${cfg.grafanaSecretKeyFile}"
-      "admin-password:${cfg.grafanaAdminPasswordFile}"
-    ];
+      tmpfiles.rules = [ "d ${metricsDirectory} 0755 root root -" ];
 
-    systemd.tmpfiles.rules = [ "d ${metricsDirectory} 0755 root root -" ];
-
-    systemd.services.tentaflake-observability-metrics = {
-      description = "Export Tentaflake broker policy and budget metrics";
-      serviceConfig = {
-        Type = "oneshot";
-        User = "root";
-        UMask = "0022";
-        NoNewPrivileges = true;
-        PrivateDevices = true;
-        PrivateTmp = true;
-        ProtectSystem = "strict";
-        ProtectHome = true;
-        ReadWritePaths = [ metricsDirectory ];
-        RestrictAddressFamilies = [ "AF_UNIX" ];
-        CapabilityBoundingSet = [ "CAP_DAC_READ_SEARCH" ];
-        LockPersonality = true;
-        MemoryDenyWriteExecute = true;
-        RestrictRealtime = true;
-        SystemCallArchitectures = "native";
-      };
-      script = ''
-        set -euo pipefail
-        tmp=${metricsDirectory}/tentaflake.prom.tmp
-        final=${metricsDirectory}/tentaflake.prom
-        cutoff=$((${pkgs.coreutils}/bin/date +%s - 300))
-        : > "$tmp"
-        ${lib.concatMapStringsSep "\n" renderBrokerSignal brokerSignals}
-        ${pkgs.coreutils}/bin/chmod 0644 "$tmp"
-        ${pkgs.coreutils}/bin/mv -f "$tmp" "$final"
-      '';
-    };
-
-    systemd.timers.tentaflake-observability-metrics = {
-      wantedBy = [ "timers.target" ];
-      timerConfig = {
-        OnBootSec = "2min";
-        OnUnitActiveSec = "1min";
-        AccuracySec = "15s";
-        Persistent = true;
-        Unit = "tentaflake-observability-metrics.service";
+      timers.tentaflake-observability-metrics = {
+        wantedBy = [ "timers.target" ];
+        timerConfig = {
+          OnBootSec = "2min";
+          OnUnitActiveSec = "1min";
+          AccuracySec = "15s";
+          Persistent = true;
+          Unit = "tentaflake-observability-metrics.service";
+        };
       };
     };
   };

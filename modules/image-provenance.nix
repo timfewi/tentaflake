@@ -108,41 +108,38 @@ in
       default = { };
       description = "Per-container Cosign verification policies.";
       type = lib.types.attrsOf (
-        lib.types.submodule (
-          { ... }:
-          {
-            options = {
-              enable = lib.mkEnableOption "Cosign verification before the container starts" // {
-                default = true;
-              };
-              mode = lib.mkOption {
-                type = lib.types.enum [
-                  "key"
-                  "keyless"
-                ];
-                default = "keyless";
-                description = "Verify with a public key or an exact keyless certificate identity.";
-              };
-              publicKeyFile = lib.mkOption {
-                type = lib.types.str;
-                default = "";
-                example = "/etc/tentaflake/image-signing.pub";
-                description = "Absolute Cosign public-key path for key mode; public verification material is not secret.";
-              };
-              certificateIdentity = lib.mkOption {
-                type = lib.types.str;
-                default = "";
-                example = "https://github.com/example/project/.github/workflows/release.yml@refs/tags/v1.2.3";
-                description = "Exact Fulcio certificate identity for keyless mode.";
-              };
-              certificateOidcIssuer = lib.mkOption {
-                type = lib.types.str;
-                default = "https://token.actions.githubusercontent.com";
-                description = "Exact OIDC issuer accepted for keyless mode.";
-              };
+        lib.types.submodule (_: {
+          options = {
+            enable = lib.mkEnableOption "Cosign verification before the container starts" // {
+              default = true;
             };
-          }
-        )
+            mode = lib.mkOption {
+              type = lib.types.enum [
+                "key"
+                "keyless"
+              ];
+              default = "keyless";
+              description = "Verify with a public key or an exact keyless certificate identity.";
+            };
+            publicKeyFile = lib.mkOption {
+              type = lib.types.str;
+              default = "";
+              example = "/etc/tentaflake/image-signing.pub";
+              description = "Absolute Cosign public-key path for key mode; public verification material is not secret.";
+            };
+            certificateIdentity = lib.mkOption {
+              type = lib.types.str;
+              default = "";
+              example = "https://github.com/example/project/.github/workflows/release.yml@refs/tags/v1.2.3";
+              description = "Exact Fulcio certificate identity for keyless mode.";
+            };
+            certificateOidcIssuer = lib.mkOption {
+              type = lib.types.str;
+              default = "https://token.actions.githubusercontent.com";
+              description = "Exact OIDC issuer accepted for keyless mode.";
+            };
+          };
+        })
       );
     };
   };

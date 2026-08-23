@@ -1,7 +1,6 @@
 {
   config,
   lib,
-  pkgs,
   ...
 }:
 let
@@ -22,7 +21,7 @@ lib.mkIf cfg.networking.enable {
   ];
 
   networking = {
-    hostName = cfg.hostName;
+    inherit (cfg) hostName;
     networkmanager.enable = true;
     nftables.enable = true;
     firewall = {

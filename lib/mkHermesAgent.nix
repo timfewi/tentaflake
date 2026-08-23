@@ -622,7 +622,7 @@ in
       inherit group;
       home = stateDir;
       createHome = false;
-      uid = uid;
+      inherit uid;
       description = "Hermes agent ${name}";
       shell = "${pkgs.bash}/bin/bash";
     };
@@ -637,47 +637,49 @@ in
   # ── tmpfiles — create state directories owned by the container uid ──
   # (numeric uid/gid: the container runs as the image's `hermes` user, not the
   # host system user, so dirs must be owned by that uid for writes to succeed)
-  systemd.tmpfiles.rules = [
-    "d ${stateDir} 0700 ${ownUid} ${ownGid} -"
-    "d ${stateDir}/workspace 0700 ${ownUid} ${ownGid} -"
-    "d ${stateDir}/skills 0700 ${ownUid} ${ownGid} -"
-    "d ${stateDir}/cron 0700 ${ownUid} ${ownGid} -"
-  ];
+  systemd = {
+    tmpfiles.rules = [
+      "d ${stateDir} 0700 ${ownUid} ${ownGid} -"
+      "d ${stateDir}/workspace 0700 ${ownUid} ${ownGid} -"
+      "d ${stateDir}/skills 0700 ${ownUid} ${ownGid} -"
+      "d ${stateDir}/cron 0700 ${ownUid} ${ownGid} -"
+    ];
 
-  # ── systemd services ──
-  systemd.services = lib.mkMerge [
-    healSvc
-    seedSvc
-    gitIdentitySvc
-    autopushSvc
-    dashboardSvc
-    agentServicesSvc
-    providerHealthcheckSvc
-    dashboardServe
-    servicesServe
-    (lib.optionalAttrs secure {
-      ${ctrServiceAttr} = secureUnitPolicy;
-    })
-    (lib.optionalAttrs (runtimeDependencies != [ ]) {
-      ${ctrServiceAttr} = {
-        requires = runtimeDependencies;
-        after = runtimeDependencies;
-      };
-    })
-  ];
-
-  # ── systemd timers (git auto-push) ──
-  systemd.timers = lib.mkMerge [
-    (lib.optionalAttrs (gitAutoPush != null) {
-      "hermes-${name}-autopush" = {
-        wantedBy = [ "timers.target" ];
-        timerConfig = {
-          OnBootSec = "3min";
-          OnUnitActiveSec = gitAutoPush.interval or "2min";
+    # ── systemd services ──
+    services = lib.mkMerge [
+      healSvc
+      seedSvc
+      gitIdentitySvc
+      autopushSvc
+      dashboardSvc
+      agentServicesSvc
+      providerHealthcheckSvc
+      dashboardServe
+      servicesServe
+      (lib.optionalAttrs secure {
+        ${ctrServiceAttr} = secureUnitPolicy;
+      })
+      (lib.optionalAttrs (runtimeDependencies != [ ]) {
+        ${ctrServiceAttr} = {
+          requires = runtimeDependencies;
+          after = runtimeDependencies;
         };
-      };
-    })
-  ];
+      })
+    ];
+
+    # ── systemd timers (git auto-push) ──
+    timers = lib.mkMerge [
+      (lib.optionalAttrs (gitAutoPush != null) {
+        "hermes-${name}-autopush" = {
+          wantedBy = [ "timers.target" ];
+          timerConfig = {
+            OnBootSec = "3min";
+            OnUnitActiveSec = gitAutoPush.interval or "2min";
+          };
+        };
+      })
+    ];
+  };
 
   virtualisation.oci-containers.containers."hermes-${name}" = securityResult.container // {
     image = pinnedImage name allowMutableImage securityResult.container.image;

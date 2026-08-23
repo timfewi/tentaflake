@@ -56,7 +56,7 @@ let
     && !(lib.any (root: pathWithin root source) dangerousMountRoots)
     && !(lib.hasSuffix ".sock" source);
   portPrivate = port: lib.hasPrefix "127.0.0.1:" port || lib.hasPrefix "[::1]:" port;
-  nonRootUser = user: lib.match "^[1-9][0-9]*:[1-9][0-9]*$" user != null;
+  nonRootUser = user: user != null && lib.match "^[1-9][0-9]*:[1-9][0-9]*$" user != null;
   resourcesComplete =
     container:
     lib.all (prefix: hasOption prefix container) [
@@ -72,7 +72,7 @@ let
   agentRecord =
     name: container:
     let
-      user = container.user or "";
+      user = container.user or null;
       capabilitiesEmpty =
         !(lib.any (value: value == true) (lib.attrValues (container.capabilities or { })));
       imagePinned = lib.match ".+@sha256:[0-9a-fA-F]{64}" container.image != null;

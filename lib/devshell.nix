@@ -110,7 +110,7 @@ in
 pkgs.mkShell {
   packages = with pkgs; [
     just
-    nixfmt-rfc-style
+    nixfmt
     statix
     deadnix
     nil

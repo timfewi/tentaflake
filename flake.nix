@@ -44,7 +44,6 @@
         hostName
         adminUser
         adminDescription
-        adminShell
         defaultLocale
         consoleKeyMap
         stateVersion
@@ -52,7 +51,7 @@
 
       system = "x86_64-linux";
       pkgs = nixpkgs.legacyPackages.${system};
-      lib = nixpkgs.lib;
+      inherit (nixpkgs) lib;
 
       # Root of the repo — used by installer ISO to embed source
       repoRoot = ./.;
@@ -61,9 +60,9 @@
       constants = import ./lib/constants.nix;
 
       # ── Shared agent builders ──
-      mkHermesAgent = (import ./lib { inherit pkgs lib; }).mkHermesAgent;
-      mkZeroClawAgent = (import ./lib { inherit pkgs lib; }).mkZeroClawAgent;
-      agentsFromData = (import ./lib { inherit pkgs lib; }).agentsFromData;
+      inherit ((import ./lib { inherit pkgs lib; })) mkHermesAgent;
+      inherit ((import ./lib { inherit pkgs lib; })) mkZeroClawAgent;
+      inherit ((import ./lib { inherit pkgs lib; })) agentsFromData;
 
       # Module set imported by external consumers and built-in hosts
       tentaflakeModules = import ./modules/default.nix;
@@ -83,16 +82,18 @@
     in
     {
       # ── Exported module set ──
-      nixosModules.default = tentaflakeModules;
+      nixosModules = {
+        default = tentaflakeModules;
 
-      # Installer and optional profiles/integrations are exported explicitly;
-      # none of them enlarge nixosModules.default.
-      nixosModules.installer = import ./installer/iso.nix;
-      nixosModules.editor = import ./modules/optional/editor.nix;
-      nixosModules.hiveResearch = import ./modules/optional/hive-research.nix;
-      nixosModules.piperTts = import ./modules/optional/piper-tts-server.nix;
-      nixosModules.observability = import ./modules/profiles/observability.nix;
-      nixosModules.falco = import ./modules/profiles/falco.nix;
+        # Installer and optional profiles/integrations are exported explicitly;
+        # none of them enlarge nixosModules.default.
+        installer = import ./installer/iso.nix;
+        editor = import ./modules/optional/editor.nix;
+        hiveResearch = import ./modules/optional/hive-research.nix;
+        piperTts = import ./modules/optional/piper-tts-server.nix;
+        observability = import ./modules/profiles/observability.nix;
+        falco = import ./modules/profiles/falco.nix;
+      };
 
       # ── Exported helpers ──
       lib.${system} = {
@@ -140,29 +141,35 @@
         };
         modules = [
           {
-            tentaflake.hostName = hostName;
-            tentaflake.adminUser = adminUser;
-            tentaflake.adminDescription = adminDescription;
-            tentaflake.adminShell = "${pkgs.zsh}/bin/zsh";
-            tentaflake.timeZone = "UTC";
-            tentaflake.defaultLocale = defaultLocale;
-            tentaflake.consoleKeyMap = consoleKeyMap;
-            tentaflake.stateVersion = stateVersion;
-            tentaflake.allowUnfree = false;
-            tentaflake.boot.enable = true;
-            tentaflake.hardening.enable = true;
-            tentaflake.locale.enable = true;
-            tentaflake.networking.enable = true;
-            tentaflake.nixSettings.enable = true;
-            tentaflake.packages.enable = true;
-            tentaflake.users.enable = true;
-            tentaflake.tailscale.enable = true;
-            tentaflake.shell.enable = true;
-            # Interactive extras (all opt-in; on here for the built-in host).
-            tentaflake.shell.zsh.enable = true;
-            tentaflake.shell.zoxide.enable = true;
-            tentaflake.shell.lazygit.enable = true;
-            tentaflake.shell.tmux.enable = true;
+            tentaflake = {
+              inherit
+                hostName
+                adminUser
+                adminDescription
+                defaultLocale
+                consoleKeyMap
+                stateVersion
+                ;
+              adminShell = "${pkgs.zsh}/bin/zsh";
+              timeZone = "UTC";
+              allowUnfree = false;
+              boot.enable = true;
+              hardening.enable = true;
+              locale.enable = true;
+              networking.enable = true;
+              nixSettings.enable = true;
+              packages.enable = true;
+              users.enable = true;
+              tailscale.enable = true;
+              shell = {
+                enable = true;
+                # Interactive extras (all opt-in; on here for the built-in host).
+                zsh.enable = true;
+                zoxide.enable = true;
+                lazygit.enable = true;
+                tmux.enable = true;
+              };
+            };
           }
           self.nixosModules.default
           ./configuration.nix
