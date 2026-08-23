@@ -11,7 +11,7 @@
 #   agentsFromData { file = ./agents.json; inherit mkHermesAgent mkZeroClawAgent; }
 # ────────────────────────────────────────────────────────────
 
-{ pkgs, lib }:
+{ lib, ... }:
 {
   file,
   mkHermesAgent,
@@ -23,26 +23,26 @@ let
   hermesModule =
     e:
     mkHermesAgent {
-      name = e.name;
-      envFile = e.envFile;
+      inherit (e) name;
+      inherit (e) envFile;
       settings.model = {
         default = e.model;
-        provider = e.provider;
+        inherit (e) provider;
       }
-      // lib.optionalAttrs ((e.base_url or null) != null) { base_url = e.base_url; };
+      // lib.optionalAttrs ((e.base_url or null) != null) { inherit (e) base_url; };
     };
 
   zeroclawModule =
     e:
     mkZeroClawAgent {
-      name = e.name;
+      inherit (e) name;
       agenixFile = e.envFile;
-      hostPort = e.hostPort;
-      servePort = e.servePort;
+      inherit (e) hostPort;
+      inherit (e) servePort;
       settings = {
         schema_version = 3;
         providers.models.${e.provider}.default = {
-          model = e.model;
+          inherit (e) model;
         }
         // lib.optionalAttrs ((e.base_url or null) != null) { uri = e.base_url; };
         runtime_profiles.default = {

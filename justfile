@@ -1,10 +1,7 @@
 # tentaflake dev commands — run `just` to list them.
-# Everything here mirrors CI (.github/workflows/check.yml) plus the ISO builds
-# CI does NOT do, so `just ci` is a stricter local gate than the pipeline.
+# Everything here mirrors CI plus the installer ISO build CI does not run.
 
 set shell := ["bash", "-euo", "pipefail", "-c"]
-
-auditd := "pkgs/tentaflake-auditd"
 
 # List recipes
 default:
@@ -12,11 +9,30 @@ default:
 
 # ── The gates ────────────────────────────────────────────────
 
-# Full local gate: everything CI runs + the two ISOs CI never builds
-ci: fmt-check lint shellcheck go-lint go check generated-flake iso iso-installer
+# Full local gate: everything CI runs + the installer ISO
+ci: fmt-check lint shellcheck rust check generated-flake iso-installer
     @echo "==> all green"
 
-# nix flake check (eval + tentaflake toplevel + tentaflake-auditd)
+# Automated end-to-end gate (alias for the complete local CI path)
+e2e: ci
+
+# Rebuild the locked Dev Container and run its contributor-shell smoke test
+e2e-devcontainer:
+    ./scripts/e2e-devcontainer.sh
+
+# Scan tracked source and locked dependencies for security findings
+security:
+    ./scripts/security-scan.sh
+
+# Build and boot the installer ISO with one isolated QCOW2 disk
+e2e-installer:
+    ./scripts/e2e-installer-vm.sh install
+
+# Boot the disposable VM created by `just e2e-installer`
+e2e-run-vm:
+    ./scripts/e2e-installer-vm.sh boot
+
+# nix flake check (eval + host + Rust packages + VM test)
 check:
     nix flake check
 
@@ -39,15 +55,12 @@ lint:
     statix check .
     deadnix --fail .
 
-# ── Go: tentaflake-auditd ────────────────────────────────────────
+# ── Rust workspace ───────────────────────────────────────────
 
-# build + vet + test tentaflake-auditd (the CI Go steps)
-go:
-    cd {{auditd}} && go build ./... && go vet ./... && go test ./...
-
-# golangci-lint — run before push (CLAUDE.md convention)
-go-lint:
-    cd {{auditd}} && golangci-lint run
+rust:
+    cargo fmt --all -- --check
+    cargo clippy --workspace --all-targets -- -D warnings
+    cargo test --workspace
 
 # ── Shell scripts ────────────────────────────────────────────
 
@@ -55,37 +68,20 @@ go-lint:
 shellcheck:
     shellcheck installer/*.sh scripts/*.sh
 
-# Preview a tentaflake-status view with a fake fleet (+ self-checks).
-# No args = the login banner; pass --stats or --health for the other two.
-banner *ARGS:
-    ./scripts/banner-test.sh {{ARGS}}
-
-# Evaluate the flake installer.sh generates for an installed machine, with an
-# agent configured — catches specialArgs drift that only bites after `agent add`
+# Evaluate the flake installer.sh generates for an installed machine with a
+# declarative JSON agent fixture.
 generated-flake:
     ./scripts/generated-flake-test.sh
 
 # ── ISOs ─────────────────────────────────────────────────────
 
-# Build the live-agent ISO (Hermes + Piper, boot-and-run appliance)
-iso:
-    ./scripts/build-iso.sh live
-
 # Build the installer ISO (minimal, installs to disk)
 iso-installer:
     ./scripts/build-iso.sh installer
 
-# Boot the live ISO in QEMU to test runtime behavior (builds it first).
-# KVM is used when /dev/kvm exists; drop nothing to test on a plain machine.
-vm: iso
-    qemu-system-x86_64 \
-        {{ if path_exists("/dev/kvm") == "true" { "-enable-kvm" } else { "" } }} \
-        -m 4096 -smp 2 \
-        -cdrom result/iso/tentaflake-live.iso -boot d
-
 # ── Release ──────────────────────────────────────────────────
 
-# Cut a release tag. Update CHANGELOG.md FIRST, then: just tag v0.3.0
+# Cut a release tag. Update CHANGELOG.md FIRST, then: just tag v0.4.0
 # The git tag is the source of truth for the repo version.
 tag VERSION:
     @test -z "$(git status --porcelain)" || { echo "working tree dirty (staged, unstaged or untracked) — commit first"; exit 1; }

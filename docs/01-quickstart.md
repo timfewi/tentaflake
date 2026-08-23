@@ -1,211 +1,114 @@
-# Tentaflake — Quickstart Guide
+# Secure installed-host quickstart
 
-Welcome to your new headless agent machine. NixOS installed, Docker ready,
-Hermes containers configured. This guide walks the first 10 minutes after boot.
+Installed hosts default to the fail-closed `balanced` profile. This guide
+verifies that baseline. An agent remains offline unless its exact container
+name has an explicit broker policy. The optional broker path grants narrow
+model/fetch APIs, never general internet access.
 
----
+## 1. Install the external management policy
 
-## 5-Minute Checklist
+Replace the placeholder identity in `docs/tailscale-policy.example.json`,
+validate it in the Tailscale admin console, and install it before relying on
+Tailscale as the only management path. The policy must restrict both network
+grants and Tailscale SSH to the operator and `tag:agent-host`.
 
-### 1. Log in and verify Docker
+The default tailnet allow-all policy is not acceptable. Do not enable Funnel
+or publish an agent API with Serve. Protect the identity provider with
+hardware-backed MFA; plan Tailnet Lock with at least two signing nodes.
 
-```bash
-sudo docker ps
-```
+## 2. Declare a stopped capsule
 
-Expect empty list or `CONTAINER ID   IMAGE   COMMAND   CREATED   STATUS   PORTS   NAMES`
-if no agents configured yet.
-
-Check Docker service health:
-
-```bash
-sudo systemctl status docker
-```
-
-### 2. Copy the agent definition
+Copy the current example:
 
 ```bash
-cp /etc/nixos/my-agents.nix.example /etc/nixos/my-agents.nix
+sudo cp \
+  /etc/nixos/my-agents.nix.example \
+  /etc/nixos/my-agents.nix
 ```
 
-This activates a single "coding" agent (in the `hermesAgents` list). The
-example file also carries a fully-commented reference agent showing every
-`settings` option — uncomment it (or copy fields onto your own agent) to
-declare model, toolsets, memory, compression, TTS/STT, and more in Nix. Edit
-later to add more.
+The example contains Hermes and ZeroClaw capsules with
+`autoStart = false` and a matching disposable worker for each. Remove both a
+runtime and its worker entry when you do not need it. Do not add `envFile`,
+`agenixFile`, `hostPort`, `servePort`, host networking, or literal secret
+values under balanced; evaluation rejects them.
 
-The example file also has a `zeroclawAgents` list for the second supported
-runtime, ZeroClaw (commented out by default) — see
-[02-agent-tips.md](02-agent-tips.md#adding--removing-agents) and
-`zeroclaw.env.example` if you want to run one alongside your Hermes agents.
-This quickstart continues with the default Hermes "coding" agent.
+## 3. Evaluate and build without activation
 
-If `/etc/nixos/my-agents.nix` doesn't exist on your system, copy the example:
-
-```bash
-sudo cp /etc/nixos/my-agents.nix.example /etc/nixos/my-agents.nix
-sudo vi /etc/nixos/my-agents.nix
-```
-
-### 3. Create env file with API key
-
-```bash
-sudo mkdir -p /run/secrets
-sudo cp /etc/nixos/hermes.env.example /run/secrets/hermes-coding.env
-sudo chmod 600 /run/secrets/hermes-coding.env
-sudo vi /run/secrets/hermes-coding.env
-```
-
-Set at minimum:
-
-```
-OPENROUTER_API_KEY=sk-or-...
-```
-
-Depending on which features you enable in `settings`, you may also need:
-
-| Feature | Key |
-|---------|-----|
-| STT (speech-to-text) | `GROQ_API_KEY=gsk_...` |
-| Web search | `FIRECRAWL_API_KEY=fc-...` |
-| Higher rate limits | `ANTHROPIC_API_KEY=sk-ant-...` |
-| OpenAI models | `OPENAI_API_KEY=sk-proj-...` |
-
-### 4. Rebuild the system
-
-```bash
-sudo nixos-rebuild switch --flake /etc/nixos#<hostname>
-```
-
-Replace `<hostname>` with your machine's hostname (set during install).
-Find it:
+From `/etc/nixos`, resolve the installed hostname and build its toplevel:
 
 ```bash
 hostname
+nix build \
+  .#nixosConfigurations.<hostname>.config.\
+system.build.toplevel \
+  --no-link
 ```
 
-First rebuild pulls the Hermes Docker image (~2-5 min depending on network).
-Subsequent rebuilds are fast.
+Review any assertion and the source diff. A successful build proves the
+candidate closure, not the live host.
 
-### 5. Verify containers running
+## 4. Activate only in an approved window
+
+Activation is an explicit host mutation. Once the exact host and build result
+are reviewed, the operator may run:
 
 ```bash
-sudo docker ps
+sudo nixos-rebuild switch \
+  --flake /etc/nixos#<hostname>
 ```
 
-Expected output:
+Tentaflake never performs this step merely because evaluation succeeded.
 
-```
-CONTAINER ID   IMAGE                                             ...   NAMES
-abc123def456   docker.io/nousresearch/hermes-agent@sha256:… ... hermes-coding
-```
+## 5. Verify the activated posture
 
-If container not running:
-
-```bash
-sudo docker ps -a
-sudo docker logs hermes-coding
+```text
+tentaflake status
+tentaflake doctor --security
+tentaflake doctor --security --json
+sudo systemctl cat \
+  docker-hermes-coding.service
 ```
 
-### 6. Check agent logs
+For Podman, the unit prefix is `podman-`. A balanced capsule should show
+`runsc`, non-root user, cap-drop-all, read-only root, no-new-privileges,
+hardened tmpfs, and resource flags. Without a broker it also shows
+`network=none`, and the security doctor reports `TFSEC-013`. With a broker it
+shows one internal network, runtime virtual credentials, and no direct route.
+It should not report `TFSEC-020`; that finding means the corresponding
+disposable worker boundary is absent. `TFSEC-021` means its persistent
+workspace has no managed hard size ceiling.
 
-```bash
-sudo docker logs hermes-coding
+`autoStart = true` is intentionally rejected under `balanced` until the same
+container key has an enabled broker, worker, and workspace quota. Keep the
+controller stopped while those policies are incomplete or while migrating an
+existing workspace.
+
+## 6. Keep the agent stopped
+
+Do not place real OpenAI, Anthropic, OpenRouter, GitHub, Firecrawl, or
+infrastructure credentials in the capsule. Without a scoped broker
+declaration, a balanced agent cannot perform external model or web calls and
+should remain stopped. To grant narrow access, follow
+[brokered egress](12-brokered-egress.md), build, review the generated units
+and firewall rules, then approve activation separately.
+
+For a trusted development-only compatibility host, the intentional escape is:
+
+```nix
+tentaflake.security.profile = "dev";
 ```
 
-First-run startup messages:
+That permits legacy direct credentials and networking but is explicitly not a
+security boundary for untrusted 24/7 agents. There is no silent fallback from
+balanced or strict.
 
-```
-Starting Hermes gateway...
-No provider configured. Run: hermes setup --portal
-```
+## Next reading
 
-This is expected — provider setup comes next.
-
-### 7. Enter the container and configure provider
-
-```bash
-sudo docker exec -it hermes-coding hermes chat
-```
-
-Inside the container, set up an LLM provider:
-
-**Fastest — Nous Portal (OAuth browser flow):**
-
-```bash
-hermes setup --portal
-```
-
-Opens browser for login, picks a model, ready to chat.
-
-**Alternative — OpenRouter (API key):**
-
-```bash
-hermes config set OPENROUTER_API_KEY sk-or-...
-hermes config set model.provider openrouter
-hermes config set model.default anthropic/claude-sonnet-4-20250514
-```
-
-**Alternative — direct Anthropic:**
-
-```bash
-hermes config set ANTHROPIC_API_KEY sk-ant-...
-hermes config set model.provider anthropic
-```
-
-After setup, type `exit` to leave the container shell.
-
-### 8. Start chatting
-
-```bash
-sudo docker exec -it hermes-coding hermes chat
-```
-
-Test with:
-
-```
-> What time is it?
-> Run uname -a
-```
-
----
-
-## Troubleshooting
-
-| Symptom | Likely cause | Fix |
-|---------|-------------|-----|
-| Container not starting | Missing env file | Check `/run/secrets/hermes-*.env` exists and `chmod 600` |
-| `nixos-rebuild` fails | Syntax error in nix file | `nix flake check` to validate |
-| Container exits immediately | No provider configured | Enter container: `sudo docker exec -it hermes-coding hermes setup --portal` |
-| Docker not starting | Time sync issue | `sudo timedatectl set-ntp true && sudo systemctl restart docker` |
-| DNS resolution fails inside container | Host DNS config | Check `/etc/resolv.conf` on host, `ping google.com` |
-| Permission denied on env file | Wrong owner/mode | `sudo chmod 600 /run/secrets/hermes-*.env` |
-| `docker exec: "hermes" not found` | Container not fully started | Wait 30s, check `sudo docker logs hermes-coding` |
-
-### Time sync
-
-Headless machines without RTC often drift. Fix:
-
-```bash
-sudo timedatectl set-ntp true
-timedatectl status
-```
-
-### Firewall
-
-The `networking.nix` module enables nftables with a deny-all default — no
-TCP/UDP ports are open. Remote access goes through Tailscale SSH; set
-`tentaflake.ssh.enable = true` for a hardened key-only sshd on port 22.
-Check rules:
-
-```bash
-sudo nft list ruleset
-```
-
----
-
-## Next Steps
-
-- [02-agent-tips.md](02-agent-tips.md) — Day-to-day agent management
-- [03-skill-index.md](03-skill-index.md) — Bundled skills reference
-- [04-agenix-secrets.md](04-agenix-secrets.md) — Encrypt agent credentials with agenix
+- [Security profiles and migration](10-security-profiles.md)
+- [Tailscale management policy](11-tailscale-management.md)
+- [Operations and recovery](07-operations.md)
+- [Agenix boundaries](04-agenix-secrets.md)
+- [Brokered egress](12-brokered-egress.md)
+- [Disposable worker and approval](13-disposable-worker.md)
+- [Persistent workspace quota](14-workspace-quota.md)
+- [Threat model](15-threat-model.md)

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ────────────────────────────────────────────────────────────
-# Build the Tentaflake live agent ISO
+# Build the Tentaflake installer ISO
 # ────────────────────────────────────────────────────────────
 set -euo pipefail
 
@@ -9,24 +9,22 @@ REPO_DIR="$(dirname "$SCRIPT_DIR")"
 
 cd "$REPO_DIR"
 
-# Default to live-agent-iso; pass "installer" as arg for installer ISO
-TARGET="${1:-live}"
+# `installer` remains accepted for compatibility with `just iso-installer`.
+TARGET="${1:-installer}"
 case "$TARGET" in
-live)
-	FLAKE_REF=".#live-agent-iso"
-	ISO_PREFIX="tentaflake-live"
-	DESC="Live agent ISO (Hermes + Piper TTS out of the box)"
-	;;
 installer)
 	FLAKE_REF=".#installer-iso"
 	ISO_PREFIX="tentaflake"
 	DESC="Installer ISO (minimal, for installing to disk)"
 	;;
 *)
-	echo "Usage: $0 [live|installer]"
+	echo "Usage: $0 [installer] [nix build args...]"
 	exit 1
 	;;
 esac
+if [ "$#" -gt 0 ]; then
+	shift
+fi
 
 echo "==> Building $DESC ..."
 echo "    Repo: $REPO_DIR"

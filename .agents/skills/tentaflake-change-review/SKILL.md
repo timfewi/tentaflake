@@ -59,15 +59,14 @@ applicable command from the repo's real toolchain:
 | Runtime behavior (unit, state dir, CLI) | `nix build .#checks.x86_64-linux.vm-integration -L` |
 | Container image pin | `nix build .#checks.x86_64-linux.image-pinning` |
 | Formatting | `nix fmt` (CI runs `nix fmt -- --ci`) |
-| Go (`pkgs/tentaflake-auditd`) | `go build ./... && go vet ./... && go test ./...`, then `golangci-lint run` |
+| Rust workspace | `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets -- -D warnings`, and `cargo test --workspace` |
 | Shell scripts | `shellcheck installer/*.sh scripts/*.sh` |
-| Login banner | `./scripts/banner-test.sh` |
 | Installer-generated flake | `./scripts/generated-flake-test.sh` |
-| ISO changes | `nix build .#installer-iso` / `nix build .#live-agent-iso` |
+| ISO changes | `nix build .#installer-iso` |
 
 Prefer a fresh check over self-grading: don't just assert "it builds" — paste
 the command you ran. If a behavior can't be exercised by an existing check,
-add or extend a check (e.g. a Go test) as part of the same change.
+add or extend a focused test as part of the same change.
 
 > Anti-pattern: "passed all tests" when the change added no test and no
 > existing test covers the new path.
@@ -93,7 +92,7 @@ The three gates only pay off if the links between them are *recorded*, not just
 thought about. Keep a single, lightweight chain per change:
 
 ```
-REASON (issue/requirement)  →  ART (the commit/diff)  →  CHECK (verification)
+REASON -> ART -> CHECK
 ```
 
 You don't need a separate matrix file — git and GitHub already store the chain
@@ -112,18 +111,19 @@ if you populate them:
 Recommended commit-body footer (Conventional Commits subject stays as-is):
 
 ```
-feat(shell): add `tentaflake doctor` egress check
+feat(shell): add doctor egress check
 
 Closes #123
-Verified: nix flake check; ./scripts/banner-test.sh
-Docs: README.md, tentaflake-repo-guidance SKILL.md
+Verified: nix flake check
+Docs: README.md, repo guidance skill
 ```
 
 To audit the chain later:
 
 ```bash
-git log --oneline --grep 'Closes #123'   # REASON → ART
-gh issue view 123                         # see linked PRs/commits
+git log --oneline \
+  --grep 'Closes #123'
+gh issue view 123
 ```
 
 If you cannot fill in all three lines of the footer, one of the gates was
@@ -139,8 +139,10 @@ regardless of REASON/VERIFY/SYNC:
   belongs in a fork (`docs/05-fork-checklist.md`).
 - **No secrets in the tree.** gitleaks runs in CI; don't commit `.env` files
   with real values.
-- **Backward compatibility for options.** Renames use
-  `mkRenamedOptionModule`; new options default to preserving current behavior.
+- **Intentional API changes.** Renames use `mkRenamedOptionModule`. Defaults
+  preserve behavior unless a stated security requirement deliberately breaks
+  compatibility; then evaluation errors, migration, examples, and changelog
+  must move together and no silent weaker fallback is allowed.
 - **Container images stay digest-pinned.** `lib/pinnedImage.nix` rejects a
   mutable tag at eval time for every runtime builder; a new default image goes
   in `lib/constants.nix` as `repository@sha256:…` (no tag). `checks.image-pinning`

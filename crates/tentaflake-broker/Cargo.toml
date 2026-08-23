@@ -1,0 +1,16 @@
+[package]
+name = "tentaflake-broker"
+version = "0.4.0"
+edition = "2024"
+license = "MIT"
+description = "Fail-closed credential and web-fetch policy broker for tentaflake"
+
+[[bin]]
+name = "tentaflake-broker"
+path = "src/main.rs"
+
+[dependencies]
+libc = "0.2"
+reqwest = { version = "0.12.28", default-features = false, features = ["blocking", "rustls-tls"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"

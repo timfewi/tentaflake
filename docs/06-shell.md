@@ -1,436 +1,107 @@
-# Shell Experience — Operating a Tentaflake Host over SSH
+# Operator shell and Rust CLI
 
-When you SSH into a freshly-installed Tentaflake machine (over Tailscale SSH),
-`modules/shell.nix` makes the landing useful instead of a bare prompt. Everything
-here is generic and toggleable via `tentaflake.shell.*` — it never hardcodes any
-agent; it reflects whatever you defined in `my-agents.nix`.
+`modules/shell.nix` installs a small Rust CLI and optional operator comforts.
+It does not contain the CLI implementation; the workspace source lives in
+`crates/tentaflake-cli`.
 
-## What you get
+## Generated inputs
 
-| Feature | Description |
-|---|---|
-| **Login banner** | `tentaflake-status` runs once per SSH/console login: host facts (kernel, uptime, load, memory, and every physical disk with usage-colored percentages), Tailscale IP, an agent count (total · active · inactive · failed), and a health line per agent colored by runtime — with per-agent uptime for active agents, dimmed inactive agents, and a `tentaflake logs` hint when one has failed. Mounted disks are identified by `/` or their first data mount; an unmounted disk is still listed by device name and capacity. |
-| **`tentaflake` CLI** | One command to drive agent containers across every runtime (Hermes, ZeroClaw) — backend-aware (works for `docker` or `podman`). A deprecated `hermes` shim still works, with a warning. |
-| **Bash QoL** | Completion, large deduped history, a colored prompt, and sensible aliases. |
-| **Modern CLI tools** | `eza`, `bat`, `fd`, `ripgrep`, `fzf`, `htop`, `btop`, `jq`, `tree`, `ncdu`, `tmux`, `dnsutils`. |
+Nix writes two non-secret files:
 
-## The `tentaflake` command
+- `/etc/tentaflake/cli.conf` selects the backend, host, flake directory, and
+  agent inventory path.
+- `/etc/tentaflake/agents.tsv` is derived from declared OCI containers.
 
-```
-tentaflake [status]            Show all agents and their state (default)
-tentaflake logs <name> [args]  Follow an agent's logs (extra journalctl args ok)
-tentaflake restart <name>      Restart an agent
-tentaflake start <name>        Start an agent
-tentaflake stop <name>         Stop an agent
-tentaflake shell <name>        Open a shell inside an agent container
-tentaflake exec <name> -- cmd  Run a command inside an agent container
-tentaflake ps                  Show all declarative agent containers
-tentaflake stats               Fleet dashboard: CPU/memory per agent
-                               (live: watch -cn2 tentaflake stats)
-tentaflake health              Host vitals dashboard: CPU/memory/swap/disk/temp
-                               bars + checks (--live to refresh in place)
-tentaflake top                 Live filesystem-activity TUI
-tentaflake backup <name>       Snapshot an agent's state dir to a .tar.gz here
-tentaflake doctor              Host health check (exits nonzero on problems)
-tentaflake console             Agent Console URL + how to publish it on the tailnet
-tentaflake agent list          List configured agents (from agents.json)
-tentaflake agent add           Add + configure an agent — interactive wizard, no Nix
-tentaflake agent set-model <n> Change an agent's model (interactive)
-tentaflake agent remove <n>    Remove an agent from agents.json
-tentaflake rebuild             Apply the system config (nixos-rebuild switch)
-tentaflake update              Update flake inputs, review, then rebuild
-tentaflake help                Show this help
+Do not hand-edit them. Change the Nix configuration and rebuild explicitly.
 
-FLAGS
-  --hide, -H                   Redact host name, tailnet IP and agent names —
-                               safe to screenshot. Works on status, stats and
-                               health.
-  --live[=SECS]                health only: redraw in place every SECS
-                               (default 2). Ctrl-C to exit.
+## Commands
+
+```text
+tentaflake status [--json] [--hide]
+tentaflake health [--json] [--hide]
+tentaflake doctor [--json] [--hide]
+tentaflake doctor --security [--json] [--hide]
+tentaflake stats
+tentaflake logs <agent>
+tentaflake restart <agent>
+tentaflake start <agent>
+tentaflake stop <agent>
+tentaflake shell <agent>
+tentaflake exec <agent> -- <command>
+tentaflake ps
+tentaflake backup <agent>
+tentaflake rebuild
+tentaflake update
 ```
 
-A deprecated `hermes` shim still works for old scripts/muscle memory: it
-prints `note: host command 'hermes' is deprecated; use 'tentaflake'` to
-stderr and execs `tentaflake "$@"`. Update to `tentaflake` when convenient —
-the shim may be removed in a future release. (This is the **host** CLI; it's
-unrelated to the `hermes` command *inside* a Hermes agent container, which is
-unchanged.)
+`status` is the default command. `--json` provides machine-readable status;
+`--hide` redacts the host and agent names. `tentaflake-status` invokes the same
+status renderer and is used by the login banner.
 
-Examples:
+`health` reports load, root disk usage, and failed agent count. `doctor` checks
+failed systemd units, high root-disk use, and failed agent units. A successful
+doctor run is host evidence only; it does not prove external provider access.
 
-```bash
-tentaflake                       # health table for every agent, every runtime
-tentaflake logs coding           # tail -f the coding (hermes) agent's journal
-tentaflake restart research      # sudo systemctl restart podman-hermes-research
-tentaflake shell coding          # drop into a shell in the container
-tentaflake shell assistant       # works the same for a ZeroClaw agent
-tentaflake exec coding -- hermes chat
-```
+`doctor --security` reads the Nix-generated desired-state security manifest.
+It emits stable `TFSEC-*` findings with severity and remediation; critical or
+high findings return non-zero. JSON output is CI-friendly. The desired-state check
+covers the declared profile, capsule flags, mounts, images, credential files,
+OpenSSH, AppArmor, Docker-group membership, backup declaration, workspace
+quota, and missing broker. It also inspects root-disk pressure, the last
+successful Restic timestamp, and live Tailscale Serve/Funnel JSON. If a live
+command is unavailable or blocked, the result is an explicit warning rather
+than green. A non-interactive backend inspect also compares a running Docker or
+Podman container's privilege, user, root filesystem, runtime, network,
+capabilities, AppArmor, security options, resource limits, and mounts with the
+secure invariants. A stopped/missing container, incomplete backend schema, or
+unavailable approved sudo path is reported as unknown. Configured broker
+`/healthz` endpoints are probed directly: connection failures stay unknown,
+while an explicit non-ready response is high severity because broker health
+checks credentials and audit persistence. Complete controller-tool audit
+coverage and cross-agent network denial remain separate runtime evidence.
 
-`tentaflake` enumerates every container under
-`virtualisation.oci-containers.containers` — `hermes-<name>` (from
-`mkHermesAgent`) and `zeroclaw-<name>` (from `mkZeroClawAgent`) alike — so it
-automatically tracks whatever agents your `my-agents.nix` defines, across both
-runtimes. Add or remove an agent and `tentaflake` reflects it after the next
-rebuild. State-changing actions (`restart`/`start`/`stop`) shell out to `sudo
-systemctl`, so the admin user needs its usual `wheel` membership (the
-default).
+`backup` creates a mode-`0600`, caller-owned archive of one state directory in
+the current directory. It does not back up secret-provider identities.
 
-### Status output has a runtime column
+`rebuild` and the apply step offered by `update` activate NixOS. Invoke them
+only when the target is resolved and activation is intended.
 
-`tentaflake status` (and the login banner) list every agent with its runtime,
-so a mixed Hermes + ZeroClaw fleet is legible at a glance. The header counts
-the fleet (total · active · inactive · failed), each runtime has its own color
-(hermes yellow, zeroclaw blue, other magenta), agents are sorted by name,
-active agents show how long they have been up, inactive agents are dimmed,
-and a failed agent adds a `tentaflake logs <name>` hint below the list:
+The deprecated `hermes` shim remains for command-name compatibility. The old
+`top`, `console`, and interactive agent wizard commands were removed with the
+Auditd, SQLite, and custom web-console stack.
 
-```
-  AGENTS (3 · 2 active · 1 inactive)
-    ● assistant             zeroclaw   active   3h 12m    306M █░░░░░  19%
-    ● coding                hermes     active   2d 4h     671M ██░░░░  43%
-    ○ research              hermes     inactive
-```
+## Shell options
 
-The memory cell per active agent comes straight from the container's cgroup
-(`memory.current - inactive_file` — the same number `docker stats` reports,
-without its ~2s sample window), so the banner stays fast on every login. The
-bar percentage is usage against the container's memory limit, colored by the
-usual thresholds; agents without a readable cgroup simply get no cell.
+All options live below `tentaflake.shell`:
 
-### `tentaflake stats` — the wide fleet dashboard
+| Option | Default | Purpose |
+|---|---:|---|
+| `enable` | `true` | Shell module |
+| `tentaflakeCli.enable` | `true` | Rust CLI |
+| `motd.enable` | `true` | Login status |
+| `tools.enable` | `true` | Curated terminal tools |
+| `starship.enable` | `true` | Prompt |
+| `zsh.enable` | `false` | Zsh and completion |
+| `zoxide.enable` | `true` | Directory jumping |
+| `lazygit.enable` | `false` | Git TUI |
+| `tmux.enable` | `false` | Terminal multiplexer |
 
-`tentaflake stats` is the same renderer as the login banner (same logo, same
-header, same rows — the two can never drift apart), one density wider: a
-column header plus per-agent CPU, PID count, memory against its limit, and a
-fleet total against host RAM. CPU needs a delta, so only `stats` pays its
-0.4s sample window; the scale matches `docker stats` (100% = one busy core).
-For a live view: `watch -cn2 tentaflake stats`.
+## Optional editor
 
-```
-  AGENTS (3 · 2 active · 1 inactive)
-      AGENT                RUNTIME    STATE    UPTIME       CPU  PIDS  MEMORY
-    ● assistant            zeroclaw   active   3h 12m      0.4%    29    306M / 1.5G  █░░░░░░░  19%
-    ● coding               hermes     active   2d 4h      20.1%    31    671M / 1.5G  ███░░░░░  43%
-    ○ research             hermes     inactive
-
-    fleet 977M across 2 agents · 12% of 7.8G host ram
-```
-
-### `tentaflake health` — the host vitals dashboard
-
-Where `stats` looks at the fleet, `health` looks at the **machine underneath
-it**. Same renderer again (same logo, same header, same bar and colour
-thresholds), with two sections below the header:
-
-- **VITALS** — a 24-cell bar per resource: CPU busy (a 0.4s `/proc/stat`
-  delta, 100% = every core busy), memory and swap in use, the hottest thermal
-  zone in °C when the box exposes one, and every block-device filesystem
-  (first four by mount point). Bars are green / yellow ≥75% / red ≥90%.
-- **CHECKS** — the ground `doctor` covers, one line each: failed systemd
-  units, agents active/failed, Tailscale connectivity.
-
-The header carries the verdict — `● healthy`, `▲ degraded` or `✗ critical` —
-which is the worst of everything below, on the same thresholds the bars are
-painted with, so a red bar and a red verdict always agree.
-
-```
-                                tentaflake agent-hub
-                                host health · ✗ critical
-  <logo>
-                                kernel     Linux 6.12.30
-                                uptime     2d 4h
-                                load       1.45, 0.92, 0.72
-                                tailnet    100.73.54.21
-
-  VITALS
-    cpu       ██░░░░░░░░░░░░░░░░░░░░░░    11%  16 cores
-    memory    ███░░░░░░░░░░░░░░░░░░░░░    16%  10.0G / 60.7G
-    swap      ░░░░░░░░░░░░░░░░░░░░░░░░     0%  0M / 8.8G
-    temp      ████████████████░░░░░░░░   69°C  hottest thermal zone
-    /         ████████░░░░░░░░░░░░░░░░    34%  586G / 1.8T
-
-  CHECKS
-    ✗ failed systemd units: docker-hermes-flux-reporter.service
-    ✗ 1 of 6 agents failed — tentaflake status
-    ✓ tailscale connected (100.73.54.21)
-```
-
-`tentaflake health --live` redraws it in place (default every 2s, `--live=5`
-for a slower cadence) on the alternate screen, so quitting with Ctrl-C leaves
-your scrollback exactly as it was. Unlike `watch`, colours survive.
-
-`health` is the dashboard and always exits 0 — **`tentaflake doctor` stays the
-scriptable check** with the nonzero exit and the per-problem fix commands.
-
-### `--hide` — screenshot-safe redaction
-
-`tentaflake --hide` (or `-H`, on `status`, `stats` and `health` alike) masks
-the fields that identify the box: host name and tailnet IP become `redacted`,
-agent names become `agent-1`…`agent-N` (the failed-agents hint included), and
-`health` prints a *count* of failed units rather than their names, since a
-unit name carries the container's. Telemetry — kernel, uptime, load, memory,
-disk, temperature, the CPU/MEMORY columns — stays, since it names nobody and
-is usually the point of the screenshot. A yellow `· redacted` marker in the
-header shows the view is masked. `tentaflake-status --selftest` renders both
-the masked wide view and the masked health view, and fails loudly if any
-identifying string leaks into either.
-
-## Host management commands
-
-The CLI also covers day-2 host chores, so routine operation never needs raw
-`nixos-rebuild`/`nix` invocations:
-
-- **`tentaflake rebuild`** — `sudo nixos-rebuild switch --flake /etc/nixos#<hostName>`,
-  the same command as the `rebuild` alias. On failure the running system is
-  unchanged; fix the config and re-run.
-- **`tentaflake update`** — runs `sudo nix flake update` on `/etc/nixos`, shows
-  the `flake.lock` diff, and asks `[y/N]` before rebuilding. Decline and the
-  updated lock stays in place — apply later with `tentaflake rebuild`.
-- **`tentaflake doctor`** — one deep health check: failed systemd units, root
-  disk ≥90% full, Tailscale connectivity, the `tentaflake-auditd` /
-  `tentaflake-console` services (when enabled), and every agent's unit state.
-  Each problem comes with the exact fix command (e.g. `tentaflake restart
-  <name>`), and the exit code is nonzero when problems were found — cron/CI
-  friendly.
-- **`tentaflake console`** — prints the Agent Console URL (from the configured
-  `console.addr`) plus the `tailscale serve` one-liner to publish it on the
-  tailnet; when the console is disabled it says which option to enable instead.
-- **`tentaflake backup <name>`** — one-shot snapshot of the agent's state dir to
-  `./tentaflake-<name>-<UTC timestamp>.tar.gz` (via `sudo tar`), printing the
-  matching restore one-liner after success. It warns when the agent is running
-  (the snapshot may be inconsistent) — `tentaflake stop <name>` first for a
-  clean one. The state dir is derived from the container's first volume mount,
-  so custom `stateDir`s are picked up automatically.
-
-## `tentaflake top` — live activity dashboard
-
-`tentaflake top` (execs the `tentaflake-top` binary; a deprecated `hermes-top`
-symlink remains for one release) is a
-full-screen TUI showing, in real time, what files your agents are touching,
-across every runtime. It reads the `tentaflake-auditd` SQLite database directly
-and refreshes once a second — **no network port is opened**, so it fits the
-Tailscale-only, firewall-closed posture: you run it inside your SSH session.
-
-```
-tentaflake-top  tentaflake
-3 events retained · window 5m · updated 12:04:31
-
-  AGENT                  5m    TOTAL  LAST ACTIVITY
-▶ coding                 42      318  write  skills/web.md
-  research                7       54  create notes/q3.md
-
-  EVENTS · coding  (44)
-  12:04:31 coding       write  skills/web.md
-  12:04:30 coding       create out/draft.txt
-  12:04:28 research     remove tmp/scratch
-
-q quit · ↑↓/jk scroll · g/G top/bottom · f filter agent · p pause · r refresh
-```
-
-Keys: `q`/`Esc` quit · `↑↓`/`jk` scroll · `pgup`/`pgdn` page · `g`/`G` top/bottom ·
-`f` cycle the agent filter · `p`/space pause · `r` force refresh. Flags:
-`-db <path>`, `-window <dur>` (recent-count window, default 5m), `-interval <dur>`.
-
-**What it shows vs. what it doesn't:** `tentaflake-auditd` records *filesystem
-changes* in every declarative agent's state dir (`/var/lib/hermes-<name>/` and
-`/var/lib/zeroclaw-<name>/` alike) — a strong "is the agent working, and on
-what" signal. It is **not** the agent's conversation or tool-call stream; for
-that use `tentaflake logs <name>`. The two are complementary.
-
-**Access:** the daemon runs as the unprivileged `hermes-audit` user and stores
-its DB group-readable by the `hermes-audit` group; the admin user is added to
-that group, so `tentaflake top` works **without sudo**. The daemon itself holds
-only `CAP_DAC_READ_SEARCH` (a read-only bypass to watch the agents' `0700`
-state dirs).
-
-Enable it (on by default for `tentaflake`):
+Editor support is not part of `nixosModules.default`. Import it explicitly:
 
 ```nix
-tentaflake.auditd.enable = true;
-# watchDirs auto-derives from ALL your agents, both runtimes (hermes-<name>
-# and zeroclaw-<name> state dirs); override only for custom stateDirs:
-# tentaflake.auditd.watchDirs = [ "/var/lib/hermes-coding" ];
-# tentaflake.auditd.retentionHours = 24;
+imports = [
+  inputs.tentaflake.nixosModules.editor
+];
 ```
 
-## Agent Console — web file explorer + live monitor
+Consumers must add an `nvf` input and pass their `inputs` through `specialArgs`.
+Core evaluation and the installer do not pull that dependency.
 
-`tentaflake top` is local-only (a TUI over SSH). The **Agent Console** (`tentaflake-console`
-binary, same package) is its web counterpart: one fast page, served on the tailnet,
-that replaces logging into each agent's kanban/dashboard. It has two panes:
+## Physical console
 
-- **Files** — a read-only, Google-Drive-style explorer over every agent's state dir.
-  Browse, preview text, and download. **Secrets are always hidden** (`.env*`,
-  `auth.json`, `config.yaml*`, `*.key`/`*.pem`/`*.age`, ssh/aws creds, …) at every
-  depth, alongside caches (`.cache`, `.npm`, `.venv`, `node_modules`, …). The surface
-  is **GET-only** — no edit, delete, or upload.
-- **Activity** — "`tentaflake top`, but more advanced": per-agent op-rate cards plus a
-  live event feed (create/write/remove/rename/chmod) streamed over SSE from the same
-  `events.db`.
-
-It reuses the daemon's exact security model — unprivileged `hermes-audit` user with a
-**read-only** `CAP_DAC_READ_SEARCH` bypass — so it can read the agents' `0700` dirs
-but write nowhere. Bind it to loopback and publish on the tailnet with
-`tailscale serve` (see [operations](07-operations.md#exposing-dashboards--agent-built-apps-on-the-tailnet)).
-
-```nix
-tentaflake.auditd.console.enable = true;
-# Roots auto-derive from your agents across both runtimes (one folder per
-# /var/lib/hermes-<name> or /var/lib/zeroclaw-<name>).
-# Keep those and ADD data-disk mounts with extraRoots:
-# tentaflake.auditd.console.extraRoots = [
-#   { name = "my-agent-data"; path = "/srv/agent-data/my-agent"; }
-# ];
-# tentaflake.auditd.console.roots = [ … ];             # override the
-#   auto-derived homes entirely (rarely needed; prefer extraRoots)
-# tentaflake.auditd.console.addr = "127.0.0.1:9090";   # loopback bind
-# tentaflake.auditd.console.extraDeny = [ "*.sqlite" ]; # extra hides
-```
-
-Then publish it, e.g. `tailscale serve --bg --https=9125 127.0.0.1:9090` →
-`https://<host>.<tailnet>.ts.net:9125`.
-
-## zsh, zoxide, lazygit, Neovim
-
-Everything is opt-in — you're never locked into a shell or editor:
-
-```nix
-tentaflake.shell.zsh.enable = true;      # zsh + Oh My Zsh + autosuggestions +
-                                         #   syntax-highlighting + fzf-tab
-tentaflake.shell.zoxide.enable = true;   # `z` smart-cd (bash + zsh) — default on
-tentaflake.shell.lazygit.enable = true;  # lazygit + the `lg` alias
-tentaflake.shell.tmux.enable = true;     # tmux + sensible system config
-tentaflake.editor.nvf.enable = true;     # Neovim via nvf (needs the nvf input)
-```
-
-- **tmux** installs a configured tmux (mouse on, `clock24`, 10k scrollback,
-  1-based windows). Great for persistent sessions over SSH.
-### Handy aliases
-
-Always present with `shell.enable` (bash + zsh):
-
-| Alias | Expands to |
-|---|---|
-| `rebuild` | `sudo nixos-rebuild switch --flake /etc/nixos#<hostName>` (same as `tentaflake rebuild`) |
-| `reload` | `exec $SHELL` (reload the current shell) |
-| `cls` | `clear` |
-| `lg` | `lazygit` (when `lazygit.enable`) |
-| `ls`/`ll`/`la`/`cat`/`tree` | `eza`/`bat` equivalents (when `tools.enable`) |
-
-- **zsh** — when enabled it becomes the admin user's login shell (overriding
-  `adminShell`), with Oh My Zsh (`git`, `sudo`, `systemd`, and your container
-  backend's plugin), autosuggestions, syntax highlighting, fzf-tab completion,
-  and Starship as the prompt. When disabled you stay on bash.
-- **Neovim (nvf)** lives in a separate module (`modules/editor.nix`) because it
-  needs the `nvf` flake input. The template wires it into its own hosts and
-  exports it as `nixosModules.editor`. The config is lean (LSP, treesitter,
-  telescope, gitsigns, blink-cmp; languages nix/bash/lua/markdown/yaml) — add
-  `languages.<lang>.enable` in a fork for a fuller dev stack. `EDITOR` becomes
-  `nvim` when enabled.
-
-These are set at install time by the **installer feature checklist** (see below),
-or by hand in your host config.
-
-## Options
-
-The base shell options default to **on** for the installed `tentaflake`:
-
-```nix
-tentaflake.shell.enable = true;                # master toggle for everything below
-tentaflake.shell.motd.enable = true;           # the tentaflake-status login banner
-tentaflake.shell.tools.enable = true;          # eza/bat/fd/ripgrep/fzf/... package set
-tentaflake.shell.starship.enable = true;       # starship prompt (off → colored bash PS1)
-tentaflake.shell.tentaflakeCli.enable = true;  # the `tentaflake` CLI (+ deprecated `hermes` shim)
-```
-
-`tentaflake.shell.tentaflakeCli.enable` was renamed from
-`tentaflake.shell.hermesCli.enable`; the old name still works (via
-`lib.mkRenamedOptionModule`) but prints an eval-time deprecation warning —
-switch to the new name when convenient.
-
-When `tools.enable` is on, `ls`/`ll`/`la`/`cat`/`tree` are aliased to the modern
-equivalents (`eza`, `bat`); turn it off to keep stock coreutils.
-
-When `starship.enable` is off, a hand-rolled colored bash prompt is installed
-instead (`user@host:cwd (git-branch)`, red username when root).
-
-## Installer feature checklist
-
-The installer ISO asks which extras to install via a checklist (zsh, zoxide,
-nvf, lazygit, tmux, modern tools — pre-checked). Your choices are written straight
-into the generated `/etc/nixos/flake.nix` as `tentaflake.*` toggles (and, for
-nvf, the `nvf` flake input pinned to the ISO's revision + the editor module
-import). Everything stays editable afterward — flip a toggle and
-`sudo nixos-rebuild switch`.
-
-## Physical console (kmscon)
-
-Over SSH the banner and `btop` look the way they should, because your terminal
-emulator has a real font. On the machine's own screen they used not to: a Linux
-VT can map at most **512 glyphs**, and the kernel's built-in font ships 256
-CP437-era ones. Braille (the `tentaflake-status` logo, `btop`'s graphs) and most
-box drawing simply have no glyph there — you get boxes and garbage, and no
-`console.font` can fix it, because the ceiling is the VT itself.
-
-So the installed system replaces the VT with **kmscon**, a KMS/DRI terminal that
-renders real TTF fonts through pango: full Unicode, antialiasing, and a font size
-that suits the panel. The default font is **Cascadia Mono**, picked because it
-covers braille (U+2800–28FF) — most "modern" monospace fonts (JetBrains Mono,
-Hack, Fira Mono) do not.
-
-```nix
-tentaflake.modernConsole.enable = true;   # default
-tentaflake.modernConsole.fontSize = 20;   # points; raise on HiDPI panels
-
-# Swap the font — it must cover braille (Iosevka, DejaVu Sans Mono, Unifont do):
-# fonts.packages = [ pkgs.iosevka ];
-# services.kmscon.config.font-name = "Iosevka";
-```
-
-Turn it off on hardware where kmscon cannot grab the framebuffer:
-
-```nix
-tentaflake.modernConsole.enable = false;
-tentaflake.consoleFont = "ter-v32n";   # Terminus fallback for the legacy VT
-# tentaflake.consoleFont = null;       # or: leave the kernel font alone entirely
-```
-
-`consoleFont` only takes effect **when kmscon is off** — with kmscon running, its
-TTF font is what you see, so a `setfont` at boot would reconfigure fbcon for
-nothing. `null` skips the `setfont` altogether, which is what both ISOs do: on
-some Intel panels that extra reconfiguration shows up as a flickering console
-with `pipe A FIFO underrun` in the log (harmless, but ugly).
-
-The Terminus fallback still beats the kernel default — it has box drawing, so
-`btop` is readable — but braille stays unrenderable, so the banner logo will
-show blanks. The keymap follows `tentaflake.consoleKeyMap` either way (kmscon
-takes it via xkb, since it replaces getty).
-
-**Both ISOs keep the legacy VT on purpose.** kmscon hands the login a pty and
-owns the VT in graphics mode, but the installer auto-launches `installer.sh`
-from a `[ "$(tty)" = /dev/tty1 ]` guard, and the live ISO's firstboot wizard
-uses the same guard *and* writes straight to `/dev/tty1`. Under kmscon neither
-would trigger. Their `dialog` TUIs need no braille anyway — kmscon comes on with
-the system the installer writes to disk.
-
-## Defaults across the ISOs
-
-| Profile | `shell.enable` | `motd.enable` | Why |
-|---|---|---|---|
-| `tentaflake` (installed) | on | on | the system you SSH into day-to-day |
-| `live-agent` (live ISO) | on | **off** | the live profile ships its own static `users.motd`; the dynamic banner is disabled to avoid two stacked banners |
-| `installer-iso` | **off** | — | TTY1 only runs `installer.sh`; no agents exist yet |
-
-## Notes
-
-- The banner only prints on interactive SSH or console **login** shells, once per
-  session — inner subshells, `tmux` panes, and `ssh host -- cmd` stay quiet. It is
-  wired for both **bash and zsh**; aliases come from `environment.shellAliases` so
-  they apply to whichever shell is active.
-- The `tentaflake` CLI enumerates every container declared under
-  `virtualisation.oci-containers.containers`. It recognizes the
-  `hermes-<name>` prefix (from `mkHermesAgent`) and `zeroclaw-<name>` prefix
-  (from `mkZeroClawAgent`) to label the runtime column; anything else is
-  labelled generically as `agent`. If you run agents through some other
-  mechanism entirely (not via `oci-containers`), the CLI won't see them.
+`tentaflake.modernConsole.enable` selects kmscon for Unicode-capable output.
+Set it to `false` when hardware cannot use kmscon; `consoleFont` then controls
+the legacy VT font. The installer disables font replacement to avoid display
+reconfiguration on sensitive hardware.

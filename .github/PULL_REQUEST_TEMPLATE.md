@@ -15,11 +15,13 @@
 - [ ] I have read [CONTRIBUTING.md](CONTRIBUTING.md)
 - [ ] This PR keeps the template **generic** — no domain-specific code
 - [ ] `nix flake check` passes
-- [ ] `cd pkgs/tentaflake-auditd && go vet ./... && go test ./...` passes (if Go code changed)
+- [ ] `cargo fmt --all -- --check` passes
+- [ ] `cargo clippy --workspace --all-targets -- -D warnings` passes
+- [ ] `cargo test --workspace` passes
 - [ ] Documentation updated in `docs/` (if user-facing change)
 - [ ] Module table in `README.md` updated (if module added/removed)
 - [ ] Commit messages follow [Conventional Commits](https://www.conventionalcommits.org/)
-- [ ] AI-authored commits include `Co-Authored-By:` attribution
+- [ ] Every non-merge commit includes a DCO sign-off
 
 ## Related Issues
 

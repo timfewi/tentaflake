@@ -17,6 +17,10 @@ in
       [ "tentaflake" "shell" "hermesCli" "enable" ]
       [ "tentaflake" "shell" "tentaflakeCli" "enable" ]
     )
+    (lib.mkRenamedOptionModule
+      [ "tentaflake" "networking" "egress" ]
+      [ "tentaflake" "networking" "legacyPortEgress" ]
+    )
   ];
 
   options.tentaflake = {
@@ -66,8 +70,8 @@ in
         and the login banner use.
 
         `null` leaves the kernel's built-in font alone — no `setfont` at boot,
-        hence no fbcon reconfiguration. Both ISOs use that: their `dialog` TUIs
-        draw in plain ASCII, and on some Intel panels the extra modeset shows up
+        hence no fbcon reconfiguration. The installer ISO uses that: its
+        `dialog` TUI draws in plain ASCII, and on some Intel panels the extra modeset shows up
         as a flickering console (`pipe A FIFO underrun`).
       '';
     };
@@ -104,10 +108,9 @@ in
       type = lib.types.enum [
         "installed"
         "installer"
-        "live"
       ];
       default = "installed";
-      description = "Deployment profile: installed=full system, installer=ISO installer, live=live agent ISO";
+      description = "Deployment profile: installed=full system or installer=ISO installer";
     };
 
     allowUnfree = lib.mkOption {
@@ -142,6 +145,24 @@ in
       enable = lib.mkEnableOption "kernel hardening and sysctl settings" // {
         default = true;
       };
+      watchdog = {
+        enable = lib.mkEnableOption "a hardware watchdog managed by systemd PID 1";
+        device = lib.mkOption {
+          type = lib.types.str;
+          default = "/dev/watchdog";
+          description = "Exact hardware watchdog device exposed by the target host.";
+        };
+        runtimeSec = lib.mkOption {
+          type = lib.types.str;
+          default = "30s";
+          description = "Maximum userspace stall before the hardware watchdog resets the host.";
+        };
+        rebootSec = lib.mkOption {
+          type = lib.types.str;
+          default = "10min";
+          description = "Watchdog deadline while rebooting.";
+        };
+      };
     };
 
     locale = {
@@ -155,16 +176,15 @@ in
         default = true;
       };
 
-      # Opt-in outbound filtering. MUST stay default-off: a default-on drop
-      # policy would break tailscale, DNS, DHCP, NTP, and nix substituters on
-      # existing deployments.
-      egress = {
-        enable = lib.mkEnableOption "outbound (egress) port allowlist via nftables";
+      # Compatibility-only host OUTPUT filter. It is not a destination
+      # allowlist and does not govern container bridge traffic in FORWARD.
+      legacyPortEgress = {
+        enable = lib.mkEnableOption "legacy host OUTPUT port filter for the dev profile";
 
         allowedTCPPorts = lib.mkOption {
           type = lib.types.listOf lib.types.port;
           default = [ 443 ];
-          description = "TCP destination ports allowed outbound when egress filtering is enabled";
+          description = "TCP destination ports accepted by the legacy dev-only host OUTPUT filter";
         };
 
         allowedUDPPorts = lib.mkOption {
@@ -176,7 +196,7 @@ in
             547 # DHCPv6 client -> server
             41641 # tailscale WireGuard
           ];
-          description = "UDP destination ports allowed outbound when egress filtering is enabled";
+          description = "UDP destination ports accepted by the legacy dev-only host OUTPUT filter";
         };
       };
     };

@@ -7,8 +7,11 @@
 /lib/ @timfewi
 /configuration.nix @timfewi
 
-# Go daemon
-/pkgs/tentaflake-auditd/ @timfewi
+# Rust workspace and package wrapper
+/crates/ @timfewi
+/Cargo.toml @timfewi
+/Cargo.lock @timfewi
+/pkgs/tentaflake-cli/ @timfewi
 
 # Installer
 /installer/ @timfewi

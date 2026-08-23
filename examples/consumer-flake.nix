@@ -43,14 +43,12 @@
     let
       system = "x86_64-linux";
       pkgs = nixpkgs.legacyPackages.${system};
-      lib = nixpkgs.lib;
 
       # ── Import tentaflake helpers ──
-      # (zeroclaw / opencode agents work the same way: pass defs to
-      #  mkZeroClawAgent / mkOpenCodeAgent)
+      # ZeroClaw agents work the same way: pass definitions to
+      # mkZeroClawAgent.
       mkHermesAgent = tentaflake.lib.${system}.mkHermesAgent;
       mkZeroClawAgent = tentaflake.lib.${system}.mkZeroClawAgent;
-      mkOpenCodeAgent = tentaflake.lib.${system}.mkOpenCodeAgent;
       constants = tentaflake.lib.${system}.constants;
 
       # ── Shared specialArgs for all hosts ──
@@ -59,7 +57,6 @@
           self
           mkHermesAgent
           mkZeroClawAgent
-          mkOpenCodeAgent
           constants
           ;
       };
@@ -70,7 +67,6 @@
           hostName,
           adminUser,
           modules,
-          extraHomeModules ? [ ],
         }:
         nixpkgs.lib.nixosSystem {
           inherit system;
@@ -86,11 +82,11 @@
             {
               tentaflake = {
                 inherit hostName;
-                adminUser = adminUser;
+                inherit adminUser;
                 timeZone = "UTC";
-                defaultLocale = constants.defaultLocale;
-                consoleKeyMap = constants.consoleKeyMap;
-                stateVersion = constants.stateVersion;
+                inherit (constants) defaultLocale;
+                inherit (constants) consoleKeyMap;
+                inherit (constants) stateVersion;
               };
             }
 
@@ -100,10 +96,12 @@
             # 4. Home Manager (user-level dotfiles, shell, git, editor)
             home-manager.nixosModules.home-manager
             {
-              home-manager.useGlobalPkgs = true;
-              home-manager.useUserPackages = true;
-              home-manager.extraSpecialArgs = specialArgs;
-              home-manager.users.${adminUser} = import ./home.nix;
+              home-manager = {
+                useGlobalPkgs = true;
+                useUserPackages = true;
+                extraSpecialArgs = specialArgs;
+                users.${adminUser} = import ./home.nix;
+              };
             }
           ]
           # 5. Machine-specific modules

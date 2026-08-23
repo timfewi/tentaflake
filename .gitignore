@@ -24,6 +24,9 @@ AGENT.local.md
 .envrc
 .planning
 
+# Rust
+/target/
+
 # Reports
 .reports/
 # Private keys — never commit unencrypted credentials

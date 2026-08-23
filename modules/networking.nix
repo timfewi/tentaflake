@@ -1,17 +1,27 @@
 {
   config,
   lib,
-  pkgs,
   ...
 }:
 let
   cfg = config.tentaflake;
-  egress = cfg.networking.egress;
+  egress = cfg.networking.legacyPortEgress;
   portList = ports: lib.concatMapStringsSep ", " toString ports;
 in
 lib.mkIf cfg.networking.enable {
+  assertions = [
+    {
+      assertion = !egress.enable || cfg.security.profile == "dev";
+      message = ''
+        tentaflake.networking.legacyPortEgress is a port-only host OUTPUT
+        filter and is allowed only with security.profile = "dev". It is not a
+        safe hostname/IP egress policy for balanced or strict capsules.
+      '';
+    }
+  ];
+
   networking = {
-    hostName = cfg.hostName;
+    inherit (cfg) hostName;
     networkmanager.enable = true;
     nftables.enable = true;
     firewall = {
@@ -22,8 +32,7 @@ lib.mkIf cfg.networking.enable {
       logRefusedConnections = true;
     };
 
-    # Opt-in egress allowlist. Agent containers run with --network=host
-    # (lib/mkHermesAgent.nix), so these host OUTPUT rules cover them too.
+    # Compatibility-only port filter for dev/host-network containers.
     # Distinct table name so it never clashes with the firewall's own tables.
     # Order matters: loopback + established/related must be accepted first.
     nftables.tables.tentaflake-egress = lib.mkIf egress.enable {

@@ -8,6 +8,225 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- `just security` now combines a pinned, telemetry-free Semgrep source scan
+  with current OSV checks for the Rust and Dev Containers CLI dependency
+  lockfiles; GitHub Actions referenced by scanned workflows are commit-pinned.
+- Contributor E2E recipes now cover the complete automated gate, a frozen-lock
+  Dev Container smoke test, and an interactive installer/installed-system UEFI
+  VM backed only by an isolated persistent QCOW2 file.
+- A digest-pinned Dev Container can bootstrap Nix and preload the repository's
+  lock-file-backed development shell without mounting runtime sockets or
+  credentials, giving local editors and Codespaces the same contributor
+  toolchain as `nix develop`.
+
+### Fixed
+- Contributor E2E now uses a source- and dependency-hash-pinned Dev Containers
+  CLI 0.88.0 with the upstream `proxy-from-env` WHATWG URL parsing change
+  backported for its CommonJS consumer, removing the legacy `url.parse()` path
+  that produced Node.js `DEP0169` security deprecation warnings.
+- The installer ISO now embeds its repository below
+  `/etc/tentaflake/source`, avoiding a parent-path collision with generated
+  runtime manifests such as `/etc/tentaflake/security.tsv`.
+- The development shell now uses the canonical `nixfmt` package instead of its
+  deprecated `nixfmt-rfc-style` alias, removing the flake evaluation warning.
+- The local `just ci` gate no longer stops on existing Statix and Deadnix
+  findings; repeated Nix attribute paths are grouped and unused arguments are
+  removed without changing their resulting module options.
+- Security-manifest generation now records an OCI container with no configured
+  user as not non-root instead of passing its `null` user to a string matcher
+  and failing evaluation in the `dev` compatibility profile.
+- The VM integration test now starts its rebooted node with QEMU reboot support
+  enabled and asks systemd to reboot directly instead of relying on a virtual
+  key combination. Its headless agent fixtures also omit kmscon, which can
+  crash on QEMU's synthetic bochs DRM device, and the stopped-controller
+  fixture now declares the broker that its reboot assertion expects to return.
+  The controlled-reboot assertion no longer waits indefinitely or checks an
+  undeclared boot service.
+
+## [0.4.0] - 2026-08-21
+
+### Breaking
+- OpenCode support is removed completely: its builder, image pin, generated
+  services, CLI discovery, examples, tests, and current documentation are no
+  longer part of the template. Version 0.4 supports Hermes and ZeroClaw;
+  OpenClaw is intentionally deferred.
+- Phase 0 removes the Go `tentaflake-auditd` package, SQLite event database,
+  custom Agent Console, `tentaflake top`, and the interactive agent wizard.
+  The operator CLI is now a Rust workspace package verified with Rustfmt,
+  Clippy, and Cargo tests.
+- The live-agent ISO and its firstboot/persistence scripts are removed. The
+  installer ISO is the only bootable image.
+- Editor, Hive Research, and Piper TTS leave the core import set and are
+  exported as explicit optional modules.
+- Installed systems now default to `tentaflake.security.profile = "balanced"`.
+  Direct credential env files, host networking, published ports, dashboards,
+  extra devices/networks, sensitive mounts, and mutable images fail evaluation
+  in a secure profile. Existing trusted development systems must explicitly
+  select `dev`; `strict` fails closed until a tested separate-kernel boundary
+  exists.
+- Automatically started balanced agents now fail evaluation unless their exact
+  container key has an enabled broker, disposable worker, and fixed-size
+  workspace quota. Deliberately stopped migration scaffolds may remain offline.
+- `tentaflake.networking.egress` is renamed to
+  `tentaflake.networking.legacyPortEgress` and is dev-only. It was only a host
+  OUTPUT port filter, not a destination allowlist or container FORWARD policy.
+
+### Added
+- A complete threat model covering assets, adversaries, trust boundaries,
+  control/evidence mapping, explicit non-goals, residual risks, and the
+  deployment acceptance checklist.
+- A per-agent disposable Rust tool-worker: descriptor-safe bounded workspace
+  snapshots, Nix-built offline toolchain image, short-lived no-network gVisor
+  capsules, read-only result import, cleanup, log/audit limits, action classes,
+  and host approval/denial over a private immutable pending request.
+- `TFSEC-020` makes a missing disposable worker a high-severity posture finding
+  for secure-profile controllers; module and VM tests cover mismatched policy,
+  no-egress execution, forbidden/approval-required actions, and cleanup.
+- Fixed-size per-agent ext4 workspace volumes with fail-closed empty-workspace
+  creation, exact-size drift rejection, checked mount/ownership dependencies,
+  VM `ENOSPC` coverage, migration documentation, and posture finding
+  `TFSEC-021`.
+- Explicit Docker `docker-default` AppArmor selection for secure controllers
+  and workers, unconfined Seccomp/AppArmor override rejection, posture findings
+  `TFSEC-022`/`TFSEC-023`, and documented Podman evidence limits.
+- Optional per-agent Cosign key/keyless verification units that gate OCI
+  startup, an all-secure-agents enforcement switch, module tests, and posture
+  finding `TFSEC-024` when no signature policy is configured.
+- Opt-in systemd hardware-watchdog settings with no assumed device and an
+  explicit target-host validation warning.
+- Observability textfile metrics and Prometheus rules for broker policy/fetch
+  denials, request/token/cost budgets, restart flapping, and root-disk pressure.
+- Security-doctor live probes for root-disk pressure, Tailscale Serve/Funnel,
+  and Restic freshness, including explicit unknown-evidence warnings and a
+  hardened post-success backup timestamp unit.
+- Non-interactive live OCI inspection for the core privilege, user, runtime,
+  network, capability, root-filesystem, resource, and mount invariants, with
+  unavailable evidence kept explicitly unknown.
+- Podman live inspection now uses its documented `OCIRuntime`, effective and
+  bounding capability sets, AppArmor profile, and compatible HostConfig fields;
+  missing version-specific fields remain unknown instead of false-critical.
+- The VM integration definition now includes a Podman node that validates its
+  generated secure unit, deterministic internal bridge, local image loading,
+  `runsc`, non-root/empty capabilities, read-only root, limits, and no egress.
+- Security manifests now carry exact configured broker modes/endpoints; the
+  doctor distinguishes unreachable evidence from an explicit failed
+  credential/policy/audit health response and detects manifest inconsistency.
+- VM negative tests now include a separate external attacker node, actual
+  `runsc` execution, direct DNS/Internet/private/metadata denials, PID and
+  worker-runtime ceilings, sensitive-state invisibility, and a successful
+  scoped LLM-broker request from the isolated agent network.
+- VM acceptance coverage now also exercises host loopback, the individual
+  private/tailnet/link-local/multicast classes, `/usr` immutability, a changed
+  Git remote, privileged-request denial, unsafe-doctor exit status, and a
+  controlled reboot. Docker live inspection confirms CPU/RAM/swap/PID limits;
+  redirect and DNS-rebinding policy uses a deterministic resolver fixture in
+  the Rust suite.
+- Broker networks now use deterministic bridge interfaces; host INPUT accepts
+  broker ports only when interface and source subnet both match, preventing a
+  source-address-only allow rule from acting as the authority boundary.
+
+### Fixed
+- The hardened backup-success timestamp service now declares its persistent
+  path with systemd `StateDirectory` instead of requiring a nonexistent
+  `ReadWritePaths` target before its script could create it. This prevents a
+  `226/NAMESPACE` failure after an otherwise successful Restic run, and the VM
+  restore and broker-restart probes now report failures within 30 seconds
+  instead of waiting for the global 15-minute retry timeout.
+- Disposable workers now select backend-compatible bounded log drivers
+  (`local` for Docker and `k8s-file` for Podman) instead of sending file
+  rotation options to a `journald` default that rejects them. Docker disables
+  compression for its single retained local log file, as required by Engine.
+- Disposable host snapshots now remain root-owned while source-owner read and
+  execute access is mirrored to the declared capsule GID for their read-only
+  bind mount. This keeps private ext4 entries such as `lost+found` readable
+  without adding `CAP_CHOWN` to the host worker. Capsule copies still discard
+  host ownership metadata, and VM worker failures now print service diagnostics
+  within 30 seconds instead of waiting for the global 15-minute retry timeout.
+  Direct root `approve` and `deny` commands adopt that same declared worker
+  group before touching state, so approved jobs do not create root-group
+  snapshots that their non-root capsule cannot read.
+- Disposable artifact export now happens before the wrapper exits, while its
+  bounded workspace tmpfs still exists. Artifacts stream from inside the gVisor
+  mount namespace instead of relying on an OCI `cp` view that cannot see that
+  tmpfs. A bounded importer rejects unsafe paths, links, and special files; the
+  stable completion-marker handshake preserves the real command status without
+  adding a writable host bind before releasing and removing the capsule.
+- gVisor VM probes now keep a small but startable PID budget. The previous
+  limit of 16 charged `runsc` sandbox helpers against the same cgroup and could
+  reject sandbox startup before the test workload ran.
+- Disposable-worker VM fixtures now request half a CPU, allowing their secure
+  capsules to run inside the integration test's single-vCPU guest while the
+  production default remains unchanged.
+- Path-activated disposable workers no longer use systemd's aggregate service
+  start counter, which also counted successful oneshot queue drains and disabled
+  a healthy worker after five ordinary jobs. Infrastructure failures retain the
+  ten-second restart delay, while per-job resource and timeout limits remain.
+- Broker health and authentication now recognize systemd's read-only named-ACL
+  access for `LoadCredential` files used with `DynamicUser`. The ACL mask is
+  accepted only for exact files below `$CREDENTIALS_DIRECTORY`; ordinary
+  group-readable files and all other-readable files remain rejected.
+- VM broker-readiness checks now fail after 30 seconds with the raw health
+  response, route, listener, firewall chains, unit status, and journal instead
+  of waiting for the test driver's 15-minute timeout.
+- Disposable worker units now use a statically declared host group matching
+  the container GID, preserve tmpfiles' setgid result mode without a blocked
+  `chmod`, and inspect NixOS' generated OCI start script when testing secure
+  runtime flags.
+- VM secure-unit assertions now inspect NixOS' generated OCI start scripts for
+  both Docker and Podman instead of expecting runtime flags in wrapper units.
+- Disposable workers now retain `openat2` as the primary no-symlink workspace
+  opener and use a descriptor-relative, component-by-component `openat`
+  fallback only when the kernel reports `ENOSYS`. Relative paths, dot/parent
+  traversal, symlinks, and non-directory components remain rejected.
+- VM broker readiness assertions now retry the actual health response instead
+  of treating systemd's `Type=simple` process start as socket readiness.
+- Quota-backed workspaces now mount after ordinary local filesystems without a
+  `local-fs.target`/`basic.target` ordering cycle; worker path watches start
+  only after mounted ownership and control-directory setup completes.
+- Broker health probes no longer append audit events; startup proves audit
+  writability once, later readiness checks reject symlinks and sync without
+  allowing health polling to churn the bounded audit history. LLM input-token
+  budgets now reserve the conservative request-byte upper bound, and bridge
+  interface hash collisions fail evaluation.
+- Secure controller restart/dependency overrides now merge into the actual
+  OCI-generated systemd service attribute instead of a parallel key ending in
+  `.service`; broker and workspace-mount ordering is therefore present in the
+  rendered container unit.
+- Per-agent Phase B brokered egress: dedicated internal OCI networks, disabled
+  container DNS/IPv6, subnet-scoped host INPUT/FORWARD firewall rules, and a
+  random runtime-only virtual credential per agent.
+- A Rust LLM credential broker with exact route/model allowlists, completion
+  clamps, concurrency/rate/daily token/cost budgets, provider credential
+  substitution through systemd `LoadCredential`, DNS pinning, no redirects or
+  environment proxies, and prompt-free JSONL audit.
+- A Rust SSRF-safe fetch broker with exact HTTPS host/media allowlists, public
+  IP enforcement, redirect revalidation, DNS-rebinding defense, bounded
+  responses, mode-0700 quarantine, and explicit untrusted-content envelopes.
+- Bounded systemd restart policy and credential/audit readiness endpoints for
+  brokers, plus a combined `tentaflake stop` transaction that stops an agent's
+  container and all loaded broker endpoints.
+- An opt-in encrypted Restic backup module with explicit state/audit paths,
+  runtime-only repository/password files, retention, integrity checks, and a
+  VM backup/restore drill.
+- A loopback-only observability profile with Prometheus, Grafana, Loki, Alloy,
+  systemd credential loading, and provisioned data sources.
+- A separate Falco modern-eBPF runtime-detection profile. Consumers must supply
+  a reviewed pinned Falco package because the pinned nixpkgs has none.
+- Direct module-evaluation coverage for core, observability, and Falco profiles.
+- One post-merge container security policy shared by Hermes and ZeroClaw:
+  explicit non-root user, no privileges/capabilities/ports/devices,
+  read-only root, bounded hardened tmpfs, CPU/RAM/swap/PID/ulimit controls,
+  sensitive-mount and secret-like-environment rejection, and declarative
+  gVisor `runsc` selection without a silent runc fallback.
+- `tentaflake doctor --security` with stable machine-readable `TFSEC-*`
+  findings and a Nix-generated desired-state manifest.
+- Secure profiles require the private Tailscale management path, reject the
+  public OpenSSH module, and advertise the documented `tag:agent-host` tag.
+- Exact canonical GitHub remote and branch allowlists for host-side
+  `gitAutoPush`, repository-scoped `safe.directory`, fail-closed errors, and
+  malicious-URL regression tests.
+
+### Previous development notes
 - `tentaflake status` now inventories every non-empty physical disk instead of showing only the root filesystem. A mounted disk is reported once using `/` or its first data-like mount (excluding `/boot` and `/nix/store`); an unmounted disk remains visible by device name and raw capacity. Loop, RAM, zram, and zero-byte card-reader devices are excluded. The screenshot-safe `--hide` view keeps this non-identifying capacity telemetry, and `tentaflake-status --selftest` covers root, mounted data, unmounted, and excluded-device cases with synthetic commands.
 - `tentaflake health` — host vitals dashboard, the machine-level counterpart to `stats`. Same renderer again (logo, header, bars, colour thresholds), with a **VITALS** section — 24-cell bars for CPU busy (a 0.4 s `/proc/stat` delta, 100% = every core busy), memory, swap, the hottest thermal zone in °C, and every block-device filesystem — and a **CHECKS** section covering failed systemd units, agent states and Tailscale. The header carries a `● healthy` / `▲ degraded` / `✗ critical` verdict, the worst finding on the same thresholds the bars are painted with. `--live` (default 2 s, `--live=5` to slow it) redraws in place on the alternate screen, so Ctrl-C leaves the scrollback untouched and colours survive — unlike `watch`. It always exits 0: `tentaflake doctor` remains the scriptable check with the nonzero exit. `--hide` applies here too and prints a *count* of failed units instead of their names (a unit name carries its container's); `tentaflake-status --selftest` now renders the masked health view alongside the masked wide view and fails if either leaks. `./scripts/banner-test.sh --health` previews and regression-checks it on a dev box.
 - `tentaflake stats` — fleet dashboard sharing the login banner's renderer (same logo, header and rows, so the two cannot drift), one density wider: per-agent CPU%, PID count, memory against the container limit, and a fleet total against host RAM. CPU is a 0.4 s cgroup delta on the `docker stats` scale (100% = one busy core); for a live view, `watch -cn2 tentaflake stats`.
@@ -15,10 +234,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `--hide` / `-H` on `status` and `stats`: masks host name, tailnet IP and agent names (`agent-1`…`agent-N`, the failed-agents hint included) for screenshot-safe output, with a yellow `· redacted` header marker. Telemetry stays. `tentaflake-status --selftest` renders the masked wide view and exits nonzero if any identifying string leaks.
 - DCO enforcement for pull requests: every non-merge commit must include a `Signed-off-by:` line; see `DCO.txt` and `CONTRIBUTING.md`.
 - `nix develop` now greets you: the dev shell prints the tentaflake logo with branch/HEAD/working-tree/Nix-version rows and a short `just` cheat sheet, and sets a `(tentaflake)` prompt marker. Same braille art and layout as the host login banner — both read `public/tentaflake-shell-logo.txt`. The banner is skipped when stdout is not a TTY (`nix develop --command …` in CI stays clean) and `TENTAFLAKE_NO_BANNER=1` disables it entirely. The dev shell moved from an inline `pkgs.mkShell` in `flake.nix` to `lib/devshell.nix`; the package set is unchanged, and the banner script is built with `writeShellApplication`, so `nix flake check` shellchecks it.
-
-### Fixed
-- `tentaflake-status --selftest` now checks agent and container identifiers at token boundaries, so a valid generic name such as `code` is no longer misreported as leaked merely because the redacted output contains the `opencode` runtime label. Exact identifiers still fail the redaction gate.
-- `store.go`: `Stats` and `Prune` no longer full-scan the events table on every call. The 0.1.x same-day-window fix wrapped the stored column in `datetime(timestamp)`, which made `idx_events_timestamp` unusable — on a busy host (~1M retained rows) each `Stats` call took seconds, and `tentaflake top` (refreshing every second under a 3 s query context) died with `agent rows query: context deadline exceeded`. The boundary is now formatted as RFC3339 UTC (`strftime('%Y-%m-%dT%H:%M:%SZ', 'now', ?)`) — the exact format `Insert` writes — so the plain string compare stays chronologically correct (same-day fix preserved, `TestPruneSameDayBoundary` still passes) while the index is used; `Stats` additionally pins `INDEXED BY idx_events_timestamp` because the planner otherwise prefers the agent index for the `GROUP BY` (measured 0.47 s → 0.002 s on a live 1.16M-row DB). Guarded by `TestWindowQueriesUseTimestampIndex` (asserts the query plan uses the timestamp index).
 
 ## [0.3.1] — 2026-07-19
 
@@ -146,7 +361,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `docs/` — quickstart guide, agent tips, skill index, and 4 bundled Hermes skills
 - GitHub Actions CI: `nix flake check` on PR and push to main
 
-[Unreleased]: https://github.com/timfewi/tentaflake/compare/v0.3.1...main
+[Unreleased]: https://github.com/timfewi/tentaflake/compare/v0.4.0...main
+[0.4.0]: https://github.com/timfewi/tentaflake/compare/v0.3.1...v0.4.0
 [0.3.1]: https://github.com/timfewi/tentaflake/compare/v0.2.0...v0.3.1
 [0.2.0]: https://github.com/timfewi/tentaflake/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/timfewi/tentaflake/releases/tag/v0.1.0

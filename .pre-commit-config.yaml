@@ -1,5 +1,5 @@
 # Mirrors the CI gates (.github/workflows/) — see CONTRIBUTING.md for setup.
-# Tools (shellcheck, go, nix) come from the environment; only gitleaks is
+# Tools (shellcheck, cargo, nix) come from the environment; only gitleaks is
 # fetched by pre-commit itself.
 repos:
   - repo: https://github.com/gitleaks/gitleaks
@@ -15,17 +15,18 @@ repos:
         language: system
         types: [shell]
 
-      - id: gofmt
-        name: gofmt
-        entry: gofmt -l -w
+      - id: cargo-fmt
+        name: cargo fmt
+        entry: cargo fmt --all -- --check
         language: system
-        types: [go]
+        types: [rust]
+        pass_filenames: false
 
-      - id: go-vet
-        name: go vet
-        entry: bash -c 'cd pkgs/tentaflake-auditd && go vet ./...'
+      - id: cargo-clippy
+        name: cargo clippy
+        entry: cargo clippy --workspace --all-targets -- -D warnings
         language: system
-        types: [go]
+        types: [rust]
         pass_filenames: false
 
       - id: nixfmt

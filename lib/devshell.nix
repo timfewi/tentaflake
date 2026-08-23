@@ -1,7 +1,7 @@
 # ────────────────────────────────────────────────────────────
 # devshell.nix — the contributor environment behind `nix develop`
 #
-# Same visual language as the login banner (modules/shell.nix): braille logo in
+# Contributor banner: braille logo in
 # cyan on the left, a dim key/value column on the right. The facts differ —
 # a contributor cares about the checkout and the gates, not fleet health.
 # ────────────────────────────────────────────────────────────
@@ -11,8 +11,7 @@ let
   inherit (pkgs) lib;
 
   # Single source of truth for the art is public/tentaflake-shell-logo.txt —
-  # the same file the login banner reads. Indented at build time so the banner
-  # script stays a plain render loop.
+  # retained as the contributor-shell identity and rendered below.
   logo = lib.concatMapStringsSep "\n" (line: "  " + line) (
     lib.splitString "\n" (lib.removeSuffix "\n" (builtins.readFile ../public/tentaflake-shell-logo.txt))
   );
@@ -26,21 +25,29 @@ let
     }
     {
       cmd = "just ci";
-      what = "full local gate (CI + both ISOs)";
+      what = "full local gate (CI + installer ISO)";
     }
     {
-      cmd = "just check";
-      what = "nix flake check";
+      cmd = "just e2e-devcontainer";
+      what = "verify the locked contributor container";
     }
     {
-      cmd = "just fmt";
-      what = "format the tree with nixfmt";
+      cmd = "just security";
+      what = "scan source and locked dependencies";
     }
     {
-      cmd = "just banner";
-      what = "preview the login banner";
+      cmd = "just e2e-installer";
+      what = "install into a disposable UEFI VM";
     }
   ];
+  commandColumnWidth =
+    lib.foldl' (width: command: lib.max width (builtins.stringLength command.cmd)) 0 commands + 3;
+  commandDescriptionWidth = lib.foldl' (
+    width: command: lib.max width (builtins.stringLength command.what)
+  ) 0 commands;
+  commandRule = lib.concatStrings (
+    lib.replicate (3 + commandColumnWidth + commandDescriptionWidth) "─"
+  );
 
   # writeShellApplication shellchecks at build time, so building the dev shell
   # lints this script — same guarantee `just shellcheck` gives scripts/*.sh.
@@ -100,12 +107,12 @@ let
         fi
       done
 
-      printf '\n  %b──────────────────────────────────────────────%b\n' "$dim" "$reset"
+      printf '\n  %b%s%b\n' "$dim" ${lib.escapeShellArg commandRule} "$reset"
 
       printf '\n  %bCOMMANDS%b\n' "$bold$cyan" "$reset"
       ${lib.concatMapStringsSep "\n" (
         c:
-        "printf '    %b%-16s%b %b%s%b\\n' \"$bold\" ${lib.escapeShellArg c.cmd} \"$reset\" \"$dim\" ${lib.escapeShellArg c.what} \"$reset\""
+        "printf '    %b%-${toString commandColumnWidth}s%b %b%s%b\\n' \"$bold\" ${lib.escapeShellArg c.cmd} \"$reset\" \"$dim\" ${lib.escapeShellArg c.what} \"$reset\""
       ) commands}
 
       printf '\n  %bevery commit needs a DCO sign-off:%b git commit -s\n\n' "$dim" "$reset"
@@ -115,12 +122,14 @@ in
 pkgs.mkShell {
   packages = with pkgs; [
     just
-    nixfmt-rfc-style
+    nixfmt
     statix
     deadnix
     nil
-    gotools
-    golangci-lint
+    cargo
+    clippy
+    rustc
+    rustfmt
     shellcheck
   ];
 

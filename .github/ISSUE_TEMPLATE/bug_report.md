@@ -21,7 +21,7 @@ What you expected to happen.
 **Environment:**
 - NixOS version: `nixos-version`
 - Nix version: `nix --version`
-- Go version (if tentaflake-auditd): `go version`
+- Rust version (if CLI-related): `rustc -V`
 - Docker version (if agent-related): `docker --version`
 
 **Logs / Error output**

@@ -1,23 +1,16 @@
 {
-  description = "Generic NixOS flake template for running multiple isolated AI agents (Hermes, ZeroClaw, …) on one headless machine";
+  description = "Generic NixOS flake template for running isolated Hermes and ZeroClaw agents on one headless machine";
 
   inputs = {
     # Tracks nixos-unstable, pinned to an exact revision by the committed flake.lock
     # (so builds are reproducible — run `nix flake update` to bump deliberately).
-    # Unstable is required here: it is the only channel that currently provides BOTH
-    # a non-vulnerable docker (29.x) AND Go >= 1.25 (needed by tentaflake-auditd's
-    # modernc.org/sqlite). The 25.11 stable ships docker 28.5.2, flagged insecure.
+    # The pinned revision provides the container and Rust toolchains used by the
+    # host and the workspace CLI.
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
 
     # Optional: use hermes-agent NixOS module for single-agent setups or container images
     hermes-agent = {
       url = "github:NousResearch/hermes-agent";
-      inputs.nixpkgs.follows = "nixpkgs";
-    };
-
-    # Neovim distribution (consumed by modules/editor.nix → tentaflake.editor.nvf)
-    nvf = {
-      url = "github:NotAShelf/nvf";
       inputs.nixpkgs.follows = "nixpkgs";
     };
 
@@ -51,7 +44,6 @@
         hostName
         adminUser
         adminDescription
-        adminShell
         defaultLocale
         consoleKeyMap
         stateVersion
@@ -59,7 +51,7 @@
 
       system = "x86_64-linux";
       pkgs = nixpkgs.legacyPackages.${system};
-      lib = nixpkgs.lib;
+      inherit (nixpkgs) lib;
 
       # Root of the repo — used by installer ISO to embed source
       repoRoot = ./.;
@@ -68,13 +60,32 @@
       constants = import ./lib/constants.nix;
 
       # ── Shared agent builders ──
-      mkHermesAgent = (import ./lib { inherit pkgs lib; }).mkHermesAgent;
-      mkZeroClawAgent = (import ./lib { inherit pkgs lib; }).mkZeroClawAgent;
-      agentsFromData = (import ./lib { inherit pkgs lib; }).agentsFromData;
-      mkOpenCodeAgent = (import ./lib { inherit pkgs lib; }).mkOpenCodeAgent;
+      inherit ((import ./lib { inherit pkgs lib; })) mkHermesAgent;
+      inherit ((import ./lib { inherit pkgs lib; })) mkZeroClawAgent;
+      inherit ((import ./lib { inherit pkgs lib; })) agentsFromData;
 
       # Module set imported by external consumers and built-in hosts
       tentaflakeModules = import ./modules/default.nix;
+
+      # Contributor E2E tooling can move ahead of the nixpkgs package while
+      # remaining source- and dependency-hash pinned.
+      devcontainerCli = import ./lib/devcontainer-cli.nix { inherit pkgs; };
+
+      # Security tools use the locked nixpkgs revisions; rule updates are
+      # separate, reviewable hash bumps instead of live registry downloads.
+      securityTools = pkgs.symlinkJoin {
+        name = "tentaflake-security-tools";
+        paths = [
+          pkgs.osv-scanner
+          pkgs.semgrep
+        ];
+      };
+      semgrepRules = pkgs.fetchFromGitHub {
+        owner = "semgrep";
+        repo = "semgrep-rules";
+        rev = "40b8c63f75dc7c22c8a77482d73bfb864b146f7e";
+        hash = "sha256-VtPavzFGDmRzdG9wTFc+yp7TbI1gT1/IaF//K1m3OT0=";
+      };
 
       # Shared specialArgs — no host-specific params here
       baseSpecialArgs = {
@@ -84,7 +95,6 @@
           mkHermesAgent
           mkZeroClawAgent
           agentsFromData
-          mkOpenCodeAgent
           repoRoot
           constants
           ;
@@ -92,22 +102,24 @@
     in
     {
       # ── Exported module set ──
-      nixosModules.default = tentaflakeModules;
+      nixosModules = {
+        default = tentaflakeModules;
 
-      # Also export installer-specific modules so consumers can compose them
-      nixosModules.installer = import ./installer/iso.nix;
-      nixosModules.live = import ./installer/live-iso.nix;
-
-      # Optional Neovim (nvf) module. Kept out of nixosModules.default because it
-      # needs the `nvf` flake input; consumers add that input and import this.
-      nixosModules.editor = import ./modules/editor.nix;
+        # Installer and optional profiles/integrations are exported explicitly;
+        # none of them enlarge nixosModules.default.
+        installer = import ./installer/iso.nix;
+        editor = import ./modules/optional/editor.nix;
+        hiveResearch = import ./modules/optional/hive-research.nix;
+        piperTts = import ./modules/optional/piper-tts-server.nix;
+        observability = import ./modules/profiles/observability.nix;
+        falco = import ./modules/profiles/falco.nix;
+      };
 
       # ── Exported helpers ──
       lib.${system} = {
         inherit
           mkHermesAgent
           mkZeroClawAgent
-          mkOpenCodeAgent
           agentsFromData
           constants
           ;
@@ -123,13 +135,20 @@
       # ── Checks (validates nixosConfigurations build) ──
       checks.${system} = {
         ${hostName} = self.nixosConfigurations.${hostName}.config.system.build.toplevel;
-        tentaflake-auditd = self.packages.${system}.tentaflake-auditd;
+        tentaflake-cli = self.packages.${system}.tentaflake-cli;
+        tentaflake-broker = self.packages.${system}.tentaflake-broker;
+        tentaflake-worker = self.packages.${system}.tentaflake-worker;
+        tentaflake-worker-image = self.packages.${system}.tentaflake-worker-image;
+        devcontainer-cli = self.packages.${system}.devcontainer-cli;
         image-pinning = import ./lib/pinnedImage-test.nix { inherit pkgs; };
+        module-evaluation =
+          assert import ./tests/module-eval.nix { nixpkgsPath = nixpkgs.outPath; };
+          pkgs.runCommand "tentaflake-module-evaluation" { } "touch $out";
 
         # VM integration test: boots the host and asserts the runtime path
-        # (CLI, banner, audit daemon, agent unit/user/state dir). See tests/integration.nix.
+        # (Rust CLI, status, and agent unit/user/state dir).
         vm-integration = pkgs.testers.runNixOSTest (
-          import ./tests/integration.nix { inherit self mkHermesAgent mkOpenCodeAgent; }
+          import ./tests/integration.nix { inherit self mkHermesAgent mkZeroClawAgent; }
         );
       };
 
@@ -143,36 +162,37 @@
         };
         modules = [
           {
-            tentaflake.hostName = hostName;
-            tentaflake.adminUser = adminUser;
-            tentaflake.adminDescription = adminDescription;
-            tentaflake.adminShell = "${pkgs.zsh}/bin/zsh";
-            tentaflake.timeZone = "UTC";
-            tentaflake.defaultLocale = defaultLocale;
-            tentaflake.consoleKeyMap = consoleKeyMap;
-            tentaflake.stateVersion = stateVersion;
-            tentaflake.allowUnfree = false;
-            tentaflake.boot.enable = true;
-            tentaflake.hardening.enable = true;
-            tentaflake.locale.enable = true;
-            tentaflake.networking.enable = true;
-            tentaflake.nixSettings.enable = true;
-            tentaflake.packages.enable = true;
-            tentaflake.users.enable = true;
-            tentaflake.tailscale.enable = true;
-            tentaflake.shell.enable = true;
-            # Interactive extras (all opt-in; on here for the built-in host).
-            tentaflake.shell.zsh.enable = true;
-            tentaflake.shell.zoxide.enable = true;
-            tentaflake.shell.lazygit.enable = true;
-            tentaflake.shell.tmux.enable = true;
-            tentaflake.editor.nvf.enable = true;
-            # Audit daemon: records agent filesystem activity for `tentaflake top`.
-            # watchDirs auto-derives from the agents defined in my-agents.nix.
-            tentaflake.auditd.enable = true;
+            tentaflake = {
+              inherit
+                hostName
+                adminUser
+                adminDescription
+                defaultLocale
+                consoleKeyMap
+                stateVersion
+                ;
+              adminShell = "${pkgs.zsh}/bin/zsh";
+              timeZone = "UTC";
+              allowUnfree = false;
+              boot.enable = true;
+              hardening.enable = true;
+              locale.enable = true;
+              networking.enable = true;
+              nixSettings.enable = true;
+              packages.enable = true;
+              users.enable = true;
+              tailscale.enable = true;
+              shell = {
+                enable = true;
+                # Interactive extras (all opt-in; on here for the built-in host).
+                zsh.enable = true;
+                zoxide.enable = true;
+                lazygit.enable = true;
+                tmux.enable = true;
+              };
+            };
           }
           self.nixosModules.default
-          self.nixosModules.editor
           ./configuration.nix
         ];
       };
@@ -184,60 +204,27 @@
           profile = "installer";
         };
         modules = [
+          {
+            # The ISO installs an agent host but does not run untrusted agents
+            # itself, so it does not need the balanced gVisor capsule closure.
+            tentaflake.security.profile = "dev";
+          }
           self.nixosModules.default
           ./configuration.nix
           ./installer/iso.nix
         ];
       };
 
-      # ── live-agent: Boot-and-run appliance, auto-starts agents + Piper ──
-      nixosConfigurations.live-agent = nixpkgs.lib.nixosSystem {
-        inherit system;
-        specialArgs = baseSpecialArgs // {
-          profile = "live";
-        };
-        modules = [
-          {
-            tentaflake.hostName = "live-agent";
-            tentaflake.adminUser = adminUser;
-            tentaflake.adminDescription = adminDescription;
-            tentaflake.adminShell = "/run/current-system/sw/bin/bash";
-            tentaflake.timeZone = "UTC";
-            tentaflake.defaultLocale = defaultLocale;
-            tentaflake.consoleKeyMap = consoleKeyMap;
-            tentaflake.stateVersion = stateVersion;
-            tentaflake.allowUnfree = false;
-            tentaflake.boot.enable = true;
-            tentaflake.hardening.enable = true;
-            tentaflake.locale.enable = true;
-            tentaflake.networking.enable = true;
-            tentaflake.nixSettings.enable = true;
-            tentaflake.packages.enable = true;
-            tentaflake.users.enable = true;
-            tentaflake.tailscale.enable = true;
-            # Shell extras are useful on the live ISO too, but the live profile
-            # ships its own static users.motd — disable the dynamic banner so
-            # operators don't see two banners stacked on every login.
-            tentaflake.shell.enable = true;
-            tentaflake.shell.motd.enable = false;
-            tentaflake.shell.tmux.enable = true;
-            # Audit daemon on too, so `tentaflake top` works on the live appliance —
-            # watchDirs auto-derives from the live agents (default + research).
-            tentaflake.auditd.enable = true;
-          }
-          self.nixosModules.default
-          ./configuration.nix
-          ./installer/live-iso.nix
-        ];
-      };
-
       # ── Convenience packages ──
       packages.${system} = rec {
-        tentaflake-auditd = pkgs.callPackage ./pkgs/tentaflake-auditd { };
-        # Deprecated alias for the pre-rename attr name; remove in a future release.
-        hermes-auditd = tentaflake-auditd;
+        devcontainer-cli = devcontainerCli;
+        security-tools = securityTools;
+        semgrep-rules = semgrepRules;
+        tentaflake-cli = pkgs.callPackage ./pkgs/tentaflake-cli { };
+        tentaflake-broker = pkgs.callPackage ./pkgs/tentaflake-broker { };
+        tentaflake-worker = pkgs.callPackage ./pkgs/tentaflake-worker { };
+        tentaflake-worker-image = pkgs.callPackage ./pkgs/tentaflake-worker/image.nix { };
         installer-iso = self.nixosConfigurations.installer-iso.config.system.build.isoImage;
-        live-agent-iso = self.nixosConfigurations.live-agent.config.system.build.isoImage;
         piper-voices = pkgs.callPackage ./pkgs/piper-voices { };
       };
     };

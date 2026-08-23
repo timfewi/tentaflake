@@ -1,255 +1,184 @@
-# Operating a Hermes fleet — persistence, UIDs, secrets & exposure
+# Operations and recovery
 
-This page covers the operational model behind `mkHermesAgent` and the optional
-hardening arguments it exposes. Everything here is generic — no host-specific
-config belongs in the template (see `CLAUDE.md` → Template Rule).
+## Evidence boundaries
 
-## The persistence model (read this first)
+Nix evaluation proves option types and assertions. A build proves the closure.
+Activation changes the host, and live checks prove only the activated runtime.
+Do not treat one boundary as proof of another. Tentaflake never activates a
+configuration merely because a check or build succeeded.
 
-A running agent sees **two** very different storage locations:
+## Daily commands
 
-| Inside the container | Host path | Lifetime | Use for |
-|---|---|---|---|
-| `$HERMES_HOME` (e.g. `/var/lib/hermes-<name>`) | bind-mount of `stateDir` | **Persistent** — survives restart, recreate, reboot | All real work |
-| `$HOME` (e.g. `/opt/data`) | anonymous Docker volume | **Ephemeral** — wiped when the container is *recreated* (any rebuild that changes the container) | Throwaway dotfiles only |
-
-> **The `/opt/data` trap.** The agent's UNIX `$HOME` is *not* persistent. Work
-> built there (a venv, a web app, a database) **disappears on the next
-> `nixos-rebuild switch` that recreates the container**. Durable work — and
-> anything you want to keep — must live under `$HERMES_HOME/workspace`.
-
-Practical consequences:
-
-- Tell the agent (in its SOUL/AGENTS seed) to build under `$HERMES_HOME/workspace`.
-- A restart (`systemctl restart docker-hermes-<name>`) preserves `$HOME`; a
-  **recreate** (config/mount/image change) does not. When in doubt, assume recreate.
-- Tool configs the agent relies on (e.g. `~/.config/...`) live in the ephemeral
-  `$HOME` unless you seed/symlink them into `$HERMES_HOME`.
-
-## UID alignment (why writes used to fail)
-
-The official `nousresearch/hermes-agent` image runs its `hermes` user as **uid
-10000**. The container writes `$HERMES_HOME` as that uid. If the host `stateDir`
-is owned by a *different* uid (e.g. an auto-allocated NixOS system user), every
-write fails with `PermissionError` — pairing, kanban, sessions, the lot.
-
-`mkHermesAgent` fixes this generically:
-
-- `containerUid` / `containerGid` (default `10000`, from `lib/constants.nix`) —
-  state dirs are owned by this numeric uid via `systemd.tmpfiles`.
-- A `hermes-<name>-heal-uid` oneshot `chown -R`s `stateDir` (plus any
-  `healDataDirs`) to that uid **before the container starts**, so rebuilds *heal*
-  ownership instead of breaking it.
-
-```nix
-healDataDirs = [ "/srv/agent-data/<name>" ];   # extra mounted data slices to keep aligned
+```text
+tentaflake status
+tentaflake health
+tentaflake doctor
+tentaflake doctor --security
+tentaflake logs <agent>
+tentaflake stop <agent>
+tentaflake start <agent>
+tentaflake restart <agent>
 ```
 
-## `config.yaml` is read-only by design
+Under `balanced`, Docker daemon access is root-equivalent and is not granted
+through the `docker` group. Container commands use the CLI's sudo-backed path.
+Podman containers are still root-managed by the NixOS OCI module unless a
+separate rootless design is implemented; selecting Podman alone is not proof
+of rootless operation.
 
-When you pass `settings`, they are serialized to a `config.yaml` mounted
-**read-only** at `$HERMES_HOME/config.yaml`. Config is declarative: edit
-`my-agents.nix` and rebuild.
+## Safe update flow
 
-> The dashboard's **"save config" button returns a 500** against this read-only
-> file. That is expected — don't edit config via the dashboard. (If you truly
-> need dashboard-editable config, drop `settings` and manage `config.yaml`
-> inside the state dir yourself; you lose declarative reproducibility.)
+1. Review input and image changes. A digest pin is reproducible identity, not
+   evidence that the image is trustworthy. If the upstream signs releases,
+   update and review its exact `tentaflake.imageProvenance` identity/key policy
+   too; a mismatched signature gate blocks the controller before start.
+2. Run formatting, lint, unit, evaluation, and VM checks.
+3. Build the selected system without activation.
+4. Review the exact target and build result.
+5. Activate only in an approved maintenance window.
+6. Run live status, security posture, service, and application health checks.
 
-## Secrets never reach the agent terminal
+The previous NixOS generation remains the rollback path. Select it in the boot
+menu or run the explicit rollback command from an operator session after
+resolving the target. Source changes and successful builds do not authorize
+`switch` or rollback.
 
-Hermes **strips secret env vars from the agent's terminal tool** by design, so an
-agent cannot read `GH_TOKEN` and push on its own. The generic pattern:
+## Git auto-push
 
-- The agent **commits** locally (set its identity with `gitIdentity`).
-- A trusted **host** unit **pushes**, holding the token the agent never sees.
-
-```nix
-gitIdentity = { name = "<name>-bot"; email = "<name>@example.com"; };
-gitAutoPush = { tokenEnvFile = "/run/agenix/hermes-<name>-env"; };  # GH_TOKEN read here
-```
-
-`gitAutoPush` finds git repos under `<stateDir>/workspace`, and pushes GitHub
-`https` remotes on a timer using an `x-access-token` credential helper. Optional
-fields: `reposRoot`, `tokenEnvVar` (default `GH_TOKEN`), `interval` (default
-`2min`).
-
-## Fail-loud provider preflight
-
-A wrong/absent `model.base_url` or a missing `*_API_KEY` produces an HTTP `401`
-that Hermes surfaces *downstream* as "worker exited without completing —
-protocol violation" or "agent crashed" — easy to misdiagnose as a model/agent
-bug. `providerHealthcheck` turns it into an obvious boot-time error:
+The agent commits inside its workspace; a host unit performs the push with a
+credential the balanced agent never receives:
 
 ```nix
-providerHealthcheck = {
-  url       = "https://api.example.com/v1";   # the model.base_url
-  model     = "my-model";
-  apiKeyEnv = "MY_API_KEY";                    # value stays in the container
+gitAutoPush = {
+  tokenEnvFile = "/run/agenix/github-coding";
+  allowedRemotes = [
+    "https://github.com/example/coding.git"
+  ];
+  allowedBranches = [ "main" ];
+  interval = "2min";
 };
 ```
 
-At boot it POSTs a 1-token completion and logs
-`[provider-healthcheck] <name>: OK` or `... FAIL HTTP <code> ... — check
-model.base_url and <APIKEYENV>` to the journal. Non-fatal (won't block the
-container) but loud.
+The helper requires an exact canonical HTTPS GitHub repository and exact
+branch. It rejects altered remotes and emits `ALLOW`, `DENY`, or `ERROR` to
+journald. Use a fine-grained repository token or GitHub App credential with
+only the required contents-write permission. The token file stays on the host.
 
-> Reminder for OpenAI-compatible providers: set `model.base_url` **explicitly**.
-> A subtly wrong path (e.g. `/v1` vs `/go/v1`) with an otherwise-valid key is the
-> classic silent 401.
+## Legacy egress option
 
-## Host access paths
-
-Tailscale SSH (`modules/tailscale.nix`, on by default) is the primary way onto
-the host — no open firewall ports, auth handled by the tailnet. If you need
-direct SSH, set `tentaflake.ssh.enable = true`: a hardened key-only sshd (no
-passwords, no root login, max 3 auth tries) plus fail2ban, opening TCP 22 in
-the otherwise deny-all firewall. Keys go in `tentaflake.adminAuthorizedKeys`.
-
-## Exposing dashboards & agent-built apps on the tailnet
-
-Containers use host networking, so a service bound to the host's `127.0.0.1:<port>`
-is reachable by host-level `tailscale serve` (TLS, tailnet-only, no firewall port).
+`tentaflake.networking.egress` is renamed to
+`tentaflake.networking.legacyPortEgress` and is allowed only in `dev`:
 
 ```nix
-dashboard = { port = 9219; tailnetPort = 9119; };   # hermes dashboard → https://<host>:9119
-
-services.knowledge-base = {                          # any agent-built web app, durable
-  startCommand = "cd $HERMES_HOME/workspace/kb && exec ./.venv/bin/python app.py";
-  port = 9191; tailnetPort = 9122;
-};
-```
-
-> **Host-networking port gotcha.** Under host networking the in-container bind
-> port and the external `tailscale serve` port must **differ**, or `serve`'s
-> listener collides with the app's `0.0.0.0` bind (`[Errno 98]`). Convention:
-> internal port = external + 100.
-
-`dashboard`/`services` run as auto-restarting host units (a foreground
-`docker exec` under `Type=simple`): when the container restarts they die and are
-restarted once it's back, so the exposure is durable across reboots and recreates.
-
-## Egress filtering (opt-in)
-
-Off by default. When enabled, the host gets an nftables **output** chain
-(table `tentaflake-egress`, family `inet`, policy `drop`) that only lets
-through:
-
-- loopback traffic and established/related connections (always, first)
-- ICMP and ICMPv6 (always — IPv6 neighbor discovery is not conntrack-tracked,
-  so dropping ICMPv6 would break all IPv6 traffic)
-- TCP to `tentaflake.networking.egress.allowedTCPPorts` (default `[ 443 ]`)
-- UDP to `tentaflake.networking.egress.allowedUDPPorts` (default
-  `[ 53 67 123 547 41641 ]` — DNS, DHCP, NTP, DHCPv6, tailscale WireGuard)
-
-Everything else outbound is counted and dropped — including plain-HTTP
-(port 80) fetches, SMTP, and arbitrary high-port callbacks.
-
-Note on tailscale: the UDP rule matches the *destination* port, so direct
-WireGuard connections only reach peers listening on 41641; peers behind NAT
-(random mapped ports) fall back to DERP relays over TCP 443 — still
-functional, but slower.
-
-```nix
-tentaflake.networking.egress = {
+tentaflake.networking.legacyPortEgress = {
   enable = true;
-  # allow an extra outbound port on top of the defaults:
-  allowedTCPPorts = [ 443 2222 ];   # e.g. SSH to a git remote on 2222
+  allowedTCPPorts = [ 443 ];
 };
 ```
 
-> **Why this covers the agents.** Agent containers run with `--network=host`,
-> so they share the host's network stack — these host OUTPUT rules apply to
-> every agent container with no per-container setup. That is the point:
-> one allowlist governs the whole fleet.
+This is a host `OUTPUT` destination-port filter. It does not constrain Docker
+bridge `FORWARD`, identify destination hosts, control DNS, or constitute a
+secure allowlist. Balanced agents use `network=none` or the dedicated broker
+path documented in [brokered egress](12-brokered-egress.md). That path adds an
+internal network, subnet-scoped INPUT/FORWARD policy, disabled container DNS,
+and host-side destination resolution.
 
-Per-agent, cgroup-based, or domain-based egress policy is deliberately out of
-scope: fragile under host networking and deployment-specific. Forks can build
-on this port-allowlist hook.
-## The `docker` group is root-equivalent
+## Crash and reboot behavior
 
-With the default backend, `configuration.nix` adds the admin user to the
-`docker` group so the shell tooling (`tentaflake ps`/`logs`/`top`, the login
-banner) can talk to the daemon without sudo. Understand the tradeoff: docker
-socket access is effectively **root on the host** — any group member can start
-a privileged container with `/` bind-mounted. This template accepts that
-deliberately: the admin user *is* the machine's operator, and the shell
-experience depends on it.
+The upstream NixOS OCI module generates systemd units with
+`Restart=on-failure`. Tentaflake adds a 10-second restart delay and bounded
+start-limit window to secure controllers. Brokers use their own 5-second
+delay/start limit and expose credential/policy-aware `/healthz`; this is not a
+provider end-to-end probe. Declarative `autoStart` controls boot startup.
 
-Don't want a root-equivalent group at all? Set
-`tentaflake.containerBackend = "podman"` — daemonless, and no root-equivalent
-group is created. Note the tradeoff: agent containers still run as root-managed
-systemd services, and the admin user's rootless podman has a separate container
-store, so the container-level subcommands (`tentaflake ps`/`shell`/`exec`) need
-root's store — run them under `sudo`. `status`, `logs`, and
-`start`/`stop`/`restart` go through journald/systemctl and work unchanged.
-## Backup & restore
-
-Everything declarative (containers, config, mounts) is recreated by
-`nixos-rebuild switch` — you back up **state**, not the system:
-
-| What | Where | How |
-|---|---|---|
-| Per-agent state | `stateDir` (default `/var/lib/hermes-<name>`), especially `workspace/` | Plain file backup |
-| Audit trail | `/var/lib/hermes-audit/events.db` | `sqlite3 ... ".backup ..."` — **never plain `cp`**: the DB runs in WAL mode, a live copy is torn |
-| Secrets | `secrets/*.age` (already in git) **plus the age identity** | Keep the identity (host SSH key / age key) **off-host** — without it, backed-up `.age` files are unrecoverable |
-
-Example — restic on NixOS (borgbackup works the same way via
-`services.borgbackup.jobs`). This belongs in **your fork**: the template ships
-no backup module because repository targets and credentials are
-deployment-specific.
+Hosts with a known, tested watchdog device can also opt in to PID 1 hardware
+watchdog supervision:
 
 ```nix
-services.restic.backups.agents = {
+tentaflake.hardening.watchdog = {
+  enable = true;
+  device = "/dev/watchdog";
+  runtimeSec = "30s";
+  rebootSec = "10min";
+};
+```
+
+This is disabled by default because the template cannot know whether a target
+has a functional watchdog or whether its firmware reset behavior is safe.
+Validate the exact device and a controlled reset/recovery drill on the target
+before relying on it.
+
+## Backup and restore
+
+Back up declarative configuration separately from mutable state. Per-agent
+state defaults to `/var/lib/<runtime>-<name>`. Provider/Git/backup credentials
+must remain outside the agent and outside backup logs.
+
+The core module provides an opt-in Restic policy while keeping repository and
+password values in runtime files owned by the deployment fork:
+
+```nix
+tentaflake.backup = {
+  enable = true;
   paths = [
     "/var/lib/hermes-coding"
-    "/var/lib/hermes-audit/events.backup.db"
+    "/var/lib/tentaflake-broker-llm-hermes-coding"
   ];
-  # Snapshot the live WAL database safely before each run:
-  backupPrepareCommand = ''
-    ${pkgs.sqlite}/bin/sqlite3 /var/lib/hermes-audit/events.db \
-      ".backup '/var/lib/hermes-audit/events.backup.db'"
-  '';
-  repository = "sftp:backup@backup-host:/srv/restic";
-  passwordFile = "/run/agenix/restic-password";
-  timerConfig.OnCalendar = "03:00";
-  pruneOpts = [ "--keep-daily 7" "--keep-weekly 4" ];
+  repositoryFile =
+    "/run/agenix/restic-repository";
+  passwordFile =
+    "/run/agenix/restic-password";
+  pruneOpts = [
+    "--keep-daily 7"
+    "--keep-weekly 4"
+  ];
 };
 ```
 
-To restore: reinstall/rebuild from your flake, stop the agent
-(`tentaflake stop <name>`), restore the state dir, fix ownership if needed
-(the `heal-uid` oneshot chowns on next start anyway), start the agent.
+The job encrypts through Restic, prunes after backup, and runs an integrity
+check. On success, a separate hardened oneshot updates
+`/var/lib/tentaflake-backup/last-success` in a systemd-managed state directory;
+the security doctor compares that timestamp with `lastSuccessMaxAgeHours` (36
+by default). Its default timer is persistent, scheduled around 03:00 with
+randomized delay. Alert on failed/stale `restic-backups-tentaflake.service`
+runs.
+For a restore drill: install a fresh test host, keep the agent stopped, restore
+its state, verify ownership and file permissions, start the exact unit, and run
+application-level checks. The VM test backs up and restores a fixture into a
+fresh target, but production backend credentials, retention, capacity, and a
+real fresh-host drill remain operator evidence. Backup freshness and restore
+readiness beyond freshness still requires an actual restore drill.
 
-## Log forwarding
+## Incident response and kill switch
 
-To ship host journals (container logs, `tentaflake-auditd`, provider healthchecks)
-to a remote collector, use systemd's native journal upload — no tentaflake
-option needed:
+1. Resolve and stop the exact agent with `tentaflake stop <agent>`.
+2. Revoke its Git/provider/broker credentials outside the agent.
+3. Preserve journald, optional Loki/Falco evidence, and a read-only state copy.
+4. Inspect declared image, mounts, policy, workspace changes, and host events.
+5. Build a repaired configuration and review it before activation.
+6. Restore only reviewed state and rotate every possibly exposed credential.
 
-```nix
-services.journald.upload = {
-  enable = true;
-  settings.Upload.URL = "https://logs.example.com:19532";  # systemd-journal-remote endpoint
-};
-```
+`tentaflake stop <agent>` asks systemd to stop the container and every loaded
+LLM/fetch broker for that exact container in one transaction. The internal
+network remains declared but has no allowed service endpoint, so the virtual
+key is inert. Provider/Git credential revocation remains an external operator
+step.
 
-The receiving side runs `systemd-journal-remote`
-(`services.journald.remote.enable` on NixOS). For TLS client auth, set
-`ServerKeyFile` / `ServerCertificateFile` / `TrustedCertificateFile` under
-`settings.Upload`. Target URL and certificates are deployment-specific — keep
-them in your fork.
+Pending worker actions are separate private state. Inspect, approve, or deny
+them with the commands in
+[the disposable-worker guide](13-disposable-worker.md). Stopping an agent does
+not authorize a pending action and an approval never grants network or secret
+access to the worker.
 
-## Quick reference
+## Disk and logs
 
-| Argument | Tier | What it does |
-|---|---|---|
-| `containerUid` / `containerGid` | fix | Own state to the image's uid (default 10000) |
-| `healDataDirs` | fix | Chown extra data dirs to the container uid each boot |
-| `providerHealthcheck` | fix | Boot-time fail-loud auth/endpoint check |
-| `gitIdentity` | build-block | Git identity inside the container, re-applied each boot |
-| `gitAutoPush` | build-block | Host-side secret-safe push on a timer |
-| `dashboard` | build-block | Launch + (optionally) tailnet-publish the dashboard |
-| `services` | build-block | Durable agent-built web apps, optional tailnet publish |
-
-All default to off; existing agents are unaffected.
+The secure capsule limits RAM, swap, CPU, PIDs, ulimits, and tmpfs size. The
+optional fixed-size workspace filesystem provides a hard per-controller code
+workspace ceiling; see [workspace quota](14-workspace-quota.md). State outside
+that mount and sparse backing images still require host free-space monitoring.
+journald rotation follows the host configuration; the
+optional Alloy/Loki profile is loopback-only and does not itself define a
+retention policy suitable for every deployment. It does provide baseline
+Prometheus rules for disk pressure, restart flapping, broker denials, unusual
+fetch-denial bursts, and near-exhausted request/token/cost budgets. Alert
+delivery remains an explicit deployment-fork integration.

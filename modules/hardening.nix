@@ -1,13 +1,27 @@
 {
   config,
   lib,
-  pkgs,
   ...
 }:
 let
   cfg = config.tentaflake.hardening;
 in
 lib.mkIf cfg.enable {
+  assertions = lib.optionals cfg.watchdog.enable [
+    {
+      assertion = lib.match "^/dev/[A-Za-z0-9._/-]+$" cfg.watchdog.device != null;
+      message = "tentaflake hardware watchdog device must be one exact path below /dev.";
+    }
+    {
+      assertion = lib.match "^[1-9][0-9]*(ms|s|min|h)$" cfg.watchdog.runtimeSec != null;
+      message = "tentaflake hardware watchdog runtimeSec must be a positive systemd duration using ms, s, min, or h.";
+    }
+    {
+      assertion = lib.match "^[1-9][0-9]*(ms|s|min|h)$" cfg.watchdog.rebootSec != null;
+      message = "tentaflake hardware watchdog rebootSec must be a positive systemd duration using ms, s, min, or h.";
+    }
+  ];
+
   boot.kernel.sysctl = {
     "kernel.kptr_restrict" = 2;
     "kernel.dmesg_restrict" = 1;
@@ -72,4 +86,10 @@ lib.mkIf cfg.enable {
     Compress=yes
     SystemMaxUse=500M
   '';
+
+  systemd.settings.Manager = lib.mkIf cfg.watchdog.enable {
+    WatchdogDevice = cfg.watchdog.device;
+    RuntimeWatchdogSec = cfg.watchdog.runtimeSec;
+    RebootWatchdogSec = cfg.watchdog.rebootSec;
+  };
 }

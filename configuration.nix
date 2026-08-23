@@ -1,10 +1,8 @@
 {
   config,
   lib,
-  pkgs,
   mkHermesAgent,
   mkZeroClawAgent,
-  mkOpenCodeAgent,
   agentsFromData,
   profile ? "installed",
   ...
@@ -20,14 +18,11 @@ let
     let
       f = import ./my-agents.nix;
     in
-    f (
-      lib.intersectAttrs (lib.functionArgs f) { inherit mkHermesAgent mkZeroClawAgent mkOpenCodeAgent; }
-    )
+    f (lib.intersectAttrs (lib.functionArgs f) { inherit mkHermesAgent mkZeroClawAgent; })
   );
 
-  # agents.json — non-Nix config written by the `tentaflake` setup wizard, for
-  # non-developers. Additive to my-agents.nix (both may coexist); git-tracked
-  # (no secrets — see lib/agentsFromData.nix).
+  # agents.json — declarative non-Nix input. Additive to my-agents.nix (both may
+  # coexist); git-tracked and intentionally secret-free.
   dataAgents = lib.optionals (builtins.pathExists ./agents.json) (agentsFromData {
     file = ./agents.json;
     inherit mkHermesAgent mkZeroClawAgent;
@@ -43,14 +38,18 @@ in
 
   # ── OCI container backend (required for agent containers) ──
   virtualisation.oci-containers.backend = cfg.containerBackend;
-  virtualisation.docker = lib.mkIf (cfg.containerBackend == "docker") {
+  virtualisation.docker = lib.mkIf (profile == "installed" && cfg.containerBackend == "docker") {
     enable = true;
     autoPrune.enable = true;
   };
 
-  # ── Admin user in the docker group for CLI container management ──
-  # (podman is rootless/daemonless and needs no group)
-  users.users.${cfg.adminUser}.extraGroups = lib.optional (cfg.containerBackend == "docker") "docker";
+  # Docker group access is root-equivalent. Keep it only in the explicitly
+  # compatibility-oriented dev profile; secure profiles use sudo for narrow
+  # operator actions and never grant the daemon socket to the login user.
+  users.users.${cfg.adminUser}.extraGroups = lib.optional (
+    profile == "installed" && cfg.containerBackend == "docker" && cfg.security.profile == "dev"
+  ) "docker";
 
+  tentaflake.profile = profile;
   system.stateVersion = cfg.stateVersion;
 }

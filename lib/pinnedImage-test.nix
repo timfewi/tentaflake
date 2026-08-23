@@ -2,7 +2,7 @@
 # digest guard stops rejecting mutable tags.
 { pkgs }:
 let
-  lib = pkgs.lib;
+  inherit (pkgs) lib;
   constants = import ./constants.nix;
   pinnedImage = import ./pinnedImage.nix { inherit lib; };
 
@@ -47,11 +47,10 @@ let
     # a registry port is a colon that is NOT a tag
     (accepts "localhost:5000/my-agent@sha256:${digest}")
     # the opt-out works for a legitimate locally-built tag
-    ((builtins.tryEval (pinnedImage "test" true "my-agent:local")).success)
+    (builtins.tryEval (pinnedImage "test" true "my-agent:local")).success
     # the shipped defaults are pinned
     (accepts constants.hermesImage)
     (accepts constants.zeroclawImage)
-    (accepts constants.opencodeImage)
   ];
 
   failed = lib.length (lib.filter (ok: !ok) cases);

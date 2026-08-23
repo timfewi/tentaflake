@@ -1,197 +1,115 @@
 # Contributing to tentaflake
 
-Thanks for contributing! This is a **generic template** — keep it that way.
+Tentaflake is a generic template. Company configuration, real hostnames,
+hardware profiles, API keys, private agent context, and deployment-specific
+policy belong in forks.
 
-## Template Rule
-
-**NEVER** commit domain-specific, company-specific, or project-specific code. This includes:
-- Company names, brands, or product names
-- Real hardware configurations (LUKS, specific disk layouts, real hostnames)
-- Real API keys, secrets, or env files
-- Agent definitions for specific companies or projects
-- Custom agent SOUL.md, AGENTS.md, or skill files written for a specific business
-- Any file referencing a real organization, person, or deployment
-
-All such content belongs in a **fork** or a private project repo.
-
-## Development Setup
+## Development setup
 
 ```bash
-# Clone
-git clone https://github.com/timfewi/tentaflake
+git clone \
+  https://github.com/timfewi/tentaflake
 cd tentaflake
-
-# Enter the dev shell (or `direnv allow` once, if you use direnv)
 nix develop
 ```
 
-Entering it prints the tentaflake logo alongside your branch, HEAD, working-tree
-state and Nix version, plus the handful of `just` recipes worth knowing, and
-switches the prompt to a `(tentaflake)` marker so you can tell at a glance which
-shell you are in. The banner stays silent when stdout is not a terminal (so
-`nix develop --command …` in CI is unaffected); set `TENTAFLAKE_NO_BANNER=1` to
-turn it off for good. It lives in [`lib/devshell.nix`](lib/devshell.nix) and
-reads the same `public/tentaflake-shell-logo.txt` as the host login banner.
+The development shell provides Nix tooling, Rust, Cargo, Clippy, Rustfmt,
+ShellCheck, Statix, Deadnix, and `just`.
 
-All the commands below are wrapped as `just` recipes (`just` is in the dev
-shell). Run `just` to list them; `just ci` runs the full local gate — every
-`check.yml` CI step **plus the two ISO builds and the statix/deadnix/golangci-lint
-linters CI does not do**. CodeQL and gitleaks run only in GitHub CI (gitleaks is
-also covered locally by the optional pre-commit hooks). The raw commands stay the
-source of truth and are documented below.
+As an alternative to installing Nix on the host, open the repository in a
+Dev Container-compatible editor and select **Reopen in Container**. The
+container installs Nix and preloads this same `nix develop` environment. Its
+base image and Nix feature are digest-locked; update
+`.devcontainer/devcontainer-lock.json` together with intentional feature
+updates. No container-runtime socket or credentials are mounted automatically.
 
-### Nix/NixOS (flake checks, ISO builds)
+## Required checks
+
+Rust workspace:
 
 ```bash
-# Validate the flake
+cargo fmt --all -- --check
+cargo clippy --workspace \
+  --all-targets -- -D warnings
+cargo test --workspace
+```
+
+Nix and shell:
+
+```bash
+nix fmt -- --ci
+statix check .
+deadnix --fail .
+shellcheck installer/*.sh scripts/*.sh
 nix flake check
+```
 
-# Format Nix files
-nix fmt
+Installer image when its path changes:
 
-# Build the installer ISO
+```bash
 nix build .#installer-iso
-
-# Build the live agent ISO (Hermes + Piper TTS)
-nix build .#live-agent-iso
 ```
 
-### Go (tentaflake-auditd)
+`just ci` mirrors the local gate and adds the installer build. GitHub-only
+security services may add checks that cannot be reproduced locally.
 
-```bash
-cd pkgs/tentaflake-auditd
+`just security` runs the pinned Semgrep CLI and rule snapshot against tracked
+source, then checks both `Cargo.lock` and the patched Dev Containers CLI
+`yarn.lock` against OSV's current advisory database. Semgrep does not contact
+its registry or send metrics; the OSV portion needs network access for current
+advisories, so it remains a separate pre-PR gate rather than part of `just ci`.
 
-# Run tests
-go test ./...
+For end-to-end verification, `just e2e` runs that complete automated gate,
+`just e2e-devcontainer` uses the source- and dependency-hash-pinned
+`.#devcontainer-cli`, rebuilds the frozen Dev Container, and runs its Nix lint
+smoke test. `just e2e-installer` starts the interactive installer with one
+isolated QCOW2 disk; afterward, `just e2e-run-vm` boots the same VM without
+the ISO. The VM state is contributor-owned below
+`/var/tmp/tentaflake-e2e-<user>/`; no host block device is passed to QEMU.
 
-# Static analysis
-go vet ./...
-
-# All checks
-go vet ./... && go test ./...
-```
-
-### Pre-commit hooks (optional, recommended)
-
-`.pre-commit-config.yaml` mirrors the CI gates (gitleaks, shellcheck, gofmt,
-`go vet`, `nix fmt`) so failures surface before you push:
-
-```bash
-# Install pre-commit (pick one)
-pip install pre-commit
-nix-shell -p pre-commit
-
-# Enable the hooks for this clone
-pre-commit install
-```
+Keep source evaluation, builds, activation, and live-runtime verification
+separate. Contributions must not activate NixOS, deploy, or mutate a VM as a
+side effect of testing.
 
 ## Conventions
 
 | Area | Convention |
-|------|-----------|
-| Commits | [Conventional Commits](https://www.conventionalcommits.org/) (`feat:`, `fix:`, `docs:`, `chore:`) |
-| AI commits | Must include `Co-Authored-By: model-name (via OpenCode)` |
-| Nix formatting | `nix fmt` (nixfmt) |
-| Go formatting | Standard `gofmt` |
-| Module boundary | Keep template generic — fork for specifics |
-| Sign-off | Every commit needs a `Signed-off-by:` line (DCO) — use `git commit -s` |
+|---|---|
+| Commits | Conventional Commits |
+| Nix | `nix fmt` and two-space indent |
+| Rust | Rustfmt, Clippy warnings denied |
+| Shell | ShellCheck |
+| Sign-off | DCO on every non-merge commit |
 
-## Signing Commits and Tags
-
-Sign your commits and tags. SSH signing is the low-friction option — it reuses
-the key you already push with:
+Create signed-off commits with:
 
 ```bash
-git config gpg.format ssh
-git config user.signingkey ~/.ssh/id_ed25519.pub
-git config commit.gpgsign true
+git commit -s -m "feat: add capability"
 ```
 
-Upload the key as a *signing key* in GitHub (Settings → SSH and GPG keys) so
-commits show as **Verified**. To verify locally:
+## Pull requests
 
-```bash
-# One-off allowed_signers file, then verify a commit
-echo "$(git config user.email) $(cat ~/.ssh/id_ed25519.pub)" > /tmp/allowed_signers
-git -c gpg.ssh.allowedSignersFile=/tmp/allowed_signers verify-commit HEAD
-```
+1. Link the change to an issue or concrete requirement.
+2. Keep the change focused and generic.
+3. Add or update focused verification.
+4. Synchronize README, `docs/`, agent instructions, and bundled skills.
+5. Fill every applicable part of the PR template.
+6. Leave inapplicable checklist entries unchecked.
 
-Release tags are signed:
+Do not stage, overwrite, or remove unrelated work in a dirty checkout.
 
-```bash
-git tag -s vX.Y.Z -m "vX.Y.Z"
-```
+## Adding modules
 
-## Licensing and the DCO
+Core modules belong in `modules/` and must be imported by
+`modules/default.nix`. Optional integrations belong in `modules/optional/`;
+profiles belong in `modules/profiles/`. Export optional modules explicitly from
+`flake.nix` and document their trust boundary.
 
-tentaflake is MIT-licensed — see [`LICENSE`](LICENSE), Copyright © 2026 Tim Witter.
+## Signing and licensing
 
-By contributing you agree that your contribution is offered under the same MIT
-license. You keep the copyright to what you wrote; the MIT grant is what lets
-everyone — including the maintainer and downstream commercial users — use it.
+Every non-merge commit needs a `Signed-off-by:` line under the Developer
+Certificate of Origin in [DCO.txt](DCO.txt). Contributions are provided under
+the MIT license. The name and logo are governed separately by
+[TRADEMARK.md](TRADEMARK.md).
 
-Every commit must carry a `Signed-off-by:` line certifying the
-[Developer Certificate of Origin 1.1](https://developercertificate.org/): that you
-wrote the contribution, or otherwise have the right to submit it under the
-project's license. The complete text is in [`DCO.txt`](DCO.txt). Git adds the
-line for you with `-s`:
-
-```bash
-git commit -s -m "feat: add thing"
-```
-
-Already committed without it? Sign off the whole branch at once:
-
-```bash
-git rebase --signoff main
-```
-
-The DCO workflow checks every non-merge commit in a PR. PRs are not merged
-until every checked commit is signed off.
-
-### Trademark
-
-The MIT license covers the **code**, not the **name**. *tentaflake* and the
-tentaflake logo are trademarks of Tim Witter — see [`TRADEMARK.md`](TRADEMARK.md).
-Contributing does not grant any right to use them, and forks need their own name.
-
-## Pull Request Process
-
-1. Fork the repo and create a feature branch:
-   ```bash
-   git checkout -b feat/my-feature
-   ```
-
-2. Make your changes and verify:
-   ```bash
-   nix flake check
-   cd pkgs/tentaflake-auditd && go vet ./... && go test ./...
-   ```
-
-3. Commit using conventional commits, with a DCO sign-off (`-s`):
-   ```bash
-   git commit -s -m "feat: add thing"
-   ```
-
-4. Push and open a PR against `main`.
-
-5. Ensure CI passes (flake check + Go tests).
-
-6. A maintainer will review. Keep PRs focused — one concern per PR.
-
-## Adding a Module
-
-When adding a new NixOS module under `modules/`:
-
-1. Create `modules/my-feature.nix`
-2. Import it in `modules/default.nix`
-3. Add it to the module table in `README.md`
-4. Document it in `docs/` if it's user-facing
-
-## Adding a Hermes Skill
-
-Skills live under `.agents/skills/<name>/SKILL.md`. Follow the [skill authoring guide](docs/03-skill-index.md) for format.
-
-## Questions?
-
-Open a [discussion](https://github.com/timfewi/tentaflake/discussions) or an issue with the `question` label.
+Report vulnerabilities through GitHub Security Advisories, not public issues.
