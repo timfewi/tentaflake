@@ -6,7 +6,7 @@
 # ────────────────────────────────────────────────────────────
 set -euo pipefail
 
-REPO_DIR="/etc/tentaflake"
+REPO_DIR="/etc/tentaflake/source"
 TARGET_NIXOS="/mnt/etc/nixos"
 INSTALL_LOG="/tmp/installer.log"
 

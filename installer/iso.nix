@@ -10,7 +10,7 @@
 # ────────────────────────────────────────────────────────────
 # Tentaflake — Installer ISO
 # Bootable installer ISO that auto-launches installer.sh on TTY1.
-# Embeds the full repo at /etc/tentaflake/
+# Embeds the full repo at /etc/tentaflake/source/
 # ────────────────────────────────────────────────────────────
 
 {
@@ -24,7 +24,7 @@
   isoImage.makeUsbBootable = true;
 
   # ── Embed the full repo source ──
-  environment.etc."tentaflake".source = repoRoot;
+  environment.etc."tentaflake/source".source = repoRoot;
 
   # ── Packages needed by the installer ──
   environment.systemPackages = with pkgs; [
@@ -57,7 +57,7 @@
       echo ""
       echo "=== Tentaflake Installer ==="
       echo ""
-      /etc/tentaflake/installer/installer.sh
+      /etc/tentaflake/source/installer/installer.sh
       exit
     fi
   '';
@@ -66,16 +66,18 @@
   # kmscon hands the login a pty, so the `tty` guard above would never see
   # /dev/tty1 and the installer would never auto-launch. The installed system
   # turns kmscon back on (see modules/locale.nix); dialog needs no braille.
-  tentaflake.modernConsole.enable = false;
-  # And no setfont either: dialog draws in ASCII (NCURSES_NO_UTF8_ACS=1 in
-  # installer.sh), so the font swap buys nothing and its fbcon reconfiguration
-  # flickers on some Intel panels.
-  tentaflake.consoleFont = null;
+  tentaflake = {
+    modernConsole.enable = false;
+    # And no setfont either: dialog draws in ASCII (NCURSES_NO_UTF8_ACS=1 in
+    # installer.sh), so the font swap buys nothing and its fbcon reconfiguration
+    # flickers on some Intel panels.
+    consoleFont = null;
 
-  # ── No operator shell extras on the bare installer ──
-  # TTY1 only ever runs installer.sh; a login banner / prompt / agent CLI would
-  # just clutter the one-shot install flow (and there are no agents yet).
-  tentaflake.shell.enable = false;
+    # ── No operator shell extras on the bare installer ──
+    # TTY1 only ever runs installer.sh; a login banner / prompt / agent CLI would
+    # just clutter the one-shot install flow (and there are no agents yet).
+    shell.enable = false;
+  };
 
   # ── System state version ──
   system.stateVersion = config.tentaflake.stateVersion;
