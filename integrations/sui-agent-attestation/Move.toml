@@ -1,0 +1,11 @@
+[package]
+name = "TentaflakeAgentAttestation"
+edition = "2024.beta"
+license = "MIT"
+authors = ["Tentaflake contributors"]
+
+[dependencies]
+Sui = { git = "https://github.com/MystenLabs/sui.git", subdir = "crates/sui-framework/packages/sui-framework", rev = "a9a6825eaf6273cc819ee3bcf65fd4909f7624a9" }
+
+[addresses]
+tentaflake_agent_attestation = "0x0"
