@@ -12,9 +12,30 @@ let
   enabledAgents = lib.filterAttrs (_: agent: agent.enable) cfg.agents;
   containerNames = lib.attrNames config.virtualisation.oci-containers.containers;
   backendUnits = lib.optional (backend == "docker") "docker.service";
+  utils = import (pkgs.path + "/nixos/lib/utils.nix") { inherit lib config pkgs; };
   safePath = value: lib.match "^/var/lib/[A-Za-z0-9._+/-]+$" value != null;
   stateDir = name: "/var/lib/tentaflake-worker-${name}";
   resultDir = name: "${stateDir name}/results";
+  stateVolumeRoot = "/var/lib/tentaflake-worker-state-volumes";
+  stateImagePath = name: "${stateVolumeRoot}/${name}.img";
+  statePrepareUnit = name: "tentaflake-worker-state-prepare-${name}.service";
+  stateMountUnit = name: "${utils.escapeSystemdPath (stateDir name)}.mount";
+  stateLayoutUnit = name: "tentaflake-worker-state-${name}.service";
+  stateVolumeBytes = agent: agent.stateVolumeMiB * 1024 * 1024;
+  statePendingMetadataBytes = agent: agent.maxPendingRequests * 4096;
+  stateRequiredBytes =
+    agent:
+    2 * agent.maxSnapshotBytes
+    + agent.maxPendingBytes
+    + agent.maxLogBytes
+    + statePendingMetadataBytes agent
+    + 16 * 1024 * 1024;
+  # The image is formatted with mkfs.ext4 -m 0 -i 16384; retain 12.5% of
+  # the raw image for its journal and allocation metadata before comparing
+  # logical worker budgets with usable blocks.
+  stateFilesystemUsableBytes = agent: (stateVolumeBytes agent) * 7 / 8;
+  stateRequiredInodes = agent: 2 * agent.maxSnapshotEntries + agent.maxPendingRequests * 4 + 1024;
+  stateAvailableInodes = agent: agent.stateVolumeMiB * 64;
   workerGroup =
     agent:
     if agent.hostGroup != null then
@@ -65,6 +86,30 @@ let
           type = lib.types.ints.positive;
           default = 64 * 1024;
         };
+        maxPendingRequests = lib.mkOption {
+          type = lib.types.ints.between 1 4096;
+          default = 128;
+          description = "Maximum number of root-owned requests awaiting execution or approval.";
+        };
+        maxPendingBytes = lib.mkOption {
+          type = lib.types.ints.between 65536 (512 * 1024 * 1024);
+          default = 8 * 1024 * 1024;
+          description = "Maximum aggregate bytes reserved in the private pending queue.";
+        };
+        maxReadyJobsPerDrain = lib.mkOption {
+          type = lib.types.ints.between 1 128;
+          default = 1;
+          description = "Maximum ready or forbidden requests completed by one queue activation.";
+        };
+        stateVolumeMiB = lib.mkOption {
+          type = lib.types.ints.between 64 65536;
+          default = 8192;
+          description = ''
+            Immutable ext4 image size for all private worker state, including
+            pending requests, snapshots, result staging, retained results, and audit.
+            Resizing requires an explicit offline migration.
+          '';
+        };
         maxSnapshotBytes = lib.mkOption {
           type = lib.types.ints.positive;
           default = 1024 * 1024 * 1024;
@@ -110,6 +155,142 @@ let
     }
   );
 
+  statePrepareService = name: agent: {
+    description = "Prepare fixed-size private worker state filesystem for ${name}";
+    requires = [ "systemd-tmpfiles-setup.service" ];
+    after = [ "systemd-tmpfiles-setup.service" ];
+    before = [ (stateMountUnit name) ];
+    serviceConfig = {
+      Type = "oneshot";
+      UMask = "0077";
+      NoNewPrivileges = true;
+      PrivateDevices = false;
+      PrivateTmp = true;
+      ProtectHome = true;
+      ProtectSystem = "strict";
+      ReadWritePaths = [
+        stateVolumeRoot
+        (stateDir name)
+      ];
+    };
+    path = [
+      pkgs.coreutils
+      pkgs.e2fsprogs
+      pkgs.findutils
+      pkgs.util-linux
+    ];
+    script = ''
+      image=${lib.escapeShellArg (stateImagePath name)}
+      image_tmp=${lib.escapeShellArg "${stateImagePath name}.new"}
+      state=${lib.escapeShellArg (stateDir name)}
+      expected=$(( ${toString agent.stateVolumeMiB} * 1024 * 1024 ))
+
+      install -d -m 0700 ${lib.escapeShellArg stateVolumeRoot}
+      if [ -L "$state" ] || { [ -e "$state" ] && [ ! -d "$state" ]; }; then
+        echo "tentaflake: worker state mountpoint is unsafe: $state" >&2
+        exit 1
+      fi
+      install -d -m 0750 "$state"
+
+      if [ -L "$image" ] || { [ -e "$image" ] && [ ! -f "$image" ]; }; then
+        echo "tentaflake: worker state image is not a regular file: $image" >&2
+        exit 1
+      fi
+      if [ -e "$image_tmp" ]; then
+        echo "tentaflake: incomplete worker state image exists: $image_tmp" >&2
+        echo "inspect and remove that exact file before retrying" >&2
+        exit 1
+      fi
+
+      if [ ! -e "$image" ]; then
+        if [ -n "$(find "$state" -mindepth 1 -print -quit)" ]; then
+          echo "tentaflake: refusing to hide non-empty worker state $state" >&2
+          echo "migrate it explicitly before enabling the fixed-size state volume" >&2
+          exit 1
+        fi
+        truncate --size "$expected" "$image_tmp"
+        mkfs.ext4 -F -q -m 0 -i 16384 "$image_tmp"
+        chmod 0600 "$image_tmp"
+        mv -T "$image_tmp" "$image"
+      fi
+
+      actual=$(stat -c %s "$image")
+      if [ "$actual" -ne "$expected" ]; then
+        echo "tentaflake: worker state image size drift for ${name}" >&2
+        echo "configured=$expected actual=$actual; use an explicit offline resize migration" >&2
+        exit 1
+      fi
+
+      if ! findmnt --noheadings --mountpoint "$state" >/dev/null; then
+        rc=0
+        e2fsck -p "$image" || rc=$?
+        if [ "$rc" -gt 1 ]; then
+          echo "tentaflake: e2fsck failed for $image with status $rc" >&2
+          exit "$rc"
+        fi
+      fi
+    '';
+  };
+
+  stateLayoutService =
+    name: agent:
+    let
+      group = workerGroup agent;
+    in
+    {
+      description = "Initialize private worker state layout for ${name}";
+      requires = [ (stateMountUnit name) ];
+      bindsTo = [ (stateMountUnit name) ];
+      after = [ (stateMountUnit name) ];
+      wantedBy = [ "multi-user.target" ];
+      serviceConfig = {
+        Type = "oneshot";
+        RemainAfterExit = true;
+        UMask = "0027";
+        NoNewPrivileges = true;
+        PrivateDevices = true;
+        PrivateTmp = true;
+        ProtectHome = true;
+        ProtectSystem = "strict";
+        ReadWritePaths = [ (stateDir name) ];
+        CapabilityBoundingSet = [
+          "CAP_CHOWN"
+          "CAP_DAC_OVERRIDE"
+          "CAP_FOWNER"
+          "CAP_FSETID"
+        ];
+      };
+      path = [ pkgs.coreutils ];
+      script = ''
+        state=${lib.escapeShellArg (stateDir name)}
+        for leaf in pending inflight jobs; do
+          path="$state/$leaf"
+          if [ -L "$path" ] || { [ -e "$path" ] && [ ! -d "$path" ]; }; then
+            echo "tentaflake: worker state path is unsafe: $path" >&2
+            exit 1
+          fi
+          install -d -m 0700 -o root -g root "$path"
+        done
+
+        results="$state/results"
+        if [ -L "$results" ] || { [ -e "$results" ] && [ ! -d "$results" ]; }; then
+          echo "tentaflake: worker result path is unsafe: $results" >&2
+          exit 1
+        fi
+        install -d -m 2750 -o root -g ${lib.escapeShellArg group} "$results"
+        marker="$state/.tentaflake-worker-state-v1"
+        if [ -L "$marker" ] || { [ -e "$marker" ] && [ ! -f "$marker" ]; }; then
+          echo "tentaflake: worker state marker is unsafe: $marker" >&2
+          exit 1
+        fi
+        printf '%s\n' 'tentaflake-worker-state-v1' > "$marker"
+        chown root:root "$marker"
+        chmod 0600 "$marker"
+        chown ${lib.escapeShellArg "root:${group}"} "$state"
+        chmod 0750 "$state"
+      '';
+    };
+
   workerConfig =
     name: agent:
     json.generate "tentaflake-worker-${name}.json" {
@@ -121,6 +302,9 @@ let
       container_uid = agent.containerUid;
       container_gid = agent.containerGid;
       max_request_bytes = agent.maxRequestBytes;
+      max_pending_requests = agent.maxPendingRequests;
+      max_pending_bytes = agent.maxPendingBytes;
+      max_ready_jobs_per_drain = agent.maxReadyJobsPerDrain;
       max_snapshot_bytes = agent.maxSnapshotBytes;
       max_snapshot_entries = agent.maxSnapshotEntries;
       max_log_bytes = agent.maxLogBytes;
@@ -143,8 +327,19 @@ let
     {
       description = "Disposable tool-worker queue for ${name}";
       wantedBy = [ "multi-user.target" ];
-      requires = [ "tentaflake-worker-image.service" ] ++ backendUnits ++ quotaUnits;
-      after = [ "tentaflake-worker-image.service" ] ++ backendUnits ++ quotaUnits;
+      requires = [
+        "tentaflake-worker-image.service"
+        (stateLayoutUnit name)
+      ]
+      ++ backendUnits
+      ++ quotaUnits;
+      after = [
+        "tentaflake-worker-image.service"
+        (stateLayoutUnit name)
+      ]
+      ++ backendUnits
+      ++ quotaUnits;
+      bindsTo = [ (stateLayoutUnit name) ];
       serviceConfig = {
         Type = "oneshot";
         User = "root";
@@ -153,6 +348,10 @@ let
         ExecStart = "${lib.getExe cfg.package} --config ${workerConfig name agent} drain";
         Restart = "on-failure";
         RestartSec = "10s";
+        # A systemd start timeout must never terminate a claimed job midway:
+        # its per-request capsule timeout remains bounded, while an interrupted
+        # claim is terminalized as outcome-unknown instead of replayed.
+        TimeoutStartSec = "infinity";
         NoNewPrivileges = true;
         PrivateDevices = true;
         PrivateTmp = true;
@@ -177,15 +376,91 @@ let
         CapabilityBoundingSet = [ "CAP_DAC_READ_SEARCH" ];
         SystemCallArchitectures = "native";
       };
-      # This path-activated oneshot drains the whole queue on every successful
-      # start. systemd's start limit counts those successes too, so a small
-      # aggregate burst limit can permanently disable a healthy queue. Real
-      # failures remain rate-bounded by RestartSec.
+      # Each start advances a bounded raw inbox scan and accepts a bounded
+      # batch of eligible regular requests into a count- and byte-capped private
+      # queue. It then completes a bounded number of ready jobs. The worker
+      # validates its persisted cursor against a directory mutation stamp and
+      # restarts safely from the beginning when that checkpoint is stale. An
+      # intentionally non-zero continuation result makes Restart=on-failure
+      # continue the next slice; a small aggregate start limit would permanently
+      # disable this controlled backpressure path. Actual worker failures use
+      # the same rate-bound retry interval.
       startLimitIntervalSec = 0;
     };
 
   allServices = lib.mapAttrs' (
     name: agent: lib.nameValuePair "tentaflake-worker-${name}" (workerService name agent)
+  ) enabledAgents;
+  stateServices = lib.foldlAttrs (
+    services: name: agent:
+    services
+    // {
+      "tentaflake-worker-state-prepare-${name}" = statePrepareService name agent;
+      "tentaflake-worker-state-${name}" = stateLayoutService name agent;
+      "tentaflake-worker-result-cleanup-${name}" = stateCleanupService name agent;
+    }
+  ) { } enabledAgents;
+  stateMounts = lib.mapAttrsToList (name: agent: {
+    description = "Fixed-size private worker state for ${name}";
+    what = stateImagePath name;
+    where = stateDir name;
+    type = "ext4";
+    options = "loop,nodev,nosuid,noexec,noatime";
+    requires = [ (statePrepareUnit name) ];
+    after = [
+      "local-fs.target"
+      (statePrepareUnit name)
+    ];
+    before = [
+      (stateLayoutUnit name)
+      "umount.target"
+    ];
+    conflicts = [ "umount.target" ];
+    wantedBy = [ "multi-user.target" ];
+    # As with the managed workspace image, the preparation service must run
+    # after ordinary local filesystems before this loop mount is activated.
+    unitConfig.DefaultDependencies = false;
+  }) enabledAgents;
+  stateCleanupService = name: agent: {
+    description = "Expire retained worker results for ${name}";
+    requires = [ (stateLayoutUnit name) ];
+    bindsTo = [ (stateLayoutUnit name) ];
+    after = [ (stateLayoutUnit name) ];
+    serviceConfig = {
+      Type = "oneshot";
+      UMask = "0077";
+      NoNewPrivileges = true;
+      PrivateDevices = true;
+      PrivateTmp = true;
+      ProtectHome = true;
+      ProtectSystem = "strict";
+      ReadWritePaths = [ (stateDir name) ];
+      CapabilityBoundingSet = [ "CAP_DAC_OVERRIDE" ];
+    };
+    path = [
+      pkgs.coreutils
+      pkgs.findutils
+    ];
+    script = ''
+      results=${lib.escapeShellArg (resultDir name)}
+      if [ -L "$results" ] || [ ! -d "$results" ]; then
+        echo "tentaflake: worker result root is unsafe: $results" >&2
+        exit 1
+      fi
+      find "$results" -mindepth 1 -maxdepth 1 -type d -mtime +13 -exec rm -rf -- {} +
+    '';
+  };
+  stateTimers = lib.mapAttrs' (
+    name: _:
+    lib.nameValuePair "tentaflake-worker-result-cleanup-${name}" {
+      wantedBy = [ "timers.target" ];
+      timerConfig = {
+        OnCalendar = "daily";
+        RandomizedDelaySec = "30m";
+        Persistent = true;
+        Unit = "tentaflake-worker-result-cleanup-${name}.service";
+      };
+    }
   ) enabledAgents;
   allPaths = lib.mapAttrs' (
     name: agent:
@@ -198,20 +473,24 @@ let
     lib.nameValuePair "tentaflake-worker-${name}" {
       description = "Watch the ${name} tool-worker inbox";
       wantedBy = [ "multi-user.target" ];
-      requires = quotaUnits;
+      requires = quotaUnits ++ [ (stateLayoutUnit name) ];
       after = [
         "basic.target"
         "systemd-tmpfiles-setup.service"
+        (stateLayoutUnit name)
       ]
       ++ quotaUnits;
+      bindsTo = [ (stateLayoutUnit name) ];
       before = [ "shutdown.target" ];
       conflicts = [ "shutdown.target" ];
       # A path unit normally starts before paths.target (and therefore before
       # basic.target). Quota-backed inboxes are late mounts, so start this
       # watcher explicitly after the ownership unit instead.
       unitConfig.DefaultDependencies = false;
+      # Ignored inbox entries remain by design, so DirectoryNotEmpty would
+      # continuously reactivate an otherwise converged oneshot.
       pathConfig = {
-        DirectoryNotEmpty = "${agent.workspace}/.tentaflake-worker/inbox";
+        PathChanged = "${agent.workspace}/.tentaflake-worker/inbox";
         Unit = "tentaflake-worker-${name}.service";
       };
     }
@@ -284,6 +563,22 @@ in
             message = "tentaflake worker ${name} snapshot limit may not exceed 16 GiB.";
           }
           {
+            assertion = (stateFilesystemUsableBytes agent) >= (stateRequiredBytes agent);
+            message = "tentaflake worker ${name} stateVolumeMiB must reserve two snapshots, pending bytes and file blocks, logs, control space, and ext4 overhead.";
+          }
+          {
+            assertion = (stateAvailableInodes agent) >= (stateRequiredInodes agent);
+            message = "tentaflake worker ${name} stateVolumeMiB must reserve ext4 inodes for two bounded snapshots, pending metadata, and recovery.";
+          }
+          {
+            assertion = agent.maxPendingBytes >= agent.maxRequestBytes;
+            message = "tentaflake worker ${name} maxPendingBytes must fit one maxRequestBytes request.";
+          }
+          {
+            assertion = agent.maxReadyJobsPerDrain <= agent.maxPendingRequests;
+            message = "tentaflake worker ${name} maxReadyJobsPerDrain may not exceed maxPendingRequests.";
+          }
+          {
             assertion =
               lib.hasAttr group config.users.groups && config.users.groups.${group}.gid == agent.containerGid;
             message = "tentaflake worker ${name} host group ${group} must exist with GID ${toString agent.containerGid}.";
@@ -319,26 +614,25 @@ in
     ) enabledAgents;
 
     systemd = {
-      tmpfiles.rules = lib.concatLists (
-        lib.mapAttrsToList (
-          name: agent:
-          let
-            group = workerGroup agent;
-          in
-          [
-            "d ${stateDir name} 0750 root ${group} -"
-            "d ${stateDir name}/pending 0700 root root -"
-            "d ${stateDir name}/approvals 0700 root root -"
-            "d ${stateDir name}/jobs 0700 root root -"
-            "d ${resultDir name} 2750 root ${group} 14d"
-            "d ${agent.workspace}/.tentaflake-worker 0700 ${toString agent.containerUid} ${group} -"
-            "d ${agent.workspace}/.tentaflake-worker/inbox 0770 ${toString agent.containerUid} ${group} -"
-          ]
-        ) enabledAgents
-      );
+      tmpfiles.rules =
+        lib.optionals (enabledAgents != { }) [ "d ${stateVolumeRoot} 0700 root root -" ]
+        ++ lib.concatLists (
+          lib.mapAttrsToList (
+            _: agent:
+            let
+              group = workerGroup agent;
+            in
+            [
+              "d ${agent.workspace}/.tentaflake-worker 0700 ${toString agent.containerUid} ${group} -"
+              "d ${agent.workspace}/.tentaflake-worker/inbox 0770 ${toString agent.containerUid} ${group} -"
+            ]
+          ) enabledAgents
+        );
 
+      mounts = stateMounts;
       services =
-        allServices
+        stateServices
+        // allServices
         // lib.optionalAttrs (enabledAgents != { }) {
           tentaflake-worker-image = {
             description = "Load the Nix-built tentaflake disposable worker image";
@@ -354,6 +648,7 @@ in
           };
         };
       paths = allPaths;
+      timers = stateTimers;
     };
   };
 }

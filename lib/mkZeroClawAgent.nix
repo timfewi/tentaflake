@@ -45,6 +45,7 @@ let
   quotaCfg = lib.attrByPath [ containerName ] null config.tentaflake.workspaceQuota.agents;
   quotaEnabled = quotaCfg != null && quotaCfg.enable;
   quotaUnit = "tentaflake-workspace-quota-${containerName}.service";
+  workerStateUnit = "tentaflake-worker-state-${containerName}.service";
   brokerEnvironmentFile = "/run/tentaflake-broker/${containerName}/agent.env";
   brokerUnits =
     lib.optional brokerEnabled "tentaflake-broker-network-${containerName}.service"
@@ -54,7 +55,10 @@ let
     ++ lib.optional (
       brokerEnabled && brokerCfg.fetch.enable
     ) "tentaflake-broker-fetch-${containerName}.service";
-  runtimeDependencies = brokerUnits ++ lib.optional quotaEnabled quotaUnit;
+  runtimeDependencies =
+    brokerUnits
+    ++ lib.optional quotaEnabled quotaUnit
+    ++ lib.optional workerEnabled workerStateUnit;
   secureUnitPolicy = {
     startLimitIntervalSec = 300;
     startLimitBurst = 5;
@@ -212,6 +216,7 @@ in
       ${serviceAttr} = secureUnitPolicy // {
         requires = runtimeDependencies;
         after = runtimeDependencies;
+        bindsTo = lib.optional workerEnabled workerStateUnit;
       };
     };
 
