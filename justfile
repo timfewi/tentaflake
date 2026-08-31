@@ -40,6 +40,10 @@ check:
 build:
     nix build .#nixosConfigurations.tentaflake.config.system.build.toplevel --no-link
 
+# Run the versioned host-policy golden evaluation corpus in the VM gate.
+golden-evals:
+    nix build .#checks.x86_64-linux.vm-integration -L
+
 # ── Formatting & lint ────────────────────────────────────────
 
 # Format the tree in place (nixfmt via `nix fmt`)

@@ -78,6 +78,8 @@
         ];
 
         environment.etc."tentaflake/network-test-image".source = networkTestImage;
+        environment.etc."tentaflake/golden-evals.json".source = ./golden-evals.json;
+        environment.etc."tentaflake/golden-eval-runner.py".source = ./golden-eval-runner.py;
         environment.systemPackages = [
           pkgs.git
           pkgs.python3
@@ -126,9 +128,13 @@
             agents.hermes-test = {
               enable = true;
               workspace = "/var/lib/hermes-test/workspace";
+              stateVolumeMiB = 64;
               maxSnapshotBytes = 16 * 1024 * 1024;
               maxSnapshotEntries = 1000;
               maxTimeoutSeconds = 10;
+              maxPendingRequests = 4;
+              maxPendingBytes = 96 * 1024;
+              maxReadyJobsPerDrain = 1;
               cpus = "0.5";
               workspaceTmpfsSize = "8m";
               tmpTmpfsSize = "4m";
@@ -138,9 +144,13 @@
               workspace = "/var/lib/zeroclaw-assistant/data";
               containerUid = 65534;
               containerGid = 65534;
+              stateVolumeMiB = 64;
               maxSnapshotBytes = 16 * 1024 * 1024;
               maxSnapshotEntries = 1000;
               maxTimeoutSeconds = 10;
+              maxPendingRequests = 4;
+              maxPendingBytes = 96 * 1024;
+              maxReadyJobsPerDrain = 1;
               cpus = "0.5";
               workspaceTmpfsSize = "8m";
               tmpTmpfsSize = "4m";
@@ -337,6 +347,8 @@
         )
         assert "TFSEC-002" not in report, report
         assert "TFSEC-011" not in report, report
+        assert "TFSEC-033" not in report, report
+        assert "TFSEC-034" not in report, report
 
     with subtest("declared agent produced its systemd unit"):
         # oci-containers names the unit docker-<container>.service.
@@ -393,6 +405,35 @@
         )
         machine.succeed(
             "rm -f /var/lib/hermes-test/workspace/over-quota"
+        )
+
+    with subtest("private worker state has a fixed-size filesystem"):
+        for name in ["hermes-test", "zeroclaw-assistant"]:
+            machine.wait_for_unit(f"tentaflake-worker-state-{name}.service")
+            state = f"/var/lib/tentaflake-worker-{name}"
+            machine.succeed(
+                f"findmnt --mountpoint {state} -n -o FSTYPE | grep -Fx ext4"
+            )
+            machine.succeed(
+                f"findmnt --mountpoint {state} -n -o OPTIONS | tr ',' '\n' | grep -Fx noexec"
+            )
+            machine.succeed(f"test -f {state}/.tentaflake-worker-state-v1")
+            size = int(
+                machine.succeed(
+                    f"stat -c %s /var/lib/tentaflake-worker-state-volumes/{name}.img"
+                ).strip()
+            )
+            assert size == 64 * 1024 * 1024, (name, size)
+        machine.fail(
+            "fallocate -l 80M "
+            "/var/lib/tentaflake-worker-hermes-test/results/over-state-quota"
+        )
+        machine.succeed(
+            "rm -f /var/lib/tentaflake-worker-hermes-test/results/over-state-quota"
+        )
+        controller_unit = machine.succeed("systemctl cat docker-hermes-test.service")
+        assert "tentaflake-worker-state-hermes-test.service" in controller_unit, (
+            controller_unit
         )
 
     with subtest("git remote policy rejects a repository remote changed by the agent"):
@@ -802,6 +843,16 @@
         machine.succeed(
             "kill $(cat /tmp/tentaflake-loopback-fixture.pid) "
             "$(cat /tmp/tentaflake-gateway-fixture.pid)"
+        )
+
+    with subtest("golden agent-host policy contracts"):
+        golden = machine.succeed(
+            "python3 /etc/tentaflake/golden-eval-runner.py"
+        ).strip()
+        assert golden == "tentaflake-agent-host-policy v1: 8 cases passed", golden
+        machine.succeed(
+            "test ! -e /var/lib/tentaflake-worker-hermes-test/"
+            "pending/*.json"
         )
 
     with subtest("disposable worker enforces policy and approval outside the agent"):

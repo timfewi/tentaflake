@@ -1,0 +1,102 @@
+{
+  "schema_version": 1,
+  "suite": "tentaflake-agent-host-policy",
+  "description": "Deterministic host-policy contracts for the disposable worker. These cases do not evaluate model quality or claim to solve prompt injection.",
+  "sensitive_marker": "GOLDEN_PROMPT_MARKER_MUST_NOT_APPEAR_IN_AUDIT",
+  "cases": [
+    {
+      "id": "local-reversible-runs-offline",
+      "action_class": "local-reversible",
+      "decision": "auto",
+      "expected_status": "succeeded",
+      "artifacts_available": true,
+      "assert_offline": true,
+      "expected_events": [
+        "request-accepted",
+        "completed"
+      ]
+    },
+    {
+      "id": "external-reversible-needs-approval",
+      "action_class": "external-reversible",
+      "decision": "approve",
+      "expected_status": "succeeded",
+      "artifacts_available": true,
+      "expected_events": [
+        "approval-required",
+        "approved",
+        "completed"
+      ]
+    },
+    {
+      "id": "irreversible-needs-approval",
+      "action_class": "irreversible",
+      "decision": "approve",
+      "expected_status": "succeeded",
+      "artifacts_available": true,
+      "expected_events": [
+        "approval-required",
+        "approved",
+        "completed"
+      ]
+    },
+    {
+      "id": "financial-needs-approval",
+      "action_class": "financial",
+      "decision": "approve",
+      "expected_status": "succeeded",
+      "artifacts_available": true,
+      "expected_events": [
+        "approval-required",
+        "approved",
+        "completed"
+      ]
+    },
+    {
+      "id": "production-needs-approval",
+      "action_class": "production",
+      "decision": "approve",
+      "expected_status": "succeeded",
+      "artifacts_available": true,
+      "expected_events": [
+        "approval-required",
+        "approved",
+        "completed"
+      ]
+    },
+    {
+      "id": "communicative-needs-approval",
+      "action_class": "communicative",
+      "decision": "approve",
+      "expected_status": "succeeded",
+      "artifacts_available": true,
+      "expected_events": [
+        "approval-required",
+        "approved",
+        "completed"
+      ]
+    },
+    {
+      "id": "privileged-denial-prevents-execution",
+      "action_class": "privileged",
+      "decision": "deny",
+      "expected_status": "denied",
+      "artifacts_available": false,
+      "expected_events": [
+        "approval-required",
+        "denied"
+      ]
+    },
+    {
+      "id": "forbidden-never-runs",
+      "action_class": "forbidden",
+      "decision": "auto",
+      "expected_status": "rejected",
+      "artifacts_available": false,
+      "expected_events": [
+        "request-accepted",
+        "rejected"
+      ]
+    }
+  ]
+}

@@ -453,9 +453,15 @@ let
   numericWorkerService = workerCapsule.config.systemd.services.tentaflake-worker-zeroclaw-worker;
   workerPath = workerCapsule.config.systemd.paths.tentaflake-worker-hermes-worker;
   workerOwnerService = workerCapsule.config.systemd.services.tentaflake-workspace-quota-hermes-worker;
+  workerStateService = workerCapsule.config.systemd.services.tentaflake-worker-state-hermes-worker;
+  workerStateCleanup =
+    workerCapsule.config.systemd.services.tentaflake-worker-result-cleanup-hermes-worker;
   workerAttempt = builtins.tryEval workerCapsule.config.system.build.toplevel.drvPath;
   workerMount = lib.findFirst (
     mount: mount.where == "/var/lib/hermes-worker/workspace"
+  ) null workerCapsule.config.systemd.mounts;
+  workerStateMount = lib.findFirst (
+    mount: mount.where == "/var/lib/tentaflake-worker-hermes-worker"
   ) null workerCapsule.config.systemd.mounts;
 
   unsafeWorkerFixture = eval [
@@ -704,12 +710,37 @@ assert lib.elem "/var/lib/tentaflake-worker-hermes-worker/results:/run/tentaflak
 assert workerService.serviceConfig.RestrictAddressFamilies == [ "AF_UNIX" ];
 assert workerService.serviceConfig.CapabilityBoundingSet == [ "CAP_DAC_READ_SEARCH" ];
 assert workerService.serviceConfig.Group == "tfw-gid-10000";
+assert workerService.serviceConfig.TimeoutStartSec == "infinity";
 assert workerService.startLimitIntervalSec == 0;
 assert workerCapsule.config.users.groups.tfw-gid-10000.gid == 10000;
+assert lib.elem "tentaflake-worker-state-hermes-worker.service" workerService.requires;
+assert workerService.bindsTo == [ "tentaflake-worker-state-hermes-worker.service" ];
+assert lib.elem "tentaflake-worker-state-hermes-worker.service"
+  workerCapsule.config.systemd.services.docker-hermes-worker.requires;
+assert
+  workerCapsule.config.systemd.services.docker-hermes-worker.bindsTo
+  == [ "tentaflake-worker-state-hermes-worker.service" ];
+assert workerStateService.serviceConfig.RemainAfterExit;
+assert
+  workerStateService.serviceConfig.CapabilityBoundingSet == [
+    "CAP_CHOWN"
+    "CAP_DAC_OVERRIDE"
+    "CAP_FOWNER"
+    "CAP_FSETID"
+  ];
+assert builtins.length workerStateService.bindsTo == 1;
+assert lib.hasInfix "refusing to hide non-empty worker state"
+  workerCapsule.config.systemd.services.tentaflake-worker-state-prepare-hermes-worker.script;
+assert lib.hasInfix "mkfs.ext4 -F -q -m 0 -i 16384"
+  workerCapsule.config.systemd.services.tentaflake-worker-state-prepare-hermes-worker.script;
+assert lib.hasInfix ".tentaflake-worker-state-v1" workerStateService.script;
+assert lib.hasInfix "find \"$results\" -mindepth 1 -maxdepth 1 -type d -mtime +13"
+  workerStateCleanup.script;
 assert numericWorkerService.serviceConfig.Group == "nogroup";
 assert
-  workerPath.pathConfig.DirectoryNotEmpty
-  == "/var/lib/hermes-worker/workspace/.tentaflake-worker/inbox";
+  workerPath.pathConfig.PathChanged == "/var/lib/hermes-worker/workspace/.tentaflake-worker/inbox";
+assert !(workerPath.pathConfig ? DirectoryNotEmpty);
+assert workerPath.bindsTo == [ "tentaflake-worker-state-hermes-worker.service" ];
 assert workerPath.unitConfig.DefaultDependencies == false;
 assert lib.elem "tentaflake-workspace-quota-hermes-worker.service" workerPath.after;
 assert workerMount != null;
@@ -718,6 +749,13 @@ assert workerMount.options == "loop,nodev,nosuid,noatime";
 assert workerMount.unitConfig.DefaultDependencies == false;
 assert workerMount.wantedBy == [ "multi-user.target" ];
 assert lib.elem "local-fs.target" workerMount.after;
+assert workerStateMount != null;
+assert workerStateMount.what == "/var/lib/tentaflake-worker-state-volumes/hermes-worker.img";
+assert workerStateMount.where == "/var/lib/tentaflake-worker-hermes-worker";
+assert workerStateMount.options == "loop,nodev,nosuid,noexec,noatime";
+assert workerStateMount.unitConfig.DefaultDependencies == false;
+assert workerStateMount.wantedBy == [ "multi-user.target" ];
+assert lib.elem "local-fs.target" workerStateMount.after;
 assert lib.hasInfix "refusing unsafe worker control path" workerOwnerService.script;
 assert
   workerOwnerService.serviceConfig.CapabilityBoundingSet == [
