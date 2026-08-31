@@ -31,6 +31,10 @@ tentaflake.worker.agents.hermes-coding = {
   containerUid = 10000;
   containerGid = 10000;
 
+  maxPendingRequests = 128;
+  maxPendingBytes = 8 * 1024 * 1024;
+  maxReadyJobsPerDrain = 1;
+  stateVolumeMiB = 8192;
   maxSnapshotBytes = 1024 * 1024 * 1024;
   maxSnapshotEntries = 200000;
   maxTimeoutSeconds = 900;
@@ -44,6 +48,35 @@ tentaflake.worker.agents.hermes-coding = {
 ```
 
 ZeroClaw uses `/var/lib/zeroclaw-<name>/data` with UID/GID 65534.
+
+### Private worker-state capacity
+
+Every enabled worker receives a separate fixed-size ext4 state image below
+`/var/lib/tentaflake-worker-state-volumes/`. It is mounted with
+`loop,nodev,nosuid,noexec,noatime` at
+`/var/lib/tentaflake-worker-<container>/` before either the worker or the
+controller's read-only result bind mount starts. The image contains pending and
+inflight claims, workspace snapshots, artifact staging, retained results, the
+audit log, and control files, so it is a hard host-disk boundary rather than an
+application-only accounting estimate.
+
+`stateVolumeMiB` defaults to 8192. Evaluation reserves two full snapshot
+budgets, the maximum pending bytes, the log budget, 4 KiB for each possible
+pending file, a 16 MiB control reserve, and ext4 inodes for two snapshot trees
+plus pending metadata and recovery. It reserves a further 12.5% of raw image
+space for the ext4 journal and allocation metadata; images are made with no
+reserved root blocks and an explicit 16 KiB inode density. Runtime admission
+checks actual free blocks and inodes under the worker-wide lock before it
+creates a snapshot; insufficient state capacity produces a terminal `rejected`
+result before the capsule starts.
+
+This is deliberately migration-safe. On first enablement the preparation unit
+refuses to hide a non-empty existing worker state directory, refuses symlinks,
+incomplete images, and size drift, and never formats or copies existing state.
+Stop the matching controller and worker, preserve and review the old state in a
+separate location, leave the exact mountpoint empty, create the new image, and
+restore only reviewed data while the services remain stopped. Resizing likewise
+requires an explicit offline migration; there is no automatic resize.
 
 The host service runs with a real group-database entry matching the numeric
 container GID. Tentaflake creates one deterministic `tfw-gid-<gid>` group per
@@ -83,6 +116,51 @@ IDs are bounded lowercase ASCII identifiers. The parser rejects unknown
 fields, oversized requests, empty or oversized argument lists, NUL bytes,
 unsupported versions, duplicate IDs, and timeouts above policy.
 
+Before it copies a validated request out of the workspace, the worker reserves
+both one slot and the request byte length in its root-owned private queue.
+`maxPendingRequests` defaults to 128 and `maxPendingBytes` to 8 MiB; both are
+hard-capped by the module and the worker binary. A request that does not fit is
+removed from the inbox and receives a `request-rejected` audit event with
+`private pending queue capacity reached`; it never consumes unbounded private
+pending state. Each queue activation completes at most
+`maxReadyJobsPerDrain` ready or forbidden entries (default one), so sorting and
+execution work remain bounded. The worker serializes queue and operator commands
+with one root-owned lock. Before any execution or terminal decision it atomically
+moves the exact private request from `pending/` to `inflight/`; an operator
+approval then executes that claimed job immediately rather than being delayed
+behind another queue entry.
+
+The untrusted directory scan processes at most 1,024 raw names per invocation
+and uses one metadata-only continuation probe to distinguish an exact boundary
+from more work. Before a controlled retry it persists a root-owned directory
+cursor together with the inbox device, inode, and change-time stamp. A malformed
+cursor, changed directory, failed cursor checkpoint, or resumed cursor that
+immediately reaches EOF is discarded and causes a bounded retry from the
+beginning. Only nofollow-checked, regular, size-bounded JSON files become job
+candidates; other names (including directories, links, FIFO-like nodes,
+oversized files, and unrelated names) do not consume that candidate batch and
+receive one aggregate audit record for the scanned slice. When raw scan work or
+the candidate batch is exhausted, the service deliberately returns a controlled
+failure after its current batch completes, then resumes after the ten-second
+restart delay. The path unit watches directory changes rather than persistent
+non-emptiness, so preserved ignored entries do not reactivate a successfully
+converged service. The boot-enabled worker service still drains requests that
+were already present before the watcher started. The inbox is therefore a
+mailbox, not general agent storage; a fixed-size workspace bounds its total
+inode space and each scan bounds one worker activation's CPU, memory, and
+latency cost.
+
+The cursor checkpoint is atomically renamed and its private parent directory is
+synced. The worker also syncs the private pending request before removing an
+inbox source. A request interrupted before its private claim can be re-observed;
+once it is atomically claimed for a terminal decision or execution it is never
+automatically replayed. On the next worker invocation a leftover claim is
+cleaned up only after a labeled capsule is removed and becomes a terminal
+`interrupted` / outcome-unknown result when no published result exists. Submit a
+fresh ID only after the operator has reconciled any possible external effect.
+A continuously mutating untrusted inbox can still force bounded retries, so the
+queue cannot promise global progress against an active availability attack.
+
 The snapshot walker opens the configured workspace through Linux `openat2`
 with `RESOLVE_NO_MAGICLINKS | RESOLVE_NO_SYMLINKS`. On kernels or filtered VM
 environments that return `ENOSYS`, it falls back to descriptor-relative,
@@ -114,8 +192,10 @@ additional authority.
 
 The host captures a validated request below
 `/var/lib/tentaflake-worker-<container>/pending/` before approval. The agent
-cannot mutate that private copy. Approve or deny the exact ID from an operator
-session:
+cannot mutate that private copy. Approval or denial first atomically claims that
+exact request below root-owned `inflight/`, so a concurrent drain, approve, or
+deny cannot execute a stale pending copy. Approve or deny the exact ID from an
+operator session:
 
 ```text
 sudo tentaflake-worker --config \
@@ -164,23 +244,38 @@ worker's private result directory and is exposed read-only to the controller:
 The controller chooses whether to copy a reviewed artifact into its persistent
 workspace. The worker never writes an artifact directly back into that
 workspace, and the capsule receives no writable host bind for this handoff.
-Result directories expire after 14 days; the prompt-free JSONL audit rotates
-daily with 14 generations.
+Result directories expire after 14 days through a post-mount root-owned
+cleanup timer; the prompt-free JSONL audit rotates daily with 14 generations.
+Both live inside the fixed-size worker-state image, so retention cannot grow
+onto the host filesystem outside that image.
 
 The path-activated queue service has a ten-second failure-restart delay but no
-aggregate systemd start counter. systemd counts successful oneshot activations
-against that counter as well, which would otherwise disable a healthy queue
-after a small number of ordinary jobs. Per-request resource, timeout, snapshot,
-and workspace ceilings remain enforced independently.
+aggregate systemd start counter. It uses that restart path deliberately after
+the current pending batch completes when a raw inbox scan slice, private queue,
+or ready-job batch needs continuation, as well as for real failures. systemd
+also counts successful oneshot activations against an aggregate counter, which
+would otherwise disable a healthy queue after a small number of ordinary jobs.
+`TimeoutStartSec=infinity` prevents systemd from killing a claimed request
+mid-transition; the capsule still has the request's strict runtime ceiling,
+and startup recovery terminalizes an interrupted claim rather than replaying
+it. Per-request resource, snapshot, and workspace ceilings remain enforced
+independently.
 
-Tmpfiles establishes the result root as `02750`; the orchestrator preserves
-that inherited setgid bit without trying to reapply it inside the hardened
-systemd unit. Published result files therefore retain the controller's exact
-numeric group while `RestrictSUIDSGID=true` remains enforced.
+The post-mount root-owned layout unit establishes the result root as `02750` and
+writes a private state-layout marker. The worker refuses to run without that
+marker, while the worker queue, watcher, cleanup timer, and controller unit are
+bound to the layout and its state mount. A later unmount therefore stops those
+consumers instead of exposing an unmounted writable host directory. The
+orchestrator preserves the inherited setgid bit without trying to reapply it
+inside the hardened systemd unit. Published result files therefore retain the
+controller's exact numeric group while `RestrictSUIDSGID=true` remains enforced.
 
 The OCI container and temporary host snapshot are removed after every normal
 completion, failure, or timeout. A stale container is removed only when its
-Tentaflake ownership label exactly matches the configured agent.
+Tentaflake ownership label exactly matches the configured agent. A crash after
+an atomic claim produces an `interrupted` result with an outcome-unknown audit
+record unless a durable result was already published; it is never automatically
+replayed.
 
 ## Verification boundary and remaining risks
 

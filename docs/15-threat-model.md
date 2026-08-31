@@ -26,7 +26,8 @@ The model protects:
 - the host kernel, NixOS configuration, boot state, container engine, and
   system services;
 - operator access, tailnet identity, and recovery authority;
-- provider, Git, backup, signing, and deployment credentials;
+- provider, Git, backup, signing, deployment, and optional attestation
+  credentials;
 - agent workspaces, broker audit records, backups, and operational logs;
 - other agents and their state, credentials, budgets, and broker endpoints;
 - external provider accounts, repositories, websites, and cost budgets;
@@ -64,6 +65,8 @@ The following remain trusted computing base or operator assumptions:
 - the deployment fork's runtime secret provisioning and file ownership;
 - reviewed image-signing identities and keys when provenance enforcement is
   enabled;
+- an optional Sui attestation issuer, relayer budget, exact RPC endpoint, and
+  custody of the AdminCap and any UpgradeCap;
 - correct provider, repository, backup, tailnet, DNS, and alerting policy owned
   outside this generic template;
 - operators review the exact build and target before activation and perform
@@ -99,7 +102,10 @@ residual risk until an ownership migration and both runtime paths are tested.
 
 The controller workspace is persistent and writable. An optional exact-size
 filesystem bounds that workspace, but the controller may still corrupt or
-delete its own data. State outside that mount needs separate capacity policy.
+delete its own data. Every enabled worker has a separate fixed-size private
+state image with a post-mount layout marker; its queue, controller result bind,
+and cleanup consumer stop if that mount disappears. Other state outside these
+managed mounts still needs a deployment capacity policy.
 
 ### Controller to external services
 
@@ -121,8 +127,19 @@ not make retrieved content safe to execute or trust.
 The worker receives a bounded, descriptor-safe workspace snapshot and runs a
 short-lived `runsc` capsule with no network or secrets. It returns artifacts
 through a controller-specific read-only import. Only `local-reversible`
-actions run automatically; other permitted classes wait for a host-side
-approval record, and `forbidden` is rejected.
+actions run automatically; other permitted classes require a host decision, and
+`forbidden` is rejected. A worker-wide root lock and non-overwriting atomic
+`pending/` to `inflight/` claim ensure that drain, approve, and deny cannot
+perform two terminal decisions for the same request. A crash after a claim is
+recovered as a terminal outcome-unknown result, never an automatic replay.
+
+Admission into the root-owned pending queue has explicit count and byte limits,
+and each activation completes only a bounded number of ready requests. A full
+queue rejects the excess request instead of moving unbounded agent-controlled
+data out of the workspace. The fixed state image is the primary disk boundary;
+static validation reserves snapshots, pending metadata, logs, control space,
+inodes, and ext4 headroom, while runtime checks actual free blocks and inodes
+before starting a capsule.
 
 This boundary cannot prove that every tool exposed by every upstream agent
 runtime routes shell or file work through the worker. Runtime-specific tool
@@ -137,6 +154,23 @@ credentials remain runtime files or systemd credentials. Each integration
 must be narrowly scoped by the deployment: exact repository and branch,
 provider account and models, backup repository, signer identity, tailnet
 grants, and alert receiver.
+
+### Optional Sui attestation
+
+The experimental Sui reference is a host-side attestation boundary, not an
+agent capability. A balanced controller receives no chain RPC route, gas
+wallet, issuer key, AdminCap, or arbitrary transaction relay. A fixed collector
+may derive only declared, root-owned evidence; a separate issuer signs a
+canonical commitment payload; and a distinct, budgeted relayer may submit only
+the fixed transaction to an exact endpoint after chain-ID and finality checks.
+The shared on-chain objects contain opaque commitments rather than prompts,
+outputs, customer data, or deployment identities.
+
+A valid on-chain record means only that the configured issuer attested fresh
+evidence under the configured registry. A consuming Move package must pin its
+exact package, registry, record, and commitment values; accepting a proof type
+alone is not an authorization boundary. It also does not establish that an
+agent is safe. See [the Sui attestation guide](17-sui-agent-attestation.md).
 
 ### Telemetry and detection
 
@@ -159,7 +193,8 @@ remain deployment responsibilities.
 | Unsafe code execution | disposable offline worker and approval classes | queue, timeout, cleanup, and no-egress tests |
 | Unauthorized Git write | exact remote and branch host helper | denial tests and least-privilege credential review |
 | Mutable image substitution | digest pin and optional Cosign start gate | verified policy plus failed-signature start test |
-| Resource exhaustion | memory, CPU, PID, tmpfs, log, and workspace limits | live limits and exhaustion tests |
+| Optional on-chain evidence replay or false claim | registry-bound issuer signature, sequence, expiry, pause, and revocation | Move, cross-language BCS, host, and relay negative tests |
+| Resource exhaustion | memory, CPU, PID, tmpfs, log, workspace, and fixed worker-state limits | live limits and disk/inode exhaustion tests |
 | Lost state | encrypted Restic policy and success freshness | real fresh-host restore drill |
 | Runtime anomaly | journald, optional observability and Falco | retention, receiver, and response drill |
 | Remote management exposure | loopback listeners and tailnet policy template | live listeners and remote policy audit |
@@ -178,8 +213,8 @@ Tentaflake does not:
 - make Docker, Podman, gVisor, the kernel, firmware, or hardware immune to
   vulnerabilities;
 - provide a tested MicroVM or separate-kernel `strict` profile today;
-- attest that a signed image, model, dependency, website, or generated artifact
-  is safe or correct;
+- attest that a signed image, model, dependency, website, generated artifact,
+  or optional on-chain commitment is safe or correct;
 - prevent an agent from damaging its own writable workspace;
 - transparently mediate every tool in every supported upstream agent runtime;
 - provide generic adapters for arbitrary purchases, messages, deployments, or
@@ -201,8 +236,9 @@ Before treating a host as ready for unattended agents:
 
 1. Keep every untrusted controller on `balanced`; confirm `strict` still fails
    closed and document any deliberate `dev` exception.
-2. Review generated units, exact mounts, identities, resource limits, image
-   digests, provenance policies, and agent-specific broker policy.
+2. Review generated units, exact workspace and worker-state mounts, identities,
+   resource limits, image digests, provenance policies, and agent-specific
+   broker policy.
 3. Build and run the unit, module-evaluation, and VM suites without activating
    the production host as a side effect.
 4. Review and separately approve the exact host activation.
@@ -210,8 +246,13 @@ Before treating a host as ready for unattended agents:
    and direct-egress, LAN, metadata, peer, and broker negative tests.
 6. Audit the deployed tailnet grants/SSH policy and all external credentials
    for least privilege and rotation.
-7. Configure log retention, capacity alerts, notification delivery, and an
-   operator response path; validate them end to end.
+7. Configure log retention, workspace and worker-state capacity alerts,
+   notification delivery, and an operator response path; validate them end to
+   end.
 8. Perform a real encrypted backup and fresh-host restore drill.
 9. Record remaining unknown evidence and accepted residual risks. Do not count
    a warning or unavailable check as a pass.
+10. If the optional Sui integration is selected, verify its Move and
+    cross-language test vectors, issuer and relayer separation, RPC chain-ID
+    and finality checks, explicit wallet budget, multisig capability custody,
+    and the absence of agent chain authority.
