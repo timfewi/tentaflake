@@ -816,7 +816,7 @@ fn security_live_findings(config: &Config, state: &SecurityState) -> Vec<Finding
         }
 
         let mut command = Command::new("sudo");
-        command.args(["-n", &config.backend, "inspect", &agent.name]);
+        command.args(inspect_arguments(&config.backend, &agent.container));
         match command.output() {
             Ok(result) if result.status.success() => {
                 let expected_network = if agent.brokered_egress {
@@ -860,6 +860,10 @@ fn security_live_findings(config: &Config, state: &SecurityState) -> Vec<Finding
     }
 
     findings
+}
+
+fn inspect_arguments<'a>(backend: &'a str, container: &'a str) -> [&'a str; 4] {
+    ["-n", backend, "inspect", container]
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1912,6 +1916,18 @@ mod tests {
         assert_eq!(findings.len(), 1);
         assert_eq!(findings[0].id, "TFSEC-037");
         assert_eq!(findings[0].severity, "critical");
+    }
+
+    #[test]
+    fn security_inspection_targets_the_generated_container_name() {
+        assert_eq!(
+            inspect_arguments("docker", "hermes-fixture"),
+            ["-n", "docker", "inspect", "hermes-fixture"]
+        );
+        assert_ne!(
+            inspect_arguments("docker", "hermes-fixture"),
+            ["-n", "docker", "inspect", "fixture"]
+        );
     }
 
     #[test]

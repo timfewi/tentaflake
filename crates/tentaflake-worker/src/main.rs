@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use std::ffi::{CString, OsStr, OsString};
+use std::ffi::{CStr, CString, OsStr, OsString};
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Write};
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
@@ -15,6 +15,18 @@ type Result<T> = std::result::Result<T, String>;
 const RESOLVE_NO_MAGICLINKS: u64 = 0x02;
 const RESOLVE_NO_SYMLINKS: u64 = 0x04;
 const COMPLETION_MARKER: &str = "/workspace/.tentaflake-worker-complete";
+const MAX_INBOX_ENTRIES: u64 = 1024;
+const MAX_INBOX_SCAN_ENTRIES: u64 = 1024;
+const MAX_PENDING_REQUESTS_LIMIT: u64 = 4096;
+const MAX_PENDING_BYTES_LIMIT: u64 = 512 * 1024 * 1024;
+const MAX_READY_JOBS_PER_DRAIN_LIMIT: u64 = 128;
+const INBOX_CURSOR_FILE: &str = "inbox.cursor";
+const STATE_LAYOUT_MARKER_FILE: &str = ".tentaflake-worker-state-v1";
+const STATE_LAYOUT_MARKER: &[u8] = b"tentaflake-worker-state-v1\n";
+const PENDING_FILE_ALLOCATION_BYTES: u64 = 4096;
+const PENDING_METADATA_INODES: u64 = 4;
+const STATE_CONTROL_RESERVE_BYTES: u64 = 16 * 1024 * 1024;
+const STATE_CONTROL_RESERVE_INODES: u64 = 1024;
 const WORKSPACE_INIT_SCRIPT: &str = r#"
 cp -R --no-preserve=ownership /input/. /workspace/
 cd /workspace
@@ -51,6 +63,9 @@ struct Config {
     container_uid: u32,
     container_gid: u32,
     max_request_bytes: u64,
+    max_pending_requests: u64,
+    max_pending_bytes: u64,
+    max_ready_jobs_per_drain: u64,
     max_snapshot_bytes: u64,
     max_snapshot_entries: u64,
     max_log_bytes: usize,
@@ -118,6 +133,88 @@ struct ArtifactExport {
     diagnostic: Option<String>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct InboxDirectoryStamp {
+    device: u64,
+    inode: u64,
+    change_seconds: i64,
+    change_nanoseconds: i64,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct InboxCursor {
+    offset: libc::c_long,
+    stamp: InboxDirectoryStamp,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct InboxCursorRead {
+    cursor: Option<InboxCursor>,
+    reset: bool,
+}
+
+struct InboxScan {
+    names: Vec<OsString>,
+    deferred: bool,
+    ignored_entries: u64,
+    scanned_entries: u64,
+    next_cursor: Option<libc::c_long>,
+    directory_stamp: InboxDirectoryStamp,
+    directory_changed: bool,
+    stale_cursor: bool,
+}
+
+struct PendingUsage {
+    requests: u64,
+    bytes: u64,
+}
+
+struct WorkerStateLock {
+    _file: File,
+}
+
+impl WorkerStateLock {
+    fn acquire(state_dir: &Path) -> Result<Self> {
+        let path = state_dir.join("worker.lock");
+        let file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .mode(0o600)
+            .open(&path)
+            .map_err(|error| format!("open worker state lock {}: {error}", path.display()))?;
+        let result = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX) };
+        if result == 0 {
+            Ok(Self { _file: file })
+        } else {
+            Err(format!(
+                "lock worker state {}: {}",
+                path.display(),
+                io::Error::last_os_error()
+            ))
+        }
+    }
+}
+
+impl PendingUsage {
+    fn has_capacity_for(&self, config: &Config, request_bytes: u64) -> bool {
+        self.requests < config.max_pending_requests
+            && request_bytes <= config.max_pending_bytes.saturating_sub(self.bytes)
+    }
+
+    fn reserve(&mut self, request_bytes: u64) -> Result<()> {
+        self.requests = self
+            .requests
+            .checked_add(1)
+            .ok_or_else(|| "pending request count overflow".to_string())?;
+        self.bytes = self
+            .bytes
+            .checked_add(request_bytes)
+            .ok_or_else(|| "pending byte count overflow".to_string())?;
+        Ok(())
+    }
+}
+
 #[derive(Debug, PartialEq, Eq)]
 enum WorkerGroupAction {
     Keep,
@@ -163,6 +260,8 @@ fn run() -> Result<()> {
     validate_config(&config)?;
     enter_worker_group(&config)?;
     ensure_state_layout(&config)?;
+    let _state_lock = WorkerStateLock::acquire(&config.state_dir)?;
+    recover_inflight(&config)?;
 
     match command.as_str() {
         "drain" => {
@@ -250,6 +349,9 @@ fn validate_config(config: &Config) -> Result<()> {
         return Err("image must be one non-empty OCI reference".into());
     }
     if config.max_request_bytes == 0
+        || config.max_pending_requests == 0
+        || config.max_pending_bytes == 0
+        || config.max_ready_jobs_per_drain == 0
         || config.max_snapshot_bytes == 0
         || config.max_snapshot_entries == 0
         || config.max_log_bytes == 0
@@ -257,6 +359,16 @@ fn validate_config(config: &Config) -> Result<()> {
         || config.pids_limit == 0
     {
         return Err("worker limits must all be positive".into());
+    }
+    if config.max_pending_bytes < config.max_request_bytes {
+        return Err("max_pending_bytes must accommodate one max_request_bytes request".into());
+    }
+    if config.max_pending_requests > MAX_PENDING_REQUESTS_LIMIT
+        || config.max_pending_bytes > MAX_PENDING_BYTES_LIMIT
+        || config.max_ready_jobs_per_drain > MAX_READY_JOBS_PER_DRAIN_LIMIT
+        || config.max_ready_jobs_per_drain > config.max_pending_requests
+    {
+        return Err("configured private queue limits exceed the worker safety bounds".into());
     }
     Ok(())
 }
@@ -302,18 +414,55 @@ fn validate_request(config: &Config, request: &JobRequest) -> Result<()> {
     Ok(())
 }
 
+fn require_directory(path: &Path, label: &str) -> Result<()> {
+    let metadata = fs::symlink_metadata(path)
+        .map_err(|error| format!("stat {label} {}: {error}", path.display()))?;
+    if metadata.is_dir() && !metadata.file_type().is_symlink() {
+        Ok(())
+    } else {
+        Err(format!(
+            "{label} is not a safe directory: {}",
+            path.display()
+        ))
+    }
+}
+
+fn verify_state_layout_marker(config: &Config) -> Result<()> {
+    let path = config.state_dir.join(STATE_LAYOUT_MARKER_FILE);
+    let metadata = fs::symlink_metadata(&path)
+        .map_err(|error| format!("stat state layout marker {}: {error}", path.display()))?;
+    if !metadata.file_type().is_file()
+        || metadata.file_type().is_symlink()
+        || metadata.len() != u64::try_from(STATE_LAYOUT_MARKER.len()).unwrap_or(u64::MAX)
+    {
+        return Err(format!(
+            "worker state layout marker is unsafe or missing: {}",
+            path.display()
+        ));
+    }
+    let mut file = File::open(&path)
+        .map_err(|error| format!("open state layout marker {}: {error}", path.display()))?;
+    let content = read_bounded(&mut file, STATE_LAYOUT_MARKER.len())
+        .map_err(|error| format!("read state layout marker {}: {error}", path.display()))?;
+    if content.as_slice() == STATE_LAYOUT_MARKER {
+        Ok(())
+    } else {
+        Err(format!(
+            "worker state layout marker has unexpected content: {}",
+            path.display()
+        ))
+    }
+}
+
 fn ensure_state_layout(config: &Config) -> Result<()> {
-    for name in ["pending", "approvals", "jobs"] {
-        let path = config.state_dir.join(name);
-        fs::create_dir_all(&path).map_err(|error| format!("create {}: {error}", path.display()))?;
-        fs::set_permissions(&path, fs::Permissions::from_mode(0o700))
-            .map_err(|error| format!("chmod {}: {error}", path.display()))?;
+    require_directory(&config.state_dir, "worker state root")?;
+    verify_state_layout_marker(config)?;
+    for name in ["pending", "inflight", "jobs"] {
+        require_directory(&config.state_dir.join(name), "worker state directory")?;
     }
     let results = config.state_dir.join("results");
-    fs::create_dir_all(&results)
-        .map_err(|error| format!("create {}: {error}", results.display()))?;
-    harden_shared_directory(&results)?;
-    Ok(())
+    require_directory(&results, "worker result directory")?;
+    harden_shared_directory(&results)
 }
 
 fn harden_shared_directory(path: &Path) -> Result<()> {
@@ -351,35 +500,131 @@ fn drain(config: &Config) -> Result<()> {
         Err(error) => return Err(format!("open worker inbox: {error}")),
     };
 
-    ingest(config, inbox.as_raw_fd())?;
-    process_ready(config, workspace.as_raw_fd())
+    let inbox_deferred = ingest(config, inbox.as_raw_fd())?;
+    let ready_deferred = process_ready(config, workspace.as_raw_fd())?;
+    if inbox_deferred || ready_deferred {
+        return Err("worker continuation required; restarting after the bounded batch".into());
+    }
+    Ok(())
 }
 
-fn ingest(config: &Config, inbox_fd: RawFd) -> Result<()> {
-    let mut names = list_fd_dir(inbox_fd)?;
-    names.sort();
-    for name in names {
-        let bytes = name.as_bytes();
-        if !bytes.ends_with(b".json") || bytes.len() > 69 {
-            continue;
-        }
-        let file = match open_file_at(inbox_fd, &name) {
-            Ok(file) => file,
-            Err(error) if error.raw_os_error() == Some(libc::ELOOP) => {
+fn ingest(config: &Config, inbox_fd: RawFd) -> Result<bool> {
+    let cursor = read_inbox_cursor(config, inbox_fd)?;
+    let mut cursor_reset = cursor.reset;
+    let mut scan = collect_inbox_requests(inbox_fd, config.max_request_bytes, cursor.cursor)?;
+    if scan.stale_cursor {
+        cursor_reset = true;
+        scan = collect_inbox_requests(inbox_fd, config.max_request_bytes, None)?;
+    }
+    if cursor_reset {
+        audit(
+            config,
+            "unknown",
+            "inbox-cursor-reset",
+            None,
+            "discarded a stale, corrupt, or mutation-invalidated inbox cursor and restarted the scan",
+        )?;
+    }
+    if scan.ignored_entries > 0 {
+        audit(
+            config,
+            "unknown",
+            "inbox-ignored",
+            None,
+            &format!(
+                "ignored {} non-request, non-regular, unreadable, or oversized inbox entries",
+                scan.ignored_entries
+            ),
+        )?;
+    }
+    if scan.deferred {
+        audit(
+            config,
+            "unknown",
+            "inbox-overflow",
+            None,
+            &format!(
+                "raw inbox scan or eligible request limit reached after {} entries; remaining requests will be retried",
+                scan.scanned_entries
+            ),
+        )?;
+    }
+    let mut inbox_mutated = false;
+    let mut pending_usage = read_pending_usage(config)?;
+    for name in scan.names {
+        let stat = match fstatat_nofollow(inbox_fd, &name) {
+            Ok(stat) => stat,
+            Err(error) => {
                 audit(
                     config,
                     "unknown",
                     "request-rejected",
                     None,
-                    "inbox entry is a symlink",
+                    &format!("cannot inspect inbox entry: {error}"),
                 )?;
                 continue;
             }
-            Err(error) => return Err(format!("open inbox entry {:?}: {error}", name)),
+        };
+        if stat.st_mode & libc::S_IFMT != libc::S_IFREG {
+            audit(
+                config,
+                "unknown",
+                "request-rejected",
+                None,
+                "inbox entry changed into a non-regular file",
+            )?;
+            continue;
+        }
+        let file = match open_file_at(inbox_fd, &name) {
+            Ok(file) => file,
+            Err(error) => {
+                audit(
+                    config,
+                    "unknown",
+                    "request-rejected",
+                    None,
+                    &format!("cannot safely open inbox entry: {error}"),
+                )?;
+                continue;
+            }
         };
         let mut file = unsafe { File::from_raw_fd(file.into_raw_fd()) };
-        let content = read_bounded(&mut file, config.max_request_bytes as usize)
-            .map_err(|error| format!("read inbox entry {:?}: {error}", name))?;
+        let metadata = match file.metadata() {
+            Ok(metadata) => metadata,
+            Err(error) => {
+                audit(
+                    config,
+                    "unknown",
+                    "request-rejected",
+                    None,
+                    &format!("cannot inspect opened inbox entry: {error}"),
+                )?;
+                continue;
+            }
+        };
+        if !metadata.is_file() {
+            audit(
+                config,
+                "unknown",
+                "request-rejected",
+                None,
+                "inbox entry changed into a non-regular file",
+            )?;
+            continue;
+        }
+        let content = match read_bounded(&mut file, config.max_request_bytes as usize) {
+            Ok(content) => content,
+            Err(error) => {
+                audit(
+                    config,
+                    "unknown",
+                    "request-rejected",
+                    None,
+                    &format!("cannot read bounded inbox entry: {error}"),
+                )?;
+                continue;
+            }
+        };
         let parsed: Result<JobRequest> = serde_json::from_slice(&content)
             .map_err(|error| format!("invalid request JSON: {error}"));
         let request = match parsed.and_then(|request| {
@@ -394,6 +639,7 @@ fn ingest(config: &Config, inbox_fd: RawFd) -> Result<()> {
             Err(error) => {
                 audit(config, "unknown", "request-rejected", None, &error)?;
                 unlink_at(inbox_fd, &name)?;
+                inbox_mutated = true;
                 continue;
             }
         };
@@ -407,12 +653,30 @@ fn ingest(config: &Config, inbox_fd: RawFd) -> Result<()> {
                 "job id already exists",
             )?;
             unlink_at(inbox_fd, &name)?;
+            inbox_mutated = true;
+            continue;
+        }
+
+        let request_bytes = u64::try_from(content.len())
+            .map_err(|_| "request length does not fit the pending queue counter".to_string())?;
+        if !pending_usage.has_capacity_for(config, request_bytes) {
+            audit(
+                config,
+                &request.id,
+                "request-rejected",
+                Some(request.action_class),
+                "private pending queue capacity reached",
+            )?;
+            unlink_at(inbox_fd, &name)?;
+            inbox_mutated = true;
             continue;
         }
 
         let pending = pending_path(config, &request.id);
         write_new_private(&pending, &content)?;
+        pending_usage.reserve(request_bytes)?;
         unlink_at(inbox_fd, &name)?;
+        inbox_mutated = true;
         audit(
             config,
             &request.id,
@@ -425,54 +689,105 @@ fn ingest(config: &Config, inbox_fd: RawFd) -> Result<()> {
             "request moved into private worker state",
         )?;
     }
-    Ok(())
+
+    let mut must_rescan = scan.directory_changed || (scan.deferred && inbox_mutated);
+    let cursor_to_persist = if scan.deferred && !must_rescan {
+        scan.next_cursor.map(|offset| InboxCursor {
+            offset,
+            stamp: scan.directory_stamp,
+        })
+    } else {
+        None
+    };
+    let cursor_persisted = write_inbox_cursor(config, inbox_fd, cursor_to_persist)?;
+    if cursor_to_persist.is_some() && !cursor_persisted {
+        must_rescan = true;
+    }
+    if must_rescan {
+        audit(
+            config,
+            "unknown",
+            "inbox-cursor-reset",
+            None,
+            "inbox changed while a bounded scan was in progress; retrying from the beginning",
+        )?;
+    }
+    Ok(scan.deferred || must_rescan)
 }
 
-fn process_ready(config: &Config, workspace_fd: RawFd) -> Result<()> {
-    let mut pending = fs::read_dir(config.state_dir.join("pending"))
-        .map_err(|error| format!("read pending queue: {error}"))?
-        .collect::<std::result::Result<Vec<_>, _>>()
-        .map_err(|error| format!("read pending entry: {error}"))?;
-    pending.sort_by_key(|entry| entry.file_name());
-    for entry in pending {
+fn process_ready(config: &Config, workspace_fd: RawFd) -> Result<bool> {
+    let pending = list_pending_entries(config)?;
+    let pending_count = pending.len();
+    let mut processed = 0_u64;
+    for (index, entry) in pending.into_iter().enumerate() {
         let path = entry.path();
-        if path.extension() != Some(OsStr::new("json"))
-            || entry.file_type().map_err(|e| e.to_string())?.is_symlink()
-        {
+        let file_type = entry
+            .file_type()
+            .map_err(|error| format!("inspect pending entry {}: {error}", path.display()))?;
+        if path.extension() != Some(OsStr::new("json")) || !file_type.is_file() {
+            return Err(format!(
+                "private pending queue contains an unsafe entry: {}",
+                path.display()
+            ));
+        }
+        let request = read_pending_file(config, &path)?;
+        if request.action_class.needs_approval() {
             continue;
         }
-        let request: JobRequest = serde_json::from_reader(
-            File::open(&path).map_err(|error| format!("open {}: {error}", path.display()))?,
-        )
-        .map_err(|error| format!("parse {}: {error}", path.display()))?;
-        validate_request(config, &request)?;
-        if request.action_class == ActionClass::Forbidden {
-            finish_without_run(
-                config,
-                &request,
-                "rejected",
-                "action class is always forbidden",
-            )?;
-            fs::remove_file(path).map_err(|error| format!("remove rejected request: {error}"))?;
+        let Some(claimed_path) = claim_pending(config, &request.id)? else {
             continue;
-        }
-        let approved = config
-            .state_dir
-            .join("approvals")
-            .join(&request.id)
-            .is_file();
-        if request.action_class.needs_approval() && !approved {
-            continue;
-        }
-        execute(config, workspace_fd, &request)?;
-        fs::remove_file(pending_path(config, &request.id))
-            .map_err(|error| format!("remove completed request: {error}"))?;
-        if approved {
-            fs::remove_file(config.state_dir.join("approvals").join(&request.id))
-                .map_err(|error| format!("consume approval: {error}"))?;
+        };
+        let claimed = read_pending_file(config, &claimed_path)?;
+        complete_claimed_request(config, workspace_fd, &claimed)?;
+        processed += 1;
+        if processed >= config.max_ready_jobs_per_drain {
+            return Ok(index + 1 < pending_count);
         }
     }
-    Ok(())
+    Ok(false)
+}
+
+fn complete_claimed_request(
+    config: &Config,
+    workspace_fd: RawFd,
+    request: &JobRequest,
+) -> Result<()> {
+    if request.action_class == ActionClass::Forbidden {
+        finish_without_run(
+            config,
+            request,
+            "rejected",
+            "action class is always forbidden",
+        )?;
+        remove_inflight(config, &request.id)?;
+        audit(
+            config,
+            &request.id,
+            "rejected",
+            Some(request.action_class),
+            "action class is always forbidden",
+        )?;
+        return Ok(());
+    }
+
+    match ensure_execution_capacity(config) {
+        Ok(()) => execute(config, workspace_fd, request)?,
+        Err(error) => {
+            let detail = format!("worker state capacity rejected execution: {error}");
+            finish_without_run(config, request, "rejected", &detail)?;
+            remove_inflight(config, &request.id)?;
+            audit(
+                config,
+                &request.id,
+                "rejected",
+                Some(request.action_class),
+                &detail,
+            )?;
+            return Ok(());
+        }
+    }
+
+    remove_inflight(config, &request.id)
 }
 
 fn approve(config: &Config, job: &str) -> Result<()> {
@@ -480,62 +795,349 @@ fn approve(config: &Config, job: &str) -> Result<()> {
     if !request.action_class.needs_approval() || request.action_class == ActionClass::Forbidden {
         return Err("this action class cannot be approved".into());
     }
-    let approval = config.state_dir.join("approvals").join(job);
-    write_new_private(&approval, b"approved\n")?;
-    audit(
-        config,
-        job,
-        "approved",
-        Some(request.action_class),
-        "host operator approval recorded",
-    )?;
-    let workspace = open_path_no_symlinks(&config.workspace)?;
-    process_ready(config, workspace.as_raw_fd())
-}
-
-fn deny(config: &Config, job: &str) -> Result<()> {
-    let request = read_pending(config, job)?;
-    finish_without_run(
-        config,
-        &request,
-        "denied",
-        "host operator denied the request",
-    )?;
-    fs::remove_file(pending_path(config, job))
-        .map_err(|error| format!("remove denied request: {error}"))?;
-    let approval = config.state_dir.join("approvals").join(job);
-    if approval.exists() {
-        fs::remove_file(approval).map_err(|error| format!("remove stale approval: {error}"))?;
+    let claimed_path =
+        claim_pending(config, job)?.ok_or_else(|| format!("pending job {job} does not exist"))?;
+    let claimed = read_pending_file(config, &claimed_path)?;
+    if !claimed.action_class.needs_approval() || claimed.action_class == ActionClass::Forbidden {
+        return Err("claimed action class cannot be approved".into());
     }
     audit(
         config,
         job,
+        "approved",
+        Some(claimed.action_class),
+        "host operator approval atomically claimed the request",
+    )?;
+    let workspace = open_path_no_symlinks(&config.workspace)?;
+    complete_claimed_request(config, workspace.as_raw_fd(), &claimed)
+}
+
+fn deny(config: &Config, job: &str) -> Result<()> {
+    let claimed_path =
+        claim_pending(config, job)?.ok_or_else(|| format!("pending job {job} does not exist"))?;
+    let request = read_pending_file(config, &claimed_path)?;
+    finish_without_run(
+        config,
+        &request,
+        "denied",
+        "host operator denied the atomically claimed request",
+    )?;
+    remove_inflight(config, job)?;
+    audit(
+        config,
+        job,
         "denied",
         Some(request.action_class),
-        "host operator denied request",
+        "host operator denied the atomically claimed request",
     )
 }
 
 fn read_pending(config: &Config, job: &str) -> Result<JobRequest> {
     let path = pending_path(config, job);
+    read_pending_file(config, &path).map_err(|error| {
+        if !path.exists() {
+            format!("pending job {job} does not exist")
+        } else {
+            error
+        }
+    })
+}
+
+fn read_pending_file(config: &Config, path: &Path) -> Result<JobRequest> {
     let metadata =
-        fs::symlink_metadata(&path).map_err(|_| format!("pending job {job} does not exist"))?;
-    if !metadata.file_type().is_file() {
-        return Err("pending request is not a regular file".into());
+        fs::symlink_metadata(path).map_err(|error| format!("stat {}: {error}", path.display()))?;
+    if !metadata.file_type().is_file() || metadata.len() > config.max_request_bytes {
+        return Err(format!("pending request is unsafe: {}", path.display()));
     }
-    serde_json::from_reader(File::open(&path).map_err(|error| error.to_string())?)
-        .map_err(|error| format!("parse pending job: {error}"))
+    let mut file = File::open(path).map_err(|error| format!("open {}: {error}", path.display()))?;
+    let content = read_bounded(&mut file, config.max_request_bytes as usize)
+        .map_err(|error| format!("read {}: {error}", path.display()))?;
+    let request: JobRequest = serde_json::from_slice(&content)
+        .map_err(|error| format!("parse {}: {error}", path.display()))?;
+    validate_request(config, &request)?;
+    let expected = format!("{}.json", request.id);
+    if path.file_name() != Some(OsStr::new(&expected)) {
+        return Err(format!(
+            "pending filename does not match request id: {}",
+            path.display()
+        ));
+    }
+    Ok(request)
 }
 
 fn pending_path(config: &Config, job: &str) -> PathBuf {
     config.state_dir.join("pending").join(format!("{job}.json"))
 }
 
+fn inflight_path(config: &Config, job: &str) -> PathBuf {
+    config
+        .state_dir
+        .join("inflight")
+        .join(format!("{job}.json"))
+}
+
+fn rename_no_replace(from: &Path, to: &Path) -> io::Result<()> {
+    let from = CString::new(from.as_os_str().as_bytes())
+        .map_err(|_| io::Error::from_raw_os_error(libc::EINVAL))?;
+    let to = CString::new(to.as_os_str().as_bytes())
+        .map_err(|_| io::Error::from_raw_os_error(libc::EINVAL))?;
+    let result = unsafe {
+        libc::syscall(
+            libc::SYS_renameat2,
+            libc::AT_FDCWD,
+            from.as_ptr(),
+            libc::AT_FDCWD,
+            to.as_ptr(),
+            1_u32,
+        )
+    };
+    if result == 0 {
+        Ok(())
+    } else {
+        Err(io::Error::last_os_error())
+    }
+}
+
+fn claim_pending(config: &Config, job: &str) -> Result<Option<PathBuf>> {
+    let pending = pending_path(config, job);
+    let inflight = inflight_path(config, job);
+    match rename_no_replace(&pending, &inflight) {
+        Ok(()) => {
+            let pending_dir = pending
+                .parent()
+                .ok_or_else(|| format!("pending path has no parent: {}", pending.display()))?;
+            let inflight_dir = inflight
+                .parent()
+                .ok_or_else(|| format!("inflight path has no parent: {}", inflight.display()))?;
+            sync_directory(pending_dir)?;
+            sync_directory(inflight_dir)?;
+            Ok(Some(inflight))
+        }
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
+        Err(error) if error.raw_os_error() == Some(libc::EEXIST) => Err(format!(
+            "refusing to overwrite an existing inflight claim for {job}"
+        )),
+        Err(error) => Err(format!("atomically claim pending job {job}: {error}")),
+    }
+}
+
+fn remove_inflight(config: &Config, job: &str) -> Result<()> {
+    let path = inflight_path(config, job);
+    fs::remove_file(&path).map_err(|error| format!("remove inflight request: {error}"))?;
+    sync_directory(
+        path.parent()
+            .ok_or_else(|| format!("inflight path has no parent: {}", path.display()))?,
+    )
+}
+
 fn job_exists(config: &Config, job: &str) -> bool {
     pending_path(config, job).exists()
-        || config.state_dir.join("approvals").join(job).exists()
+        || inflight_path(config, job).exists()
         || config.state_dir.join("results").join(job).exists()
         || config.state_dir.join("jobs").join(job).exists()
+}
+
+fn list_pending_entries(config: &Config) -> Result<Vec<fs::DirEntry>> {
+    let limit = usize::try_from(config.max_pending_requests)
+        .map_err(|_| "max_pending_requests does not fit this platform".to_string())?;
+    let mut entries = Vec::new();
+    for entry in fs::read_dir(config.state_dir.join("pending"))
+        .map_err(|error| format!("read pending queue: {error}"))?
+    {
+        if entries.len() >= limit {
+            return Err(format!(
+                "private pending queue exceeds configured maximum of {} requests",
+                config.max_pending_requests
+            ));
+        }
+        entries.push(entry.map_err(|error| format!("read pending entry: {error}"))?);
+    }
+    entries.sort_by_key(|entry| entry.file_name());
+    Ok(entries)
+}
+
+fn read_pending_usage(config: &Config) -> Result<PendingUsage> {
+    let mut usage = PendingUsage {
+        requests: 0,
+        bytes: 0,
+    };
+    for entry in list_pending_entries(config)? {
+        let path = entry.path();
+        let file_type = entry
+            .file_type()
+            .map_err(|error| format!("inspect pending entry {}: {error}", path.display()))?;
+        if path.extension() != Some(OsStr::new("json")) || !file_type.is_file() {
+            return Err(format!(
+                "private pending queue contains an unsafe entry: {}",
+                path.display()
+            ));
+        }
+        let bytes = entry
+            .metadata()
+            .map_err(|error| format!("stat pending entry {}: {error}", path.display()))?
+            .len();
+        usage.reserve(bytes)?;
+    }
+    Ok(usage)
+}
+
+fn only_inflight_entry(config: &Config) -> Result<Option<fs::DirEntry>> {
+    let mut entries = fs::read_dir(config.state_dir.join("inflight"))
+        .map_err(|error| format!("read inflight queue: {error}"))?;
+    let Some(first) = entries.next() else {
+        return Ok(None);
+    };
+    let first = first.map_err(|error| format!("read inflight entry: {error}"))?;
+    if entries.next().is_some() {
+        return Err("worker has more than one inflight claim; refusing automatic recovery".into());
+    }
+    let path = first.path();
+    let file_type = first
+        .file_type()
+        .map_err(|error| format!("inspect inflight entry {}: {error}", path.display()))?;
+    if path.extension() != Some(OsStr::new("json")) || !file_type.is_file() {
+        return Err(format!(
+            "worker inflight queue contains an unsafe entry: {}",
+            path.display()
+        ));
+    }
+    Ok(Some(first))
+}
+
+fn published_result_exists(path: &Path) -> Result<bool> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.is_dir() && !metadata.file_type().is_symlink() => Ok(true),
+        Ok(_) => Err(format!("result path is unsafe: {}", path.display())),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(format!("stat result {}: {error}", path.display())),
+    }
+}
+
+fn remove_private_directory_if_present(path: &Path, label: &str) -> Result<()> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.is_dir() && !metadata.file_type().is_symlink() => {
+            fs::remove_dir_all(path).map_err(|error| format!("remove stale {label}: {error}"))
+        }
+        Ok(_) => Err(format!("stale {label} path is unsafe: {}", path.display())),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(format!("stat stale {label} {}: {error}", path.display())),
+    }
+}
+
+fn recover_inflight(config: &Config) -> Result<()> {
+    let Some(entry) = only_inflight_entry(config)? else {
+        return Ok(());
+    };
+    let path = entry.path();
+    let request = read_pending_file(config, &path)?;
+    let container = format!("tfw-{}-{}", config.agent, request.id);
+    cleanup_existing_worker_container(config, &container)?;
+    remove_private_directory_if_present(
+        &config.state_dir.join("jobs").join(&request.id),
+        "job state",
+    )?;
+    remove_private_directory_if_present(
+        &config
+            .state_dir
+            .join("results")
+            .join(format!(".{}.tmp", request.id)),
+        "result staging",
+    )?;
+
+    let final_result = config.state_dir.join("results").join(&request.id);
+    if published_result_exists(&final_result)? {
+        remove_inflight(config, &request.id)?;
+        return audit(
+            config,
+            &request.id,
+            "inflight-recovered",
+            Some(request.action_class),
+            "a published result existed after an interrupted claim; it was not replayed",
+        );
+    }
+
+    finish_without_run(
+        config,
+        &request,
+        "interrupted",
+        "worker stopped after atomically claiming this request; its outcome is unknown and it will not be replayed automatically",
+    )?;
+    remove_inflight(config, &request.id)?;
+    audit(
+        config,
+        &request.id,
+        "interrupted",
+        Some(request.action_class),
+        "inflight claim recovered as outcome-unknown without replay",
+    )
+}
+
+fn pending_metadata_bytes(config: &Config) -> Result<u64> {
+    config
+        .max_pending_requests
+        .checked_mul(PENDING_FILE_ALLOCATION_BYTES)
+        .ok_or_else(|| "worker pending metadata byte reservation overflowed".to_string())
+}
+
+fn pending_metadata_inodes(config: &Config) -> Result<u64> {
+    config
+        .max_pending_requests
+        .checked_mul(PENDING_METADATA_INODES)
+        .ok_or_else(|| "worker pending metadata inode reservation overflowed".to_string())
+}
+
+fn required_execution_state_bytes(config: &Config) -> Result<u64> {
+    let max_log_bytes = u64::try_from(config.max_log_bytes)
+        .map_err(|_| "worker log reservation does not fit u64".to_string())?;
+    let pending_metadata = pending_metadata_bytes(config)?;
+    config
+        .max_snapshot_bytes
+        .checked_mul(2)
+        .and_then(|value| value.checked_add(max_log_bytes))
+        .and_then(|value| value.checked_add(pending_metadata))
+        .and_then(|value| value.checked_add(STATE_CONTROL_RESERVE_BYTES))
+        .ok_or_else(|| "worker state byte reservation overflowed".to_string())
+}
+
+fn required_execution_state_inodes(config: &Config) -> Result<u64> {
+    let pending_metadata = pending_metadata_inodes(config)?;
+    config
+        .max_snapshot_entries
+        .checked_mul(2)
+        .and_then(|value| value.checked_add(pending_metadata))
+        .and_then(|value| value.checked_add(STATE_CONTROL_RESERVE_INODES))
+        .ok_or_else(|| "worker state inode reservation overflowed".to_string())
+}
+
+fn ensure_execution_capacity(config: &Config) -> Result<()> {
+    let path = CString::new(config.state_dir.as_os_str().as_bytes())
+        .map_err(|_| "worker state path contains NUL".to_string())?;
+    let mut stats = std::mem::MaybeUninit::<libc::statvfs>::uninit();
+    let result = unsafe { libc::statvfs(path.as_ptr(), stats.as_mut_ptr()) };
+    if result != 0 {
+        return Err(format!(
+            "stat worker state capacity: {}",
+            io::Error::last_os_error()
+        ));
+    }
+    let stats = unsafe { stats.assume_init() };
+    let block_size = if stats.f_frsize == 0 {
+        stats.f_bsize as u64
+    } else {
+        stats.f_frsize as u64
+    };
+    let available_bytes = (stats.f_bavail as u64)
+        .checked_mul(block_size)
+        .ok_or_else(|| "worker state free-byte counter overflowed".to_string())?;
+    let required_bytes = required_execution_state_bytes(config)?;
+    let available_inodes = stats.f_favail as u64;
+    let required_inodes = required_execution_state_inodes(config)?;
+    if available_bytes < required_bytes || available_inodes < required_inodes {
+        return Err(format!(
+            "free bytes={available_bytes} required bytes={required_bytes}; free inodes={available_inodes} required inodes={required_inodes}"
+        ));
+    }
+    Ok(())
 }
 
 fn execute(config: &Config, workspace_fd: RawFd, request: &JobRequest) -> Result<()> {
@@ -683,6 +1285,11 @@ fn execute(config: &Config, workspace_fd: RawFd, request: &JobRequest) -> Result
     };
     write_json(staging.join("result.json"), &result)?;
     fs::rename(&staging, &final_result).map_err(|error| format!("publish result: {error}"))?;
+    sync_directory(
+        final_result
+            .parent()
+            .ok_or_else(|| format!("result path has no parent: {}", final_result.display()))?,
+    )?;
     container_guard.cleanup()?;
     job_guard.cleanup()?;
     audit(
@@ -1071,7 +1678,12 @@ fn finish_without_run(
         message: message.into(),
     };
     write_json(staging.join("result.json"), &result)?;
-    fs::rename(staging, final_result).map_err(|error| format!("publish result: {error}"))
+    fs::rename(&staging, &final_result).map_err(|error| format!("publish result: {error}"))?;
+    sync_directory(
+        final_result
+            .parent()
+            .ok_or_else(|| format!("result path has no parent: {}", final_result.display()))?,
+    )
 }
 
 fn write_json(path: PathBuf, value: &impl Serialize) -> Result<()> {
@@ -1082,7 +1694,9 @@ fn write_json(path: PathBuf, value: &impl Serialize) -> Result<()> {
         .open(&path)
         .map_err(|error| format!("create {}: {error}", path.display()))?;
     serde_json::to_writer_pretty(&mut file, value).map_err(|error| error.to_string())?;
-    file.write_all(b"\n").map_err(|error| error.to_string())
+    file.write_all(b"\n").map_err(|error| error.to_string())?;
+    file.sync_all()
+        .map_err(|error| format!("sync {}: {error}", path.display()))
 }
 
 fn write_new_private(path: &Path, content: &[u8]) -> Result<()> {
@@ -1095,7 +1709,11 @@ fn write_new_private(path: &Path, content: &[u8]) -> Result<()> {
     file.write_all(content)
         .map_err(|error| format!("write {}: {error}", path.display()))?;
     file.sync_all()
-        .map_err(|error| format!("sync {}: {error}", path.display()))
+        .map_err(|error| format!("sync {}: {error}", path.display()))?;
+    let parent = path
+        .parent()
+        .ok_or_else(|| format!("private state path has no parent: {}", path.display()))?;
+    sync_directory(parent)
 }
 
 fn audit(
@@ -1124,7 +1742,9 @@ fn audit(
         },
     )
     .map_err(|error| error.to_string())?;
-    file.write_all(b"\n").map_err(|error| error.to_string())
+    file.write_all(b"\n").map_err(|error| error.to_string())?;
+    file.sync_data()
+        .map_err(|error| format!("sync audit {}: {error}", path.display()))
 }
 
 fn unix_seconds() -> u64 {
@@ -1217,7 +1837,11 @@ fn copy_directory_fd(
     budget: &mut CopyBudget,
     top: bool,
 ) -> Result<()> {
-    let mut names = list_fd_dir(fd)?;
+    let (mut names, truncated) =
+        list_fd_dir(fd, budget.entries_left.saturating_add(u64::from(top)))?;
+    if truncated {
+        return Err("snapshot entry limit exceeded".into());
+    }
     names.sort();
     for name in names {
         if top && name == OsStr::new(".tentaflake-worker") {
@@ -1375,7 +1999,7 @@ fn open_file_at(parent: RawFd, name: &OsStr) -> io::Result<OwnedFd> {
     open_at(
         parent,
         name,
-        libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+        libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC,
     )
 }
 
@@ -1390,16 +2014,349 @@ fn open_at(parent: RawFd, name: &OsStr, flags: i32) -> io::Result<OwnedFd> {
     }
 }
 
-fn list_fd_dir(fd: RawFd) -> Result<Vec<OsString>> {
+fn list_fd_dir(fd: RawFd, max_entries: u64) -> Result<(Vec<OsString>, bool)> {
     let path = PathBuf::from(format!("/proc/self/fd/{fd}"));
-    fs::read_dir(path)
-        .map_err(|error| format!("read directory fd: {error}"))?
-        .map(|entry| {
+    let mut names = Vec::new();
+    for entry in fs::read_dir(path).map_err(|error| format!("read directory fd: {error}"))? {
+        if names.len() >= usize::try_from(max_entries).unwrap_or(usize::MAX) {
+            return Ok((names, true));
+        }
+        names.push(
             entry
                 .map(|value| value.file_name())
-                .map_err(|error| error.to_string())
-        })
-        .collect()
+                .map_err(|error| error.to_string())?,
+        );
+    }
+    Ok((names, false))
+}
+
+struct DirectoryCursor {
+    directory: *mut libc::DIR,
+}
+
+impl DirectoryCursor {
+    fn from_fd(fd: RawFd) -> Result<Self> {
+        let duplicated = unsafe { libc::dup(fd) };
+        if duplicated < 0 {
+            return Err(format!(
+                "duplicate inbox directory fd: {}",
+                io::Error::last_os_error()
+            ));
+        }
+        let directory = unsafe { libc::fdopendir(duplicated) };
+        if directory.is_null() {
+            let error = io::Error::last_os_error();
+            unsafe {
+                libc::close(duplicated);
+            }
+            return Err(format!("open inbox directory stream: {error}"));
+        }
+        Ok(Self { directory })
+    }
+
+    fn seek(&mut self, cursor: libc::c_long) {
+        unsafe {
+            libc::seekdir(self.directory, cursor);
+        }
+    }
+
+    fn cursor(&self) -> Result<libc::c_long> {
+        let cursor = unsafe { libc::telldir(self.directory) };
+        if cursor < 0 {
+            Err(format!(
+                "read inbox directory cursor: {}",
+                io::Error::last_os_error()
+            ))
+        } else {
+            Ok(cursor)
+        }
+    }
+
+    fn next_name(&mut self) -> Result<Option<OsString>> {
+        loop {
+            unsafe {
+                *libc::__errno_location() = 0;
+            }
+            let entry = unsafe { libc::readdir(self.directory) };
+            if entry.is_null() {
+                let errno = unsafe { *libc::__errno_location() };
+                return if errno == 0 {
+                    Ok(None)
+                } else {
+                    Err(format!(
+                        "read inbox directory: {}",
+                        io::Error::from_raw_os_error(errno)
+                    ))
+                };
+            }
+            let bytes = unsafe { CStr::from_ptr((*entry).d_name.as_ptr()).to_bytes() };
+            if bytes == b"." || bytes == b".." {
+                continue;
+            }
+            return Ok(Some(OsString::from_vec(bytes.to_vec())));
+        }
+    }
+}
+
+impl Drop for DirectoryCursor {
+    fn drop(&mut self) {
+        unsafe {
+            libc::closedir(self.directory);
+        }
+    }
+}
+
+fn inbox_directory_stamp(inbox_fd: RawFd) -> Result<InboxDirectoryStamp> {
+    let mut stat = std::mem::MaybeUninit::<libc::stat>::uninit();
+    let result = unsafe { libc::fstat(inbox_fd, stat.as_mut_ptr()) };
+    if result != 0 {
+        return Err(format!(
+            "stat inbox directory: {}",
+            io::Error::last_os_error()
+        ));
+    }
+    let stat = unsafe { stat.assume_init() };
+    Ok(InboxDirectoryStamp {
+        device: stat.st_dev as u64,
+        inode: stat.st_ino,
+        change_seconds: stat.st_ctime,
+        change_nanoseconds: stat.st_ctime_nsec,
+    })
+}
+
+fn read_inbox_cursor(config: &Config, inbox_fd: RawFd) -> Result<InboxCursorRead> {
+    let path = config.state_dir.join(INBOX_CURSOR_FILE);
+    let current_stamp = inbox_directory_stamp(inbox_fd)?;
+    match fs::read_to_string(&path) {
+        Ok(value) => {
+            let mut fields = value.split_whitespace();
+            let parsed = (|| {
+                if fields.next()? != "v1" {
+                    return None;
+                }
+                let stamp = InboxDirectoryStamp {
+                    device: fields.next()?.parse::<u64>().ok()?,
+                    inode: fields.next()?.parse::<u64>().ok()?,
+                    change_seconds: fields.next()?.parse::<i64>().ok()?,
+                    change_nanoseconds: fields.next()?.parse::<i64>().ok()?,
+                };
+                let offset = fields.next()?.parse::<libc::c_long>().ok()?;
+                if fields.next().is_some() || offset < 0 {
+                    return None;
+                }
+                Some(InboxCursor { offset, stamp })
+            })();
+            match parsed {
+                Some(cursor) if cursor.stamp == current_stamp => Ok(InboxCursorRead {
+                    cursor: Some(cursor),
+                    reset: false,
+                }),
+                _ => Ok(InboxCursorRead {
+                    cursor: None,
+                    reset: true,
+                }),
+            }
+        }
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(InboxCursorRead {
+            cursor: None,
+            reset: false,
+        }),
+        Err(error) => Err(format!("read {}: {error}", path.display())),
+    }
+}
+
+fn sync_directory(path: &Path) -> Result<()> {
+    File::open(path)
+        .map_err(|error| format!("open directory {}: {error}", path.display()))?
+        .sync_all()
+        .map_err(|error| format!("sync directory {}: {error}", path.display()))
+}
+
+fn remove_inbox_cursor(path: &Path, state_dir: &Path) -> Result<()> {
+    match fs::remove_file(path) {
+        Ok(()) => sync_directory(state_dir),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(format!("remove {}: {error}", path.display())),
+    }
+}
+
+fn write_inbox_cursor(
+    config: &Config,
+    inbox_fd: RawFd,
+    cursor: Option<InboxCursor>,
+) -> Result<bool> {
+    let path = config.state_dir.join(INBOX_CURSOR_FILE);
+    let temporary = config.state_dir.join(format!("{INBOX_CURSOR_FILE}.new"));
+    match cursor {
+        Some(cursor) => {
+            if cursor.offset < 0 {
+                return Err("refusing a negative inbox cursor".into());
+            }
+            if inbox_directory_stamp(inbox_fd)? != cursor.stamp {
+                remove_inbox_cursor(&path, &config.state_dir)?;
+                return Ok(false);
+            }
+            let mut file = OpenOptions::new()
+                .write(true)
+                .create(true)
+                .truncate(true)
+                .mode(0o600)
+                .open(&temporary)
+                .map_err(|error| format!("open {}: {error}", temporary.display()))?;
+            writeln!(
+                file,
+                "v1 {} {} {} {} {}",
+                cursor.stamp.device,
+                cursor.stamp.inode,
+                cursor.stamp.change_seconds,
+                cursor.stamp.change_nanoseconds,
+                cursor.offset,
+            )
+            .map_err(|error| format!("write {}: {error}", temporary.display()))?;
+            file.sync_all()
+                .map_err(|error| format!("sync {}: {error}", temporary.display()))?;
+            fs::rename(&temporary, &path)
+                .map_err(|error| format!("replace {}: {error}", path.display()))?;
+            sync_directory(&config.state_dir)?;
+            Ok(true)
+        }
+        None => {
+            remove_inbox_cursor(&path, &config.state_dir)?;
+            Ok(true)
+        }
+    }
+}
+
+fn finish_inbox_scan(
+    inbox_fd: RawFd,
+    directory_stamp: InboxDirectoryStamp,
+    mut names: Vec<OsString>,
+    deferred: bool,
+    ignored_entries: u64,
+    scanned_entries: u64,
+    next_cursor: Option<libc::c_long>,
+    stale_cursor: bool,
+) -> Result<InboxScan> {
+    names.sort();
+    Ok(InboxScan {
+        names,
+        deferred,
+        ignored_entries,
+        scanned_entries,
+        next_cursor,
+        directory_stamp,
+        directory_changed: inbox_directory_stamp(inbox_fd)? != directory_stamp,
+        stale_cursor,
+    })
+}
+
+fn collect_inbox_requests(
+    inbox_fd: RawFd,
+    max_request_bytes: u64,
+    cursor: Option<InboxCursor>,
+) -> Result<InboxScan> {
+    let directory_stamp = inbox_directory_stamp(inbox_fd)?;
+    let mut directory = DirectoryCursor::from_fd(inbox_fd)?;
+    let mut prefetched_name = None;
+    if let Some(cursor) = cursor {
+        if cursor.stamp != directory_stamp {
+            return finish_inbox_scan(
+                inbox_fd,
+                directory_stamp,
+                Vec::new(),
+                false,
+                0,
+                0,
+                None,
+                true,
+            );
+        }
+        directory.seek(cursor.offset);
+        prefetched_name = directory.next_name()?;
+        if prefetched_name.is_none() {
+            return finish_inbox_scan(
+                inbox_fd,
+                directory_stamp,
+                Vec::new(),
+                false,
+                0,
+                0,
+                None,
+                true,
+            );
+        }
+    }
+    let mut names = Vec::new();
+    let mut ignored_entries = 0_u64;
+    let mut scanned_entries = 0_u64;
+    loop {
+        if scanned_entries >= MAX_INBOX_SCAN_ENTRIES
+            || names.len() >= usize::try_from(MAX_INBOX_ENTRIES).unwrap_or(usize::MAX)
+        {
+            let next_cursor = directory.cursor()?;
+            if directory.next_name()?.is_some() {
+                return finish_inbox_scan(
+                    inbox_fd,
+                    directory_stamp,
+                    names,
+                    true,
+                    ignored_entries,
+                    scanned_entries,
+                    Some(next_cursor),
+                    false,
+                );
+            }
+            return finish_inbox_scan(
+                inbox_fd,
+                directory_stamp,
+                names,
+                false,
+                ignored_entries,
+                scanned_entries,
+                None,
+                false,
+            );
+        }
+        let name = match prefetched_name.take() {
+            Some(name) => name,
+            None => match directory.next_name()? {
+                Some(name) => name,
+                None => {
+                    return finish_inbox_scan(
+                        inbox_fd,
+                        directory_stamp,
+                        names,
+                        false,
+                        ignored_entries,
+                        scanned_entries,
+                        None,
+                        false,
+                    );
+                }
+            },
+        };
+        scanned_entries += 1;
+        let bytes = name.as_bytes();
+        if !bytes.ends_with(b".json") || bytes.len() > 69 {
+            ignored_entries = ignored_entries.saturating_add(1);
+            continue;
+        }
+        let stat = match fstatat_nofollow(inbox_fd, &name) {
+            Ok(stat) => stat,
+            Err(_) => {
+                ignored_entries = ignored_entries.saturating_add(1);
+                continue;
+            }
+        };
+        let size = u64::try_from(stat.st_size).ok();
+        if stat.st_mode & libc::S_IFMT != libc::S_IFREG
+            || !matches!(size, Some(size) if size <= max_request_bytes)
+        {
+            ignored_entries = ignored_entries.saturating_add(1);
+            continue;
+        }
+        names.push(name);
+    }
 }
 
 fn fstatat_nofollow(parent: RawFd, name: &OsStr) -> Result<libc::stat> {
@@ -1464,7 +2421,7 @@ fn unlink_at(parent: RawFd, name: &OsStr) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::os::unix::fs::symlink;
+    use std::os::unix::fs::{FileTypeExt, symlink};
 
     fn temp_dir(name: &str) -> PathBuf {
         let root = std::env::var_os("CARGO_TARGET_TMPDIR")
@@ -1486,6 +2443,467 @@ mod tests {
         let _ = fs::remove_dir_all(&path);
         fs::create_dir(&path).unwrap();
         path
+    }
+
+    fn test_config(root: &Path) -> Config {
+        let config = Config {
+            agent: "fixture".into(),
+            backend: "docker".into(),
+            runtime: "/bin/false".into(),
+            image: "example.invalid/fixture@sha256:fixture".into(),
+            workspace: root.join("workspace"),
+            state_dir: root.join("state"),
+            container_uid: 10000,
+            container_gid: 10000,
+            max_request_bytes: 1024,
+            max_pending_requests: 4,
+            max_pending_bytes: 2048,
+            max_ready_jobs_per_drain: 1,
+            max_snapshot_bytes: 1024,
+            max_snapshot_entries: 16,
+            max_log_bytes: 1024,
+            max_timeout_seconds: 10,
+            memory: "64m".into(),
+            memory_swap: "64m".into(),
+            cpus: "0.5".into(),
+            pids_limit: 16,
+            workspace_tmpfs_size: "8m".into(),
+            tmp_tmpfs_size: "4m".into(),
+        };
+        initialize_test_state_layout(&config);
+        config
+    }
+
+    fn initialize_test_state_layout(config: &Config) {
+        fs::create_dir_all(&config.state_dir).unwrap();
+        for name in ["pending", "inflight", "jobs", "results"] {
+            fs::create_dir(config.state_dir.join(name)).unwrap();
+        }
+        fs::write(
+            config.state_dir.join(STATE_LAYOUT_MARKER_FILE),
+            STATE_LAYOUT_MARKER,
+        )
+        .unwrap();
+        ensure_state_layout(config).unwrap();
+    }
+
+    fn request_bytes(id: &str, action_class: &str) -> Vec<u8> {
+        format!(
+            "{{\"version\":1,\"id\":\"{id}\",\"action_class\":\"{action_class}\",\"argv\":[\"true\"],\"timeout_seconds\":1}}"
+        )
+        .into_bytes()
+    }
+
+    #[test]
+    fn worker_state_layout_requires_the_post_mount_marker() {
+        let root = temp_dir("state-layout-marker");
+        let config = test_config(&root);
+        fs::remove_file(config.state_dir.join(STATE_LAYOUT_MARKER_FILE)).unwrap();
+        assert!(ensure_state_layout(&config).is_err());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn execution_reservation_includes_pending_metadata() {
+        let root = temp_dir("state-capacity-reservation");
+        let config = test_config(&root);
+        assert_eq!(pending_metadata_bytes(&config).unwrap(), 4 * 4096);
+        assert_eq!(pending_metadata_inodes(&config).unwrap(), 4 * 4);
+        assert_eq!(
+            required_execution_state_bytes(&config).unwrap(),
+            2 * 1024 + 1024 + 4 * 4096 + STATE_CONTROL_RESERVE_BYTES
+        );
+        assert_eq!(
+            required_execution_state_inodes(&config).unwrap(),
+            2 * 16 + 4 * 4 + STATE_CONTROL_RESERVE_INODES
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn directory_listing_stops_at_the_declared_bound() {
+        let root = temp_dir("directory-listing-bound");
+        for index in 0..3 {
+            fs::write(root.join(format!("entry-{index}")), b"fixture").unwrap();
+        }
+        let fd = open_path_no_symlinks(&root).unwrap();
+        let (names, truncated) = list_fd_dir(fd.as_raw_fd(), 2).unwrap();
+        assert_eq!(names.len(), 2);
+        assert!(truncated);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn inbox_candidate_batch_is_bounded() {
+        let root = temp_dir("inbox-candidate-bound");
+        for index in 0..=MAX_INBOX_ENTRIES {
+            fs::write(root.join(format!("candidate-{index:04}.json")), b"{}").unwrap();
+        }
+        let fd = open_path_no_symlinks(&root).unwrap();
+        let scan = collect_inbox_requests(fd.as_raw_fd(), 1024, None).unwrap();
+        assert_eq!(
+            scan.names.len(),
+            usize::try_from(MAX_INBOX_ENTRIES).unwrap()
+        );
+        assert!(scan.deferred);
+        assert_eq!(scan.scanned_entries, MAX_INBOX_SCAN_ENTRIES);
+        assert_eq!(scan.ignored_entries, 0);
+        assert!(scan.next_cursor.is_some());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn inbox_cursor_is_bound_to_the_directory_stamp() {
+        let root = temp_dir("inbox-cursor-identity");
+        let config = test_config(&root);
+        let first = root.join("first");
+        let second = root.join("second");
+        fs::create_dir(&first).unwrap();
+        fs::create_dir(&second).unwrap();
+        ensure_state_layout(&config).unwrap();
+
+        let first_fd = open_path_no_symlinks(&first).unwrap();
+        let second_fd = open_path_no_symlinks(&second).unwrap();
+        let cursor = InboxCursor {
+            offset: 17,
+            stamp: inbox_directory_stamp(first_fd.as_raw_fd()).unwrap(),
+        };
+        assert!(write_inbox_cursor(&config, first_fd.as_raw_fd(), Some(cursor)).unwrap());
+        assert_eq!(
+            read_inbox_cursor(&config, first_fd.as_raw_fd()).unwrap(),
+            InboxCursorRead {
+                cursor: Some(cursor),
+                reset: false,
+            }
+        );
+        assert_eq!(
+            read_inbox_cursor(&config, second_fd.as_raw_fd()).unwrap(),
+            InboxCursorRead {
+                cursor: None,
+                reset: true,
+            }
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn inbox_cursor_recovers_after_reopen_and_mutation() {
+        let root = temp_dir("inbox-cursor-mutation");
+        let config = test_config(&root);
+        fs::create_dir(&config.workspace).unwrap();
+        let control = config.workspace.join(".tentaflake-worker");
+        let inbox = control.join("inbox");
+        fs::create_dir(&control).unwrap();
+        fs::create_dir(&inbox).unwrap();
+        for index in 0..=MAX_INBOX_SCAN_ENTRIES {
+            fs::create_dir(inbox.join(format!("junk-{index:04}.json"))).unwrap();
+        }
+        ensure_state_layout(&config).unwrap();
+
+        {
+            let workspace = open_path_no_symlinks(&config.workspace).unwrap();
+            let control =
+                open_dir_at(workspace.as_raw_fd(), OsStr::new(".tentaflake-worker")).unwrap();
+            let inbox_fd = open_dir_at(control.as_raw_fd(), OsStr::new("inbox")).unwrap();
+            assert!(ingest(&config, inbox_fd.as_raw_fd()).unwrap());
+        }
+        assert!(config.state_dir.join(INBOX_CURSOR_FILE).is_file());
+
+        fs::write(
+            inbox.join("recovered.json"),
+            br#"{"version":1,"id":"recovered","action_class":"local-reversible","argv":["true"],"timeout_seconds":1}"#,
+        )
+        .unwrap();
+        {
+            let workspace = open_path_no_symlinks(&config.workspace).unwrap();
+            let control =
+                open_dir_at(workspace.as_raw_fd(), OsStr::new(".tentaflake-worker")).unwrap();
+            let inbox_fd = open_dir_at(control.as_raw_fd(), OsStr::new("inbox")).unwrap();
+            let cursor = read_inbox_cursor(&config, inbox_fd.as_raw_fd()).unwrap();
+            assert!(cursor.cursor.is_none());
+            assert!(cursor.reset);
+            for _ in 0..4 {
+                let deferred = ingest(&config, inbox_fd.as_raw_fd()).unwrap();
+                if pending_path(&config, "recovered").is_file() {
+                    break;
+                }
+                assert!(
+                    deferred,
+                    "a reset scan stopped before reaching the valid request"
+                );
+            }
+        }
+
+        assert!(pending_path(&config, "recovered").is_file());
+        let audit = fs::read_to_string(config.state_dir.join("audit.jsonl")).unwrap();
+        assert!(
+            audit.contains("\"event\":\"inbox-cursor-reset\""),
+            "{audit}"
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn corrupt_inbox_cursor_is_discarded() {
+        let root = temp_dir("inbox-cursor-corrupt");
+        let config = test_config(&root);
+        let inbox = root.join("inbox");
+        fs::create_dir(&inbox).unwrap();
+        ensure_state_layout(&config).unwrap();
+        fs::write(config.state_dir.join(INBOX_CURSOR_FILE), "not a cursor\n").unwrap();
+
+        let inbox_fd = open_path_no_symlinks(&inbox).unwrap();
+        assert_eq!(
+            read_inbox_cursor(&config, inbox_fd.as_raw_fd()).unwrap(),
+            InboxCursorRead {
+                cursor: None,
+                reset: true,
+            }
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn stale_inbox_cursor_eof_restarts_from_the_beginning() {
+        let root = temp_dir("inbox-cursor-eof");
+        let config = test_config(&root);
+        fs::create_dir(&config.workspace).unwrap();
+        let control = config.workspace.join(".tentaflake-worker");
+        let inbox = control.join("inbox");
+        fs::create_dir(&control).unwrap();
+        fs::create_dir(&inbox).unwrap();
+        fs::write(
+            inbox.join("recovered.json"),
+            br#"{"version":1,"id":"recovered","action_class":"local-reversible","argv":["true"],"timeout_seconds":1}"#,
+        )
+        .unwrap();
+        ensure_state_layout(&config).unwrap();
+
+        let workspace = open_path_no_symlinks(&config.workspace).unwrap();
+        let control = open_dir_at(workspace.as_raw_fd(), OsStr::new(".tentaflake-worker")).unwrap();
+        let inbox_fd = open_dir_at(control.as_raw_fd(), OsStr::new("inbox")).unwrap();
+        let mut directory = DirectoryCursor::from_fd(inbox_fd.as_raw_fd()).unwrap();
+        while directory.next_name().unwrap().is_some() {}
+        let stale_cursor = InboxCursor {
+            offset: directory.cursor().unwrap(),
+            stamp: inbox_directory_stamp(inbox_fd.as_raw_fd()).unwrap(),
+        };
+        assert!(write_inbox_cursor(&config, inbox_fd.as_raw_fd(), Some(stale_cursor)).unwrap());
+
+        ingest(&config, inbox_fd.as_raw_fd()).unwrap();
+        assert!(pending_path(&config, "recovered").is_file());
+        let audit = fs::read_to_string(config.state_dir.join("audit.jsonl")).unwrap();
+        assert!(
+            audit.contains("\"event\":\"inbox-cursor-reset\""),
+            "{audit}"
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn inbox_ignores_persistent_junk_without_starving_valid_requests() {
+        let root = temp_dir("inbox-non-regular");
+        let config = test_config(&root);
+        fs::create_dir(&config.workspace).unwrap();
+        let control = config.workspace.join(".tentaflake-worker");
+        let inbox = control.join("inbox");
+        fs::create_dir(&control).unwrap();
+        fs::create_dir(&inbox).unwrap();
+        for index in 0..MAX_INBOX_ENTRIES {
+            fs::create_dir(inbox.join(format!("junk-{index:04}.json"))).unwrap();
+        }
+        symlink("valid.json", inbox.join("link.json")).unwrap();
+        let fifo = inbox.join("pipe.json");
+        let fifo = CString::new(fifo.as_os_str().as_bytes()).unwrap();
+        assert_eq!(unsafe { libc::mkfifo(fifo.as_ptr(), 0o600) }, 0);
+        fs::write(
+            inbox.join("oversized.json"),
+            vec![0_u8; config.max_request_bytes as usize + 1],
+        )
+        .unwrap();
+        fs::write(
+            inbox.join("valid.json"),
+            br#"{"version":1,"id":"valid","action_class":"local-reversible","argv":["true"],"timeout_seconds":1}"#,
+        )
+        .unwrap();
+        ensure_state_layout(&config).unwrap();
+
+        let workspace = open_path_no_symlinks(&config.workspace).unwrap();
+        let control = open_dir_at(workspace.as_raw_fd(), OsStr::new(".tentaflake-worker")).unwrap();
+        let inbox_fd = open_dir_at(control.as_raw_fd(), OsStr::new("inbox")).unwrap();
+        for _ in 0..4 {
+            let deferred = ingest(&config, inbox_fd.as_raw_fd()).unwrap();
+            if pending_path(&config, "valid").is_file() {
+                break;
+            }
+            assert!(
+                deferred,
+                "a bounded scan stopped without scheduling a retry"
+            );
+        }
+
+        assert!(pending_path(&config, "valid").is_file());
+        assert!(inbox.join("junk-0000.json").is_dir());
+        assert!(inbox.join("link.json").is_symlink());
+        assert!(
+            fs::symlink_metadata(inbox.join("pipe.json"))
+                .unwrap()
+                .file_type()
+                .is_fifo()
+        );
+        assert!(inbox.join("oversized.json").is_file());
+        let audit = fs::read_to_string(config.state_dir.join("audit.jsonl")).unwrap();
+        assert!(audit.contains("\"event\":\"inbox-ignored\""), "{audit}");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn private_pending_queue_rejects_excess_requests() {
+        let root = temp_dir("pending-capacity");
+        let mut config = test_config(&root);
+        config.max_pending_requests = 1;
+        config.max_pending_bytes = 1024;
+        fs::create_dir(&config.workspace).unwrap();
+        let control = config.workspace.join(".tentaflake-worker");
+        let inbox = control.join("inbox");
+        fs::create_dir(&control).unwrap();
+        fs::create_dir(&inbox).unwrap();
+        fs::write(
+            inbox.join("first.json"),
+            request_bytes("first", "external-reversible"),
+        )
+        .unwrap();
+        fs::write(
+            inbox.join("second.json"),
+            request_bytes("second", "external-reversible"),
+        )
+        .unwrap();
+        ensure_state_layout(&config).unwrap();
+
+        let workspace = open_path_no_symlinks(&config.workspace).unwrap();
+        let control = open_dir_at(workspace.as_raw_fd(), OsStr::new(".tentaflake-worker")).unwrap();
+        let inbox_fd = open_dir_at(control.as_raw_fd(), OsStr::new("inbox")).unwrap();
+        assert!(!ingest(&config, inbox_fd.as_raw_fd()).unwrap());
+
+        assert!(pending_path(&config, "first").is_file());
+        assert!(!pending_path(&config, "second").exists());
+        assert!(!inbox.join("first.json").exists());
+        assert!(!inbox.join("second.json").exists());
+        let usage = read_pending_usage(&config).unwrap();
+        assert_eq!(usage.requests, 1);
+        let audit = fs::read_to_string(config.state_dir.join("audit.jsonl")).unwrap();
+        assert!(
+            audit.contains("private pending queue capacity reached"),
+            "{audit}"
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn private_pending_processing_is_limited_per_activation() {
+        let root = temp_dir("pending-processing-bound");
+        let config = test_config(&root);
+        fs::create_dir(&config.workspace).unwrap();
+        ensure_state_layout(&config).unwrap();
+        write_new_private(
+            &pending_path(&config, "first"),
+            &request_bytes("first", "forbidden"),
+        )
+        .unwrap();
+        write_new_private(
+            &pending_path(&config, "second"),
+            &request_bytes("second", "forbidden"),
+        )
+        .unwrap();
+
+        let workspace = open_path_no_symlinks(&config.workspace).unwrap();
+        assert!(process_ready(&config, workspace.as_raw_fd()).unwrap());
+        assert!(!pending_path(&config, "first").exists());
+        assert!(pending_path(&config, "second").is_file());
+        assert!(config.state_dir.join("results").join("first").is_dir());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn pending_claim_is_non_overwriting_and_recovery_never_replays() {
+        let root = temp_dir("inflight-recovery");
+        let config = test_config(&root);
+        ensure_state_layout(&config).unwrap();
+        write_new_private(
+            &pending_path(&config, "claimed"),
+            &request_bytes("claimed", "external-reversible"),
+        )
+        .unwrap();
+
+        let claimed = claim_pending(&config, "claimed").unwrap().unwrap();
+        assert_eq!(claimed, inflight_path(&config, "claimed"));
+        assert!(!pending_path(&config, "claimed").exists());
+        assert!(claimed.is_file());
+
+        write_new_private(
+            &pending_path(&config, "claimed"),
+            &request_bytes("claimed", "external-reversible"),
+        )
+        .unwrap();
+        assert!(claim_pending(&config, "claimed").is_err());
+        fs::remove_file(pending_path(&config, "claimed")).unwrap();
+
+        recover_inflight(&config).unwrap();
+        assert!(!inflight_path(&config, "claimed").exists());
+        let result: serde_json::Value = serde_json::from_slice(
+            &fs::read(
+                config
+                    .state_dir
+                    .join("results")
+                    .join("claimed")
+                    .join("result.json"),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(result["status"], "interrupted");
+        let audit = fs::read_to_string(config.state_dir.join("audit.jsonl")).unwrap();
+        assert!(audit.contains("outcome-unknown"), "{audit}");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn private_pending_queue_rejects_excess_bytes() {
+        let root = temp_dir("pending-byte-capacity");
+        let mut config = test_config(&root);
+        config.max_request_bytes =
+            u64::try_from(request_bytes("second", "external-reversible").len()).unwrap();
+        config.max_pending_bytes = config.max_request_bytes;
+        fs::create_dir(&config.workspace).unwrap();
+        let control = config.workspace.join(".tentaflake-worker");
+        let inbox = control.join("inbox");
+        fs::create_dir(&control).unwrap();
+        fs::create_dir(&inbox).unwrap();
+        fs::write(
+            inbox.join("first.json"),
+            request_bytes("first", "external-reversible"),
+        )
+        .unwrap();
+        fs::write(
+            inbox.join("second.json"),
+            request_bytes("second", "external-reversible"),
+        )
+        .unwrap();
+        ensure_state_layout(&config).unwrap();
+
+        let workspace = open_path_no_symlinks(&config.workspace).unwrap();
+        let control = open_dir_at(workspace.as_raw_fd(), OsStr::new(".tentaflake-worker")).unwrap();
+        let inbox_fd = open_dir_at(control.as_raw_fd(), OsStr::new("inbox")).unwrap();
+        ingest(&config, inbox_fd.as_raw_fd()).unwrap();
+
+        assert!(pending_path(&config, "first").is_file());
+        assert!(!pending_path(&config, "second").exists());
+        let audit = fs::read_to_string(config.state_dir.join("audit.jsonl")).unwrap();
+        assert!(
+            audit.contains("private pending queue capacity reached"),
+            "{audit}"
+        );
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
