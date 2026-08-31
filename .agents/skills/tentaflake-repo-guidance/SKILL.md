@@ -1,7 +1,7 @@
 ---
 name: tentaflake-repo-guidance
 description: Comprehensive reference for tentaflake modules, profiles, agent builders, Rust CLI, installer, checks, and architecture.
-version: 2.0.0
+version: 2.1.0
 ---
 
 # Tentaflake repository guidance
@@ -228,14 +228,17 @@ matches the controller and preserves tmpfiles' setgid result directory without
 weakening `RestrictSUIDSGID`.
 
 Only `local-reversible` runs automatically. Other allowed action classes wait
-in private host state for an operator `approve`; `forbidden` is rejected.
-Direct root operator commands adopt the declared capsule GID before touching
-worker state, matching the systemd queue service without adding `CAP_CHOWN`.
-The path-activated oneshot has a ten-second failure backoff but disables the
-aggregate service start counter because systemd also counts successful drains.
-Approval never expands capsule authority, so generic external actions still
-need a separate narrow broker. The module cannot prove runtime-specific agent
-tool configuration routed every shell command through the queue. See
+in private host state for an operator `approve`; `forbidden` is rejected. A
+worker-wide lock and non-overwriting atomic `pending/` to `inflight/` claim
+serialize drain, approve, and deny. A claim left after a crash is terminalized
+as outcome-unknown and is never replayed automatically. Direct root operator
+commands adopt the declared capsule GID before touching worker state, matching
+the systemd queue service without adding `CAP_CHOWN`. The path-activated
+oneshot has a ten-second failure backoff but disables the aggregate service
+start counter because systemd also counts successful drains. Approval never
+expands capsule authority, so generic external actions still need a separate
+narrow broker. The module cannot prove runtime-specific agent tool
+configuration routed every shell command through the queue. See
 `docs/13-disposable-worker.md` and the `TFSEC-020` posture finding.
 
 ## Persistent workspace ceiling
@@ -249,6 +252,23 @@ watcher starts. First activation is a real disk mutation and fails when the
 workspace is non-empty; size drift never resizes silently. Source/eval does
 not prove the loop mount or `ENOSPC` path. See `docs/14-workspace-quota.md` and
 `TFSEC-021`.
+
+## Private worker state ceiling
+
+Every enabled `tentaflake.worker.agents.<container>` receives a fixed-size
+private ext4 image at its derived worker state directory; `stateVolumeMiB`
+defaults to 8192. The backing image and mountpoint are not caller-configurable.
+The mount uses `loop,nodev,nosuid,noexec,noatime`, is prepared only for an empty
+first-use state directory, and fails closed on unsafe files, incomplete images,
+or size drift. There is no automatic migration, disable, or resize path.
+
+A root-owned post-mount layout creates `pending`, `inflight`, `jobs`, results,
+and the layout marker. The queue service, path unit, cleanup, and controller
+result bind must require/after and bind to that layout so unmount cannot expose
+an unbounded backing directory. Static validation and runtime `statvfs`
+admission reserve two snapshot trees, logs, pending file metadata, control
+space, ext4 overhead, and inodes. Keep Nix assertions, VM exhaustion tests, and
+`docs/13-disposable-worker.md` synchronized when changing this boundary.
 
 ## Image provenance
 
@@ -307,6 +327,16 @@ Editor, Hive Research, and Piper live below `modules/optional/` and are exported
 individually. Do not import them from `modules/default.nix`. External inputs,
 credentials, network listeners, and voice assets remain opt-in.
 
+The source-only Sui Move reference lives in
+`integrations/sui-agent-attestation/`; it is not a NixOS module or a default
+service. It records issuer-authorized opaque evidence commitments only. A
+balanced agent must not receive Sui RPC access, wallet/gas or issuer keys,
+AdminCap custody, or an arbitrary transaction relay. The optional host-side
+issuer and relayer remain separate, explicitly scoped trust boundaries. A
+consumer must pin its own Registry, AgentRecord, and commitment values through
+`verify_bound`; a `VerifiedAgent` value alone is not an authorization
+boundary. Read `docs/17-sui-agent-attestation.md` before changing it.
+
 ## Installer
 
 The only ISO is `installer-iso`. `installer/installer.sh` copies the core Nix
@@ -355,8 +385,20 @@ nix flake check
 nix build \
   .#checks.x86_64-linux.vm-integration \
   -L
+just golden-evals
 nix build .#installer-iso
 ```
+
+The VM integration gate runs the versioned Golden host-policy corpus from
+`tests/golden-evals.json`. It proves deterministic worker policy enforcement,
+that bounded inbox scanning completes a real systemd retry while preserving
+persistent non-regular junk, and that preserved junk does not reactivate the
+converged worker or grow its audit indefinitely. It proves private pending
+count and byte backpressure, a two-command atomic claim race with one terminal
+result, and state-capacity rejection before a capsule starts. The cursor is mutation-stamped
+and safely resets rather than claiming liveness against continuous inbox churn.
+It does not prove model quality or universal upstream tool routing. See
+`docs/16-golden-evals.md`.
 
 Shell and generated installation:
 

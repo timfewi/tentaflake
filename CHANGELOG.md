@@ -6,9 +6,51 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
-### Changed
+### Security
+- The security doctor now inspects each generated OCI container name rather than
+  the short display name, so available live runtime evidence is evaluated
+  instead of being incorrectly reported as unknown.
+- The disposable worker bounds every untrusted inbox scan, batches only
+  eligible regular requests, and deliberately retries an overflowed slice. Its
+  root-owned cursor is directory-mutation-stamped, resets safely on stale or
+  corrupt state, and is atomically checkpointed with directory sync. Its private
+  pending queue now has count/byte admission limits and bounded ready-job
+  processing, so approval bursts cannot grow root-owned pending state without
+  bound. Persistent non-regular or oversized junk is aggregated in the audit;
+  rejected forbidden actions now receive an explicit audit event.
+- Every enabled disposable worker now owns a fixed-size, `noexec` ext4 state
+  image with fail-closed first-mount and resize handling. A post-mount marker
+  and `BindsTo` ordering prevent the queue, cleanup, and controller result bind
+  from using an unmounted host directory. Static and runtime block/inode
+  reservations include snapshot, queue metadata, logs, control space, and
+  ext4 overhead.
+- Pending requests are claimed under a worker-wide lock with non-overwriting
+  atomic `pending/` to `inflight/` renames. Concurrent drain/approve/deny paths
+  cannot execute twice; interrupted claims become durable outcome-unknown
+  results and are never replayed automatically.
+
 ### Added
+- A versioned Golden host-policy evaluation corpus runs inside the existing VM
+  integration gate. It covers all worker action classes, approval/denial
+  transitions, one-time approvals, stable artifacts, audit projections,
+  offline execution, prompt-marker non-disclosure, inbox-junk fairness, private
+  queue count/byte backpressure, concurrent atomic claiming, and worker-state
+  capacity rejection before capsule execution.
+- An experimental, source-only Sui Move agent-attestation reference package
+  provides shared Registry and AgentRecord objects, non-transferable AdminCap
+  custody, a single active issuer with staged rotation, fresh exact-sequence
+  Ed25519 attestations, expiry, pause, revocation, and commitment-bound proof
+  verification. It adds no default service, RPC path, wallet, signer, or
+  deployment.
+
+### Changed
 ### Fixed
+- The disposable worker now borrows its parsed configuration during inflight
+  recovery so the Rust binary compiles, and its path unit wakes on inbox
+  directory changes instead of persistent non-emptiness. Preserved ignored
+  entries therefore no longer cause endless successful service activations and
+  repeated audit growth.
+
 ### Breaking
 
 
