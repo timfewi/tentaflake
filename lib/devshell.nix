@@ -16,28 +16,88 @@ let
     lib.splitString "\n" (lib.removeSuffix "\n" (builtins.readFile ../public/tentaflake-shell-logo.txt))
   );
 
-  # The cheat sheet mirrors the justfile — the five recipes worth knowing on
-  # entry. `just` itself lists the rest, so this never has to grow.
+  # The cheat sheet mirrors every justfile recipe, keeping the entry banner
+  # useful without making contributors run `just --list` to discover a gate.
   commands = [
     {
       cmd = "just";
       what = "list every recipe";
     }
     {
+      cmd = "just build";
+      what = "build the installed system";
+    }
+    {
+      cmd = "just check";
+      what = "run the full Nix flake check";
+    }
+    {
       cmd = "just ci";
       what = "full local gate (CI + installer ISO)";
+    }
+    {
+      cmd = "just e2e";
+      what = "run the complete automated gate";
     }
     {
       cmd = "just e2e-devcontainer";
       what = "verify the locked contributor container";
     }
     {
+      cmd = "just e2e-installer";
+      what = "install into a disposable UEFI VM";
+    }
+    {
+      cmd = "just e2e-run-vm";
+      what = "boot the installed disposable VM";
+    }
+    {
+      cmd = "just fmt";
+      what = "format the tree in place";
+    }
+    {
+      cmd = "just fmt-check";
+      what = "check formatting without changes";
+    }
+    {
+      cmd = "just generated-flake";
+      what = "test the generated consumer flake";
+    }
+    {
+      cmd = "just golden-eval-schema";
+      what = "validate the Golden Eval schema";
+    }
+    {
+      cmd = "just golden-evals";
+      what = "run the Golden Eval VM corpus";
+    }
+    {
+      cmd = "just iso-installer";
+      what = "build the installer ISO";
+    }
+    {
+      cmd = "just lint";
+      what = "run Statix and Deadnix";
+    }
+    {
+      cmd = "just rust";
+      what = "format, lint, and test Rust";
+    }
+    {
       cmd = "just security";
       what = "scan source and locked dependencies";
     }
     {
-      cmd = "just e2e-installer";
-      what = "install into a disposable UEFI VM";
+      cmd = "just shellcheck";
+      what = "lint installer and helper scripts";
+    }
+    {
+      cmd = "just sui-attestation-vector";
+      what = "verify the deterministic Sui fixture";
+    }
+    {
+      cmd = "just tag VERSION";
+      what = "create a release tag from the changelog";
     }
   ];
   commandColumnWidth =

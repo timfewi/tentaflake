@@ -61,7 +61,9 @@ jobs:
       - name: nix build (non-VM checks)
         run: |
           nix build --no-link \
+            .#checks.x86_64-linux.golden-eval-schema \
             .#checks.x86_64-linux.image-pinning \
+            .#checks.x86_64-linux.sui-attestation-signing-vector \
             .#checks.x86_64-linux.tentaflake-broker \
             .#checks.x86_64-linux.tentaflake-cli \
             .#checks.x86_64-linux.tentaflake-worker \

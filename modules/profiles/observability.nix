@@ -11,6 +11,8 @@ let
   cfg = config.tentaflake.profiles.observability;
   brokerAgents = lib.attrByPath [ "tentaflake" "broker" "agents" ] { } config;
   enabledBrokerAgents = lib.filterAttrs (_: agent: agent.enable) brokerAgents;
+  workerAgents = lib.attrByPath [ "tentaflake" "worker" "agents" ] { } config;
+  enabledWorkerAgents = lib.filterAttrs (_: agent: agent.enable) workerAgents;
   brokerSignals = lib.concatLists (
     lib.mapAttrsToList (
       name: agent:
@@ -36,18 +38,18 @@ let
     ''
       files=()
       for audit in \
-        ${lib.escapeShellArg auditFile} \
-        ${lib.escapeShellArg "${auditFile}.1"}; do
+        ${lib.escapeShellArg "${auditFile}.1"} \
+        ${lib.escapeShellArg auditFile}; do
         if [ -r "$audit" ]; then
           files+=("$audit")
         fi
       done
       denials=0
       if [ "''${#files[@]}" -gt 0 ]; then
-        denials=$(${pkgs.jq}/bin/jq -s \
+        denials=$(${pkgs.coreutils}/bin/tail -q -n ${toString cfg.maxAuditLinesPerBroker} \
+          "''${files[@]}" | ${pkgs.coreutils}/bin/tail -n ${toString cfg.maxAuditLinesPerBroker} | ${pkgs.jq}/bin/jq -R -s \
           --argjson cutoff "$cutoff" \
-          '[.[] | select((.ts // 0) >= $cutoff and .outcome == "denied")] | length' \
-          "''${files[@]}")
+          'split("\n") | map(fromjson? | select((.ts? // 0) >= $cutoff and (.outcome? // "") == "denied")) | length')
       fi
       printf 'tentaflake_broker_policy_denials_5m{agent="%s",mode="%s"} %s\n' \
         ${lib.escapeShellArg name} ${lib.escapeShellArg mode} "$denials" >> "$tmp"
@@ -59,9 +61,9 @@ let
       tokens=0
       cost=0
       if [ -r ${lib.escapeShellArg budgetFile} ]; then
-        requests=$(${pkgs.jq}/bin/jq -r '.requests // 0' ${lib.escapeShellArg budgetFile})
-        tokens=$(${pkgs.jq}/bin/jq -r '.tokens // 0' ${lib.escapeShellArg budgetFile})
-        cost=$(${pkgs.jq}/bin/jq -r '.cost_microusd // 0' ${lib.escapeShellArg budgetFile})
+        requests=$(${pkgs.jq}/bin/jq -r '(.requests // 0) | if type == "number" and . >= 0 and floor == . then . else 0 end' ${lib.escapeShellArg budgetFile})
+        tokens=$(${pkgs.jq}/bin/jq -r '(.tokens // 0) | if type == "number" and . >= 0 and floor == . then . else 0 end' ${lib.escapeShellArg budgetFile})
+        cost=$(${pkgs.jq}/bin/jq -r '(.cost_microusd // 0) | if type == "number" and . >= 0 and floor == . then . else 0 end' ${lib.escapeShellArg budgetFile})
       fi
       printf 'tentaflake_broker_budget_requests{agent="%s",mode="%s"} %s\n' \
         ${lib.escapeShellArg name} ${lib.escapeShellArg mode} "$requests" >> "$tmp"
@@ -79,6 +81,17 @@ let
         ${lib.escapeShellArg name} ${lib.escapeShellArg mode} \
         ${toString agent.dailyCostMicrousd} >> "$tmp"
     '';
+  renderWorkerSignal = name: agent: ''
+    printf 'tentaflake_worker_enabled{agent="%s"} 1\n' ${lib.escapeShellArg name} >> "$tmp"
+    printf 'tentaflake_worker_pending_request_limit{agent="%s"} %s\n' \
+      ${lib.escapeShellArg name} ${toString agent.maxPendingRequests} >> "$tmp"
+    printf 'tentaflake_worker_pending_bytes_limit{agent="%s"} %s\n' \
+      ${lib.escapeShellArg name} ${toString agent.maxPendingBytes} >> "$tmp"
+    printf 'tentaflake_worker_state_volume_bytes{agent="%s"} %s\n' \
+      ${lib.escapeShellArg name} ${toString (agent.stateVolumeMiB * 1024 * 1024)} >> "$tmp"
+    printf 'tentaflake_worker_pids_limit{agent="%s"} %s\n' \
+      ${lib.escapeShellArg name} ${toString agent.pidsLimit} >> "$tmp"
+  '';
 in
 {
   options.tentaflake.profiles.observability = {
@@ -113,6 +126,12 @@ in
       default = "14d";
       example = "30d";
       description = "Prometheus and Loki data retention window.";
+    };
+
+    maxAuditLinesPerBroker = lib.mkOption {
+      type = lib.types.ints.positive;
+      default = 500;
+      description = "Maximum trailing audit records read per broker mode for one metrics collection run.";
     };
 
     grafanaSecretKeyFile = lib.mkOption {
@@ -364,6 +383,11 @@ in
             Type = "oneshot";
             User = "root";
             UMask = "0022";
+            TimeoutStartSec = "45s";
+            MemoryMax = 256 * 1024 * 1024;
+            TasksMax = 32;
+            CPUQuota = "50%";
+            Nice = 10;
             NoNewPrivileges = true;
             PrivateDevices = true;
             PrivateTmp = true;
@@ -384,6 +408,9 @@ in
             cutoff=$((${pkgs.coreutils}/bin/date +%s - 300))
             : > "$tmp"
             ${lib.concatMapStringsSep "\n" renderBrokerSignal brokerSignals}
+            ${lib.concatMapStringsSep "\n" (name: renderWorkerSignal name enabledWorkerAgents.${name}) (
+              lib.attrNames enabledWorkerAgents
+            )}
             ${pkgs.coreutils}/bin/chmod 0644 "$tmp"
             ${pkgs.coreutils}/bin/mv -f "$tmp" "$final"
           '';

@@ -77,15 +77,19 @@
           "multi-user.target"
         ];
 
-        environment.etc."tentaflake/network-test-image".source = networkTestImage;
-        environment.etc."tentaflake/golden-evals.json".source = ./golden-evals.json;
-        environment.etc."tentaflake/golden-eval-runner.py".source = ./golden-eval-runner.py;
-        environment.systemPackages = [
-          pkgs.git
-          pkgs.python3
-          pkgs.restic
-          brokerPackage
-        ];
+        environment = {
+          etc = {
+            "tentaflake/network-test-image".source = networkTestImage;
+            "tentaflake/golden-evals.json".source = ./golden-evals.json;
+            "tentaflake/golden-eval-runner.py".source = ./golden-eval-runner.py;
+          };
+          systemPackages = [
+            pkgs.git
+            pkgs.python3
+            pkgs.restic
+            brokerPackage
+          ];
+        };
 
         tentaflake = {
           hostName = "agent-host";
@@ -303,6 +307,41 @@
                 f"worker {unit} failed before publishing {path}"
             )
 
+    def assert_worker_state_layout(node, name, group):
+        state = f"/var/lib/tentaflake-worker-{name}"
+        filesystem = node.succeed(
+            f"findmnt --mountpoint {state} -n -o FSTYPE"
+        ).strip()
+        assert filesystem == "ext4", (state, filesystem)
+        mount_options = set(
+            node.succeed(
+                f"findmnt --mountpoint {state} -n -o OPTIONS"
+            ).strip().split(",")
+        )
+        required_options = {"nodev", "nosuid", "noexec", "noatime"}
+        missing_options = required_options - mount_options
+        assert not missing_options, (
+            f"{state} missing mount options {sorted(missing_options)}: "
+            f"{sorted(mount_options)}"
+        )
+        expected_layout = {
+            state: f"root:{group} 750",
+            f"{state}/pending": "root:root 700",
+            f"{state}/inflight": "root:root 700",
+            f"{state}/jobs": "root:root 700",
+            f"{state}/results": f"root:{group} 2750",
+            f"{state}/.tentaflake-worker-state-v1": "root:root 600",
+        }
+        for path, expected in expected_layout.items():
+            actual = node.succeed(
+                f"stat -c '%U:%G %a' {path}"
+            ).strip()
+            assert actual == expected, (path, expected, actual)
+        node.succeed(
+            f"grep -Fx tentaflake-worker-state-v1 "
+            f"{state}/.tentaflake-worker-state-v1"
+        )
+
     # The final subtest exercises a real reboot. Start this node explicitly so
     # the test driver does not add QEMU's `-no-reboot` default.
     machine.start(allow_reboot=True)
@@ -338,16 +377,19 @@
         machine.succeed("test -s /etc/tentaflake/cli.conf")
         machine.succeed("test -s /etc/tentaflake/agents.tsv")
 
-    with subtest("security doctor accepts the fail-closed balanced capsule"):
+    with subtest("security doctor keeps stopped controllers explicitly unknown"):
         report = machine.succeed("tentaflake doctor --security --json")
         machine.succeed(
             "tentaflake doctor --security --json | "
             "jq -e '.profile == \"balanced\" and "
-            "([.findings[].id] | index(\"TFSEC-013\")) != null'"
+            "([.findings[].id] | index(\"TFSEC-013\")) != null and "
+            "([.findings[] | select(.id == \"TFSEC-033\") | .agent] | sort) "
+            "== [\"hermes-test\",\"zeroclaw-assistant\"] and "
+            "([.findings[] | select(.id == \"TFSEC-034\")] | length) == 0'"
         )
         assert "TFSEC-002" not in report, report
         assert "TFSEC-011" not in report, report
-        assert "TFSEC-033" not in report, report
+        assert "TFSEC-033" in report, report
         assert "TFSEC-034" not in report, report
 
     with subtest("declared agent produced its systemd unit"):
@@ -408,16 +450,12 @@
         )
 
     with subtest("private worker state has a fixed-size filesystem"):
-        for name in ["hermes-test", "zeroclaw-assistant"]:
+        for name, group in [
+            ("hermes-test", "tfw-gid-10000"),
+            ("zeroclaw-assistant", "nogroup"),
+        ]:
             machine.wait_for_unit(f"tentaflake-worker-state-{name}.service")
-            state = f"/var/lib/tentaflake-worker-{name}"
-            machine.succeed(
-                f"findmnt --mountpoint {state} -n -o FSTYPE | grep -Fx ext4"
-            )
-            machine.succeed(
-                f"findmnt --mountpoint {state} -n -o OPTIONS | tr ',' '\n' | grep -Fx noexec"
-            )
-            machine.succeed(f"test -f {state}/.tentaflake-worker-state-v1")
+            assert_worker_state_layout(machine, name, group)
             size = int(
                 machine.succeed(
                     f"stat -c %s /var/lib/tentaflake-worker-state-volumes/{name}.img"
@@ -652,6 +690,55 @@
         podman.succeed(
             "podman load < /etc/tentaflake/podman-test-image"
         )
+        podman.succeed(
+            "podman run -d --name tf-podman-resource-limits "
+            "--runtime runsc --network none --read-only "
+            "--user 65534:65534 --cap-drop ALL "
+            "--security-opt no-new-privileges "
+            "--memory 64m --memory-swap 64m --cpus 0.5 "
+            f"--pids-limit {runtime_probe_pids_limit} "
+            "--ulimit nofile=4096:4096 "
+            f"--ulimit nproc={runtime_probe_pids_limit}:"
+            f"{runtime_probe_pids_limit} "
+            "--tmpfs /run:rw,nosuid,nodev,noexec,size=8m "
+            "--tmpfs /tmp:rw,nosuid,nodev,noexec,size=8m "
+            "--tmpfs /var/tmp:rw,nosuid,nodev,noexec,size=8m "
+            "tentaflake-podman-test:latest sleep 120"
+        )
+        podman.succeed(
+            "podman inspect tf-podman-resource-limits | jq -e '"
+            ".[0] as $c | "
+            "$c.HostConfig.PortBindings as $host_ports | "
+            "$c.NetworkSettings.Ports as $network_ports | "
+            "($c.HostConfig.Ulimits // []) as $limits | "
+            "($c.HostConfig.Tmpfs // {}) as $tmpfs | "
+            "$c.State.Running == true and "
+            "$c.HostConfig.PublishAllPorts == false and "
+            "($host_ports | type) == \"object\" and "
+            "($network_ports | type) == \"object\" and "
+            "($host_ports | all(.[]; . == null or "
+            "(type == \"array\" and length == 0))) and "
+            "($network_ports | all(.[]; . == null or "
+            "(type == \"array\" and length == 0))) and "
+            "$c.HostConfig.Memory == 67108864 and "
+            "$c.HostConfig.MemorySwap == 67108864 and "
+            "$c.HostConfig.CpuPeriod == 100000 and "
+            "$c.HostConfig.CpuQuota == 50000 and "
+            "$c.HostConfig.NanoCpus == 500000000 and "
+            f"$c.HostConfig.PidsLimit == {runtime_probe_pids_limit} and "
+            "([$limits[] | select(.Name == \"RLIMIT_NOFILE\" and "
+            ".Soft == 4096 and .Hard == 4096)] | length) == 1 and "
+            "([$limits[] | select(.Name == \"RLIMIT_NPROC\" and "
+            f".Soft == {runtime_probe_pids_limit} and "
+            f".Hard == {runtime_probe_pids_limit})] | length) == 1 and "
+            "($tmpfs | keys | sort) == "
+            "([\"/run\", \"/tmp\", \"/var/tmp\"] | sort) and "
+            "all([\"/run\", \"/tmp\", \"/var/tmp\"][]; "
+            "($tmpfs[.] | split(\",\") | sort) == "
+            "([\"rw\", \"nosuid\", \"nodev\", \"noexec\", "
+            "\"size=8m\", \"rprivate\", \"tmpcopyup\"] | sort))'"
+        )
+        podman.succeed("podman rm -f tf-podman-resource-limits")
         podman_base = (
             "podman run --rm --runtime runsc "
             "--network none --read-only "
@@ -1117,6 +1204,12 @@
         machine.wait_for_unit(
             "tentaflake-workspace-quota-hermes-test.service"
         )
+        for name, group in [
+            ("hermes-test", "tfw-gid-10000"),
+            ("zeroclaw-assistant", "nogroup"),
+        ]:
+            machine.wait_for_unit(f"tentaflake-worker-state-{name}.service")
+            assert_worker_state_layout(machine, name, group)
         machine.wait_for_unit(
             "tentaflake-worker-hermes-test.path"
         )
@@ -1140,6 +1233,64 @@
         machine.succeed(
             "docker network inspect tf-zeroclaw-assistant | "
             "jq -e '.[0].Internal == true'"
+        )
+
+        # Existing result and audit records demonstrate that the remounted
+        # filesystem retained the pre-reboot worker state.
+        machine.succeed(
+            "jq -e '.status == \"succeeded\"' "
+            "/var/lib/tentaflake-worker-hermes-test/"
+            "results/local_1/result.json"
+        )
+        machine.succeed(
+            "jq -s -e 'any(.[]; .job == \"local_1\" and "
+            ".event == \"completed\")' "
+            "/var/lib/tentaflake-worker-hermes-test/audit.jsonl"
+        )
+
+        post_reboot_inbox = (
+            "/var/lib/hermes-test/workspace/.tentaflake-worker/inbox"
+        )
+        post_reboot_results = (
+            "/var/lib/tentaflake-worker-hermes-test/results"
+        )
+        post_reboot_result = (
+            post_reboot_results + "/post_reboot_1/result.json"
+        )
+        post_reboot_worker = "tentaflake-worker-hermes-test.service"
+        machine.succeed(
+            "cat > " + post_reboot_inbox + "/post_reboot_1.json <<'EOF'\n"
+            '{"version":1,"id":"post_reboot_1",'
+            '"action_class":"local-reversible",'
+            '"argv":["sh","-c",'
+            '"mkdir artifacts; echo post-reboot > artifacts/state"],'
+            '"timeout_seconds":5}\nEOF'
+        )
+        wait_for_worker_file(
+            machine,
+            post_reboot_worker,
+            post_reboot_result,
+        )
+        machine.succeed(
+            "jq -e '.status == \"succeeded\" and "
+            ".artifacts_available == true' "
+            + post_reboot_result
+            + " || { cat "
+            + post_reboot_result
+            + "; cat "
+            + post_reboot_results
+            + "/post_reboot_1/job.log; exit 1; }"
+        )
+        machine.succeed(
+            "grep -Fx post-reboot "
+            + post_reboot_results
+            + "/post_reboot_1/artifacts/state"
+        )
+        machine.succeed(
+            "jq -s -e "
+            "'[.[] | select(.job == \"post_reboot_1\") | .event] "
+            "== [\"request-accepted\", \"completed\"]' "
+            "/var/lib/tentaflake-worker-hermes-test/audit.jsonl"
         )
 
   '';

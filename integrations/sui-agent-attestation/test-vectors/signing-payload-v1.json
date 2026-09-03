@@ -1,0 +1,54 @@
+{
+  "schema": "tentaflake.sui-agent-attestation.signing-vector.v1",
+  "description": "Cross-language fixture for raw Ed25519 over BCS(SigningPayload) used by the experimental Sui Move attestation reference.",
+  "serialization": "BCS(SigningPayload)",
+  "signature_scheme": "Ed25519 over the raw serialized payload; no Sui intent or personal-message framing",
+  "key_material": {
+    "classification": "deterministic public test material only",
+    "deterministic": true,
+    "private_seed_included": false,
+    "warning": "The fixture contains only a public key and signature. No private seed or production credential is included or implied."
+  },
+  "field_types": {
+    "domain_utf8": "vector<u8>",
+    "network_domain_utf8": "vector<u8>",
+    "registry_id_hex": "sui::object::ID",
+    "agent_record_id_hex": "sui::object::ID",
+    "protocol_version": "u64",
+    "issuer_key_id": "u64",
+    "issuer_set_epoch": "u64",
+    "sequence": "u64",
+    "not_before_epoch": "u64",
+    "expires_epoch": "u64",
+    "policy_digest_hex": "vector<u8>",
+    "image_digest_hex": "vector<u8>",
+    "golden_eval_report_digest_hex": "vector<u8>",
+    "evidence_digest_hex": "vector<u8>"
+  },
+  "fields": {
+    "domain_utf8": "TFA-SUI-ATTEST-v1",
+    "network_domain_utf8": "sui:testnet",
+    "registry_id_hex": "0x0000000000000000000000000000000000000000000000000000000000000011",
+    "agent_record_id_hex": "0x0000000000000000000000000000000000000000000000000000000000000022",
+    "protocol_version": 1,
+    "issuer_key_id": 7,
+    "issuer_set_epoch": 3,
+    "sequence": 42,
+    "not_before_epoch": 100,
+    "expires_epoch": 105,
+    "policy_digest_hex": "0101010101010101010101010101010101010101010101010101010101010101",
+    "image_digest_hex": "0202020202020202020202020202020202020202020202020202020202020202",
+    "golden_eval_report_digest_hex": "0303030303030303030303030303030303030303030303030303030303030303",
+    "evidence_digest_hex": "0404040404040404040404040404040404040404040404040404040404040404"
+  },
+  "expected": {
+    "payload_length": 274,
+    "payload_hex": "115446412d5355492d4154544553542d76310b7375693a746573746e6574000000000000000000000000000000000000000000000000000000000000001100000000000000000000000000000000000000000000000000000000000000220100000000000000070000000000000003000000000000002a0000000000000064000000000000006900000000000000200101010101010101010101010101010101010101010101010101010101010101200202020202020202020202020202020202020202020202020202020202020202200303030303030303030303030303030303030303030303030303030303030303200404040404040404040404040404040404040404040404040404040404040404",
+    "public_key_hex": "03a107bff3ce10be1d70dd18e74bc09967e4d6309ba50d5f1ddc8664125531b8",
+    "signature_hex": "b81aa8efb03356809da51edfb8dfd6051b3e605885175426e8c8a033499ceaa1e1dcbfeb1ff6a8a8ce6a15e0805b344adf85ed437211d7837a934b66b38a1303"
+  },
+  "negative_check": {
+    "operation": "XOR the final payload byte with 0x01",
+    "expected_signature_valid": false
+  }
+}

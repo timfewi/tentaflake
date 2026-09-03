@@ -6,6 +6,7 @@ use std::io::{Read, Write};
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 #[derive(Default, Deserialize, Serialize)]
@@ -15,6 +16,10 @@ struct BudgetState {
     requests: u64,
     tokens: u64,
     cost_microusd: u64,
+    #[serde(default)]
+    rate_window: u64,
+    #[serde(default)]
+    rate_requests: u64,
 }
 
 struct RateState {
@@ -52,6 +57,10 @@ impl Limits {
                 ));
             }
         };
+        let rate = RateState {
+            window: budget.rate_window,
+            requests: budget.rate_requests,
+        };
         Ok(Self {
             path,
             window_seconds,
@@ -59,28 +68,25 @@ impl Limits {
             daily_request_budget,
             daily_token_budget,
             daily_cost_microusd,
-            inner: Mutex::new((
-                budget,
-                RateState {
-                    window: 0,
-                    requests: 0,
-                },
-            )),
+            inner: Mutex::new((budget, rate)),
         })
     }
 
     pub fn reserve(&self, tokens: u64, cost_microusd: u64) -> Result<(), String> {
-        let now = unix_seconds();
+        self.reserve_at(unix_seconds(), tokens, cost_microusd)
+    }
+
+    fn reserve_at(&self, now: u64, tokens: u64, cost_microusd: u64) -> Result<(), String> {
         let day = now / 86_400;
         let window = now / self.window_seconds;
         let mut state = self.inner.lock().map_err(|_| "budget state lock failed")?;
-        if state.0.day != day {
+        if state.0.day < day {
             state.0 = BudgetState {
                 day,
                 ..BudgetState::default()
             };
         }
-        if state.1.window != window {
+        if state.1.window < window {
             state.1 = RateState {
                 window,
                 requests: 0,
@@ -99,6 +105,8 @@ impl Limits {
         state.0.tokens = state.0.tokens.saturating_add(tokens);
         state.0.cost_microusd = state.0.cost_microusd.saturating_add(cost_microusd);
         state.1.requests += 1;
+        state.0.rate_window = state.1.window;
+        state.0.rate_requests = state.1.requests;
         atomic_json(&self.path, &state.0)
     }
 }
@@ -232,24 +240,55 @@ pub fn unix_seconds() -> u64 {
 
 fn atomic_json(path: &Path, value: &impl Serialize) -> Result<(), String> {
     ensure_parent(path)?;
-    let temporary = path.with_extension("tmp");
-    let mut options = OpenOptions::new();
-    options
-        .write(true)
-        .create(true)
-        .truncate(true)
-        .mode(0o600)
-        .custom_flags(libc::O_NOFOLLOW);
-    let mut file = options
-        .open(&temporary)
-        .map_err(|error| format!("cannot create state file: {error}"))?;
-    serde_json::to_writer(&mut file, value)
-        .map_err(|error| format!("cannot encode state: {error}"))?;
-    file.sync_all()
-        .map_err(|error| format!("cannot sync state: {error}"))?;
-    fs::rename(&temporary, path).map_err(|error| format!("cannot replace state: {error}"))?;
-    fs::set_permissions(path, fs::Permissions::from_mode(0o600))
-        .map_err(|error| format!("cannot protect state: {error}"))
+    let (temporary, mut file) = create_state_temporary(path)?;
+    let result = (|| {
+        serde_json::to_writer(&mut file, value)
+            .map_err(|error| format!("cannot encode state: {error}"))?;
+        file.sync_all()
+            .map_err(|error| format!("cannot sync state: {error}"))?;
+        fs::rename(&temporary, path).map_err(|error| format!("cannot replace state: {error}"))?;
+        fs::set_permissions(path, fs::Permissions::from_mode(0o600))
+            .map_err(|error| format!("cannot protect state: {error}"))?;
+        sync_parent_directory(path)
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(&temporary);
+    }
+    result
+}
+
+fn create_state_temporary(path: &Path) -> Result<(PathBuf, fs::File), String> {
+    for _ in 0..32 {
+        let temporary = temporary_state_path(path);
+        let mut options = OpenOptions::new();
+        options
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .custom_flags(libc::O_NOFOLLOW);
+        match options.open(&temporary) {
+            Ok(file) => return Ok((temporary, file)),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(format!("cannot create state file: {error}")),
+        }
+    }
+    Err("cannot allocate a unique state temporary file".into())
+}
+
+fn temporary_state_path(path: &Path) -> PathBuf {
+    static SEQUENCE: AtomicU64 = AtomicU64::new(0);
+    path.with_extension(format!(
+        "tmp-{}-{}",
+        std::process::id(),
+        SEQUENCE.fetch_add(1, Ordering::Relaxed)
+    ))
+}
+
+fn sync_parent_directory(path: &Path) -> Result<(), String> {
+    let parent = path.parent().ok_or("state path has no parent")?;
+    fs::File::open(parent)
+        .and_then(|directory| directory.sync_all())
+        .map_err(|error| format!("cannot sync state directory {}: {error}", parent.display()))
 }
 
 fn ensure_parent(path: &Path) -> Result<(), String> {
@@ -284,6 +323,81 @@ mod tests {
         assert!(constant_time_eq(b"secret", b"secret"));
         assert!(!constant_time_eq(b"secret", b"secreu"));
         assert!(!constant_time_eq(b"secret", b"secret-long"));
+    }
+
+    #[test]
+    fn atomic_budget_state_is_private_and_readable_after_publish() {
+        let path = test_path("atomic-budget");
+        let expected = BudgetState {
+            day: 42,
+            requests: 3,
+            tokens: 99,
+            cost_microusd: 123,
+            rate_window: 0,
+            rate_requests: 0,
+        };
+        atomic_json(&path, &expected).unwrap();
+        assert_eq!(
+            fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+        let persisted: BudgetState = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        assert_eq!(persisted.day, expected.day);
+        assert_eq!(persisted.requests, expected.requests);
+        assert_eq!(persisted.tokens, expected.tokens);
+        assert_eq!(persisted.cost_microusd, expected.cost_microusd);
+        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn atomic_budget_state_ignores_a_stale_fixed_temporary_path() {
+        use std::os::unix::fs::symlink;
+
+        let path = test_path("atomic-stale");
+        let stale = path.with_extension("tmp");
+        let target = test_path("atomic-stale-target");
+        fs::write(&target, b"do-not-touch").unwrap();
+        symlink(&target, &stale).unwrap();
+
+        atomic_json(&path, &BudgetState::default()).unwrap();
+        assert!(
+            fs::symlink_metadata(&stale)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        assert_eq!(fs::read(&target).unwrap(), b"do-not-touch");
+
+        fs::remove_file(path).unwrap();
+        fs::remove_file(stale).unwrap();
+        fs::remove_file(target).unwrap();
+    }
+
+    #[test]
+    fn budget_and_rate_limits_do_not_reset_when_the_clock_moves_backwards() {
+        let daily_path = test_path("daily-clock-rollback");
+        let daily = Limits::load(daily_path.clone(), 60, 10, 1, 100, 100).unwrap();
+        daily.reserve_at(2 * 86_400, 0, 0).unwrap();
+        assert_eq!(
+            daily.reserve_at(86_400, 0, 0).unwrap_err(),
+            "daily budget exceeded"
+        );
+        fs::remove_file(daily_path).unwrap();
+
+        let rate_path = test_path("rate-clock-rollback");
+        let rate = Limits::load(rate_path.clone(), 60, 1, 10, 100, 100).unwrap();
+        rate.reserve_at(120, 0, 0).unwrap();
+        assert_eq!(
+            rate.reserve_at(60, 0, 0).unwrap_err(),
+            "rate limit exceeded"
+        );
+        drop(rate);
+        let restarted = Limits::load(rate_path.clone(), 60, 1, 10, 100, 100).unwrap();
+        assert_eq!(
+            restarted.reserve_at(60, 0, 0).unwrap_err(),
+            "rate limit exceeded"
+        );
+        fs::remove_file(rate_path).unwrap();
     }
 
     #[test]

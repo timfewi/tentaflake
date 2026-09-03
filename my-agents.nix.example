@@ -31,7 +31,10 @@
   })
 
   # Disposable no-egress execution queues. The exact key, workspace, and
-  # numeric user are checked against each builder during evaluation.
+  # numeric user are checked against each builder during evaluation. Each
+  # enabled worker also creates an 8192 MiB fixed-size private state image by
+  # default. Existing non-empty worker state requires the stopped, offline
+  # migration in docs/13-disposable-worker.md before activation.
   {
     tentaflake.worker.agents = {
       hermes-coding = {

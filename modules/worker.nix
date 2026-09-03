@@ -9,11 +9,63 @@ let
   backend = config.virtualisation.oci-containers.backend;
   runtime = lib.getExe pkgs.${backend};
   json = pkgs.formats.json { };
+  containerSecurity = import ../lib/containerSecurity.nix { inherit lib; };
   enabledAgents = lib.filterAttrs (_: agent: agent.enable) cfg.agents;
+  enabledAgentCount = lib.length (lib.attrNames enabledAgents);
   containerNames = lib.attrNames config.virtualisation.oci-containers.containers;
   backendUnits = lib.optional (backend == "docker") "docker.service";
   utils = import (pkgs.path + "/nixos/lib/utils.nix") { inherit lib config pkgs; };
-  safePath = value: lib.match "^/var/lib/[A-Za-z0-9._+/-]+$" value != null;
+  maxLinuxId = 4294967294;
+  maxMemoryBytes = 1024 * 1024 * 1024 * 1024;
+  maxTmpfsBytes = 64 * 1024 * 1024 * 1024;
+  maxCpus = 1024;
+  maxPids = 65536;
+  maxSnapshotBytes = 16 * 1024 * 1024 * 1024;
+  maxSnapshotEntries = 2000000;
+  maxLogBytes = 64 * 1024 * 1024;
+  maxTimeoutSeconds = 24 * 60 * 60;
+  sizeComponents =
+    value:
+    let
+      matched = builtins.match "^([1-9][0-9]*)([kKmMgGtT]?)$" value;
+      factors = {
+        "" = 1;
+        k = 1024;
+        m = 1024 * 1024;
+        g = 1024 * 1024 * 1024;
+        t = 1024 * 1024 * 1024 * 1024;
+      };
+    in
+    if matched == null || builtins.stringLength (lib.head matched) > 13 then
+      null
+    else
+      {
+        amount = builtins.fromJSON (lib.head matched);
+        factor = factors.${lib.toLower (lib.elemAt matched 1)};
+      };
+  sizeBytes =
+    value:
+    let
+      components = sizeComponents value;
+    in
+    if components == null then 0 else components.amount * components.factor;
+  validSize =
+    maximum: value:
+    let
+      components = sizeComponents value;
+    in
+    components != null && components.amount <= maximum / components.factor;
+  validCpus =
+    value:
+    builtins.stringLength value <= 16
+    && builtins.match "^([1-9][0-9]*([.][0-9]{1,5})?|0[.][0-9]{0,4}[1-9][0-9]{0,4})$" value != null
+    && builtins.fromJSON value <= maxCpus;
+  safeWorkspacePath =
+    value:
+    lib.hasPrefix "/var/lib/" value
+    && containerSecurity.canonicalPath value
+    && !(containerSecurity.forbiddenWritableSource value)
+    && !(lib.hasPrefix "/var/lib/tentaflake-worker-" value);
   stateDir = name: "/var/lib/tentaflake-worker-${name}";
   resultDir = name: "${stateDir name}/results";
   stateVolumeRoot = "/var/lib/tentaflake-worker-state-volumes";
@@ -22,6 +74,15 @@ let
   stateMountUnit = name: "${utils.escapeSystemdPath (stateDir name)}.mount";
   stateLayoutUnit = name: "tentaflake-worker-state-${name}.service";
   stateVolumeBytes = agent: agent.stateVolumeMiB * 1024 * 1024;
+  totalStateVolumeMiB = lib.foldl' (total: agent: total + agent.stateVolumeMiB) 0 (
+    lib.attrValues enabledAgents
+  );
+  totalWorkerMemoryBytes = lib.foldl' (total: agent: total + sizeBytes agent.memory) 0 (
+    lib.attrValues enabledAgents
+  );
+  totalWorkerPids = lib.foldl' (total: agent: total + agent.pidsLimit) 0 (
+    lib.attrValues enabledAgents
+  );
   statePendingMetadataBytes = agent: agent.maxPendingRequests * 4096;
   stateRequiredBytes =
     agent:
@@ -67,11 +128,11 @@ let
           description = "Exact persistent controller workspace copied into bounded worker snapshots.";
         };
         containerUid = lib.mkOption {
-          type = lib.types.ints.unsigned;
+          type = lib.types.ints.between 1 maxLinuxId;
           default = 10000;
         };
         containerGid = lib.mkOption {
-          type = lib.types.ints.unsigned;
+          type = lib.types.ints.between 1 maxLinuxId;
           default = 10000;
         };
         hostGroup = lib.mkOption {
@@ -111,36 +172,47 @@ let
           '';
         };
         maxSnapshotBytes = lib.mkOption {
-          type = lib.types.ints.positive;
+          type = lib.types.ints.between 1 maxSnapshotBytes;
           default = 1024 * 1024 * 1024;
+          description = "Maximum workspace snapshot bytes; at most 16 GiB.";
         };
         maxSnapshotEntries = lib.mkOption {
-          type = lib.types.ints.positive;
+          type = lib.types.ints.between 1 maxSnapshotEntries;
           default = 200000;
+          description = "Maximum workspace snapshot entries; at most 2,000,000.";
         };
         maxLogBytes = lib.mkOption {
-          type = lib.types.ints.positive;
+          type = lib.types.ints.between 1 maxLogBytes;
           default = 1024 * 1024;
+          description = "Maximum retained worker log bytes; at most 64 MiB.";
         };
         maxTimeoutSeconds = lib.mkOption {
-          type = lib.types.ints.positive;
+          type = lib.types.ints.between 1 maxTimeoutSeconds;
           default = 900;
+          description = "Maximum capsule runtime; bounded to 24 hours.";
         };
         memory = lib.mkOption {
           type = lib.types.str;
           default = "2g";
+          description = "Hard capsule memory limit in OCI byte-size syntax; at most 1 TiB.";
         };
         memorySwap = lib.mkOption {
           type = lib.types.str;
           default = "2g";
+          description = ''
+            Total capsule memory-plus-swap limit in OCI byte-size syntax; at
+            most 1 TiB. Setting it equal to memory disables additional swap.
+          '';
         };
         cpus = lib.mkOption {
           type = lib.types.str;
           default = "2.0";
+          description = "Fractional capsule CPU quota in OCI decimal syntax; at most 1024.";
         };
         pidsLimit = lib.mkOption {
-          type = lib.types.ints.positive;
+          type = lib.types.ints.between 1 maxPids;
           default = 512;
+          description = "Maximum number of process IDs available inside one capsule; at most 65,536.";
         };
         workspaceTmpfsSize = lib.mkOption {
           type = lib.types.str;
@@ -150,6 +222,7 @@ let
         tmpTmpfsSize = lib.mkOption {
           type = lib.types.str;
           default = "256m";
+          description = "Hard tmpfs ceiling for the disposable capsule's /tmp; at most 64 GiB.";
         };
       };
     }
@@ -172,6 +245,10 @@ let
         stateVolumeRoot
         (stateDir name)
       ];
+      MemoryMax = 256 * 1024 * 1024;
+      TasksMax = 32;
+      CPUQuota = "25%";
+      Nice = 10;
     };
     path = [
       pkgs.coreutils
@@ -208,7 +285,7 @@ let
           echo "migrate it explicitly before enabling the fixed-size state volume" >&2
           exit 1
         fi
-        truncate --size "$expected" "$image_tmp"
+        fallocate --length "$expected" "$image_tmp"
         mkfs.ext4 -F -q -m 0 -i 16384 "$image_tmp"
         chmod 0600 "$image_tmp"
         mv -T "$image_tmp" "$image"
@@ -222,6 +299,11 @@ let
       fi
 
       if ! findmnt --noheadings --mountpoint "$state" >/dev/null; then
+        if ! fallocate --length "$expected" "$image"; then
+          echo "tentaflake: cannot fully preallocate worker state image $image" >&2
+          echo "free host disk space or use a filesystem supporting fallocate before retrying" >&2
+          exit 1
+        fi
         rc=0
         e2fsck -p "$image" || rc=$?
         if [ "$rc" -gt 1 ]; then
@@ -375,6 +457,11 @@ let
         LockPersonality = true;
         CapabilityBoundingSet = [ "CAP_DAC_READ_SEARCH" ];
         SystemCallArchitectures = "native";
+        MemoryMax = 256 * 1024 * 1024;
+        TasksMax = 64;
+        CPUQuota = "50%";
+        LimitNOFILE = 4096;
+        Nice = 10;
       };
       # Each start advances a bounded raw inbox scan and accepts a bounded
       # batch of eligible regular requests into a count- and byte-capped private
@@ -400,7 +487,7 @@ let
       "tentaflake-worker-result-cleanup-${name}" = stateCleanupService name agent;
     }
   ) { } enabledAgents;
-  stateMounts = lib.mapAttrsToList (name: agent: {
+  stateMounts = lib.mapAttrsToList (name: _: {
     description = "Fixed-size private worker state for ${name}";
     what = stateImagePath name;
     where = stateDir name;
@@ -421,7 +508,7 @@ let
     # after ordinary local filesystems before this loop mount is activated.
     unitConfig.DefaultDependencies = false;
   }) enabledAgents;
-  stateCleanupService = name: agent: {
+  stateCleanupService = name: _: {
     description = "Expire retained worker results for ${name}";
     requires = [ (stateLayoutUnit name) ];
     bindsTo = [ (stateLayoutUnit name) ];
@@ -432,10 +519,27 @@ let
       NoNewPrivileges = true;
       PrivateDevices = true;
       PrivateTmp = true;
+      ProtectClock = true;
+      ProtectControlGroups = true;
       ProtectHome = true;
+      ProtectHostname = true;
+      ProtectKernelLogs = true;
+      ProtectKernelModules = true;
+      ProtectKernelTunables = true;
       ProtectSystem = "strict";
       ReadWritePaths = [ (stateDir name) ];
+      RestrictAddressFamilies = [ "AF_UNIX" ];
+      RestrictNamespaces = true;
+      RestrictRealtime = true;
+      RestrictSUIDSGID = true;
+      LockPersonality = true;
+      SystemCallArchitectures = "native";
       CapabilityBoundingSet = [ "CAP_DAC_OVERRIDE" ];
+      TimeoutStartSec = "5min";
+      MemoryMax = 128 * 1024 * 1024;
+      TasksMax = 32;
+      CPUQuota = "25%";
+      Nice = 10;
     };
     path = [
       pkgs.coreutils
@@ -447,16 +551,21 @@ let
         echo "tentaflake: worker result root is unsafe: $results" >&2
         exit 1
       fi
-      find "$results" -mindepth 1 -maxdepth 1 -type d -mtime +13 -exec rm -rf -- {} +
+      find "$results" -xdev -mindepth 1 -maxdepth 1 -type d -mtime +13 -exec \
+        find -- {} -xdev -depth -ignore_readdir_race -delete \;
     '';
   };
   stateTimers = lib.mapAttrs' (
     name: _:
     lib.nameValuePair "tentaflake-worker-result-cleanup-${name}" {
       wantedBy = [ "timers.target" ];
+      requires = [ (stateLayoutUnit name) ];
+      after = [ (stateLayoutUnit name) ];
+      bindsTo = [ (stateLayoutUnit name) ];
       timerConfig = {
         OnCalendar = "daily";
-        RandomizedDelaySec = "30m";
+        RandomizedDelaySec = "6h";
+        FixedRandomDelay = true;
         Persistent = true;
         Unit = "tentaflake-worker-result-cleanup-${name}.service";
       };
@@ -515,6 +624,42 @@ in
       default = "tentaflake-worker:0.4.0";
       description = "Exact local reference emitted by worker.image; this is not pulled from a registry.";
     };
+    maxEnabledAgents = lib.mkOption {
+      type = lib.types.nullOr lib.types.ints.positive;
+      default = null;
+      description = ''
+        Optional host-wide ceiling for enabled disposable workers. Set this to
+        the reviewed service, mount, and timer operating budget; evaluation
+        rejects configurations exceeding it.
+      '';
+    };
+    maxTotalStateVolumeMiB = lib.mkOption {
+      type = lib.types.nullOr lib.types.ints.positive;
+      default = null;
+      description = ''
+        Optional host-wide ceiling for the sum of enabled workers' fixed state
+        image sizes. Set this to the reviewed disk budget; evaluation rejects
+        configurations exceeding it.
+      '';
+    };
+    maxTotalMemoryBytes = lib.mkOption {
+      type = lib.types.nullOr lib.types.ints.positive;
+      default = null;
+      description = ''
+        Optional host-wide ceiling for the sum of enabled workers' OCI memory
+        limits. Set this to a reviewed capacity budget; evaluation rejects
+        configurations exceeding it.
+      '';
+    };
+    maxTotalPids = lib.mkOption {
+      type = lib.types.nullOr lib.types.ints.positive;
+      default = null;
+      description = ''
+        Optional host-wide ceiling for the sum of enabled workers' OCI PID
+        limits. Set this below the reviewed host PID capacity; evaluation
+        rejects configurations exceeding it.
+      '';
+    };
     agents = lib.mkOption {
       type = lib.types.attrsOf agentType;
       default = { };
@@ -538,6 +683,22 @@ in
           || (cfg.imageReference != "" && lib.match "^[A-Za-z0-9._/:+-]+$" cfg.imageReference != null);
         message = "tentaflake worker imageReference must be one exact shell-safe local image reference.";
       }
+      {
+        assertion = cfg.maxEnabledAgents == null || enabledAgentCount <= cfg.maxEnabledAgents;
+        message = "tentaflake worker enabled-agent count exceeds maxEnabledAgents.";
+      }
+      {
+        assertion = cfg.maxTotalStateVolumeMiB == null || totalStateVolumeMiB <= cfg.maxTotalStateVolumeMiB;
+        message = "tentaflake worker state-image total exceeds maxTotalStateVolumeMiB.";
+      }
+      {
+        assertion = cfg.maxTotalMemoryBytes == null || totalWorkerMemoryBytes <= cfg.maxTotalMemoryBytes;
+        message = "tentaflake worker memory-limit total exceeds maxTotalMemoryBytes.";
+      }
+      {
+        assertion = cfg.maxTotalPids == null || totalWorkerPids <= cfg.maxTotalPids;
+        message = "tentaflake worker PID-limit total exceeds maxTotalPids.";
+      }
     ]
     ++ lib.concatLists (
       lib.mapAttrsToList (
@@ -555,8 +716,27 @@ in
             message = "tentaflake worker names must be lowercase safe OCI identifiers up to 48 characters.";
           }
           {
-            assertion = safePath agent.workspace && !(lib.elem ".." (lib.splitString "/" agent.workspace));
-            message = "tentaflake worker ${name} requires an explicit simple workspace below /var/lib.";
+            assertion = safeWorkspacePath agent.workspace;
+            message = "tentaflake worker ${name} requires a canonical workspace below /var/lib and outside sensitive worker, runtime, or backing-volume roots.";
+          }
+          {
+            assertion = validSize maxMemoryBytes agent.memory && validSize maxMemoryBytes agent.memorySwap;
+            message = "tentaflake worker ${name} memory and memorySwap must be positive OCI byte sizes no larger than 1 TiB.";
+          }
+          {
+            assertion =
+              !(validSize maxMemoryBytes agent.memory && validSize maxMemoryBytes agent.memorySwap)
+              || sizeBytes agent.memorySwap >= sizeBytes agent.memory;
+            message = "tentaflake worker ${name} memorySwap must be greater than or equal to memory.";
+          }
+          {
+            assertion = validCpus agent.cpus;
+            message = "tentaflake worker ${name} cpus must be a positive decimal value no greater than 1024.";
+          }
+          {
+            assertion =
+              validSize maxTmpfsBytes agent.workspaceTmpfsSize && validSize maxTmpfsBytes agent.tmpTmpfsSize;
+            message = "tentaflake worker ${name} tmpfs sizes must be positive OCI byte sizes no larger than 64 GiB.";
           }
           {
             assertion = agent.maxSnapshotBytes <= 16 * 1024 * 1024 * 1024;
@@ -618,11 +798,12 @@ in
         lib.optionals (enabledAgents != { }) [ "d ${stateVolumeRoot} 0700 root root -" ]
         ++ lib.concatLists (
           lib.mapAttrsToList (
-            _: agent:
+            name: agent:
             let
               group = workerGroup agent;
             in
             [
+              "d ${stateDir name} 0750 root root -"
               "d ${agent.workspace}/.tentaflake-worker 0700 ${toString agent.containerUid} ${group} -"
               "d ${agent.workspace}/.tentaflake-worker/inbox 0770 ${toString agent.containerUid} ${group} -"
             ]

@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::env;
 use std::ffi::OsString;
 use std::fs;
@@ -6,10 +7,14 @@ use std::net::{SocketAddr, TcpStream};
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode, Output};
-use std::time::SystemTime;
+use std::time::{Duration, Instant, SystemTime};
 
 const DEFAULT_CONFIG: &str = "/etc/tentaflake/cli.conf";
 const DEFAULT_AGENTS: &str = "/etc/tentaflake/agents.tsv";
+const MAX_CONTROLLER_MEMORY_BYTES: u64 = 1024 * 1024 * 1024 * 1024;
+const MAX_CONTROLLER_NANO_CPUS: u64 = 1024 * 1_000_000_000;
+const LIVE_INSPECTION_TIMEOUT: Duration = Duration::from_secs(5);
+const MAX_PARALLEL_BROKER_HEALTH_PROBES: usize = 16;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct Config {
@@ -34,6 +39,23 @@ struct Agent {
 struct OutputMode {
     hide: bool,
     json: bool,
+}
+
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+struct DeclaredMount {
+    source: String,
+    destination: String,
+    writable: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct DeclaredLiveResources {
+    memory_bytes: u64,
+    memory_swap_bytes: u64,
+    nano_cpus: u64,
+    pids_limit: u64,
+    nofile: u64,
+    nproc: u64,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -63,6 +85,10 @@ struct SecurityAgent {
     fetch_broker_enabled: bool,
     fetch_broker_endpoint: Option<SocketAddr>,
     broker_network: Option<String>,
+    declared_mounts: Option<Vec<DeclaredMount>>,
+    declared_tmpfs: Option<BTreeMap<String, u64>>,
+    declared_ports_absent: Option<bool>,
+    declared_live_resources: Option<DeclaredLiveResources>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -382,37 +408,55 @@ fn parse_security_state(text: &str) -> Result<SecurityState, String> {
                     agents: Vec::new(),
                 });
             }
-            Some("agent") if fields.len() == 25 || fields.len() == 26 => {
-                agents.push(SecurityAgent {
-                    name: fields[1].into(),
-                    profile: fields[2].into(),
-                    network_isolated: parse_bool(fields[3], index + 1)?,
-                    ports_private: parse_bool(fields[4], index + 1)?,
-                    unprivileged: parse_bool(fields[5], index + 1)?,
-                    non_root: parse_bool(fields[6], index + 1)?,
-                    capabilities_empty: parse_bool(fields[7], index + 1)?,
-                    no_new_privileges: parse_bool(fields[8], index + 1)?,
-                    read_only_root: parse_bool(fields[9], index + 1)?,
-                    mounts_safe: parse_bool(fields[10], index + 1)?,
-                    runsc: parse_bool(fields[11], index + 1)?,
-                    resources_limited: parse_bool(fields[12], index + 1)?,
-                    image_pinned: parse_bool(fields[13], index + 1)?,
-                    env_files_absent: parse_bool(fields[14], index + 1)?,
-                    disposable_worker: parse_bool(fields[15], index + 1)?,
-                    workspace_quota: parse_bool(fields[16], index + 1)?,
-                    seccomp_confined: parse_bool(fields[17], index + 1)?,
-                    apparmor_confined: parse_bool(fields[18], index + 1)?,
-                    provenance_gate_configured: parse_bool(fields[19], index + 1)?,
-                    brokered_egress: parse_bool(fields[20], index + 1)?,
-                    llm_broker_enabled: parse_bool(fields[21], index + 1)?,
-                    llm_broker_endpoint: parse_optional_socket(fields[22], index + 1)?,
-                    fetch_broker_enabled: parse_bool(fields[23], index + 1)?,
-                    fetch_broker_endpoint: parse_optional_socket(fields[24], index + 1)?,
-                    broker_network: fields
-                        .get(25)
-                        .map_or(Ok(None), |value| parse_optional_network(value, index + 1))?,
-                })
-            }
+            Some("agent") if (25..=30).contains(&fields.len()) => agents.push(SecurityAgent {
+                name: fields[1].into(),
+                profile: fields[2].into(),
+                network_isolated: parse_bool(fields[3], index + 1)?,
+                ports_private: parse_bool(fields[4], index + 1)?,
+                unprivileged: parse_bool(fields[5], index + 1)?,
+                non_root: parse_bool(fields[6], index + 1)?,
+                capabilities_empty: parse_bool(fields[7], index + 1)?,
+                no_new_privileges: parse_bool(fields[8], index + 1)?,
+                read_only_root: parse_bool(fields[9], index + 1)?,
+                mounts_safe: parse_bool(fields[10], index + 1)?,
+                runsc: parse_bool(fields[11], index + 1)?,
+                resources_limited: parse_bool(fields[12], index + 1)?,
+                image_pinned: parse_bool(fields[13], index + 1)?,
+                env_files_absent: parse_bool(fields[14], index + 1)?,
+                disposable_worker: parse_bool(fields[15], index + 1)?,
+                workspace_quota: parse_bool(fields[16], index + 1)?,
+                seccomp_confined: parse_bool(fields[17], index + 1)?,
+                apparmor_confined: parse_bool(fields[18], index + 1)?,
+                provenance_gate_configured: parse_bool(fields[19], index + 1)?,
+                brokered_egress: parse_bool(fields[20], index + 1)?,
+                llm_broker_enabled: parse_bool(fields[21], index + 1)?,
+                llm_broker_endpoint: parse_optional_socket(fields[22], index + 1)?,
+                fetch_broker_enabled: parse_bool(fields[23], index + 1)?,
+                fetch_broker_endpoint: parse_optional_socket(fields[24], index + 1)?,
+                broker_network: fields
+                    .get(25)
+                    .map_or(Ok(None), |value| parse_optional_network(value, index + 1))?,
+                declared_mounts: fields
+                    .get(26)
+                    .map(|value| parse_declared_mounts(value, index + 1))
+                    .transpose()?
+                    .flatten(),
+                declared_tmpfs: fields
+                    .get(27)
+                    .map(|value| parse_declared_tmpfs(value, index + 1))
+                    .transpose()?
+                    .flatten(),
+                declared_ports_absent: fields
+                    .get(28)
+                    .map(|value| parse_optional_bool(value, index + 1))
+                    .transpose()?
+                    .flatten(),
+                declared_live_resources: fields
+                    .get(29)
+                    .map(|value| parse_declared_live_resources(value, index + 1))
+                    .transpose()?
+                    .flatten(),
+            }),
             _ => {
                 return Err(format!(
                     "invalid security manifest record on line {}",
@@ -433,6 +477,14 @@ fn parse_bool(value: &str, line: usize) -> Result<bool, String> {
         _ => Err(format!(
             "invalid boolean `{value}` on security manifest line {line}"
         )),
+    }
+}
+
+fn parse_optional_bool(value: &str, line: usize) -> Result<Option<bool>, String> {
+    if value == "-" {
+        Ok(None)
+    } else {
+        parse_bool(value, line).map(Some)
     }
 }
 
@@ -463,6 +515,134 @@ fn parse_optional_network(value: &str, line: usize) -> Result<Option<String>, St
             "invalid broker network `{value}` on security manifest line {line}"
         ))
     }
+}
+
+fn parse_declared_mounts(value: &str, line: usize) -> Result<Option<Vec<DeclaredMount>>, String> {
+    if value == "-" {
+        return Ok(None);
+    }
+    let volumes: Vec<String> = serde_json::from_str(value)
+        .map_err(|_| format!("invalid declared-mount JSON on security manifest line {line}"))?;
+    let mut mounts = Vec::with_capacity(volumes.len());
+    for volume in volumes {
+        let fields = volume.split(':').collect::<Vec<_>>();
+        if !(2..=3).contains(&fields.len())
+            || !fields[0].starts_with('/')
+            || !fields[1].starts_with('/')
+        {
+            return Err(format!(
+                "invalid declared mount `{volume}` on security manifest line {line}"
+            ));
+        }
+        let writable = match fields.get(2).copied() {
+            None | Some("rw") => true,
+            Some("ro") => false,
+            Some(_) => {
+                return Err(format!(
+                    "unsupported declared mount mode in `{volume}` on security manifest line {line}"
+                ));
+            }
+        };
+        mounts.push(DeclaredMount {
+            source: fields[0].to_owned(),
+            destination: fields[1].to_owned(),
+            writable,
+        });
+    }
+    mounts.sort();
+    if mounts.windows(2).any(|pair| pair[0] == pair[1]) {
+        return Err(format!(
+            "duplicate declared mount on security manifest line {line}"
+        ));
+    }
+    Ok(Some(mounts))
+}
+
+fn parse_declared_tmpfs(value: &str, line: usize) -> Result<Option<BTreeMap<String, u64>>, String> {
+    if value == "-" {
+        return Ok(None);
+    }
+    let tmpfs: BTreeMap<String, u64> = serde_json::from_str(value)
+        .map_err(|_| format!("invalid declared-tmpfs JSON on security manifest line {line}"))?;
+    let expected_destinations = ["/run", "/tmp", "/var/tmp"];
+    if tmpfs.len() != expected_destinations.len()
+        || expected_destinations
+            .iter()
+            .any(|destination| !tmpfs.contains_key(*destination))
+        || tmpfs.values().any(|size| *size == 0)
+    {
+        return Err(format!(
+            "declared tmpfs set must contain positive sizes for /run, /tmp, and /var/tmp on security manifest line {line}"
+        ));
+    }
+    Ok(Some(tmpfs))
+}
+
+fn parse_declared_live_resources(
+    value: &str,
+    line: usize,
+) -> Result<Option<DeclaredLiveResources>, String> {
+    if value == "-" {
+        return Ok(None);
+    }
+    let parsed: serde_json::Value = serde_json::from_str(value).map_err(|_| {
+        format!("invalid declared-live-resource JSON on security manifest line {line}")
+    })?;
+    let Some(fields) = parsed.as_object() else {
+        return Err(format!(
+            "declared live resources must be a JSON object on security manifest line {line}"
+        ));
+    };
+    let expected_fields = [
+        "memoryBytes",
+        "memorySwapBytes",
+        "nanoCpus",
+        "pidsLimit",
+        "nofile",
+        "nproc",
+    ];
+    if fields.len() != expected_fields.len()
+        || expected_fields
+            .iter()
+            .any(|field| !fields.contains_key(*field))
+    {
+        return Err(format!(
+            "declared live resources have an invalid field set on security manifest line {line}"
+        ));
+    }
+    let positive = |field: &str| {
+        fields
+            .get(field)
+            .and_then(serde_json::Value::as_u64)
+            .filter(|value| *value > 0)
+            .ok_or_else(|| {
+                format!(
+                    "declared live resource `{field}` must be a positive integer on security manifest line {line}"
+                )
+            })
+    };
+    let resources = DeclaredLiveResources {
+        memory_bytes: positive("memoryBytes")?,
+        memory_swap_bytes: positive("memorySwapBytes")?,
+        nano_cpus: positive("nanoCpus")?,
+        pids_limit: positive("pidsLimit")?,
+        nofile: positive("nofile")?,
+        nproc: positive("nproc")?,
+    };
+    if resources.memory_bytes > MAX_CONTROLLER_MEMORY_BYTES
+        || resources.memory_swap_bytes > MAX_CONTROLLER_MEMORY_BYTES
+        || resources.memory_swap_bytes < resources.memory_bytes
+        || resources.nano_cpus > MAX_CONTROLLER_NANO_CPUS
+        || !resources.nano_cpus.is_multiple_of(10_000)
+        || resources.nproc != resources.pids_limit
+        || resources.pids_limit > i64::MAX as u64
+        || resources.nofile > i64::MAX as u64
+    {
+        return Err(format!(
+            "declared live resources violate controller bounds on security manifest line {line}"
+        ));
+    }
+    Ok(Some(resources))
 }
 
 fn security_findings(state: &SecurityState) -> Vec<Finding> {
@@ -791,12 +971,20 @@ fn security_live_findings(config: &Config, state: &SecurityState) -> Vec<Finding
         }
     }
 
+    let broker_endpoints = state
+        .agents
+        .iter()
+        .flat_map(|agent| [agent.llm_broker_endpoint, agent.fetch_broker_endpoint])
+        .flatten()
+        .collect::<Vec<_>>();
+    let mut broker_health = probe_broker_health_bounded(&broker_endpoints).into_iter();
+
     for agent in &state.agents {
-        for endpoint in [agent.llm_broker_endpoint, agent.fetch_broker_endpoint]
+        for _endpoint in [agent.llm_broker_endpoint, agent.fetch_broker_endpoint]
             .into_iter()
             .flatten()
         {
-            match probe_broker_health(endpoint) {
+            match broker_health.next().unwrap_or(BrokerHealth::Unavailable) {
                 BrokerHealth::Ready => {}
                 BrokerHealth::Unavailable => findings.push(agent_finding(
                     "TFSEC-035",
@@ -816,22 +1004,52 @@ fn security_live_findings(config: &Config, state: &SecurityState) -> Vec<Finding
         }
 
         let mut command = Command::new("sudo");
-        command.args(inspect_arguments(&config.backend, &agent.container));
-        match command.output() {
+        command.args(inspect_arguments_for_agent(&config.backend, agent));
+        match output_with_timeout(&mut command, LIVE_INSPECTION_TIMEOUT) {
             Ok(result) if result.status.success() => {
                 let expected_network = if agent.brokered_egress {
                     agent.broker_network.as_deref()
                 } else {
                     Some("none")
                 };
-                let state = expected_network.map_or(LiveContainerState::Unknown, |network| {
-                    serde_json::from_slice::<serde_json::Value>(&result.stdout)
-                        .ok()
-                        .map_or(LiveContainerState::Unknown, |value| {
-                            live_container_security(&value, &config.backend, network)
-                        })
-                });
-                match state {
+                let container_value =
+                    serde_json::from_slice::<serde_json::Value>(&result.stdout).ok();
+                let mut live_state = live_container_security_from_manifest(
+                    agent,
+                    container_value.as_ref(),
+                    &config.backend,
+                    expected_network,
+                );
+                if live_state != LiveContainerState::Unsafe && agent.brokered_egress {
+                    let network_state = match agent.broker_network.as_deref() {
+                        Some(network) => {
+                            let mut network_command = Command::new("sudo");
+                            network_command.args(network_inspect_arguments(&config.backend, network));
+                            match output_with_timeout(
+                                &mut network_command,
+                                LIVE_INSPECTION_TIMEOUT,
+                            ) {
+                                Ok(network_result) if network_result.status.success() => {
+                                    serde_json::from_slice::<serde_json::Value>(
+                                        &network_result.stdout,
+                                    )
+                                    .ok()
+                                    .map_or(LiveContainerState::Unknown, |network_value| {
+                                        live_broker_network_security(
+                                            &network_value,
+                                            &config.backend,
+                                            network,
+                                        )
+                                    })
+                                }
+                                _ => LiveContainerState::Unknown,
+                            }
+                        }
+                        None => LiveContainerState::Unknown,
+                    };
+                    live_state = merge_live_state(live_state, network_state);
+                }
+                match live_state {
                     LiveContainerState::Secure => {}
                     LiveContainerState::Unsafe => findings.push(agent_finding(
                         "TFSEC-034",
@@ -862,8 +1080,16 @@ fn security_live_findings(config: &Config, state: &SecurityState) -> Vec<Finding
     findings
 }
 
+fn inspect_arguments_for_agent<'a>(backend: &'a str, agent: &'a SecurityAgent) -> [&'a str; 4] {
+    inspect_arguments(backend, &agent.name)
+}
+
 fn inspect_arguments<'a>(backend: &'a str, container: &'a str) -> [&'a str; 4] {
     ["-n", backend, "inspect", container]
+}
+
+fn network_inspect_arguments<'a>(backend: &'a str, network: &'a str) -> [&'a str; 5] {
+    ["-n", backend, "network", "inspect", network]
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -904,6 +1130,24 @@ fn probe_broker_health(endpoint: SocketAddr) -> BrokerHealth {
     }
 }
 
+fn probe_broker_health_bounded(endpoints: &[SocketAddr]) -> Vec<BrokerHealth> {
+    endpoints
+        .chunks(MAX_PARALLEL_BROKER_HEALTH_PROBES)
+        .flat_map(|batch| {
+            std::thread::scope(|scope| {
+                let handles = batch
+                    .iter()
+                    .map(|endpoint| scope.spawn(move || probe_broker_health(*endpoint)))
+                    .collect::<Vec<_>>();
+                handles
+                    .into_iter()
+                    .map(|handle| handle.join().unwrap_or(BrokerHealth::Unavailable))
+                    .collect::<Vec<_>>()
+            })
+        })
+        .collect()
+}
+
 fn parse_disk_percent(text: &str) -> Option<u8> {
     text.lines()
         .nth(1)
@@ -942,176 +1186,720 @@ enum LiveContainerState {
     Unknown,
 }
 
+fn live_container_security_from_manifest(
+    agent: &SecurityAgent,
+    value: Option<&serde_json::Value>,
+    backend: &str,
+    expected_network: Option<&str>,
+) -> LiveContainerState {
+    match (
+        agent.declared_ports_absent,
+        agent.declared_mounts.as_deref(),
+        agent.declared_tmpfs.as_ref(),
+        agent.declared_live_resources.as_ref(),
+        value,
+        expected_network,
+    ) {
+        (Some(false), _, _, _, _, _) => LiveContainerState::Unsafe,
+        (Some(true), Some(mounts), Some(tmpfs), Some(resources), Some(value), Some(network)) => {
+            live_container_security(value, backend, network, mounts, tmpfs, resources)
+        }
+        _ => LiveContainerState::Unknown,
+    }
+}
+
 fn live_container_security(
     value: &serde_json::Value,
     backend: &str,
     expected_network: &str,
+    declared_mounts: &[DeclaredMount],
+    declared_tmpfs: &BTreeMap<String, u64>,
+    declared_live_resources: &DeclaredLiveResources,
 ) -> LiveContainerState {
-    let Some(container) = value
-        .as_array()
-        .and_then(|values| values.first())
+    let Some(containers) = value.as_array() else {
+        return LiveContainerState::Unknown;
+    };
+    if containers.len() != 1 {
+        return LiveContainerState::Unknown;
+    }
+    let Some(container) = containers.first().and_then(serde_json::Value::as_object) else {
+        return LiveContainerState::Unknown;
+    };
+    let Some(true) = container
+        .get("State")
         .and_then(serde_json::Value::as_object)
-    else {
-        return LiveContainerState::Unknown;
-    };
-    let Some(host) = container
-        .get("HostConfig")
-        .and_then(serde_json::Value::as_object)
-    else {
-        return LiveContainerState::Unknown;
-    };
-    let Some(runtime_config) = container
-        .get("Config")
-        .and_then(serde_json::Value::as_object)
-    else {
-        return LiveContainerState::Unknown;
-    };
-
-    let Some(privileged) = host.get("Privileged").and_then(serde_json::Value::as_bool) else {
-        return LiveContainerState::Unknown;
-    };
-    let Some(read_only) = host
-        .get("ReadonlyRootfs")
+        .and_then(|state| state.get("Running"))
         .and_then(serde_json::Value::as_bool)
     else {
         return LiveContainerState::Unknown;
     };
-    let Some(network) = host.get("NetworkMode").and_then(serde_json::Value::as_str) else {
+    live_observed_security_drift(
+        container,
+        backend,
+        expected_network,
+        declared_mounts,
+        declared_tmpfs,
+        declared_live_resources,
+    )
+}
+
+fn live_expected_bool_security(
+    value: Option<&serde_json::Value>,
+    expected: bool,
+) -> LiveContainerState {
+    match value.and_then(serde_json::Value::as_bool) {
+        Some(value) if value == expected => LiveContainerState::Secure,
+        Some(_) => LiveContainerState::Unsafe,
+        None => LiveContainerState::Unknown,
+    }
+}
+
+fn live_network_attachment_security(
+    network_settings: Option<&serde_json::Map<String, serde_json::Value>>,
+    backend: &str,
+    expected_network: &str,
+) -> LiveContainerState {
+    let Some(network_settings) = network_settings else {
         return LiveContainerState::Unknown;
     };
-    let Some(user) = runtime_config
-        .get("User")
+    match network_settings.get("Networks") {
+        Some(serde_json::Value::Object(networks)) if expected_network == "none" => {
+            if networks.is_empty() || (networks.len() == 1 && networks.contains_key("none")) {
+                LiveContainerState::Secure
+            } else {
+                LiveContainerState::Unsafe
+            }
+        }
+        Some(serde_json::Value::Object(networks)) => {
+            if networks.len() == 1 && networks.contains_key(expected_network) {
+                LiveContainerState::Secure
+            } else {
+                LiveContainerState::Unsafe
+            }
+        }
+        None | Some(serde_json::Value::Null)
+            if backend == "podman" && expected_network == "none" =>
+        {
+            LiveContainerState::Secure
+        }
+        _ => LiveContainerState::Unknown,
+    }
+}
+
+fn live_security_options_security(
+    host: Option<&serde_json::Map<String, serde_json::Value>>,
+) -> LiveContainerState {
+    let Some(host) = host else {
+        return LiveContainerState::Unknown;
+    };
+    let explicit_no_new_privileges = match host.get("NoNewPrivileges") {
+        Some(serde_json::Value::Bool(value)) => Some(*value),
+        _ => None,
+    };
+    let options = match host.get("SecurityOpt") {
+        Some(serde_json::Value::Array(options)) => options.as_slice(),
+        Some(serde_json::Value::Null) => &[],
+        _ => {
+            return match explicit_no_new_privileges {
+                Some(false) => LiveContainerState::Unsafe,
+                _ => LiveContainerState::Unknown,
+            };
+        }
+    };
+
+    let mut state = match host.get("NoNewPrivileges") {
+        Some(serde_json::Value::Bool(false)) => LiveContainerState::Unsafe,
+        Some(serde_json::Value::Bool(true)) | None => LiveContainerState::Secure,
+        Some(_) => LiveContainerState::Unknown,
+    };
+    let mut no_new_privileges = explicit_no_new_privileges == Some(true);
+    for option in options {
+        let Some(option) = option.as_str() else {
+            state = merge_live_state(state, LiveContainerState::Unknown);
+            continue;
+        };
+        match option {
+            "no-new-privileges" | "no-new-privileges=true" | "no-new-privileges:true" => {
+                no_new_privileges = true
+            }
+            "no-new-privileges=false"
+            | "no-new-privileges:false"
+            | "seccomp=unconfined"
+            | "seccomp:unconfined"
+            | "apparmor=unconfined"
+            | "apparmor:unconfined" => {
+                state = merge_live_state(state, LiveContainerState::Unsafe);
+            }
+            _ => {}
+        }
+    }
+    if !no_new_privileges {
+        state = merge_live_state(state, LiveContainerState::Unsafe);
+    }
+    state
+}
+
+fn live_mounts_security(
+    value: Option<&serde_json::Value>,
+    declared_mounts: &[DeclaredMount],
+) -> LiveContainerState {
+    let Some(mounts) = value.and_then(serde_json::Value::as_array) else {
+        return LiveContainerState::Unknown;
+    };
+    let mut state = LiveContainerState::Secure;
+    let mut complete = true;
+    let mut observed_mounts = Vec::new();
+    for mount in mounts {
+        let Some(mount) = mount.as_object() else {
+            complete = false;
+            state = merge_live_state(state, LiveContainerState::Unknown);
+            continue;
+        };
+        if mount.get("Type").and_then(serde_json::Value::as_str) == Some("tmpfs") {
+            continue;
+        }
+        let source = mount.get("Source").and_then(serde_json::Value::as_str);
+        if source.is_some_and(live_mount_source_is_sensitive) {
+            state = merge_live_state(state, LiveContainerState::Unsafe);
+        }
+        let destination = mount.get("Destination").and_then(serde_json::Value::as_str);
+        let writable = mount.get("RW").and_then(serde_json::Value::as_bool);
+        match (source, destination, writable) {
+            (Some(source), Some(destination), Some(writable)) => {
+                observed_mounts.push(DeclaredMount {
+                    source: source.to_owned(),
+                    destination: destination.to_owned(),
+                    writable,
+                });
+            }
+            _ => {
+                complete = false;
+                state = merge_live_state(state, LiveContainerState::Unknown);
+            }
+        }
+    }
+    observed_mounts.sort();
+    let mut expected_mounts = declared_mounts.to_vec();
+    expected_mounts.sort();
+    let set_state = if complete {
+        if observed_mounts == expected_mounts {
+            LiveContainerState::Secure
+        } else {
+            LiveContainerState::Unsafe
+        }
+    } else if observed_mounts
+        .iter()
+        .any(|mount| !expected_mounts.contains(mount))
+    {
+        LiveContainerState::Unsafe
+    } else {
+        LiveContainerState::Unknown
+    };
+    merge_live_state(state, set_state)
+}
+
+fn live_capabilities_security(
+    container: &serde_json::Map<String, serde_json::Value>,
+    host: Option<&serde_json::Map<String, serde_json::Value>>,
+    backend: &str,
+) -> LiveContainerState {
+    if backend == "podman" {
+        return ["EffectiveCaps", "BoundingCaps"]
+            .into_iter()
+            .map(
+                |field| match container.get(field).and_then(serde_json::Value::as_array) {
+                    Some(values) if values.is_empty() => LiveContainerState::Secure,
+                    Some(_) => LiveContainerState::Unsafe,
+                    None => LiveContainerState::Unknown,
+                },
+            )
+            .fold(LiveContainerState::Secure, merge_live_state);
+    }
+    let Some(host) = host else {
+        return LiveContainerState::Unknown;
+    };
+    let cap_add = match host.get("CapAdd") {
+        Some(serde_json::Value::Null) => LiveContainerState::Secure,
+        Some(serde_json::Value::Array(values)) if values.is_empty() => LiveContainerState::Secure,
+        Some(serde_json::Value::Array(_)) => LiveContainerState::Unsafe,
+        _ => LiveContainerState::Unknown,
+    };
+    let cap_drop = match host.get("CapDrop").and_then(serde_json::Value::as_array) {
+        Some(values) => {
+            let mut state = LiveContainerState::Secure;
+            let mut has_all = false;
+            for value in values {
+                match value.as_str() {
+                    Some(value) => has_all |= value.eq_ignore_ascii_case("all"),
+                    None => state = merge_live_state(state, LiveContainerState::Unknown),
+                }
+            }
+            if !has_all {
+                state = merge_live_state(state, LiveContainerState::Unsafe);
+            }
+            state
+        }
+        None => LiveContainerState::Unknown,
+    };
+    merge_live_state(cap_add, cap_drop)
+}
+
+fn live_apparmor_security(
+    container: &serde_json::Map<String, serde_json::Value>,
+    backend: &str,
+) -> LiveContainerState {
+    match (
+        backend,
+        container
+            .get("AppArmorProfile")
+            .and_then(serde_json::Value::as_str),
+    ) {
+        ("docker", Some("docker-default")) => LiveContainerState::Secure,
+        ("docker", Some(_)) => LiveContainerState::Unsafe,
+        ("podman", Some(profile)) if !profile.is_empty() && profile != "unconfined" => {
+            LiveContainerState::Secure
+        }
+        ("podman", Some(_)) => LiveContainerState::Unsafe,
+        _ => LiveContainerState::Unknown,
+    }
+}
+
+fn live_observed_security_drift(
+    container: &serde_json::Map<String, serde_json::Value>,
+    backend: &str,
+    expected_network: &str,
+    declared_mounts: &[DeclaredMount],
+    declared_tmpfs: &BTreeMap<String, u64>,
+    declared_live_resources: &DeclaredLiveResources,
+) -> LiveContainerState {
+    let network_settings = container
+        .get("NetworkSettings")
+        .and_then(serde_json::Value::as_object);
+    let host = container
+        .get("HostConfig")
+        .and_then(serde_json::Value::as_object);
+    let mut state = live_network_attachment_security(network_settings, backend, expected_network);
+    state = merge_live_state(state, live_port_bindings_security(host, network_settings));
+
+    if let Some(host) = host {
+        let tmpfs = match host.get("Tmpfs") {
+            Some(serde_json::Value::Object(tmpfs)) => {
+                live_tmpfs_set_security(tmpfs, declared_tmpfs, backend)
+            }
+            None | Some(serde_json::Value::Null) => LiveContainerState::Unsafe,
+            Some(_) => LiveContainerState::Unknown,
+        };
+        state = merge_live_state(state, tmpfs);
+        state = merge_live_state(
+            state,
+            live_resource_limits_security(host, backend, declared_live_resources),
+        );
+    } else {
+        state = merge_live_state(state, LiveContainerState::Unknown);
+    }
+
+    state = merge_live_state(
+        state,
+        live_expected_bool_security(host.and_then(|host| host.get("Privileged")), false),
+    );
+    state = merge_live_state(
+        state,
+        live_expected_bool_security(host.and_then(|host| host.get("ReadonlyRootfs")), true),
+    );
+    let network_mode = match host
+        .and_then(|host| host.get("NetworkMode"))
         .and_then(serde_json::Value::as_str)
-    else {
-        return LiveContainerState::Unknown;
+    {
+        Some("none") if expected_network == "none" => LiveContainerState::Secure,
+        Some("bridge") if expected_network != "none" && backend == "podman" => {
+            LiveContainerState::Secure
+        }
+        Some(network) if expected_network != "none" && network == expected_network => {
+            LiveContainerState::Secure
+        }
+        Some(_) => LiveContainerState::Unsafe,
+        None => LiveContainerState::Unknown,
     };
+    state = merge_live_state(state, network_mode);
+
+    let user = match container
+        .get("Config")
+        .and_then(serde_json::Value::as_object)
+        .and_then(|config| config.get("User"))
+        .and_then(serde_json::Value::as_str)
+    {
+        Some(user) if live_user_is_non_root(user) => LiveContainerState::Secure,
+        Some(_) => LiveContainerState::Unsafe,
+        None => LiveContainerState::Unknown,
+    };
+    state = merge_live_state(state, user);
+
     let runtime = if backend == "podman" {
         container
             .get("OCIRuntime")
             .and_then(serde_json::Value::as_str)
     } else {
-        host.get("Runtime").and_then(serde_json::Value::as_str)
-    };
-    let Some(runtime) = runtime else {
-        return LiveContainerState::Unknown;
-    };
-    let Some(security_options) = host
-        .get("SecurityOpt")
-        .and_then(serde_json::Value::as_array)
-    else {
-        return LiveContainerState::Unknown;
-    };
-    let has_no_new_privileges = security_options.iter().any(|value| {
-        value
-            .as_str()
-            .is_some_and(|value| value.contains("no-new-privileges"))
-    }) || host
-        .get("NoNewPrivileges")
-        .and_then(serde_json::Value::as_bool)
-        .unwrap_or(false);
-    let has_unconfined = security_options.iter().any(|value| {
-        value.as_str().is_some_and(|value| {
-            value.contains("seccomp=unconfined") || value.contains("apparmor=unconfined")
-        })
-    });
-    let memory_limited = host
-        .get("Memory")
-        .and_then(serde_json::Value::as_u64)
-        .is_some_and(|value| value > 0);
-    let swap_limited = host
-        .get("MemorySwap")
-        .and_then(serde_json::Value::as_i64)
-        .is_some_and(|value| value > 0);
-    let pids_limited = host
-        .get("PidsLimit")
-        .and_then(serde_json::Value::as_i64)
-        .is_some_and(|value| value > 0);
-    let cpu_limited = host
-        .get("NanoCpus")
-        .and_then(serde_json::Value::as_i64)
-        .is_some_and(|value| value > 0)
-        || host
-            .get("CpuQuota")
-            .and_then(serde_json::Value::as_i64)
-            .is_some_and(|value| value > 0);
-    let Some(mounts) = container
-        .get("Mounts")
-        .and_then(serde_json::Value::as_array)
-    else {
-        return LiveContainerState::Unknown;
-    };
-    let mounts_known = mounts.iter().all(|mount| {
-        mount
-            .get("Source")
+        host.and_then(|host| host.get("Runtime"))
             .and_then(serde_json::Value::as_str)
-            .is_some()
-    });
-    if !mounts_known {
-        return LiveContainerState::Unknown;
-    }
-    let mounts_safe = mounts.iter().all(|mount| {
-        mount
-            .get("Source")
-            .and_then(serde_json::Value::as_str)
-            .is_some_and(|source| !live_mount_source_is_sensitive(source))
-    });
-    let runtime_is_runsc = runtime == "runsc" || runtime.ends_with("/runsc");
-    let apparmor = container
-        .get("AppArmorProfile")
-        .and_then(serde_json::Value::as_str);
+    };
+    state = merge_live_state(
+        state,
+        match runtime {
+            Some(runtime) if runtime == "runsc" || runtime.ends_with("/runsc") => {
+                LiveContainerState::Secure
+            }
+            Some(_) => LiveContainerState::Unsafe,
+            None => LiveContainerState::Unknown,
+        },
+    );
+    state = merge_live_state(state, live_security_options_security(host));
+    state = merge_live_state(
+        state,
+        live_mounts_security(container.get("Mounts"), declared_mounts),
+    );
+    state = merge_live_state(state, live_capabilities_security(container, host, backend));
+    state = merge_live_state(state, live_apparmor_security(container, backend));
+    state
+}
 
-    let capabilities_secure = if backend == "podman" {
-        let effective = container
-            .get("EffectiveCaps")
-            .and_then(serde_json::Value::as_array);
-        let bounding = container
-            .get("BoundingCaps")
-            .and_then(serde_json::Value::as_array);
-        match (effective, bounding) {
-            (Some(effective), Some(bounding)) => effective.is_empty() && bounding.is_empty(),
-            _ => return LiveContainerState::Unknown,
+fn merge_live_state(
+    current: LiveContainerState,
+    observed: LiveContainerState,
+) -> LiveContainerState {
+    match (current, observed) {
+        (LiveContainerState::Unsafe, _) | (_, LiveContainerState::Unsafe) => {
+            LiveContainerState::Unsafe
         }
-    } else {
-        let cap_add_empty = host
-            .get("CapAdd")
-            .is_some_and(|value| value.is_null() || value.as_array().is_some_and(Vec::is_empty));
-        let cap_drop_all = host
-            .get("CapDrop")
-            .and_then(serde_json::Value::as_array)
-            .is_some_and(|values| {
-                values.iter().any(|value| {
-                    value
-                        .as_str()
-                        .is_some_and(|value| value.eq_ignore_ascii_case("all"))
-                })
-            });
-        cap_add_empty && cap_drop_all
-    };
-    let apparmor_secure = match (backend, apparmor) {
-        ("docker", Some("docker-default")) => true,
-        ("podman", Some(profile)) => !profile.is_empty() && profile != "unconfined",
-        _ => return LiveContainerState::Unknown,
-    };
-
-    if privileged
-        || !read_only
-        || network != expected_network
-        || !runtime_is_runsc
-        || !live_user_is_non_root(user)
-        || !capabilities_secure
-        || !has_no_new_privileges
-        || has_unconfined
-        || !memory_limited
-        || !swap_limited
-        || !pids_limited
-        || !cpu_limited
-        || !mounts_safe
-        || !apparmor_secure
-    {
-        LiveContainerState::Unsafe
-    } else {
-        LiveContainerState::Secure
+        (LiveContainerState::Unknown, _) | (_, LiveContainerState::Unknown) => {
+            LiveContainerState::Unknown
+        }
+        (LiveContainerState::Secure, LiveContainerState::Secure) => LiveContainerState::Secure,
     }
+}
+
+fn live_port_bindings_security(
+    host: Option<&serde_json::Map<String, serde_json::Value>>,
+    network_settings: Option<&serde_json::Map<String, serde_json::Value>>,
+) -> LiveContainerState {
+    let publish_all = match host
+        .and_then(|host| host.get("PublishAllPorts"))
+        .and_then(serde_json::Value::as_bool)
+    {
+        Some(false) => LiveContainerState::Secure,
+        Some(true) => LiveContainerState::Unsafe,
+        None => LiveContainerState::Unknown,
+    };
+    [
+        publish_all,
+        live_port_map_security(host.and_then(|host| host.get("PortBindings"))),
+        live_port_map_security(
+            network_settings.and_then(|network_settings| network_settings.get("Ports")),
+        ),
+    ]
+    .into_iter()
+    .fold(LiveContainerState::Secure, merge_live_state)
+}
+
+fn live_port_map_security(value: Option<&serde_json::Value>) -> LiveContainerState {
+    let Some(value) = value else {
+        return LiveContainerState::Unknown;
+    };
+    match value {
+        serde_json::Value::Null => LiveContainerState::Secure,
+        serde_json::Value::Object(bindings) => {
+            bindings
+                .values()
+                .fold(LiveContainerState::Secure, |state, value| {
+                    let observed = match value {
+                        serde_json::Value::Null => LiveContainerState::Secure,
+                        serde_json::Value::Array(values) if values.is_empty() => {
+                            LiveContainerState::Secure
+                        }
+                        serde_json::Value::Array(_) => LiveContainerState::Unsafe,
+                        _ => LiveContainerState::Unknown,
+                    };
+                    merge_live_state(state, observed)
+                })
+        }
+        _ => LiveContainerState::Unknown,
+    }
+}
+
+fn live_u64_field(
+    object: &serde_json::Map<String, serde_json::Value>,
+    field: &str,
+) -> Result<u64, LiveContainerState> {
+    let Some(value) = object.get(field) else {
+        return Err(LiveContainerState::Unknown);
+    };
+    let Some(number) = value.as_number() else {
+        return Err(LiveContainerState::Unknown);
+    };
+    if let Some(value) = number.as_u64() {
+        Ok(value)
+    } else if number.as_i64().is_some() {
+        Err(LiveContainerState::Unsafe)
+    } else {
+        Err(LiveContainerState::Unknown)
+    }
+}
+
+fn live_exact_u64_security(
+    object: &serde_json::Map<String, serde_json::Value>,
+    field: &str,
+    expected: u64,
+) -> LiveContainerState {
+    if object.get(field).is_some_and(serde_json::Value::is_null) {
+        return LiveContainerState::Unsafe;
+    }
+    match live_u64_field(object, field) {
+        Ok(value) if value == expected => LiveContainerState::Secure,
+        Ok(_) => LiveContainerState::Unsafe,
+        Err(state) => state,
+    }
+}
+
+fn live_resource_limits_security(
+    host: &serde_json::Map<String, serde_json::Value>,
+    backend: &str,
+    declared: &DeclaredLiveResources,
+) -> LiveContainerState {
+    let mut state = [
+        ("Memory", declared.memory_bytes),
+        ("MemorySwap", declared.memory_swap_bytes),
+        ("PidsLimit", declared.pids_limit),
+        ("NanoCpus", declared.nano_cpus),
+    ]
+    .into_iter()
+    .map(|(field, expected)| live_exact_u64_security(host, field, expected))
+    .fold(LiveContainerState::Secure, merge_live_state);
+
+    if backend == "podman" {
+        for (field, expected) in [
+            ("CpuPeriod", 100_000),
+            ("CpuQuota", declared.nano_cpus / 10_000),
+        ] {
+            state = merge_live_state(state, live_exact_u64_security(host, field, expected));
+        }
+    }
+    merge_live_state(
+        state,
+        live_ulimits_security(host.get("Ulimits"), backend, declared),
+    )
+}
+
+fn live_ulimits_security(
+    value: Option<&serde_json::Value>,
+    backend: &str,
+    declared: &DeclaredLiveResources,
+) -> LiveContainerState {
+    let ulimits = match value {
+        None => return LiveContainerState::Unknown,
+        Some(serde_json::Value::Null) => return LiveContainerState::Unsafe,
+        Some(serde_json::Value::Array(ulimits)) => ulimits,
+        Some(_) => return LiveContainerState::Unknown,
+    };
+    let (nofile_name, nproc_name) = if backend == "podman" {
+        ("RLIMIT_NOFILE", "RLIMIT_NPROC")
+    } else {
+        ("nofile", "nproc")
+    };
+    let mut state = LiveContainerState::Secure;
+    let mut names_complete = true;
+    let mut nofile_count = 0;
+    let mut nproc_count = 0;
+    for ulimit in ulimits {
+        let Some(ulimit) = ulimit.as_object() else {
+            names_complete = false;
+            state = merge_live_state(state, LiveContainerState::Unknown);
+            continue;
+        };
+        let Some(name) = ulimit.get("Name").and_then(serde_json::Value::as_str) else {
+            names_complete = false;
+            state = merge_live_state(state, LiveContainerState::Unknown);
+            continue;
+        };
+        let expected = if name == nofile_name {
+            nofile_count += 1;
+            Some(declared.nofile)
+        } else if name == nproc_name {
+            nproc_count += 1;
+            Some(declared.nproc)
+        } else {
+            None
+        };
+        if let Some(expected) = expected {
+            for field in ["Soft", "Hard"] {
+                state = merge_live_state(state, live_exact_u64_security(ulimit, field, expected));
+            }
+        } else {
+            for field in ["Soft", "Hard"] {
+                let observed = match live_u64_field(ulimit, field) {
+                    Ok(_) => LiveContainerState::Secure,
+                    Err(state) => state,
+                };
+                state = merge_live_state(state, observed);
+            }
+        }
+    }
+    for count in [nofile_count, nproc_count] {
+        let observed = match count {
+            0 if names_complete => LiveContainerState::Unsafe,
+            0 => LiveContainerState::Unknown,
+            1 => LiveContainerState::Secure,
+            _ => LiveContainerState::Unknown,
+        };
+        state = merge_live_state(state, observed);
+    }
+    state
+}
+
+fn live_tmpfs_set_security(
+    observed: &serde_json::Map<String, serde_json::Value>,
+    declared: &BTreeMap<String, u64>,
+    backend: &str,
+) -> LiveContainerState {
+    if observed.len() != declared.len()
+        || declared
+            .keys()
+            .any(|destination| !observed.contains_key(destination))
+    {
+        return LiveContainerState::Unsafe;
+    }
+    declared
+        .iter()
+        .map(|(destination, expected_size)| {
+            observed
+                .get(destination)
+                .and_then(serde_json::Value::as_str)
+                .map_or(LiveContainerState::Unknown, |options| {
+                    live_tmpfs_options_security(options, *expected_size, backend)
+                })
+        })
+        .fold(LiveContainerState::Secure, merge_live_state)
+}
+
+fn live_tmpfs_options_security(
+    options: &str,
+    expected_size: u64,
+    backend: &str,
+) -> LiveContainerState {
+    let mut state = LiveContainerState::Secure;
+    let mut read_write = false;
+    let mut no_suid = false;
+    let mut no_dev = false;
+    let mut no_exec = false;
+    let mut recursive_private = false;
+    let mut copy_up = false;
+    let mut size_seen = false;
+    for option in options.split(',') {
+        let already_seen = match option {
+            "rw" => std::mem::replace(&mut read_write, true),
+            "nosuid" => std::mem::replace(&mut no_suid, true),
+            "nodev" => std::mem::replace(&mut no_dev, true),
+            "noexec" => std::mem::replace(&mut no_exec, true),
+            "rprivate" => std::mem::replace(&mut recursive_private, true),
+            "tmpcopyup" => std::mem::replace(&mut copy_up, true),
+            "ro" | "suid" | "dev" | "exec" | "private" | "shared" | "rshared" | "slave"
+            | "rslave" | "unbindable" | "runbindable" | "notmpcopyup" => {
+                state = merge_live_state(state, LiveContainerState::Unsafe);
+                false
+            }
+            value if value.starts_with("size=") => {
+                let duplicate = std::mem::replace(&mut size_seen, true);
+                state = merge_live_state(
+                    state,
+                    match parse_live_size(&value[5..]) {
+                        Some(size) if size == expected_size => LiveContainerState::Secure,
+                        Some(_) => LiveContainerState::Unsafe,
+                        None => LiveContainerState::Unknown,
+                    },
+                );
+                duplicate
+            }
+            _ => {
+                state = merge_live_state(state, LiveContainerState::Unknown);
+                false
+            }
+        };
+        if already_seen {
+            state = merge_live_state(state, LiveContainerState::Unknown);
+        }
+    }
+    let required_options = if read_write
+        && no_suid
+        && no_dev
+        && no_exec
+        && size_seen
+        && if backend == "podman" {
+            recursive_private && copy_up
+        } else {
+            !recursive_private && !copy_up
+        } {
+        LiveContainerState::Secure
+    } else {
+        LiveContainerState::Unsafe
+    };
+    merge_live_state(state, required_options)
+}
+
+fn parse_live_size(value: &str) -> Option<u64> {
+    let normalized = value.to_ascii_lowercase();
+    let normalized = normalized.strip_suffix('b').unwrap_or(&normalized);
+    let (digits, factor) = match normalized.as_bytes().last().copied() {
+        Some(b'k') => (&normalized[..normalized.len() - 1], 1024_u64),
+        Some(b'm') => (&normalized[..normalized.len() - 1], 1024_u64.pow(2)),
+        Some(b'g') => (&normalized[..normalized.len() - 1], 1024_u64.pow(3)),
+        Some(b't') => (&normalized[..normalized.len() - 1], 1024_u64.pow(4)),
+        _ => (normalized, 1),
+    };
+    if digits.is_empty() || !digits.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+    digits.parse::<u64>().ok()?.checked_mul(factor)
+}
+
+fn live_broker_network_security(
+    network_value: &serde_json::Value,
+    backend: &str,
+    expected_network: &str,
+) -> LiveContainerState {
+    let Some(networks) = network_value.as_array() else {
+        return LiveContainerState::Unknown;
+    };
+    if networks.len() > 1 {
+        return LiveContainerState::Unsafe;
+    }
+    let Some(network) = networks.first().and_then(serde_json::Value::as_object) else {
+        return LiveContainerState::Unknown;
+    };
+    let (name_key, internal_key, driver_key) = if backend == "podman" {
+        ("name", "internal", "driver")
+    } else {
+        ("Name", "Internal", "Driver")
+    };
+    [
+        match network.get(name_key).and_then(serde_json::Value::as_str) {
+            Some(name) if name == expected_network => LiveContainerState::Secure,
+            Some(_) => LiveContainerState::Unsafe,
+            None => LiveContainerState::Unknown,
+        },
+        match network
+            .get(internal_key)
+            .and_then(serde_json::Value::as_bool)
+        {
+            Some(true) => LiveContainerState::Secure,
+            Some(false) => LiveContainerState::Unsafe,
+            None => LiveContainerState::Unknown,
+        },
+        match network.get(driver_key).and_then(serde_json::Value::as_str) {
+            Some("bridge") => LiveContainerState::Secure,
+            Some(_) => LiveContainerState::Unsafe,
+            None => LiveContainerState::Unknown,
+        },
+    ]
+    .into_iter()
+    .fold(LiveContainerState::Secure, merge_live_state)
 }
 
 fn live_user_is_non_root(user: &str) -> bool {
@@ -1135,6 +1923,8 @@ fn live_mount_source_is_sensitive(source: &str) -> bool {
         "/sys",
         "/var/lib/containers",
         "/var/lib/docker",
+        "/var/lib/tentaflake-worker-state-volumes",
+        "/var/lib/tentaflake-workspace-volumes",
         "/var/run",
     ]
     .iter()
@@ -1588,6 +2378,34 @@ fn output(program: &str, args: &[&str]) -> Result<Output, String> {
         .map_err(|error| format!("cannot execute {program}: {error}"))
 }
 
+fn output_with_timeout(command: &mut Command, timeout: Duration) -> Result<Output, String> {
+    let program = command.get_program().to_string_lossy().into_owned();
+    let mut child = command
+        .spawn()
+        .map_err(|error| format!("cannot execute {program}: {error}"))?;
+    let deadline = Instant::now() + timeout;
+    loop {
+        match child
+            .try_wait()
+            .map_err(|error| format!("cannot wait for {program}: {error}"))?
+        {
+            Some(_) => {
+                return child
+                    .wait_with_output()
+                    .map_err(|error| format!("cannot collect {program} output: {error}"));
+            }
+            None if Instant::now() >= deadline => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(format!(
+                    "{program} exceeded the {timeout:?} inspection timeout"
+                ));
+            }
+            None => std::thread::sleep(Duration::from_millis(10)),
+        }
+    }
+}
+
 fn unit_state(unit: &str) -> String {
     Command::new("systemctl")
         .args(["is-active", unit])
@@ -1906,6 +2724,28 @@ mod tests {
     }
 
     #[test]
+    fn broker_health_probes_preserve_one_result_per_endpoint() {
+        let endpoints = (0..=MAX_PARALLEL_BROKER_HEALTH_PROBES)
+            .map(|_| "127.0.0.1:0".parse::<SocketAddr>().unwrap())
+            .collect::<Vec<_>>();
+        let result = probe_broker_health_bounded(&endpoints);
+        assert_eq!(result.len(), endpoints.len());
+        assert!(
+            result
+                .iter()
+                .all(|health| *health == BrokerHealth::Unavailable)
+        );
+    }
+
+    #[test]
+    fn live_inspection_command_times_out_and_reaps_the_child() {
+        let mut command = Command::new("sh");
+        command.args(["-c", "while :; do :; done"]);
+        let error = output_with_timeout(&mut command, Duration::from_millis(10)).unwrap_err();
+        assert!(error.contains("inspection timeout"), "{error}");
+    }
+
+    #[test]
     fn broker_manifest_modes_must_match_the_network_label() {
         let state = parse_security_state(
             "host\tbalanced\tfalse\ttrue\ttrue\ttrue\ttrue\ttrue\t36\n\
@@ -1919,24 +2759,203 @@ mod tests {
     }
 
     #[test]
-    fn security_inspection_targets_the_generated_container_name() {
+    fn security_inspection_targets_the_manifest_container_name() {
+        let state = parse_security_state(
+            "host\tbalanced\tfalse\tfalse\ttrue\ttrue\ttrue\ttrue\t36\n\\
+             agent\thermes-fixture\tbalanced\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\tfalse\tfalse\t-\tfalse\t-\n",
+        )
+        .unwrap();
+        let agent = &state.agents[0];
+
+        assert_eq!(agent.name, "hermes-fixture");
+        assert!(agent.declared_ports_absent.is_none());
+        assert!(agent.declared_live_resources.is_none());
         assert_eq!(
-            inspect_arguments("docker", "hermes-fixture"),
+            live_container_security_from_manifest(
+                agent,
+                Some(&serde_json::json!([])),
+                "docker",
+                Some("none"),
+            ),
+            LiveContainerState::Unknown
+        );
+        assert_eq!(
+            inspect_arguments_for_agent("docker", agent),
             ["-n", "docker", "inspect", "hermes-fixture"]
         );
-        assert_ne!(
-            inspect_arguments("docker", "hermes-fixture"),
-            ["-n", "docker", "inspect", "fixture"]
+    }
+
+    #[test]
+    fn parses_current_live_evidence_manifest_fields() {
+        let state = parse_security_state(concat!(
+            "host\tbalanced\tfalse\tfalse\ttrue\ttrue\ttrue\ttrue\t36\n",
+            "agent\thermes-fixture\tbalanced\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\tfalse\tfalse\t-\tfalse\t-",
+            "\tnone\t[]\t",
+            r#"{"/run":67108864,"/tmp":268435456,"/var/tmp":268435456}"#,
+            "\ttrue\t",
+            r#"{"memoryBytes":2147483648,"memorySwapBytes":2147483648,"nanoCpus":2000000000,"pidsLimit":512,"nofile":4096,"nproc":512}"#,
+            "\n"
+        ))
+        .unwrap();
+        let agent = &state.agents[0];
+
+        assert_eq!(agent.broker_network.as_deref(), Some("none"));
+        assert_eq!(
+            agent.declared_mounts.as_deref(),
+            Some(&[] as &[DeclaredMount])
+        );
+        assert_eq!(agent.declared_tmpfs, Some(test_declared_tmpfs()));
+        assert_eq!(agent.declared_ports_absent, Some(true));
+        assert_eq!(
+            agent.declared_live_resources,
+            Some(test_declared_live_resources())
+        );
+
+        let mut ports_declared = agent.clone();
+        ports_declared.declared_ports_absent = Some(false);
+        assert_eq!(
+            live_container_security_from_manifest(&ports_declared, None, "docker", Some("none"),),
+            LiveContainerState::Unsafe
+        );
+    }
+
+    #[test]
+    fn dev_manifest_omits_strict_live_desired_fields() {
+        let state = parse_security_state(
+            "host\tdev\ttrue\tfalse\tfalse\tfalse\tfalse\tfalse\t36\n\
+             agent\tdev-fixture\tdev\tfalse\tfalse\tfalse\tfalse\tfalse\tfalse\tfalse\tfalse\tfalse\tfalse\tfalse\tfalse\tfalse\tfalse\tfalse\tfalse\tfalse\tfalse\tfalse\t-\tfalse\t-\t-\t-\t-\t-\t-\n",
+        )
+        .unwrap();
+        let agent = &state.agents[0];
+
+        assert!(agent.broker_network.is_none());
+        assert!(agent.declared_mounts.is_none());
+        assert!(agent.declared_tmpfs.is_none());
+        assert!(agent.declared_ports_absent.is_none());
+        assert!(agent.declared_live_resources.is_none());
+        assert_eq!(
+            live_container_security_from_manifest(
+                agent,
+                Some(&serde_json::json!([])),
+                "docker",
+                Some("none"),
+            ),
+            LiveContainerState::Unknown
+        );
+    }
+
+    #[test]
+    fn declared_mount_manifest_is_closed_and_typed() {
+        assert_eq!(
+            parse_declared_mounts(
+                r#"["/var/lib/hermes-coding:/home/hermes:rw","/nix/store/config:/config:ro"]"#,
+                2,
+            )
+            .unwrap(),
+            Some(vec![
+                DeclaredMount {
+                    source: "/nix/store/config".into(),
+                    destination: "/config".into(),
+                    writable: false,
+                },
+                DeclaredMount {
+                    source: "/var/lib/hermes-coding".into(),
+                    destination: "/home/hermes".into(),
+                    writable: true,
+                },
+            ])
+        );
+        assert_eq!(parse_declared_mounts("-", 2).unwrap(), None);
+        assert!(parse_declared_mounts(r#"["relative:/target:ro"]"#, 2).is_err());
+        assert!(parse_declared_mounts(r#"["/source:/target:shared"]"#, 2).is_err());
+    }
+
+    fn test_declared_tmpfs() -> BTreeMap<String, u64> {
+        BTreeMap::from([
+            ("/run".into(), 64 * 1024 * 1024),
+            ("/tmp".into(), 256 * 1024 * 1024),
+            ("/var/tmp".into(), 256 * 1024 * 1024),
+        ])
+    }
+
+    fn test_declared_live_resources() -> DeclaredLiveResources {
+        DeclaredLiveResources {
+            memory_bytes: 2 * 1024 * 1024 * 1024,
+            memory_swap_bytes: 2 * 1024 * 1024 * 1024,
+            nano_cpus: 2_000_000_000,
+            pids_limit: 512,
+            nofile: 4096,
+            nproc: 512,
+        }
+    }
+
+    #[test]
+    fn declared_tmpfs_manifest_is_closed_and_typed() {
+        assert_eq!(
+            parse_declared_tmpfs(
+                r#"{"/run":67108864,"/tmp":268435456,"/var/tmp":268435456}"#,
+                2,
+            )
+            .unwrap(),
+            Some(test_declared_tmpfs())
+        );
+        assert_eq!(parse_declared_tmpfs("-", 2).unwrap(), None);
+        assert!(parse_declared_tmpfs(r#"{"/run":1,"/tmp":1}"#, 2).is_err());
+        assert!(parse_declared_tmpfs(r#"{"/run":1,"/tmp":1,"/var/tmp":0}"#, 2,).is_err());
+    }
+
+    #[test]
+    fn declared_live_resource_manifest_is_closed_and_typed() {
+        let encoded = r#"{"memoryBytes":2147483648,"memorySwapBytes":2147483648,"nanoCpus":2000000000,"pidsLimit":512,"nofile":4096,"nproc":512}"#;
+        assert_eq!(
+            parse_declared_live_resources(encoded, 2).unwrap(),
+            Some(test_declared_live_resources())
+        );
+        assert_eq!(parse_declared_live_resources("-", 2).unwrap(), None);
+        assert!(
+            parse_declared_live_resources(
+                r#"{"memoryBytes":2147483648,"memorySwapBytes":2147483648,"nanoCpus":2000000000,"pidsLimit":512,"nofile":4096,"nproc":512,"extra":1}"#,
+                2,
+            )
+            .is_err()
+        );
+        assert!(
+            parse_declared_live_resources(
+                r#"{"memoryBytes":2147483648,"memorySwapBytes":2147483648,"nanoCpus":2000000001,"pidsLimit":512,"nofile":4096,"nproc":512}"#,
+                2,
+            )
+            .is_err()
+        );
+        assert!(
+            parse_declared_live_resources(
+                r#"{"memoryBytes":2147483648,"memorySwapBytes":2147483648,"nanoCpus":2000000000,"pidsLimit":512,"nofile":0,"nproc":512}"#,
+                2,
+            )
+            .is_err()
         );
     }
 
     #[test]
     fn rejects_insecure_live_container_inspect_state() {
+        let declared_mounts = vec![DeclaredMount {
+            source: "/var/lib/hermes-coding".into(),
+            destination: "/home/hermes".into(),
+            writable: true,
+        }];
+        let declared_tmpfs = test_declared_tmpfs();
+        let declared_live_resources = test_declared_live_resources();
         let mut inspect = serde_json::json!([{
             "AppArmorProfile": "docker-default",
+            "State": { "Running": true },
             "Config": { "User": "10000:10000" },
+            "NetworkSettings": {
+                "Networks": { "none": {} },
+                "Ports": {}
+            },
             "HostConfig": {
                 "Privileged": false,
+                "PublishAllPorts": false,
+                "PortBindings": {},
                 "ReadonlyRootfs": true,
                 "NetworkMode": "none",
                 "Runtime": "runsc",
@@ -1946,72 +2965,768 @@ mod tests {
                 "Memory": 2147483648_u64,
                 "MemorySwap": 2147483648_i64,
                 "NanoCpus": 2000000000_i64,
-                "PidsLimit": 512
+                "PidsLimit": 512,
+                "Ulimits": [
+                    { "Name": "nofile", "Soft": 4096, "Hard": 4096 },
+                    { "Name": "nproc", "Soft": 512, "Hard": 512 }
+                ],
+                "Tmpfs": {
+                    "/run": "rw,nosuid,nodev,noexec,size=64m",
+                    "/tmp": "rw,nosuid,nodev,noexec,size=256m",
+                    "/var/tmp": "rw,nosuid,nodev,noexec,size=256m"
+                }
             },
             "Mounts": [
-                { "Source": "/var/lib/hermes-coding" }
+                {
+                    "Type": "bind",
+                    "Source": "/var/lib/hermes-coding",
+                    "Destination": "/home/hermes",
+                    "RW": true
+                }
             ]
         }]);
         assert_eq!(
-            live_container_security(&inspect, "docker", "none"),
+            live_container_security(
+                &inspect,
+                "docker",
+                "none",
+                &declared_mounts,
+                &declared_tmpfs,
+                &declared_live_resources,
+            ),
             LiveContainerState::Secure
         );
+        let mut empty_none_network = inspect.clone();
+        empty_none_network[0]["NetworkSettings"]["Networks"] = serde_json::json!({});
+        assert_eq!(
+            live_container_security(
+                &empty_none_network,
+                "docker",
+                "none",
+                &declared_mounts,
+                &declared_tmpfs,
+                &declared_live_resources,
+            ),
+            LiveContainerState::Secure
+        );
+
+        let mut multiple_containers = inspect.clone();
+        multiple_containers
+            .as_array_mut()
+            .unwrap()
+            .push(serde_json::json!({}));
+        assert_eq!(
+            live_container_security(
+                &multiple_containers,
+                "docker",
+                "none",
+                &declared_mounts,
+                &declared_tmpfs,
+                &declared_live_resources,
+            ),
+            LiveContainerState::Unknown
+        );
+
+        let mut published_all = inspect.clone();
+        published_all[0]["HostConfig"]["PublishAllPorts"] = serde_json::json!(true);
+        assert_eq!(
+            live_container_security(
+                &published_all,
+                "docker",
+                "none",
+                &declared_mounts,
+                &declared_tmpfs,
+                &declared_live_resources,
+            ),
+            LiveContainerState::Unsafe
+        );
+        let binding = serde_json::json!({
+            "8080/tcp": [{ "HostIp": "0.0.0.0", "HostPort": "8080" }]
+        });
+        for (scope, field) in [("HostConfig", "PortBindings"), ("NetworkSettings", "Ports")] {
+            let mut published_port = inspect.clone();
+            published_port[0][scope][field] = binding.clone();
+            assert_eq!(
+                live_container_security(
+                    &published_port,
+                    "docker",
+                    "none",
+                    &declared_mounts,
+                    &declared_tmpfs,
+                    &declared_live_resources,
+                ),
+                LiveContainerState::Unsafe,
+                "published port in {scope}.{field} was not rejected"
+            );
+        }
+        let mut exposed_unpublished = inspect.clone();
+        exposed_unpublished[0]["HostConfig"]["PortBindings"]["80/tcp"] = serde_json::Value::Null;
+        exposed_unpublished[0]["NetworkSettings"]["Ports"]["80/tcp"] = serde_json::json!([]);
+        assert_eq!(
+            live_container_security(
+                &exposed_unpublished,
+                "docker",
+                "none",
+                &declared_mounts,
+                &declared_tmpfs,
+                &declared_live_resources,
+            ),
+            LiveContainerState::Secure
+        );
+        for (scope, field) in [("HostConfig", "PortBindings"), ("NetworkSettings", "Ports")] {
+            let mut missing_port_field = inspect.clone();
+            missing_port_field[0][scope]
+                .as_object_mut()
+                .unwrap()
+                .remove(field);
+            assert_eq!(
+                live_container_security(
+                    &missing_port_field,
+                    "docker",
+                    "none",
+                    &declared_mounts,
+                    &declared_tmpfs,
+                    &declared_live_resources,
+                ),
+                LiveContainerState::Unknown,
+                "missing {scope}.{field} was not treated as unknown"
+            );
+        }
+        let mut malformed_port_field = inspect.clone();
+        malformed_port_field[0]["NetworkSettings"]["Ports"]["80/tcp"] =
+            serde_json::json!("unexpected");
+        assert_eq!(
+            live_container_security(
+                &malformed_port_field,
+                "docker",
+                "none",
+                &declared_mounts,
+                &declared_tmpfs,
+                &declared_live_resources,
+            ),
+            LiveContainerState::Unknown
+        );
+
+        let mut missing_publish_all = inspect.clone();
+        missing_publish_all[0]["HostConfig"]
+            .as_object_mut()
+            .unwrap()
+            .remove("PublishAllPorts");
+        assert_eq!(
+            live_container_security(
+                &missing_publish_all,
+                "docker",
+                "none",
+                &declared_mounts,
+                &declared_tmpfs,
+                &declared_live_resources,
+            ),
+            LiveContainerState::Unknown
+        );
+        let mut missing_publish_with_binding = missing_publish_all.clone();
+        missing_publish_with_binding[0]["NetworkSettings"]["Ports"] = binding.clone();
+        assert_eq!(
+            live_container_security(
+                &missing_publish_with_binding,
+                "docker",
+                "none",
+                &declared_mounts,
+                &declared_tmpfs,
+                &declared_live_resources,
+            ),
+            LiveContainerState::Unsafe
+        );
+
+        for (field, value) in [
+            ("Memory", serde_json::json!(2147483649_u64)),
+            ("MemorySwap", serde_json::json!(2147483649_u64)),
+            ("NanoCpus", serde_json::json!(2000000001_u64)),
+            ("PidsLimit", serde_json::json!(513_u64)),
+        ] {
+            let mut drifted_resource = inspect.clone();
+            drifted_resource[0]["HostConfig"][field] = value;
+            assert_eq!(
+                live_container_security(
+                    &drifted_resource,
+                    "docker",
+                    "none",
+                    &declared_mounts,
+                    &declared_tmpfs,
+                    &declared_live_resources,
+                ),
+                LiveContainerState::Unsafe,
+                "resource drift in {field} was not rejected"
+            );
+        }
+        let mut missing_memory_with_pids_drift = inspect.clone();
+        missing_memory_with_pids_drift[0]["HostConfig"]
+            .as_object_mut()
+            .unwrap()
+            .remove("Memory");
+        missing_memory_with_pids_drift[0]["HostConfig"]["PidsLimit"] = serde_json::json!(513);
+        assert_eq!(
+            live_container_security(
+                &missing_memory_with_pids_drift,
+                "docker",
+                "none",
+                &declared_mounts,
+                &declared_tmpfs,
+                &declared_live_resources,
+            ),
+            LiveContainerState::Unsafe
+        );
+
+        let mut drifted_nofile = inspect.clone();
+        drifted_nofile[0]["HostConfig"]["Ulimits"][0]["Soft"] = serde_json::json!(4097);
+        assert_eq!(
+            live_container_security(
+                &drifted_nofile,
+                "docker",
+                "none",
+                &declared_mounts,
+                &declared_tmpfs,
+                &declared_live_resources,
+            ),
+            LiveContainerState::Unsafe
+        );
+        let mut missing_ulimits = inspect.clone();
+        missing_ulimits[0]["HostConfig"]
+            .as_object_mut()
+            .unwrap()
+            .remove("Ulimits");
+        assert_eq!(
+            live_container_security(
+                &missing_ulimits,
+                "docker",
+                "none",
+                &declared_mounts,
+                &declared_tmpfs,
+                &declared_live_resources,
+            ),
+            LiveContainerState::Unknown
+        );
+        let mut missing_ulimits_privileged = missing_ulimits.clone();
+        missing_ulimits_privileged[0]["HostConfig"]["Privileged"] = serde_json::json!(true);
+        assert_eq!(
+            live_container_security(
+                &missing_ulimits_privileged,
+                "docker",
+                "none",
+                &declared_mounts,
+                &declared_tmpfs,
+                &declared_live_resources,
+            ),
+            LiveContainerState::Unsafe
+        );
+        for field in ["PidsLimit", "Ulimits"] {
+            let mut null_resource_evidence = inspect.clone();
+            null_resource_evidence[0]["HostConfig"][field] = serde_json::Value::Null;
+            assert_eq!(
+                live_container_security(
+                    &null_resource_evidence,
+                    "docker",
+                    "none",
+                    &declared_mounts,
+                    &declared_tmpfs,
+                    &declared_live_resources,
+                ),
+                LiveContainerState::Unsafe,
+                "explicit null {field} evidence was not rejected"
+            );
+        }
+
+        let mut false_nnp_without_options = inspect.clone();
+        false_nnp_without_options[0]["HostConfig"]
+            .as_object_mut()
+            .unwrap()
+            .remove("SecurityOpt");
+        false_nnp_without_options[0]["HostConfig"]["NoNewPrivileges"] = serde_json::json!(false);
+        assert_eq!(
+            live_container_security(
+                &false_nnp_without_options,
+                "docker",
+                "none",
+                &declared_mounts,
+                &declared_tmpfs,
+                &declared_live_resources,
+            ),
+            LiveContainerState::Unsafe
+        );
+        let mut true_nnp_without_options = false_nnp_without_options.clone();
+        true_nnp_without_options[0]["HostConfig"]["NoNewPrivileges"] = serde_json::json!(true);
+        assert_eq!(
+            live_container_security(
+                &true_nnp_without_options,
+                "docker",
+                "none",
+                &declared_mounts,
+                &declared_tmpfs,
+                &declared_live_resources,
+            ),
+            LiveContainerState::Unknown
+        );
+        let mut null_security_options = inspect.clone();
+        null_security_options[0]["HostConfig"]["SecurityOpt"] = serde_json::Value::Null;
+        assert_eq!(
+            live_container_security(
+                &null_security_options,
+                "docker",
+                "none",
+                &declared_mounts,
+                &declared_tmpfs,
+                &declared_live_resources,
+            ),
+            LiveContainerState::Unsafe
+        );
+        for option in ["no-new-privileges:false", "seccomp:unconfined"] {
+            let mut unsafe_security_option = inspect.clone();
+            unsafe_security_option[0]["HostConfig"]["SecurityOpt"] =
+                serde_json::json!(["no-new-privileges", option]);
+            assert_eq!(
+                live_container_security(
+                    &unsafe_security_option,
+                    "docker",
+                    "none",
+                    &declared_mounts,
+                    &declared_tmpfs,
+                    &declared_live_resources,
+                ),
+                LiveContainerState::Unsafe,
+                "unsafe security option was not rejected: {option}"
+            );
+        }
+
+        let mut missing_tmpfs = inspect.clone();
+        missing_tmpfs[0]["HostConfig"]["Tmpfs"]
+            .as_object_mut()
+            .unwrap()
+            .remove("/run");
+        assert_eq!(
+            live_container_security(
+                &missing_tmpfs,
+                "docker",
+                "none",
+                &declared_mounts,
+                &declared_tmpfs,
+                &declared_live_resources,
+            ),
+            LiveContainerState::Unsafe
+        );
+        let mut extra_tmpfs = inspect.clone();
+        extra_tmpfs[0]["HostConfig"]["Tmpfs"]["/cache"] =
+            serde_json::json!("rw,nosuid,nodev,noexec,size=1m");
+        assert_eq!(
+            live_container_security(
+                &extra_tmpfs,
+                "docker",
+                "none",
+                &declared_mounts,
+                &declared_tmpfs,
+                &declared_live_resources,
+            ),
+            LiveContainerState::Unsafe
+        );
+        for options in [
+            "rw,nosuid,nodev,exec,size=64m",
+            "rw,suid,nodev,noexec,size=64m",
+            "rw,nosuid,noexec,size=64m",
+            "rw,nosuid,nodev,noexec,size=65m",
+        ] {
+            let mut drifted_tmpfs = inspect.clone();
+            drifted_tmpfs[0]["HostConfig"]["Tmpfs"]["/run"] = serde_json::json!(options);
+            assert_eq!(
+                live_container_security(
+                    &drifted_tmpfs,
+                    "docker",
+                    "none",
+                    &declared_mounts,
+                    &declared_tmpfs,
+                    &declared_live_resources,
+                ),
+                LiveContainerState::Unsafe,
+                "tmpfs drift was not rejected: {options}"
+            );
+        }
+        let mut malformed_tmpfs = inspect.clone();
+        malformed_tmpfs[0]["HostConfig"]["Tmpfs"]["/run"] =
+            serde_json::json!("rw,nosuid,nodev,noexec,mystery,size=64m");
+        assert_eq!(
+            live_container_security(
+                &malformed_tmpfs,
+                "docker",
+                "none",
+                &declared_mounts,
+                &declared_tmpfs,
+                &declared_live_resources,
+            ),
+            LiveContainerState::Unknown
+        );
+        let mut unknown_then_unsafe_tmpfs = inspect.clone();
+        unknown_then_unsafe_tmpfs[0]["HostConfig"]["Tmpfs"]["/run"] =
+            serde_json::json!(["unrecognized"]);
+        unknown_then_unsafe_tmpfs[0]["HostConfig"]["Tmpfs"]["/tmp"] =
+            serde_json::json!("rw,nosuid,nodev,exec,size=256m");
+        assert_eq!(
+            live_container_security(
+                &unknown_then_unsafe_tmpfs,
+                "docker",
+                "none",
+                &declared_mounts,
+                &declared_tmpfs,
+                &declared_live_resources,
+            ),
+            LiveContainerState::Unsafe
+        );
+        let mut unknown_option_then_exec = inspect.clone();
+        unknown_option_then_exec[0]["HostConfig"]["Tmpfs"]["/run"] =
+            serde_json::json!("mystery,exec,rw,nosuid,nodev,noexec,size=64m");
+        assert_eq!(
+            live_container_security(
+                &unknown_option_then_exec,
+                "docker",
+                "none",
+                &declared_mounts,
+                &declared_tmpfs,
+                &declared_live_resources,
+            ),
+            LiveContainerState::Unsafe
+        );
+        let mut null_tmpfs = inspect.clone();
+        null_tmpfs[0]["HostConfig"]["Tmpfs"] = serde_json::Value::Null;
+        assert_eq!(
+            live_container_security(
+                &null_tmpfs,
+                "docker",
+                "none",
+                &declared_mounts,
+                &declared_tmpfs,
+                &declared_live_resources,
+            ),
+            LiveContainerState::Unsafe
+        );
+
+        inspect[0]["State"]["Running"] = serde_json::json!(false);
+        assert_eq!(
+            live_container_security(
+                &inspect,
+                "docker",
+                "none",
+                &declared_mounts,
+                &declared_tmpfs,
+                &declared_live_resources,
+            ),
+            LiveContainerState::Unknown
+        );
+        inspect[0]["State"]["Running"] = serde_json::json!(true);
+        let mut missing_state = inspect.clone();
+        missing_state[0].as_object_mut().unwrap().remove("State");
+        assert_eq!(
+            live_container_security(
+                &missing_state,
+                "docker",
+                "none",
+                &declared_mounts,
+                &declared_tmpfs,
+                &declared_live_resources,
+            ),
+            LiveContainerState::Unknown
+        );
+
         inspect[0]["HostConfig"]["NetworkMode"] = serde_json::json!("tf-unreviewed");
         assert_eq!(
-            live_container_security(&inspect, "docker", "none"),
+            live_container_security(
+                &inspect,
+                "docker",
+                "none",
+                &declared_mounts,
+                &declared_tmpfs,
+                &declared_live_resources,
+            ),
             LiveContainerState::Unsafe
         );
         inspect[0]["HostConfig"]["NetworkMode"] = serde_json::json!("none");
         inspect[0]["HostConfig"]["Privileged"] = serde_json::json!(true);
         assert_eq!(
-            live_container_security(&inspect, "docker", "none"),
+            live_container_security(
+                &inspect,
+                "docker",
+                "none",
+                &declared_mounts,
+                &declared_tmpfs,
+                &declared_live_resources,
+            ),
             LiveContainerState::Unsafe
         );
         inspect[0]["HostConfig"]["Privileged"] = serde_json::json!(false);
+        let mut missing_readonly_privileged = inspect.clone();
+        missing_readonly_privileged[0]["HostConfig"]
+            .as_object_mut()
+            .unwrap()
+            .remove("ReadonlyRootfs");
+        missing_readonly_privileged[0]["HostConfig"]["Privileged"] = serde_json::json!(true);
+        assert_eq!(
+            live_container_security(
+                &missing_readonly_privileged,
+                "docker",
+                "none",
+                &declared_mounts,
+                &declared_tmpfs,
+                &declared_live_resources,
+            ),
+            LiveContainerState::Unsafe
+        );
+
         inspect[0]["Config"]["User"] = serde_json::json!("0:10000");
         assert_eq!(
-            live_container_security(&inspect, "docker", "none"),
+            live_container_security(
+                &inspect,
+                "docker",
+                "none",
+                &declared_mounts,
+                &declared_tmpfs,
+                &declared_live_resources,
+            ),
             LiveContainerState::Unsafe
         );
         inspect[0]["Config"]["User"] = serde_json::json!("10000:10000");
+
+        inspect[0]["NetworkSettings"]["Networks"]["unexpected"] = serde_json::json!({});
+        assert_eq!(
+            live_container_security(
+                &inspect,
+                "docker",
+                "none",
+                &declared_mounts,
+                &declared_tmpfs,
+                &declared_live_resources,
+            ),
+            LiveContainerState::Unsafe
+        );
+        inspect[0]["NetworkSettings"]["Networks"]
+            .as_object_mut()
+            .unwrap()
+            .remove("unexpected");
+
+        inspect[0]["Mounts"][0]["Destination"] = serde_json::json!("/unexpected");
+        assert_eq!(
+            live_container_security(
+                &inspect,
+                "docker",
+                "none",
+                &declared_mounts,
+                &declared_tmpfs,
+                &declared_live_resources,
+            ),
+            LiveContainerState::Unsafe
+        );
+        inspect[0]["Mounts"][0]["Destination"] = serde_json::json!("/home/hermes");
+        inspect[0]["Mounts"][0]["RW"] = serde_json::json!(false);
+        assert_eq!(
+            live_container_security(
+                &inspect,
+                "docker",
+                "none",
+                &declared_mounts,
+                &declared_tmpfs,
+                &declared_live_resources,
+            ),
+            LiveContainerState::Unsafe
+        );
+        inspect[0]["Mounts"][0]["RW"] = serde_json::json!(true);
+
         inspect[0]["Mounts"][0]["Source"] = serde_json::json!("/var/run/docker.sock");
         assert_eq!(
-            live_container_security(&inspect, "docker", "none"),
+            live_container_security(
+                &inspect,
+                "docker",
+                "none",
+                &declared_mounts,
+                &declared_tmpfs,
+                &declared_live_resources,
+            ),
             LiveContainerState::Unsafe
         );
     }
 
     #[test]
     fn parses_podman_live_container_security_state() {
+        let declared_mounts = vec![DeclaredMount {
+            source: "/var/lib/zeroclaw-assistant".into(),
+            destination: "/zeroclaw-data".into(),
+            writable: true,
+        }];
+        let declared_tmpfs = test_declared_tmpfs();
+        let declared_live_resources = test_declared_live_resources();
         let mut inspect = serde_json::json!([{
             "AppArmorProfile": "containers-default-0.57.0",
             "OCIRuntime": "/nix/store/fixture/bin/runsc",
             "EffectiveCaps": [],
             "BoundingCaps": [],
+            "State": { "Running": true },
             "Config": { "User": "65534:65534" },
+            "NetworkSettings": {
+                "Networks": { "tf-zeroclaw-assistant": {} },
+                "Ports": {}
+            },
             "HostConfig": {
                 "Privileged": false,
+                "PublishAllPorts": false,
+                "PortBindings": {},
                 "ReadonlyRootfs": true,
-                "NetworkMode": "tf-zeroclaw-assistant",
+                "NetworkMode": "bridge",
                 "CapAdd": null,
                 "CapDrop": ["ALL"],
                 "SecurityOpt": ["no-new-privileges"],
                 "Memory": 2147483648_u64,
                 "MemorySwap": 2147483648_i64,
+                "CpuPeriod": 100000_i64,
                 "CpuQuota": 200000_i64,
-                "PidsLimit": 512
+                "NanoCpus": 2000000000_i64,
+                "PidsLimit": 512,
+                "Ulimits": [
+                    { "Name": "RLIMIT_NOFILE", "Soft": 4096, "Hard": 4096 },
+                    { "Name": "RLIMIT_NPROC", "Soft": 512, "Hard": 512 }
+                ],
+                "Tmpfs": {
+                    "/run": "rw,nosuid,nodev,noexec,size=64m,rprivate,tmpcopyup",
+                    "/tmp": "rw,nosuid,nodev,noexec,size=256m,rprivate,tmpcopyup",
+                    "/var/tmp": "rw,nosuid,nodev,noexec,size=256m,rprivate,tmpcopyup"
+                }
             },
             "Mounts": [
-                { "Source": "/var/lib/zeroclaw-assistant" }
+                {
+                    "Type": "bind",
+                    "Source": "/var/lib/zeroclaw-assistant",
+                    "Destination": "/zeroclaw-data",
+                    "RW": true
+                }
             ]
         }]);
         assert_eq!(
-            live_container_security(&inspect, "podman", "tf-zeroclaw-assistant"),
+            live_container_security(
+                &inspect,
+                "podman",
+                "tf-zeroclaw-assistant",
+                &declared_mounts,
+                &declared_tmpfs,
+                &declared_live_resources,
+            ),
             LiveContainerState::Secure
         );
+        let mut missing_podman_propagation = inspect.clone();
+        missing_podman_propagation[0]["HostConfig"]["Tmpfs"]["/run"] =
+            serde_json::json!("rw,nosuid,nodev,noexec,size=64m,tmpcopyup");
+        assert_eq!(
+            live_container_security(
+                &missing_podman_propagation,
+                "podman",
+                "tf-zeroclaw-assistant",
+                &declared_mounts,
+                &declared_tmpfs,
+                &declared_live_resources,
+            ),
+            LiveContainerState::Unsafe
+        );
+        let mut conflicting_podman_propagation = inspect.clone();
+        conflicting_podman_propagation[0]["HostConfig"]["Tmpfs"]["/run"] =
+            serde_json::json!("rw,nosuid,nodev,noexec,size=64m,shared,tmpcopyup");
+        assert_eq!(
+            live_container_security(
+                &conflicting_podman_propagation,
+                "podman",
+                "tf-zeroclaw-assistant",
+                &declared_mounts,
+                &declared_tmpfs,
+                &declared_live_resources,
+            ),
+            LiveContainerState::Unsafe
+        );
+
+        let mut missing_named_networks = inspect.clone();
+        missing_named_networks[0]["NetworkSettings"]
+            .as_object_mut()
+            .unwrap()
+            .remove("Networks");
+        assert_eq!(
+            live_container_security(
+                &missing_named_networks,
+                "podman",
+                "tf-zeroclaw-assistant",
+                &declared_mounts,
+                &declared_tmpfs,
+                &declared_live_resources,
+            ),
+            LiveContainerState::Unknown
+        );
+        let mut additional_named_network = inspect.clone();
+        additional_named_network[0]["NetworkSettings"]["Networks"]["unexpected"] =
+            serde_json::json!({});
+        assert_eq!(
+            live_container_security(
+                &additional_named_network,
+                "podman",
+                "tf-zeroclaw-assistant",
+                &declared_mounts,
+                &declared_tmpfs,
+                &declared_live_resources,
+            ),
+            LiveContainerState::Unsafe
+        );
+        let mut isolated_podman = inspect.clone();
+        isolated_podman[0]["HostConfig"]["NetworkMode"] = serde_json::json!("none");
+        isolated_podman[0]["NetworkSettings"]
+            .as_object_mut()
+            .unwrap()
+            .remove("Networks");
+        assert_eq!(
+            live_container_security(
+                &isolated_podman,
+                "podman",
+                "none",
+                &declared_mounts,
+                &declared_tmpfs,
+                &declared_live_resources,
+            ),
+            LiveContainerState::Secure
+        );
+
+        let mut inconsistent_podman_cpu = inspect.clone();
+        inconsistent_podman_cpu[0]["HostConfig"]["CpuQuota"] = serde_json::json!(199999);
+        assert_eq!(
+            live_container_security(
+                &inconsistent_podman_cpu,
+                "podman",
+                "tf-zeroclaw-assistant",
+                &declared_mounts,
+                &declared_tmpfs,
+                &declared_live_resources,
+            ),
+            LiveContainerState::Unsafe
+        );
+        let mut drifted_podman_nproc = inspect.clone();
+        drifted_podman_nproc[0]["HostConfig"]["Ulimits"][1]["Hard"] = serde_json::json!(513);
+        assert_eq!(
+            live_container_security(
+                &drifted_podman_nproc,
+                "podman",
+                "tf-zeroclaw-assistant",
+                &declared_mounts,
+                &declared_tmpfs,
+                &declared_live_resources,
+            ),
+            LiveContainerState::Unsafe
+        );
+
         inspect[0]["EffectiveCaps"] = serde_json::json!(["CAP_NET_RAW"]);
         assert_eq!(
-            live_container_security(&inspect, "podman", "tf-zeroclaw-assistant"),
+            live_container_security(
+                &inspect,
+                "podman",
+                "tf-zeroclaw-assistant",
+                &declared_mounts,
+                &declared_tmpfs,
+                &declared_live_resources,
+            ),
             LiveContainerState::Unsafe
         );
         inspect[0]["EffectiveCaps"] = serde_json::json!([]);
@@ -2020,8 +3735,94 @@ mod tests {
             .unwrap()
             .remove("AppArmorProfile");
         assert_eq!(
-            live_container_security(&inspect, "podman", "tf-zeroclaw-assistant"),
+            live_container_security(
+                &inspect,
+                "podman",
+                "tf-zeroclaw-assistant",
+                &declared_mounts,
+                &declared_tmpfs,
+                &declared_live_resources,
+            ),
             LiveContainerState::Unknown
+        );
+    }
+
+    #[test]
+    fn broker_network_inspect_must_be_exact_internal_bridge() {
+        let docker = serde_json::json!([{
+            "Name": "tf-coding",
+            "Internal": true,
+            "Driver": "bridge"
+        }]);
+        assert_eq!(
+            live_broker_network_security(&docker, "docker", "tf-coding"),
+            LiveContainerState::Secure
+        );
+        assert_eq!(
+            network_inspect_arguments("docker", "tf-coding"),
+            ["-n", "docker", "network", "inspect", "tf-coding"]
+        );
+
+        let mut external = docker.clone();
+        external[0]["Internal"] = serde_json::json!(false);
+        assert_eq!(
+            live_broker_network_security(&external, "docker", "tf-coding"),
+            LiveContainerState::Unsafe
+        );
+        let mut missing_internal = docker.clone();
+        missing_internal[0]
+            .as_object_mut()
+            .unwrap()
+            .remove("Internal");
+        assert_eq!(
+            live_broker_network_security(&missing_internal, "docker", "tf-coding"),
+            LiveContainerState::Unknown
+        );
+        let mut missing_name_external = docker.clone();
+        missing_name_external[0]
+            .as_object_mut()
+            .unwrap()
+            .remove("Name");
+        missing_name_external[0]["Internal"] = serde_json::json!(false);
+        assert_eq!(
+            live_broker_network_security(&missing_name_external, "docker", "tf-coding"),
+            LiveContainerState::Unsafe
+        );
+        let mut missing_name_wrong_driver = docker.clone();
+        missing_name_wrong_driver[0]
+            .as_object_mut()
+            .unwrap()
+            .remove("Name");
+        missing_name_wrong_driver[0]["Driver"] = serde_json::json!("host");
+        assert_eq!(
+            live_broker_network_security(&missing_name_wrong_driver, "docker", "tf-coding"),
+            LiveContainerState::Unsafe
+        );
+        let mut wrong_name = docker.clone();
+        wrong_name[0]["Name"] = serde_json::json!("tf-attacker");
+        assert_eq!(
+            live_broker_network_security(&wrong_name, "docker", "tf-coding"),
+            LiveContainerState::Unsafe
+        );
+        let mut multiple = docker.clone();
+        multiple.as_array_mut().unwrap().push(serde_json::json!({
+            "Name": "tf-coding",
+            "Internal": true,
+            "Driver": "bridge"
+        }));
+        assert_eq!(
+            live_broker_network_security(&multiple, "docker", "tf-coding"),
+            LiveContainerState::Unsafe
+        );
+
+        let podman = serde_json::json!([{
+            "name": "tf-coding",
+            "internal": true,
+            "driver": "bridge"
+        }]);
+        assert_eq!(
+            live_broker_network_security(&podman, "podman", "tf-coding"),
+            LiveContainerState::Secure
         );
     }
 }

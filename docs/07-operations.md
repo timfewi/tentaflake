@@ -26,6 +26,13 @@ Podman containers are still root-managed by the NixOS OCI module unless a
 separate rootless design is implemented; selecting Podman alone is not proof
 of rootless operation.
 
+`tentaflake doctor --security` bounds each live OCI and broker-network
+inspection to five seconds. A timeout is reported as unavailable/unknown
+runtime evidence, never as a green posture. Broker health probes run in ordered
+batches of at most 16; live OCI and broker-network inspection remains serial.
+Large fleets should schedule the command through the operator's monitoring
+path and size the run window for the number of agents.
+
 ## Safe update flow
 
 1. Review input and image changes. A digest pin is reproducible identity, not
@@ -38,10 +45,16 @@ of rootless operation.
 5. Activate only in an approved maintenance window.
 6. Run live status, security posture, service, and application health checks.
 
-The previous NixOS generation remains the rollback path. Select it in the boot
-menu or run the explicit rollback command from an operator session after
-resolving the target. Source changes and successful builds do not authorize
-`switch` or rollback.
+The previous NixOS generation remains the code/configuration rollback path,
+but a generation switch does not migrate mutable data. In particular, the
+fixed-size worker-state image is a separate mount: an older generation can see
+the directory below that mount rather than the queue/results stored in the
+image. Before a rollback that crosses this storage-layout change, stop the
+controller, worker, watcher, and cleanup units; reconcile pending and inflight
+outcomes; archive reviewed results/audit data; then follow the offline rollback
+steps in [the worker guide](13-disposable-worker.md). Select the previous
+generation only after that data plan is explicit. Source changes and successful
+builds do not authorize `switch` or rollback.
 
 ## Git auto-push
 
@@ -134,6 +147,18 @@ tentaflake.backup = {
   ];
 };
 ```
+
+Worker state is not added to `tentaflake.backup.paths` automatically.
+Restic uses filesystem-boundary protection, and copying the live sparse
+`.img` backing file is neither an application-consistent queue backup nor a
+safe replay plan. For a worker-state archive, first stop the exact controller,
+worker, path watcher, cleanup timer, and cleanup service; verify all five
+units are inactive, reconcile every `pending/` and `inflight/` request, then
+back up the mounted, reviewed `results/` and
+`audit.jsonl` paths explicitly. Do not restore `inflight/`, `jobs/`,
+`worker.lock`, or `inbox.cursor` blindly. Restoring pending requests also
+requires an operator decision about possible prior side effects and fresh job
+IDs where an outcome is unknown.
 
 The job encrypts through Restic, prunes after backup, and runs an integrity
 check. On success, a separate hardened oneshot updates

@@ -56,9 +56,7 @@ let
       brokerEnabled && brokerCfg.fetch.enable
     ) "tentaflake-broker-fetch-${containerName}.service";
   runtimeDependencies =
-    brokerUnits
-    ++ lib.optional quotaEnabled quotaUnit
-    ++ lib.optional workerEnabled workerStateUnit;
+    brokerUnits ++ lib.optional quotaEnabled quotaUnit ++ lib.optional workerEnabled workerStateUnit;
   secureUnitPolicy = {
     startLimitIntervalSec = 300;
     startLimitBurst = 5;
@@ -118,6 +116,12 @@ in
 {
   assertions =
     securityResult.assertions
+    ++ [
+      {
+        assertion = containerSecurity.statePathIsSafe containerName stateDir;
+        message = "tentaflake: ZeroClaw agent ${name} stateDir must be a canonical, agent-specific path below /var/lib and outside sensitive or backing-volume roots.";
+      }
+    ]
     ++ lib.optionals secure [
       {
         assertion = !allowMutableImage;

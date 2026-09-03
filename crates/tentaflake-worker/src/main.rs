@@ -20,6 +20,16 @@ const MAX_INBOX_SCAN_ENTRIES: u64 = 1024;
 const MAX_PENDING_REQUESTS_LIMIT: u64 = 4096;
 const MAX_PENDING_BYTES_LIMIT: u64 = 512 * 1024 * 1024;
 const MAX_READY_JOBS_PER_DRAIN_LIMIT: u64 = 128;
+const MAX_LINUX_ID: u32 = u32::MAX - 1;
+const MAX_MEMORY_BYTES: u64 = 1024 * 1024 * 1024 * 1024;
+const MAX_TMPFS_BYTES: u64 = 64 * 1024 * 1024 * 1024;
+const MAX_CPUS: f64 = 1024.0;
+const MAX_PIDS_LIMIT: u32 = 65_536;
+const MAX_SNAPSHOT_BYTES: u64 = 16 * 1024 * 1024 * 1024;
+const MAX_SNAPSHOT_ENTRIES: u64 = 2_000_000;
+const MAX_LOG_BYTES: usize = 64 * 1024 * 1024;
+const MAX_CPU_FRACTION_DIGITS: usize = 5;
+const MAX_TIMEOUT_SECONDS: u64 = 24 * 60 * 60;
 const INBOX_CURSOR_FILE: &str = "inbox.cursor";
 const STATE_LAYOUT_MARKER_FILE: &str = ".tentaflake-worker-state-v1";
 const STATE_LAYOUT_MARKER: &[u8] = b"tentaflake-worker-state-v1\n";
@@ -180,6 +190,7 @@ impl WorkerStateLock {
             .read(true)
             .write(true)
             .create(true)
+            .truncate(false)
             .mode(0o600)
             .open(&path)
             .map_err(|error| format!("open worker state lock {}: {error}", path.display()))?;
@@ -331,6 +342,103 @@ fn reject_extra_args(mut args: impl Iterator<Item = String>) -> Result<()> {
     }
 }
 
+fn parse_oci_size(value: &str) -> Option<u64> {
+    let (digits, factor) = match value.as_bytes().last().copied() {
+        Some(b'k' | b'K') => (&value[..value.len() - 1], 1024_u64),
+        Some(b'm' | b'M') => (&value[..value.len() - 1], 1024_u64 * 1024),
+        Some(b'g' | b'G') => (&value[..value.len() - 1], 1024_u64 * 1024 * 1024),
+        Some(b't' | b'T') => (&value[..value.len() - 1], 1024_u64 * 1024 * 1024 * 1024),
+        Some(_) => (value, 1),
+        None => return None,
+    };
+    if digits.is_empty()
+        || digits.starts_with('0')
+        || !digits.bytes().all(|byte| byte.is_ascii_digit())
+    {
+        return None;
+    }
+    digits.parse::<u64>().ok()?.checked_mul(factor)
+}
+
+fn bounded_oci_size(kind: &str, value: &str, maximum: u64) -> Result<u64> {
+    let bytes = parse_oci_size(value).ok_or_else(|| {
+        format!("{kind} must be a positive integer byte size with an optional K/M/G/T suffix")
+    })?;
+    if bytes > maximum {
+        Err(format!("{kind} exceeds its {maximum}-byte safety bound"))
+    } else {
+        Ok(bytes)
+    }
+}
+
+fn parse_positive_decimal(value: &str) -> Option<f64> {
+    let mut fields = value.split('.');
+    let whole = fields.next()?;
+    let fraction = fields.next();
+    if fields.next().is_some()
+        || whole.is_empty()
+        || !whole.bytes().all(|byte| byte.is_ascii_digit())
+        || (whole.len() > 1 && whole.starts_with('0'))
+        || fraction.is_some_and(|digits| {
+            digits.is_empty()
+                || digits.len() > MAX_CPU_FRACTION_DIGITS
+                || !digits.bytes().all(|byte| byte.is_ascii_digit())
+        })
+        || (whole == "0" && !fraction.is_some_and(|digits| digits.bytes().any(|byte| byte != b'0')))
+    {
+        return None;
+    }
+    let parsed = value.parse::<f64>().ok()?;
+    (parsed.is_finite() && parsed > 0.0).then_some(parsed)
+}
+
+fn canonical_var_lib_path(path: &Path) -> Option<&str> {
+    let value = path.to_str()?;
+    let syntax_safe = value.starts_with("/var/lib/")
+        && !value.contains("//")
+        && value.bytes().all(|byte| {
+            byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'+' | b'/' | b'-')
+        })
+        && value
+            .split('/')
+            .skip(1)
+            .all(|component| !component.is_empty() && component != "." && component != "..");
+    syntax_safe.then_some(value)
+}
+
+fn path_within(root: &str, path: &str) -> bool {
+    path == root
+        || path
+            .strip_prefix(root)
+            .is_some_and(|suffix| suffix.starts_with('/'))
+}
+
+fn validate_worker_paths(config: &Config) -> Result<()> {
+    let workspace = canonical_var_lib_path(&config.workspace)
+        .ok_or_else(|| "workspace must be one canonical ASCII path below /var/lib".to_string())?;
+    let forbidden_workspace_roots = [
+        "/var/lib/containers",
+        "/var/lib/docker",
+        "/var/lib/tentaflake-worker-state-volumes",
+        "/var/lib/tentaflake-workspace-volumes",
+    ];
+    if forbidden_workspace_roots
+        .iter()
+        .any(|root| path_within(root, workspace))
+        || workspace.starts_with("/var/lib/tentaflake-worker-")
+    {
+        return Err(
+            "workspace may not use a sensitive runtime, worker, or backing-volume path".into(),
+        );
+    }
+
+    let expected_state = format!("/var/lib/tentaflake-worker-{}", config.agent);
+    if config.state_dir.as_path() != Path::new(&expected_state) {
+        return Err(format!("state_dir must exactly equal {expected_state}"));
+    }
+    Ok(())
+}
+
 fn validate_config(config: &Config) -> Result<()> {
     validate_identifier("agent", &config.agent, 48)?;
     if !matches!(config.backend.as_str(), "docker" | "podman") {
@@ -345,8 +453,16 @@ fn validate_config(config: &Config) -> Result<()> {
     if config.workspace.as_os_str().as_bytes().contains(&b',') {
         return Err("workspace may not contain a comma".into());
     }
+    validate_worker_paths(config)?;
     if config.image.is_empty() || config.image.contains(char::is_whitespace) {
         return Err("image must be one non-empty OCI reference".into());
+    }
+    if config.container_uid == 0
+        || config.container_gid == 0
+        || config.container_uid > MAX_LINUX_ID
+        || config.container_gid > MAX_LINUX_ID
+    {
+        return Err("container_uid and container_gid must be non-root Linux IDs".into());
     }
     if config.max_request_bytes == 0
         || config.max_pending_requests == 0
@@ -359,6 +475,36 @@ fn validate_config(config: &Config) -> Result<()> {
         || config.pids_limit == 0
     {
         return Err("worker limits must all be positive".into());
+    }
+    if config.max_timeout_seconds > MAX_TIMEOUT_SECONDS {
+        return Err(format!(
+            "max_timeout_seconds may not exceed {MAX_TIMEOUT_SECONDS}"
+        ));
+    }
+    if config.pids_limit > MAX_PIDS_LIMIT {
+        return Err(format!("pids_limit may not exceed {MAX_PIDS_LIMIT}"));
+    }
+    if config.max_snapshot_bytes > MAX_SNAPSHOT_BYTES
+        || config.max_snapshot_entries > MAX_SNAPSHOT_ENTRIES
+        || config.max_log_bytes > MAX_LOG_BYTES
+    {
+        return Err("snapshot or log limits exceed the worker safety bounds".into());
+    }
+    let memory = bounded_oci_size("memory", &config.memory, MAX_MEMORY_BYTES)?;
+    let memory_swap = bounded_oci_size("memory_swap", &config.memory_swap, MAX_MEMORY_BYTES)?;
+    if memory_swap < memory {
+        return Err("memory_swap must be greater than or equal to memory".into());
+    }
+    bounded_oci_size(
+        "workspace_tmpfs_size",
+        &config.workspace_tmpfs_size,
+        MAX_TMPFS_BYTES,
+    )?;
+    bounded_oci_size("tmp_tmpfs_size", &config.tmp_tmpfs_size, MAX_TMPFS_BYTES)?;
+    let cpus = parse_positive_decimal(&config.cpus)
+        .ok_or_else(|| "cpus must be a positive decimal value".to_string())?;
+    if cpus > MAX_CPUS {
+        return Err(format!("cpus may not exceed {MAX_CPUS}"));
     }
     if config.max_pending_bytes < config.max_request_bytes {
         return Err("max_pending_bytes must accommodate one max_request_bytes request".into());
@@ -770,7 +916,7 @@ fn complete_claimed_request(
         return Ok(());
     }
 
-    match ensure_execution_capacity(config) {
+    match ensure_execution_capacity(config, &request.id) {
         Ok(()) => execute(config, workspace_fd, request)?,
         Err(error) => {
             let detail = format!("worker state capacity rejected execution: {error}");
@@ -1025,13 +1171,20 @@ fn remove_private_directory_if_present(path: &Path, label: &str) -> Result<()> {
 }
 
 fn recover_inflight(config: &Config) -> Result<()> {
+    recover_inflight_with(config, cleanup_existing_worker_container)
+}
+
+fn recover_inflight_with(
+    config: &Config,
+    cleanup_container: impl FnOnce(&Config, &str) -> Result<()>,
+) -> Result<()> {
     let Some(entry) = only_inflight_entry(config)? else {
         return Ok(());
     };
     let path = entry.path();
     let request = read_pending_file(config, &path)?;
     let container = format!("tfw-{}-{}", config.agent, request.id);
-    cleanup_existing_worker_container(config, &container)?;
+    cleanup_container(config, &container)?;
     remove_private_directory_if_present(
         &config.state_dir.join("jobs").join(&request.id),
         "job state",
@@ -1086,14 +1239,24 @@ fn pending_metadata_inodes(config: &Config) -> Result<u64> {
         .ok_or_else(|| "worker pending metadata inode reservation overflowed".to_string())
 }
 
-fn required_execution_state_bytes(config: &Config) -> Result<u64> {
+fn required_execution_state_bytes(config: &Config, queued_bytes: u64) -> Result<u64> {
     let max_log_bytes = u64::try_from(config.max_log_bytes)
         .map_err(|_| "worker log reservation does not fit u64".to_string())?;
     let pending_metadata = pending_metadata_bytes(config)?;
+    let remaining_pending_bytes = config
+        .max_pending_bytes
+        .checked_sub(queued_bytes)
+        .ok_or_else(|| {
+            format!(
+                "private pending queue uses {queued_bytes} bytes, above its {}-byte limit",
+                config.max_pending_bytes
+            )
+        })?;
     config
         .max_snapshot_bytes
         .checked_mul(2)
         .and_then(|value| value.checked_add(max_log_bytes))
+        .and_then(|value| value.checked_add(remaining_pending_bytes))
         .and_then(|value| value.checked_add(pending_metadata))
         .and_then(|value| value.checked_add(STATE_CONTROL_RESERVE_BYTES))
         .ok_or_else(|| "worker state byte reservation overflowed".to_string())
@@ -1109,7 +1272,16 @@ fn required_execution_state_inodes(config: &Config) -> Result<u64> {
         .ok_or_else(|| "worker state inode reservation overflowed".to_string())
 }
 
-fn ensure_execution_capacity(config: &Config) -> Result<()> {
+fn ensure_execution_capacity(config: &Config, job: &str) -> Result<()> {
+    let pending_usage = read_pending_usage(config)?;
+    let inflight_bytes = fs::metadata(inflight_path(config, job))
+        .map_err(|error| format!("stat inflight request for capacity accounting: {error}"))?
+        .len();
+    let queued_bytes = pending_usage
+        .bytes
+        .checked_add(inflight_bytes)
+        .ok_or_else(|| "worker queued-byte counter overflowed".to_string())?;
+
     let path = CString::new(config.state_dir.as_os_str().as_bytes())
         .map_err(|_| "worker state path contains NUL".to_string())?;
     let mut stats = std::mem::MaybeUninit::<libc::statvfs>::uninit();
@@ -1122,15 +1294,16 @@ fn ensure_execution_capacity(config: &Config) -> Result<()> {
     }
     let stats = unsafe { stats.assume_init() };
     let block_size = if stats.f_frsize == 0 {
-        stats.f_bsize as u64
+        stats.f_bsize
     } else {
-        stats.f_frsize as u64
+        stats.f_frsize
     };
-    let available_bytes = (stats.f_bavail as u64)
+    let available_bytes = stats
+        .f_bavail
         .checked_mul(block_size)
         .ok_or_else(|| "worker state free-byte counter overflowed".to_string())?;
-    let required_bytes = required_execution_state_bytes(config)?;
-    let available_inodes = stats.f_favail as u64;
+    let required_bytes = required_execution_state_bytes(config, queued_bytes)?;
+    let available_inodes = stats.f_favail;
     let required_inodes = required_execution_state_inodes(config)?;
     if available_bytes < required_bytes || available_inodes < required_inodes {
         return Err(format!(
@@ -1189,14 +1362,16 @@ fn execute(config: &Config, workspace_fd: RawFd, request: &JobRequest) -> Result
     if started.is_ok() {
         let deadline = Instant::now() + Duration::from_secs(request.timeout_seconds);
         loop {
-            let state = runtime_output(
+            let state = runtime_output_checked(
                 config,
                 ["inspect", "--format={{.State.Running}}", &container],
+                "inspect disposable container running state",
             )?;
             if String::from_utf8_lossy(&state.stdout).trim() != "true" {
-                let status = runtime_output(
+                let status = runtime_output_checked(
                     config,
                     ["inspect", "--format={{.State.ExitCode}}", &container],
+                    "inspect disposable container exit status",
                 )?;
                 exit_code = String::from_utf8_lossy(&status.stdout).trim().parse().ok();
                 break;
@@ -1562,7 +1737,34 @@ fn append_runtime_log_policy(command: &mut Command, backend: &str) {
     }
 }
 
+fn listed_container_exists(listing: &[u8], container: &str) -> Result<bool> {
+    let names = std::str::from_utf8(listing)
+        .map_err(|_| "stale worker container listing is not UTF-8".to_string())?;
+    Ok(names.lines().any(|name| name.trim() == container))
+}
+
 fn cleanup_existing_worker_container(config: &Config, container: &str) -> Result<()> {
+    let name_filter = format!("name={container}");
+    let listing = runtime(config)
+        .args([
+            "ps",
+            "--all",
+            "--filter",
+            &name_filter,
+            "--format={{.Names}}",
+        ])
+        .output()
+        .map_err(|error| format!("list stale worker containers: {error}"))?;
+    if !listing.status.success() {
+        return Err(format!(
+            "list stale worker containers failed: {}",
+            String::from_utf8_lossy(&listing.stderr).trim()
+        ));
+    }
+    if !listed_container_exists(&listing.stdout, container)? {
+        return Ok(());
+    }
+
     let output = runtime(config)
         .args([
             "inspect",
@@ -1572,7 +1774,10 @@ fn cleanup_existing_worker_container(config: &Config, container: &str) -> Result
         .output()
         .map_err(|error| format!("inspect stale worker container: {error}"))?;
     if !output.status.success() {
-        return Ok(());
+        return Err(format!(
+            "inspect existing stale worker container failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
     }
     if String::from_utf8_lossy(&output.stdout).trim() != config.agent {
         return Err(format!("refusing to remove unowned container {container}"));
@@ -1600,6 +1805,22 @@ where
         .args(args)
         .output()
         .map_err(|error| format!("run {}: {error}", config.runtime.display()))
+}
+
+fn runtime_output_checked<I, S>(config: &Config, args: I, operation: &str) -> Result<Output>
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<OsStr>,
+{
+    let output = runtime_output(config, args)?;
+    if output.status.success() {
+        Ok(output)
+    } else {
+        Err(format!(
+            "{operation} failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ))
+    }
 }
 
 fn command_ok(command: &mut Command, operation: &str) -> Result<()> {
@@ -1700,20 +1921,75 @@ fn write_json(path: PathBuf, value: &impl Serialize) -> Result<()> {
 }
 
 fn write_new_private(path: &Path, content: &[u8]) -> Result<()> {
-    let mut file = OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .mode(0o600)
-        .open(path)
-        .map_err(|error| format!("create {}: {error}", path.display()))?;
-    file.write_all(content)
-        .map_err(|error| format!("write {}: {error}", path.display()))?;
-    file.sync_all()
-        .map_err(|error| format!("sync {}: {error}", path.display()))?;
+    write_new_private_with(path, |file| file.write_all(content))
+}
+
+fn write_new_private_with(
+    path: &Path,
+    writer: impl FnOnce(&mut File) -> io::Result<()>,
+) -> Result<()> {
     let parent = path
         .parent()
         .ok_or_else(|| format!("private state path has no parent: {}", path.display()))?;
-    sync_directory(parent)
+    let name = path
+        .file_name()
+        .filter(|name| !name.is_empty())
+        .ok_or_else(|| format!("private state path has no file name: {}", path.display()))?;
+    let parent_path_fd = open_path_no_symlinks(parent)?;
+    let parent_fd = open_dir_at(parent_path_fd.as_raw_fd(), OsStr::new("."))
+        .map_err(|error| format!("open private state directory {}: {error}", parent.display()))?;
+    let dot = CString::new(".")
+        .map_err(|_| "internal private state directory name contains NUL".to_string())?;
+    let file_fd = unsafe {
+        libc::openat(
+            parent_fd.as_raw_fd(),
+            dot.as_ptr(),
+            libc::O_WRONLY | libc::O_TMPFILE | libc::O_CLOEXEC,
+            0o600,
+        )
+    };
+    if file_fd < 0 {
+        return Err(format!(
+            "create unnamed private state file in {}: {}",
+            parent.display(),
+            io::Error::last_os_error()
+        ));
+    }
+    let mut file = unsafe { File::from_raw_fd(file_fd) };
+    writer(&mut file).map_err(|error| format!("write {}: {error}", path.display()))?;
+    file.sync_all()
+        .map_err(|error| format!("sync {}: {error}", path.display()))?;
+
+    let source = CString::new(format!("/proc/self/fd/{}", file.as_raw_fd()))
+        .map_err(|_| "internal private state source path contains NUL".to_string())?;
+    let destination = CString::new(name.as_bytes())
+        .map_err(|_| format!("private state file name contains NUL: {}", path.display()))?;
+    let result = unsafe {
+        libc::linkat(
+            libc::AT_FDCWD,
+            source.as_ptr(),
+            parent_fd.as_raw_fd(),
+            destination.as_ptr(),
+            libc::AT_SYMLINK_FOLLOW,
+        )
+    };
+    if result != 0 {
+        return Err(format!(
+            "atomically publish private state file {}: {}",
+            path.display(),
+            io::Error::last_os_error()
+        ));
+    }
+    let result = unsafe { libc::fsync(parent_fd.as_raw_fd()) };
+    if result == 0 {
+        Ok(())
+    } else {
+        Err(format!(
+            "sync private state directory {}: {}",
+            parent.display(),
+            io::Error::last_os_error()
+        ))
+    }
 }
 
 fn audit(
@@ -1728,8 +2004,15 @@ fn audit(
         .append(true)
         .create(true)
         .mode(0o600)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
         .open(&path)
         .map_err(|error| format!("open audit: {error}"))?;
+    let metadata = file
+        .metadata()
+        .map_err(|error| format!("stat audit {}: {error}", path.display()))?;
+    if !metadata.is_file() || metadata.permissions().mode() & 0o077 != 0 {
+        return Err("audit must be a private regular file".into());
+    }
     serde_json::to_writer(
         &mut file,
         &AuditEvent {
@@ -2117,7 +2400,7 @@ fn inbox_directory_stamp(inbox_fd: RawFd) -> Result<InboxDirectoryStamp> {
     }
     let stat = unsafe { stat.assume_init() };
     Ok(InboxDirectoryStamp {
-        device: stat.st_dev as u64,
+        device: stat.st_dev,
         inode: stat.st_ino,
         change_seconds: stat.st_ctime,
         change_nanoseconds: stat.st_ctime_nsec,
@@ -2227,6 +2510,8 @@ fn write_inbox_cursor(
     }
 }
 
+// Each argument represents a distinct directory-scan outcome needed at every early return.
+#[allow(clippy::too_many_arguments)]
 fn finish_inbox_scan(
     inbox_fd: RawFd,
     directory_stamp: InboxDirectoryStamp,
@@ -2495,6 +2780,122 @@ mod tests {
     }
 
     #[test]
+    fn resource_syntax_is_positive_and_bounded() {
+        assert_eq!(parse_oci_size("1"), Some(1));
+        assert_eq!(parse_oci_size("64m"), Some(64 * 1024 * 1024));
+        assert_eq!(parse_oci_size("1T"), Some(MAX_MEMORY_BYTES));
+        for invalid in ["", "0", "01m", "1b", "-1", "1.5g", "18446744073709551615t"] {
+            assert_eq!(parse_oci_size(invalid), None, "{invalid}");
+        }
+
+        assert_eq!(parse_positive_decimal("0.5"), Some(0.5));
+        assert_eq!(parse_positive_decimal("2.0"), Some(2.0));
+        assert_eq!(parse_positive_decimal("1024"), Some(1024.0));
+        for invalid in [
+            "", "0", "0.0", "01", "1.", ".5", "-1", "1e3", "inf", "0.000001",
+        ] {
+            assert_eq!(parse_positive_decimal(invalid), None, "{invalid}");
+        }
+    }
+
+    #[test]
+    fn worker_config_rejects_unsafe_paths_identities_and_resource_limits() {
+        let root = temp_dir("config-validation");
+        let mut config = test_config(&root);
+        config.workspace = "/var/lib/hermes-fixture/workspace".into();
+        config.state_dir = "/var/lib/tentaflake-worker-fixture".into();
+        validate_config(&config).unwrap();
+
+        config.workspace = "/var/lib/hermes-fixture/./workspace".into();
+        assert!(validate_config(&config).is_err());
+        config.workspace = "/var/lib/tentaflake-worker-state-volumes/fixture".into();
+        assert!(validate_config(&config).is_err());
+        config.workspace = "/var/lib/hermes-fixture/workspace".into();
+        config.state_dir = "/var/lib/tentaflake-worker-other".into();
+        assert!(validate_config(&config).is_err());
+        config.state_dir = "/var/lib/tentaflake-worker-fixture".into();
+
+        config.container_uid = 0;
+        assert!(validate_config(&config).is_err());
+        config.container_uid = u32::MAX;
+        assert!(validate_config(&config).is_err());
+        config.container_uid = 10000;
+        config.container_gid = 0;
+        assert!(validate_config(&config).is_err());
+        config.container_gid = 10000;
+
+        config.pids_limit = MAX_PIDS_LIMIT + 1;
+        assert!(validate_config(&config).is_err());
+        config.pids_limit = 16;
+
+        config.max_snapshot_bytes = MAX_SNAPSHOT_BYTES + 1;
+        assert!(validate_config(&config).is_err());
+        config.max_snapshot_bytes = 1024;
+        config.max_snapshot_entries = MAX_SNAPSHOT_ENTRIES + 1;
+        assert!(validate_config(&config).is_err());
+        config.max_snapshot_entries = 16;
+        config.max_log_bytes = MAX_LOG_BYTES + 1;
+        assert!(validate_config(&config).is_err());
+        config.max_log_bytes = 1024;
+
+        config.memory = "0".into();
+        assert!(validate_config(&config).is_err());
+        config.memory = "2t".into();
+        assert!(validate_config(&config).is_err());
+        config.memory = "64m".into();
+        config.memory_swap = "32m".into();
+        assert!(validate_config(&config).is_err());
+        config.memory_swap = "64m".into();
+
+        config.cpus = "0".into();
+        assert!(validate_config(&config).is_err());
+        config.cpus = "1025".into();
+        assert!(validate_config(&config).is_err());
+        config.cpus = "0.5".into();
+
+        config.workspace_tmpfs_size = "65g".into();
+        assert!(validate_config(&config).is_err());
+        config.workspace_tmpfs_size = "8m".into();
+        config.tmp_tmpfs_size = "0".into();
+        assert!(validate_config(&config).is_err());
+        config.tmp_tmpfs_size = "4m".into();
+
+        config.max_timeout_seconds = MAX_TIMEOUT_SECONDS + 1;
+        assert!(validate_config(&config).is_err());
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn worker_audit_rejects_a_symlink_target() {
+        let root = temp_dir("audit-symlink");
+        let config = test_config(&root);
+        let target = root.join("audit-target");
+        fs::write(&target, b"do-not-append\n").unwrap();
+        let audit_path = config.state_dir.join("audit.jsonl");
+        symlink(&target, &audit_path).unwrap();
+
+        assert!(audit(&config, "fixture", "event", None, "detail").is_err());
+        assert_eq!(fs::read(&target).unwrap(), b"do-not-append\n");
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn worker_audit_rejects_a_non_private_existing_file() {
+        let root = temp_dir("audit-permissions");
+        let config = test_config(&root);
+        let audit_path = config.state_dir.join("audit.jsonl");
+        fs::write(&audit_path, b"do-not-append\n").unwrap();
+        fs::set_permissions(&audit_path, fs::Permissions::from_mode(0o644)).unwrap();
+
+        assert!(audit(&config, "fixture", "event", None, "detail").is_err());
+        assert_eq!(fs::read(&audit_path).unwrap(), b"do-not-append\n");
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn worker_state_layout_requires_the_post_mount_marker() {
         let root = temp_dir("state-layout-marker");
         let config = test_config(&root);
@@ -2510,14 +2911,59 @@ mod tests {
         assert_eq!(pending_metadata_bytes(&config).unwrap(), 4 * 4096);
         assert_eq!(pending_metadata_inodes(&config).unwrap(), 4 * 4);
         assert_eq!(
-            required_execution_state_bytes(&config).unwrap(),
-            2 * 1024 + 1024 + 4 * 4096 + STATE_CONTROL_RESERVE_BYTES
+            required_execution_state_bytes(&config, 0).unwrap(),
+            2 * 1024 + 1024 + config.max_pending_bytes + 4 * 4096 + STATE_CONTROL_RESERVE_BYTES
         );
+        assert_eq!(
+            required_execution_state_bytes(&config, 512).unwrap(),
+            2 * 1024
+                + 1024
+                + (config.max_pending_bytes - 512)
+                + 4 * 4096
+                + STATE_CONTROL_RESERVE_BYTES
+        );
+        assert!(required_execution_state_bytes(&config, config.max_pending_bytes + 1).is_err());
         assert_eq!(
             required_execution_state_inodes(&config).unwrap(),
             2 * 16 + 4 * 4 + STATE_CONTROL_RESERVE_INODES
         );
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn private_state_publish_is_atomic_and_non_overwriting() {
+        let root = temp_dir("private-state-atomic");
+        let path = root.join("pending.json");
+        let error = write_new_private_with(&path, |file| {
+            file.write_all(b"partial")?;
+            Err(io::Error::other("injected write failure"))
+        })
+        .unwrap_err();
+        assert!(error.contains("injected write failure"), "{error}");
+        assert!(!path.exists());
+
+        write_new_private(&path, b"complete").unwrap();
+        assert_eq!(fs::read(&path).unwrap(), b"complete");
+        assert!(write_new_private(&path, b"replacement").is_err());
+        assert_eq!(fs::read(&path).unwrap(), b"complete");
+
+        let published = root.join("published");
+        fs::create_dir(&published).unwrap();
+        let redirected = root.join("redirected");
+        symlink(&published, &redirected).unwrap();
+        let redirected_path = redirected.join("outside.json");
+        assert!(write_new_private(&redirected_path, b"must-not-publish").is_err());
+        assert!(!published.join("outside.json").exists());
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn stale_container_listing_requires_an_exact_utf8_name() {
+        assert!(listed_container_exists(b"tfw-fixture-job\n", "tfw-fixture-job").unwrap());
+        assert!(!listed_container_exists(b"tfw-fixture-job-old\n", "tfw-fixture-job").unwrap());
+        assert!(!listed_container_exists(b"", "tfw-fixture-job").unwrap());
+        assert!(listed_container_exists(&[0xff], "tfw-fixture-job").is_err());
     }
 
     #[test]
@@ -2848,7 +3294,7 @@ mod tests {
         assert!(claim_pending(&config, "claimed").is_err());
         fs::remove_file(pending_path(&config, "claimed")).unwrap();
 
-        recover_inflight(&config).unwrap();
+        recover_inflight_with(&config, |_, _| Ok(())).unwrap();
         assert!(!inflight_path(&config, "claimed").exists());
         let result: serde_json::Value = serde_json::from_slice(
             &fs::read(

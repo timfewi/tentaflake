@@ -34,6 +34,9 @@ const ETTL_CONFIGURATION: u64 = 20;
 const ETRUSTED_BINDING: u64 = 21;
 const ESTALE_ATTESTATION: u64 = 22;
 
+#[test_only]
+const ETEST_EVENT: u64 = 100;
+
 const STATUS_ACTIVE: u8 = 0;
 const STATUS_REVOKED: u8 = 1;
 const DIGEST_LENGTH: u64 = 32;
@@ -84,6 +87,7 @@ public struct AgentRecord has key {
     sequence: u64,
     issuer_key_id: u64,
     issuer_set_epoch: u64,
+    not_before_epoch: u64,
     expires_epoch: u64,
     policy_digest: vector<u8>,
     image_digest: vector<u8>,
@@ -125,11 +129,13 @@ struct SigningPayload has copy, drop {
 
 /// A short-lived, non-storable proof for a same-transaction handoff.
 /// This type is not a standalone authorization token: a receiving module must
-/// call assert_verified_for with its own trusted IDs and commitments.
+/// call assert_verified_for with its own trusted IDs, commitments, and age
+/// policy.
 public struct VerifiedAgent has drop {
     registry_id: ID,
     agent_record_id: ID,
     sequence: u64,
+    not_before_epoch: u64,
     policy_digest: vector<u8>,
     image_digest: vector<u8>,
     golden_eval_report_digest: vector<u8>,
@@ -147,7 +153,37 @@ public struct AttestationSubmitted has copy, drop {
     issuer_key_id: u64,
     issuer_set_epoch: u64,
     sequence: u64,
+    not_before_epoch: u64,
     expires_epoch: u64,
+}
+
+public struct AdminCapTransferred has copy, drop {
+    registry_id: ID,
+    admin_cap_id: ID,
+    recipient: address,
+}
+
+public struct IssuerAdded has copy, drop {
+    registry_id: ID,
+    issuer_key_id: u64,
+    public_key: vector<u8>,
+}
+
+public struct IssuerRotated has copy, drop {
+    registry_id: ID,
+    issuer_key_id: u64,
+    issuer_set_epoch: u64,
+    public_key: vector<u8>,
+}
+
+public struct RegistryPauseChanged has copy, drop {
+    registry_id: ID,
+    paused: bool,
+}
+
+public struct AgentRevoked has copy, drop {
+    registry_id: ID,
+    agent_record_id: ID,
 }
 
 /// Build a registry without sharing it. Deployment code should immediately use
@@ -203,6 +239,11 @@ public fun share_registry(registry: Registry) {
 }
 
 public fun transfer_admin_cap(cap: AdminCap, recipient: address) {
+    event::emit(AdminCapTransferred {
+        registry_id: copy cap.registry_id,
+        admin_cap_id: object::uid_to_inner(&cap.id),
+        recipient,
+    });
     transfer::transfer(cap, recipient);
 }
 
@@ -227,6 +268,7 @@ public fun register_agent(
         sequence: 0,
         issuer_key_id: 0,
         issuer_set_epoch: 0,
+        not_before_epoch: 0,
         expires_epoch: 0,
         policy_digest: vector::empty(),
         image_digest: vector::empty(),
@@ -252,6 +294,7 @@ public fun add_issuer(
     assert_public_key(&public_key);
     assert!(!issuer_exists(registry, key_id), EDUPLICATE_ISSUER);
     assert!(vector::length(&registry.issuers) < MAX_ISSUERS, EMANY_ISSUERS);
+    let event_public_key = copy public_key;
     vector::push_back(
         &mut registry.issuers,
         Issuer {
@@ -260,6 +303,11 @@ public fun add_issuer(
             active: false,
         },
     );
+    event::emit(IssuerAdded {
+        registry_id: object::uid_to_inner(&registry.id),
+        issuer_key_id: key_id,
+        public_key: event_public_key,
+    });
 }
 
 /// Atomically replace the single active issuer. The target may be a staged key
@@ -272,6 +320,7 @@ public fun rotate_issuer(
 ) {
     assert_admin(cap, registry);
     assert_public_key(&public_key);
+    let event_public_key = copy public_key;
     let index = 0;
     let length = vector::length(&registry.issuers);
     while (index < length) {
@@ -282,11 +331,21 @@ public fun rotate_issuer(
     issuer.public_key = public_key;
     issuer.active = true;
     registry.issuer_set_epoch = registry.issuer_set_epoch + 1;
+    event::emit(IssuerRotated {
+        registry_id: object::uid_to_inner(&registry.id),
+        issuer_key_id: key_id,
+        issuer_set_epoch: registry.issuer_set_epoch,
+        public_key: event_public_key,
+    });
 }
 
 public fun set_paused(cap: &AdminCap, registry: &mut Registry, paused: bool) {
     assert_admin(cap, registry);
     registry.paused = paused;
+    event::emit(RegistryPauseChanged {
+        registry_id: object::uid_to_inner(&registry.id),
+        paused,
+    });
 }
 
 /// Revoke rather than delete: consumers can distinguish a revoked record from
@@ -295,6 +354,10 @@ public fun revoke_agent(cap: &AdminCap, registry: &Registry, record: &mut AgentR
     assert_admin(cap, registry);
     assert_record_belongs_to_registry(registry, record);
     record.status = STATUS_REVOKED;
+    event::emit(AgentRevoked {
+        registry_id: object::uid_to_inner(&registry.id),
+        agent_record_id: object::uid_to_inner(&record.id),
+    });
 }
 
 /// Anyone may relay an attestation, but only the single active issuer's fresh,
@@ -331,15 +394,17 @@ public entry fun submit_attestation(
     submit_attestation_inner(registry, record, attestation, signature, ctx);
 }
 
-/// Verify a record against a consumer's pinned registry/record IDs and
-/// commitments. The consumer must own or otherwise authenticate these expected
-/// values; accepting only VerifiedAgent would be an unbound universal proof.
+/// Verify a record against a consumer's pinned registry/record IDs,
+/// commitments, minimum sequence, and maximum age in epochs. The consumer must
+/// own or otherwise authenticate these expected values; accepting only
+/// VerifiedAgent would be an unbound universal proof.
 public fun verify_bound(
     registry: &Registry,
     record: &AgentRecord,
     expected_registry_id: ID,
     expected_agent_record_id: ID,
     minimum_sequence: u64,
+    max_attestation_age_epochs: u64,
     expected_policy_digest: &vector<u8>,
     expected_image_digest: &vector<u8>,
     expected_golden_eval_report_digest: &vector<u8>,
@@ -352,25 +417,30 @@ public fun verify_bound(
         expected_registry_id,
         expected_agent_record_id,
         minimum_sequence,
+        max_attestation_age_epochs,
         expected_policy_digest,
         expected_image_digest,
         expected_golden_eval_report_digest,
         expected_evidence_digest,
+        ctx,
     );
     proof
 }
 
 /// Re-check a proof handed across a programmable transaction block. Receiving
-/// modules must call this with their own pinned IDs and expected commitments.
+/// modules must call this with their own pinned IDs, expected commitments, and
+/// maximum acceptable age, using the current transaction context.
 public fun assert_verified_for(
     proof: &VerifiedAgent,
     expected_registry_id: ID,
     expected_agent_record_id: ID,
     minimum_sequence: u64,
+    max_attestation_age_epochs: u64,
     expected_policy_digest: &vector<u8>,
     expected_image_digest: &vector<u8>,
     expected_golden_eval_report_digest: &vector<u8>,
     expected_evidence_digest: &vector<u8>,
+    ctx: &TxContext,
 ) {
     assert!(proof.registry_id == expected_registry_id, ETRUSTED_BINDING);
     assert!(
@@ -378,6 +448,12 @@ public fun assert_verified_for(
         ETRUSTED_BINDING,
     );
     assert!(proof.sequence >= minimum_sequence, ESEQUENCE);
+    let current_epoch = tx_context::epoch(ctx);
+    assert!(proof.not_before_epoch <= current_epoch, ENOT_YET_VALID);
+    assert!(
+        current_epoch - proof.not_before_epoch <= max_attestation_age_epochs,
+        ESTALE_ATTESTATION,
+    );
     assert_digest_matches(&proof.policy_digest, expected_policy_digest);
     assert_digest_matches(&proof.image_digest, expected_image_digest);
     assert_digest_matches(
@@ -403,11 +479,14 @@ fun verify_current(
         record.issuer_set_epoch == registry.issuer_set_epoch,
         EISSUER_SET_EPOCH,
     );
-    assert!(tx_context::epoch(ctx) < record.expires_epoch, EEXPIRED);
+    let current_epoch = tx_context::epoch(ctx);
+    assert!(record.not_before_epoch <= current_epoch, ENOT_YET_VALID);
+    assert!(current_epoch < record.expires_epoch, EEXPIRED);
     VerifiedAgent {
         registry_id: object::uid_to_inner(&registry.id),
         agent_record_id: object::uid_to_inner(&record.id),
         sequence: record.sequence,
+        not_before_epoch: record.not_before_epoch,
         policy_digest: copy record.policy_digest,
         image_digest: copy record.image_digest,
         golden_eval_report_digest: copy record.golden_eval_report_digest,
@@ -464,10 +543,12 @@ fun submit_attestation_inner(
     let sequence = attestation.sequence;
     let issuer_key_id = attestation.issuer_key_id;
     let issuer_set_epoch = attestation.issuer_set_epoch;
+    let not_before_epoch = attestation.not_before_epoch;
     let expires_epoch = attestation.expires_epoch;
     record.sequence = sequence;
     record.issuer_key_id = issuer_key_id;
     record.issuer_set_epoch = issuer_set_epoch;
+    record.not_before_epoch = not_before_epoch;
     record.expires_epoch = expires_epoch;
     record.policy_digest = attestation.policy_digest;
     record.image_digest = attestation.image_digest;
@@ -480,14 +561,169 @@ fun submit_attestation_inner(
         issuer_key_id,
         issuer_set_epoch,
         sequence,
+        not_before_epoch,
         expires_epoch,
     });
 }
 
+#[test_only]
+/// Require exactly one issuer-add event with the expected indexed payload.
+public fun assert_single_issuer_added_event(
+    events: &vector<IssuerAdded>,
+    expected_registry_id: ID,
+    expected_issuer_key_id: u64,
+    expected_public_key: &vector<u8>,
+) {
+    assert!(vector::length(events) == 1, ETEST_EVENT);
+    let emitted = vector::borrow(events, 0);
+    assert!(emitted.registry_id == expected_registry_id, ETEST_EVENT);
+    assert!(
+        emitted.issuer_key_id == expected_issuer_key_id,
+        ETEST_EVENT,
+    );
+    assert!(&emitted.public_key == expected_public_key, ETEST_EVENT);
+}
+
+#[test_only]
+/// Require exactly one issuer-rotation event with the expected indexed payload.
+public fun assert_single_issuer_rotated_event(
+    events: &vector<IssuerRotated>,
+    expected_registry_id: ID,
+    expected_issuer_key_id: u64,
+    expected_issuer_set_epoch: u64,
+    expected_public_key: &vector<u8>,
+) {
+    assert!(vector::length(events) == 1, ETEST_EVENT);
+    let emitted = vector::borrow(events, 0);
+    assert!(emitted.registry_id == expected_registry_id, ETEST_EVENT);
+    assert!(
+        emitted.issuer_key_id == expected_issuer_key_id,
+        ETEST_EVENT,
+    );
+    assert!(
+        emitted.issuer_set_epoch == expected_issuer_set_epoch,
+        ETEST_EVENT,
+    );
+    assert!(&emitted.public_key == expected_public_key, ETEST_EVENT);
+}
+
+#[test_only]
+/// Require exactly one pause event with the expected indexed payload.
+public fun assert_single_registry_pause_changed_event(
+    events: &vector<RegistryPauseChanged>,
+    expected_registry_id: ID,
+    expected_paused: bool,
+) {
+    assert!(vector::length(events) == 1, ETEST_EVENT);
+    let emitted = vector::borrow(events, 0);
+    assert!(emitted.registry_id == expected_registry_id, ETEST_EVENT);
+    assert!(emitted.paused == expected_paused, ETEST_EVENT);
+}
+
+#[test_only]
+/// Require exactly one AdminCap-transfer event with the expected indexed payload.
+public fun assert_single_admin_cap_transferred_event(
+    events: &vector<AdminCapTransferred>,
+    expected_registry_id: ID,
+    expected_admin_cap_id: ID,
+    expected_recipient: address,
+) {
+    assert!(vector::length(events) == 1, ETEST_EVENT);
+    let emitted = vector::borrow(events, 0);
+    assert!(emitted.registry_id == expected_registry_id, ETEST_EVENT);
+    assert!(emitted.admin_cap_id == expected_admin_cap_id, ETEST_EVENT);
+    assert!(emitted.recipient == expected_recipient, ETEST_EVENT);
+}
+
+#[test_only]
+/// Require exactly one revocation event with the expected indexed payload.
+public fun assert_single_agent_revoked_event(
+    events: &vector<AgentRevoked>,
+    expected_registry_id: ID,
+    expected_agent_record_id: ID,
+) {
+    assert!(vector::length(events) == 1, ETEST_EVENT);
+    let emitted = vector::borrow(events, 0);
+    assert!(emitted.registry_id == expected_registry_id, ETEST_EVENT);
+    assert!(
+        emitted.agent_record_id == expected_agent_record_id,
+        ETEST_EVENT,
+    );
+}
+
+#[test_only]
+/// Construct a non-storable proof for focused consumer-policy unit tests.
+public fun test_verified_agent(
+    registry_id: ID,
+    agent_record_id: ID,
+    sequence: u64,
+    not_before_epoch: u64,
+    policy_digest: vector<u8>,
+    image_digest: vector<u8>,
+    golden_eval_report_digest: vector<u8>,
+    evidence_digest: vector<u8>,
+): VerifiedAgent {
+    assert_digest(&policy_digest);
+    assert_digest(&image_digest);
+    assert_digest(&golden_eval_report_digest);
+    assert_digest(&evidence_digest);
+    VerifiedAgent {
+        registry_id,
+        agent_record_id,
+        sequence,
+        not_before_epoch,
+        policy_digest,
+        image_digest,
+        golden_eval_report_digest,
+        evidence_digest,
+    }
+}
+
+#[test_only]
+/// Serialize fixture fields through the same BCS path used for verification.
+public fun test_signing_bytes(
+    network_domain: vector<u8>,
+    registry_id: ID,
+    agent_record_id: ID,
+    protocol_version: u64,
+    issuer_key_id: u64,
+    issuer_set_epoch: u64,
+    sequence: u64,
+    not_before_epoch: u64,
+    expires_epoch: u64,
+    policy_digest: vector<u8>,
+    image_digest: vector<u8>,
+    golden_eval_report_digest: vector<u8>,
+    evidence_digest: vector<u8>,
+): vector<u8> {
+    let attestation = Attestation {
+        registry_id,
+        agent_record_id,
+        protocol_version,
+        issuer_key_id,
+        issuer_set_epoch,
+        sequence,
+        not_before_epoch,
+        expires_epoch,
+        policy_digest,
+        image_digest,
+        golden_eval_report_digest,
+        evidence_digest,
+    };
+    signing_payload_bytes(network_domain, &attestation)
+}
+
 fun signing_bytes(registry: &Registry, attestation: &Attestation): vector<u8> {
+    signing_payload_bytes(copy registry.network_domain, attestation)
+}
+
+fun signing_payload_bytes(
+    network_domain: vector<u8>,
+    attestation: &Attestation,
+): vector<u8> {
     bcs::to_bytes(&SigningPayload {
         domain: DOMAIN,
-        network_domain: copy registry.network_domain,
+        network_domain,
         registry_id: copy attestation.registry_id,
         agent_record_id: copy attestation.agent_record_id,
         protocol_version: attestation.protocol_version,

@@ -2,7 +2,7 @@
 
 ## Result
 
-Installed hosts default to `balanced`. All three runtime builders pass their
+Installed hosts default to `balanced`. Both runtime builders pass their
 final merged OCI configuration through one policy. The policy rejects an
 unsafe configuration during NixOS evaluation instead of silently weakening
 it. `strict` also fails evaluation because no tested separate-kernel boundary
@@ -63,7 +63,12 @@ overrides cannot bypass the final checks. It enforces:
 Default per-agent limits are configurable under
 `tentaflake.security.resources`: `memory = "2g"`, `memorySwap = "2g"`,
 `cpus = "2.0"`, `nofile = 4096`, `tmpfsSize = "256m"`, and
-`runTmpfsSize = "64m"`. PID defaults remain runtime-builder specific.
+`runTmpfsSize = "64m"`. PID defaults remain runtime-builder specific. Memory
+and total-memory-plus-swap must be positive sizes no greater than 1 TiB, with
+the total-memory-plus-swap limit at least as large as memory. CPU must be a
+positive decimal no greater than 1024 with at most five fractional digits. Each tmpfs size must be positive and no greater than
+64 GiB. Invalid or unlimited-looking values fail evaluation instead of being
+passed to the runtime.
 
 `tentaflake.workspaceQuota.agents` provides a backend-independent hard
 workspace ceiling by mounting a fixed-size ext4 image before the controller.
@@ -191,10 +196,19 @@ effective/bounding capabilities, AppArmor profile, and Docker-compatible
 `HostConfig`; missing schema fields stay explicitly unknown. A blocked or
 unparseable probe is a warning, never green. Configured broker endpoints are
 also checked for credential, policy, and audit-path readiness through
-`/healthz`. The generated manifest records each capsule's exact broker-network
-name, and live inspection treats a different network as unsafe; a legacy
-manifest without that field remains unknown rather than accepted. The check
-still does not prove complete controller-tool audit
+`/healthz`. The generated manifest records each capsule's exact broker network,
+non-tmpfs mounts, three secure tmpfs sizes, required absence of published
+ports, and normalized resource limits. Live inspection requires an explicit
+running state; the exact network set and, for a brokered capsule, a separate
+internal-bridge check; no `PublishAllPorts` or actual port binding; exact
+source, destination, and write mode for every non-tmpfs mount; the complete
+`/run`/`/tmp`/`/var/tmp` tmpfs set with sizes and backend-normalized hardening
+options; and exact memory, total memory-plus-swap, CPU, PID, `nofile`, and
+`nproc` limits. In plain terms, the doctor compares what the host declared with
+what the running OCI engine reports for that container. A legacy manifest
+without these fields or backend JSON with missing or malformed fields remains
+unknown rather than accepted; explicit extra exposure or value drift is
+critical. The check still does not prove complete controller-tool audit
 coverage, remote policy delivery, or cross-agent network denial; those require
 target-host runtime and VM evidence.
 

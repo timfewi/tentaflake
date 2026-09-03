@@ -59,7 +59,14 @@ or cost budgets above 90 percent. A hardened root oneshot reads only the exact
 configured broker audit/budget paths once per minute and writes numeric metrics
 for node exporter's textfile collector; it does not export prompt bodies or
 credentials. Missing state files produce zero usage until a broker has written
-state.
+state. To bound work on large fleets, it reads only the trailing 500 audit
+records per broker mode by default (`maxAuditLinesPerBroker`) and runs with a
+45-second timeout, 256 MiB memory ceiling, 32-task ceiling, and 50% CPU quota.
+Raise the line bound only after measuring the configured request rate; a bound
+too low can undercount a five-minute denial window but cannot expose prompts.
+A malformed or incomplete trailing audit line is ignored so a broker crash does
+not prevent all metric publication. Budget values are accepted only as
+non-negative integers before they enter the Prometheus textfile.
 
 Prometheus evaluates these rules, but this generic profile deliberately does
 not guess an email, pager, webhook, or external Alertmanager destination.

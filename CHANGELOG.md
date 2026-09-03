@@ -24,10 +24,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   from using an unmounted host directory. Static and runtime block/inode
   reservations include snapshot, queue metadata, logs, control space, and
   ext4 overhead.
-- Pending requests are claimed under a worker-wide lock with non-overwriting
-  atomic `pending/` to `inflight/` renames. Concurrent drain/approve/deny paths
-  cannot execute twice; interrupted claims become durable outcome-unknown
-  results and are never replayed automatically.
+- Builder and worker validation now reject root identities, unsafe/dot-segment
+  state or workspace paths, both backing-image roots, zero/unlimited resource
+  strings, a total-memory-plus-swap limit below memory, and worker timeouts
+  above 24 hours. The Rust binary repeats the Nix checks before invoking the
+  OCI runtime.
+- Pending requests are published from an unnamed, fully synced private file and
+  then claimed under a worker-wide lock with non-overwriting atomic `pending/`
+  to `inflight/` renames. A partial write never becomes a queue entry.
+  Concurrent drain/approve/deny paths cannot execute twice; interrupted claims
+  become durable outcome-unknown results and are never replayed automatically.
+  Recovery now fails closed when the OCI runtime cannot list or inspect an exact
+  owned capsule, and runtime capacity retains the unused pending-byte reserve.
 
 ### Added
 - A versioned Golden host-policy evaluation corpus runs inside the existing VM
@@ -37,22 +45,62 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   queue count/byte backpressure, concurrent atomic claiming, and worker-state
   capacity rejection before capsule execution.
 - An experimental, source-only Sui Move agent-attestation reference package
-  provides shared Registry and AgentRecord objects, non-transferable AdminCap
-  custody, a single active issuer with staged rotation, fresh exact-sequence
-  Ed25519 attestations, expiry, pause, revocation, and commitment-bound proof
-  verification. It adds no default service, RPC path, wallet, signer, or
-  deployment.
+  provides shared Registry and AgentRecord objects, module-controlled AdminCap
+  transfer, a single active issuer with staged rotation, epoch-bounded
+  exact-sequence Ed25519 attestations, expiry, temporary pause, revocation,
+  commitment-bound proof verification, and exact privileged-event payload test
+  sources. A deterministic Python BCS/Ed25519 verifier checks committed
+  fixture bytes and signature behavior without exposing private test or
+  production key material. Move-side serializer compatibility remains gated on
+  compiling the committed Move test with the pinned Sui toolchain. The
+  integration adds no default service, RPC path, wallet, signer, or deployment.
 
-### Changed
 ### Fixed
 - The disposable worker now borrows its parsed configuration during inflight
   recovery so the Rust binary compiles, and its path unit wakes on inbox
   directory changes instead of persistent non-emptiness. Preserved ignored
   entries therefore no longer cause endless successful service activations and
   repeated audit growth.
+- The security doctor now targets the container identity actually present in
+  its generated security manifest. It requires explicit
+  `State.Running=true`, the exact declared network set and, for a brokered
+  capsule, a separately inspected internal bridge, no actual port publication,
+  exact non-tmpfs mounts, the exact hardened tmpfs set and sizes, and exact
+  memory/total-memory-plus-swap/CPU/PID and `nofile`/`nproc` limits after
+  Docker/Podman normalization. Stopped, incomplete, malformed, or legacy
+  evidence remains unknown; extra exposure or explicit drift is critical
+  instead of being reported as secure.
+- Golden evaluation validation is now a fast standalone check with a closed,
+  typed corpus schema. Its oracle requires one exact ordered audit transition,
+  rejects duplicate/contradictory terminal events, and proves offline execution
+  from the capsule network namespace instead of relying on a public HTTPS
+  request that could fail for unrelated reasons.
 
 ### Breaking
-
+- Enabling a disposable worker now places its private queue, results, audit, and
+  recovery state on a mandatory fixed-size ext4 image. Existing non-empty
+  `/var/lib/tentaflake-worker-<container>` directories are deliberately not
+  migrated automatically. Operators must stop the controller and worker,
+  reconcile pending/inflight outcomes, and perform the documented offline
+  migration before activation; rollback also requires an explicit state-data
+  step rather than only selecting the previous NixOS generation.
+- Existing secure controller and agent-builder declarations now fail
+  evaluation when UID/GID is zero, state or workspace paths are not canonical
+  absolute paths or enter either backing-image root, resource values are
+  zero/unlimited or exceed the documented 1 TiB memory,
+  1 TiB total-memory-plus-swap, 1024 CPU, or 64 GiB tmpfs bounds, CPU precision
+  exceeds five fractional digits, or the total-memory-plus-swap limit is below
+  memory.
+- Existing disposable-worker declarations now fail evaluation and also fail
+  closed at Rust worker startup when UID/GID is zero, the workspace path is not
+  canonical or enters either backing-image root, resource values are
+  zero/unlimited or exceed the documented 1 TiB memory,
+  1 TiB total-memory-plus-swap, 1024 CPU, or 64 GiB tmpfs bounds, the
+  total-memory-plus-swap limit is below memory, or timeout exceeds 24 hours.
+  Correct these declarations before upgrading. If a persistent state or
+  workspace path must change, stop every consumer and plan the data migration;
+  the worker-state image migration remains the explicit offline procedure
+  described above.
 
 
 ## [0.4.0] - 2026-08-23

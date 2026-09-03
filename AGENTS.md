@@ -1,6 +1,6 @@
 # Agent Instructions — tentaflake
 
-NixOS flake template for running isolated AI agents (Hermes and ZeroClaw) in Docker containers on a single machine.
+NixOS flake template for running isolated AI agents (Hermes and ZeroClaw) in Docker or Podman OCI containers on a single machine.
 
 ## Build & Test
 
@@ -10,6 +10,8 @@ nix build .#installer-iso
 nix build \
   .#checks.x86_64-linux.vm-integration \
   -L
+just golden-eval-schema
+just sui-attestation-vector
 cargo fmt --all -- --check
 cargo clippy --workspace \
   --all-targets -- -D warnings
@@ -53,6 +55,8 @@ still accurate before finishing — and update them in the same change:
 - A balanced agent with `autoStart = true` requires its exact broker, worker,
   and workspace-quota declarations; stopped scaffolds remain `network=none`.
 - `tests/` — NixOS VM test backing `checks.<system>.vm-integration`
+- `integrations/` — optional source references such as the experimental Sui
+  Move package; never grant an agent chain RPC, wallet, gas, or issuer keys
 - `installer/` — installer ISO and disk-install scripts
 - `examples/` — consumer-flake reference
 - `docs/` — user-facing documentation

@@ -40,9 +40,17 @@ check:
 build:
     nix build .#nixosConfigurations.tentaflake.config.system.build.toplevel --no-link
 
-# Run the versioned host-policy golden evaluation corpus in the VM gate.
+# Validate the Golden Eval schema and runner oracle without booting a VM.
+golden-eval-schema:
+    nix build .#checks.x86_64-linux.golden-eval-schema -L
+
+# Run the versioned host-policy Golden Eval corpus in the VM gate.
 golden-evals:
     nix build .#checks.x86_64-linux.vm-integration -L
+
+# Verify the deterministic Sui BCS payload and Ed25519 signing fixture.
+sui-attestation-vector:
+    nix build .#checks.x86_64-linux.sui-attestation-signing-vector -L
 
 # ── Formatting & lint ────────────────────────────────────────
 

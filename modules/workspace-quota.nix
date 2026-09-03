@@ -7,6 +7,7 @@
 let
   cfg = config.tentaflake.workspaceQuota;
   utils = import (pkgs.path + "/nixos/lib/utils.nix") { inherit lib config pkgs; };
+  containerSecurity = import ../lib/containerSecurity.nix { inherit lib; };
   enabledAgents = lib.filterAttrs (_: agent: agent.enable) cfg.agents;
   containerNames = lib.attrNames config.virtualisation.oci-containers.containers;
   volumeRoot = "/var/lib/tentaflake-workspace-volumes";
@@ -14,7 +15,11 @@ let
   prepareUnit = name: "tentaflake-workspace-quota-prepare-${name}.service";
   ownerUnit = name: "tentaflake-workspace-quota-${name}.service";
   mountUnit = agent: "${utils.escapeSystemdPath agent.workspace}.mount";
-  safePath = value: lib.match "^/var/lib/[A-Za-z0-9._+/-]+$" value != null;
+  safePath =
+    value:
+    lib.hasPrefix "/var/lib/" value
+    && containerSecurity.canonicalPath value
+    && !(containerSecurity.forbiddenWritableSource value);
 
   agentType = lib.types.submodule (
     { name, ... }:
@@ -96,7 +101,7 @@ let
           echo "inspect and remove that exact file before retrying" >&2
           exit 1
         fi
-        truncate --size "$expected" "$image_tmp"
+        fallocate --length "$expected" "$image_tmp"
         mkfs.ext4 -F -q -m 0 "$image_tmp"
         chmod 0600 "$image_tmp"
         mv -T "$image_tmp" "$image"
@@ -110,6 +115,10 @@ let
       fi
 
       if ! findmnt --noheadings --mountpoint "$workspace" >/dev/null; then
+        if ! fallocate --length "$expected" "$image"; then
+          echo "tentaflake: cannot fully preallocate workspace image $image" >&2
+          exit 1
+        fi
         rc=0
         e2fsck -p "$image" || rc=$?
         if [ "$rc" -gt 1 ]; then

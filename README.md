@@ -145,7 +145,11 @@ tentaflake health [--json] [--hide]
 tentaflake doctor [--json] [--hide]
 tentaflake doctor --security [--json] [--hide]
 tentaflake logs <agent>
+tentaflake start <agent>
+tentaflake stop <agent>
 tentaflake restart <agent>
+tentaflake rebuild
+tentaflake update
 tentaflake shell <agent>
 tentaflake exec <agent> -- <command>
 tentaflake stats
@@ -175,7 +179,8 @@ Management-plane policy is covered by the
 
 The shared policy in `lib/containerSecurity.nix` is applied after caller
 overrides and asserts the secure invariants. The secure path drops all
-capabilities, uses `runsc`, applies CPU/RAM/swap/PID/ulimit/tmpfs limits, and
+capabilities, uses `runsc`, applies CPU/memory/total-memory-plus-swap/PID/ulimit/tmpfs
+limits, and
 rejects ports, devices, caller networks, real credential files, sensitive
 mounts, secret-like environment keys, and attempts to override OCI security
 flags. The only secure network exception is the module-generated internal
@@ -365,8 +370,15 @@ Piper voice assets remain available as `packages.x86_64-linux.piper-voices`.
 unpublished Move reference package for agent-evidence commitments. It is not
 imported by the core module set and does not give agents RPC access, a wallet,
 a signing key, or an automatic publisher. The intended issuer and relayer stay
-host-side and explicitly scoped. A consumer must pin its registry, record, and
-commitment values rather than accepting a proof type alone. See the
+host-side and explicitly scoped. A consumer must pin its registry, record,
+minimum sequence, maximum attestation age, and commitments, pass the current
+transaction context, and enforce a separate actor/action capability rather
+than accepting a proof type alone. A valid on-chain statement binds an
+issuer's claim to exact evidence digests; it does not prove that the evidence
+is truthful or sub-epoch fresh, make the agent safe, or authorize an action.
+`just sui-attestation-vector` verifies the deterministic BCS/Ed25519 fixture,
+but a production gate also requires the pinned Sui compiler/unit suite and a
+deployment-specific local-network drill. See the
 [Sui attestation guide](docs/17-sui-agent-attestation.md) before evaluating a
 testnet deployment.
 
@@ -378,6 +390,8 @@ cargo clippy --workspace \
   --all-targets -- -D warnings
 cargo test --workspace
 nix fmt -- --ci
+just golden-eval-schema
+just sui-attestation-vector
 nix flake check
 nix build .#installer-iso
 ```

@@ -75,6 +75,35 @@ duplicate networks/subnets, unrelated gateways, missing modes, plain HTTP
 providers, provider files outside `/run`, duplicate models, wildcard hosts,
 wildcard media types, and deterministic bridge-interface collisions.
 
+For a host with many agents, set aggregate ceilings explicitly. They are checked
+at evaluation time against the sum of enabled agent budgets, so a configuration
+cannot accidentally admit more aggregate provider cost or concurrency than the
+operator planned:
+
+```nix
+tentaflake.broker = {
+  maxEnabledAgents = 1000;
+  maxTotalConcurrency = 400;
+  maxTotalRequestsPerMinute = 3000;
+  maxTotalDailyTokenBudget = 100000000;
+  maxTotalDailyCostMicrousd = 1000000000;
+};
+```
+
+These are admission controls for declared limits, not a distributed rate
+limiter. `maxEnabledAgents` bounds the generated broker units, internal
+bridges, and state directories; the other limits bound declared broker policy.
+Choose them from measured host, provider-account, and incident-budget capacity;
+leave an option unset only after explicitly accepting that no corresponding
+host-wide ceiling is enforced.
+
+Every broker process is additionally contained by systemd with a default
+128 MiB `MemoryMax`, `TasksMax = 64`, and `LimitNOFILE = 4096`. Tune the
+`serviceMemoryMaxBytes`, `serviceTasksMax`, and `serviceNoFileLimit` options
+only from measured request/response and connection behavior; these per-service
+limits complement, but do not replace, host capacity planning or the aggregate
+admission ceilings.
+
 ## Credential boundary
 
 The real provider credential is supplied to the LLM unit through systemd
@@ -88,7 +117,9 @@ mask bit only for an exact file directly below `$CREDENTIALS_DIRECTORY`;
 ordinary credential files remain restricted to owner-only permissions, and
 other-access bits are always rejected.
 
-The credential setup unit creates:
+The credential setup unit creates these files in a sandbox with no network,
+private temporary and device views, no additional Linux capabilities, and no
+namespace or set-ID transitions:
 
 ```text
 /run/tentaflake-broker/<container>/agent-token
@@ -159,7 +190,12 @@ free of prompt injection.
 The brokers fail closed when authentication, policy, DNS, upstream TLS,
 budget-state persistence, quarantine, or audit persistence fails. Budget
 reservations are conservative and are not refunded after a failed upstream
-call.
+call. Each budget-state replacement synchronizes both the new file and its
+parent directory before the request is considered reserved, preventing a
+successful rename from being lost across a host crash. The current rate window
+is stored with the daily budget, so a broker restart cannot reopen it. A
+backward host-clock step does not reopen a previously spent daily or rate
+window; it fails closed until time reaches the already observed window.
 
 `GET /healthz` verifies that the virtual key, provider credential when
 applicable, and prompt-free audit path are readable. Broker units restart on

@@ -197,6 +197,24 @@ let
         Type = "oneshot";
         RemainAfterExit = true;
         UMask = "0077";
+        NoNewPrivileges = true;
+        PrivateDevices = true;
+        PrivateTmp = true;
+        ProtectClock = true;
+        ProtectControlGroups = true;
+        ProtectHome = true;
+        ProtectHostname = true;
+        ProtectKernelLogs = true;
+        ProtectKernelModules = true;
+        ProtectKernelTunables = true;
+        ProtectSystem = "strict";
+        RestrictAddressFamilies = [ "AF_UNIX" ];
+        RestrictNamespaces = true;
+        RestrictRealtime = true;
+        RestrictSUIDSGID = true;
+        LockPersonality = true;
+        SystemCallArchitectures = "native";
+        CapabilityBoundingSet = [ ];
       };
       script = ''
         runtime_dir=/run/tentaflake-broker/${lib.escapeShellArg name}
@@ -299,6 +317,9 @@ let
       Restart = "on-failure";
       RestartSec = "5s";
       UMask = "0077";
+      MemoryMax = cfg.serviceMemoryMaxBytes;
+      TasksMax = cfg.serviceTasksMax;
+      LimitNOFILE = cfg.serviceNoFileLimit;
       NoNewPrivileges = true;
       PrivateDevices = true;
       PrivateTmp = true;
@@ -346,6 +367,9 @@ let
     result // servicesFor name agent
   ) { } enabledAgents;
   unique = values: lib.length values == lib.length (lib.unique values);
+  sumEnabled =
+    field: lib.foldl' (total: agent: total + agent.${field}) 0 (lib.attrValues enabledAgents);
+  withinTotal = limit: value: limit == null || value <= limit;
   brokerPorts =
     agent:
     lib.optional agent.llm.enable agent.llm.port ++ lib.optional agent.fetch.enable agent.fetch.port;
@@ -392,6 +416,46 @@ in
       defaultText = lib.literalExpression "pkgs.callPackage ../pkgs/tentaflake-broker { }";
       description = "Broker package used by managed systemd services.";
     };
+    maxEnabledAgents = lib.mkOption {
+      type = lib.types.nullOr lib.types.ints.positive;
+      default = null;
+      description = "Optional host-wide ceiling for the number of enabled broker agent declarations.";
+    };
+    serviceMemoryMaxBytes = lib.mkOption {
+      type = lib.types.ints.positive;
+      default = 128 * 1024 * 1024;
+      description = "Hard memory ceiling in bytes for each broker systemd service.";
+    };
+    serviceTasksMax = lib.mkOption {
+      type = lib.types.ints.positive;
+      default = 64;
+      description = "Hard task ceiling for each broker systemd service.";
+    };
+    serviceNoFileLimit = lib.mkOption {
+      type = lib.types.ints.positive;
+      default = 4096;
+      description = "Hard open-file-descriptor ceiling for each broker systemd service.";
+    };
+    maxTotalConcurrency = lib.mkOption {
+      type = lib.types.nullOr lib.types.ints.positive;
+      default = null;
+      description = "Optional host-wide ceiling for the sum of enabled broker maxConcurrency values.";
+    };
+    maxTotalRequestsPerMinute = lib.mkOption {
+      type = lib.types.nullOr lib.types.ints.positive;
+      default = null;
+      description = "Optional host-wide ceiling for the sum of enabled broker request-rate budgets.";
+    };
+    maxTotalDailyTokenBudget = lib.mkOption {
+      type = lib.types.nullOr lib.types.ints.positive;
+      default = null;
+      description = "Optional host-wide ceiling for the sum of enabled broker daily token budgets.";
+    };
+    maxTotalDailyCostMicrousd = lib.mkOption {
+      type = lib.types.nullOr lib.types.ints.positive;
+      default = null;
+      description = "Optional host-wide ceiling for the sum of enabled broker daily cost budgets in micro-USD.";
+    };
     agents = lib.mkOption {
       type = lib.types.attrsOf agentType;
       default = { };
@@ -408,6 +472,27 @@ in
       {
         assertion = enabledAgents == { } || config.tentaflake.networking.enable;
         message = "tentaflake brokers require tentaflake.networking.enable so their host and forward firewall boundary is active.";
+      }
+      {
+        assertion =
+          cfg.maxEnabledAgents == null || lib.length (lib.attrNames enabledAgents) <= cfg.maxEnabledAgents;
+        message = "tentaflake broker enabled-agent count exceeds maxEnabledAgents.";
+      }
+      {
+        assertion = withinTotal cfg.maxTotalConcurrency (sumEnabled "maxConcurrency");
+        message = "tentaflake broker enabled-agent concurrency budgets exceed maxTotalConcurrency.";
+      }
+      {
+        assertion = withinTotal cfg.maxTotalRequestsPerMinute (sumEnabled "maxRequestsPerMinute");
+        message = "tentaflake broker enabled-agent request-rate budgets exceed maxTotalRequestsPerMinute.";
+      }
+      {
+        assertion = withinTotal cfg.maxTotalDailyTokenBudget (sumEnabled "dailyTokenBudget");
+        message = "tentaflake broker enabled-agent daily token budgets exceed maxTotalDailyTokenBudget.";
+      }
+      {
+        assertion = withinTotal cfg.maxTotalDailyCostMicrousd (sumEnabled "dailyCostMicrousd");
+        message = "tentaflake broker enabled-agent daily cost budgets exceed maxTotalDailyCostMicrousd.";
       }
       {
         assertion = unique (lib.mapAttrsToList (_: agent: agent.networkName) enabledAgents);

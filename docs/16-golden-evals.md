@@ -1,57 +1,128 @@
 # Golden host-policy evaluations
 
-Tentaflake's Golden Eval Set is a versioned, deterministic contract for the
-host-enforced agent boundary. It deliberately evaluates policy enforcement, not
-model quality, model safety, or prompt-injection resistance.
+Tentaflake's Golden Eval Set is a small, versioned set of worker requests and
+expected host-policy outcomes. It checks the boundary enforced by the host. It
+does not score an AI model, judge answer quality, solve prompt injection, or
+turn an attestation into authorization.
 
-The corpus is tests/golden-evals.json. The existing NixOS VM integration test
-copies it into the test host and runs tests/golden-eval-runner.py against the
-real worker, systemd path activation, Docker, and gVisor fixture.
+The corpus is `tests/golden-evals.json`. The fast schema check loads it with
+`tests/golden-eval-runner.py` and runs the runner's Python unit tests. The
+NixOS VM integration test additionally copies both files into a test machine
+and exercises the real worker, systemd path activation, Docker, and gVisor
+fixture.
 
-## What v1 proves
+## Terms used here
 
-Each action class has exactly one stable case:
+- **Corpus:** the complete JSON file containing the version and test cases.
+- **Case:** one request plus its expected status, artifact projection, and
+  ordered audit transition.
+- **Action class:** the policy category assigned to a request, such as
+  `local-reversible`, `financial`, or `forbidden`.
+- **Pending:** private host state holding a request that needs an operator
+  decision. The agent cannot approve its own request.
+- **Capsule:** the short-lived gVisor container used to execute allowed work.
+- **Audit event:** one JSON line recording a host-side policy transition.
+
+See [Disposable execution and approval](13-disposable-worker.md) for the full
+worker lifecycle.
+
+## What v1 checks
+
+The checked-in corpus currently has one case for every action class. The schema
+requires at least one case for each class and allows additional cases with
+unique IDs.
 
 | Action class | Expected transition |
 |---|---|
-| local-reversible | runs in the disposable offline capsule |
-| external-reversible, irreversible, financial, production, communicative | remains private and has no artifact before a job-bound operator approval |
-| privileged | remains private until a host operator denial produces denied |
-| forbidden | never runs and produces rejected |
+| `local-reversible` | accepted, then completed in a capsule whose network namespace exposes only loopback |
+| `external-reversible`, `irreversible`, `financial`, `production`, `communicative` | held privately, then approved and completed |
+| `privileged` | held privately, then denied |
+| `forbidden` | accepted by the inbox parser, then rejected without an artifact |
 
-The runner also verifies stable result projections, expected audit events,
-one-time approval consumption, absence of an artifact before approval, no
-runtime socket in the capsule, and that a fixture sensitive marker never
-appears in the worker audit log. After the corpus cases it places 1,024
-persistent non-regular inbox entries beside a valid job and proves that the
-worker completes a systemd restart (`NRestarts` increases), converges its
-root-owned cursor checkpoint, runs that valid job without allocating an
-unbounded candidate list or deleting the junk, and then remains inactive with a
-stable audit despite the preserved entries. It also bursts one more
-approval-required request than the VM fixture's private queue capacity and
-proves the excess request is rejected while the accepted requests are cleaned
-up through operator denial. A separate oversized-payload burst proves the
-private byte limit independently of the count limit. Two simultaneous `deny`
-commands then race for one approval-required request and must yield exactly one
-terminal denial. Finally, the runner fills the fixed worker-state image until
-its `statvfs` reservation is unavailable and proves that the worker publishes a
-capacity rejection before it starts a capsule. Rust unit tests separately cover
-cursor recovery after a worker reopen plus inbox mutation, malformed cursor
-input, a stale cursor that resumes at EOF, pending count/byte admission, atomic
-non-overwriting claims, outcome-unknown recovery, post-mount state-marker
-refusal, capacity reservations, and bounded pending processing. It avoids
-volatile timestamps, process IDs, latencies, and untrusted inbox names.
+For every corpus case, the runner checks:
 
-The v1 corpus supplements the existing VM tests for worker timeout, bad
-requests, broker authentication, SSRF, direct-egress denial, and security
-doctor findings. It does not prove that every upstream Hermes or ZeroClaw tool
-routes work through the worker; that remains a deployment-specific residual
-risk described in the [threat model](15-threat-model.md).
+- the exact result status and artifact projection;
+- the exact ordered audit-event sequence, with no missing, duplicate, reordered,
+  or additional event;
+- that approval-required work has no result artifact before the operator
+  decision;
+- that a consumed approval cannot be reused and returns the precise
+  missing-pending-job error;
+- that the capsule has no Docker socket and an offline case exposes only the
+  `lo` network interface; and
+- that the fixture's sensitive marker never appears in the worker audit log.
 
-## Run it
+The runner also exercises several bounded-runtime conditions:
 
-The corpus runs as part of the VM integration check, which CI builds for every
-non-Markdown source change:
+- It places 1,024 non-regular inbox entries beside one valid request. It
+  observes that the valid request completes, `NRestarts` increases, the cursor
+  file eventually disappears, the junk remains untouched, the worker becomes
+  inactive, and the audit stops growing.
+- It stops the watcher, pre-fills bursts that independently exceed the private
+  pending count and byte limits, restarts both watcher and worker explicitly,
+  and observes the excess request being rejected. This avoids depending on a
+  directory-change event for files that already existed before the watcher.
+- It races two `deny` commands for one pending request and requires exactly one
+  successful claimant and one terminal denial.
+- It measures the exact queued request size and reproduces the runtime byte
+  reservation, including the unused `max_pending_bytes` allowance. The fixture
+  leaves enough space for the formula with that allowance removed but less
+  than the complete reservation, then requires the capacity-specific rejected
+  result and audit event.
+
+These observations have deliberate limits. The cursor test does not inspect
+the cursor's owner and cannot prove from outside the process that no unbounded
+allocation occurred. The state-capacity test does not trace OCI runtime calls,
+so by itself it does not independently prove that a capsule `create` or
+`start` call never happened. Source review and focused Rust tests remain
+separate evidence for those implementation-ordering claims.
+
+The corpus also does not prove that every upstream Hermes or ZeroClaw tool
+routes work through the worker, that a production host matches the VM, or that
+model output is safe. Those remain deployment and threat-model concerns; see
+the [threat model](15-threat-model.md).
+
+## Fast schema and oracle check
+
+This check validates the strict JSON fields and types, complete action-class
+coverage, policy projections, ordered audit oracle, duplicate approval error,
+and loopback-only offline command without booting a VM.
+
+Prerequisites:
+
+- Nix with the `nix-command` and `flakes` features enabled.
+- Access to the pinned inputs in `flake.lock`, either from the local Nix store,
+  a configured binary cache, or normal network access.
+
+Run:
+
+~~~bash
+just golden-eval-schema
+# equivalent:
+nix build .#checks.x86_64-linux.golden-eval-schema -L
+~~~
+
+Once the pinned inputs are available, this normally takes seconds. On an
+uncached build, the relevant log ends with output similar to:
+
+~~~text
+Ran 13 tests in ...
+OK
+~~~
+
+A substituted cached result may finish without replaying the test log.
+
+## Full VM check
+
+The VM check is the runtime evidence gate.
+
+Additional prerequisites:
+
+- an x86_64 Linux host;
+- KVM available to the Nix builder, normally through `/dev/kvm`; and
+- `kvm` listed in the Nix builder's supported system features.
+
+Run:
 
 ~~~bash
 just golden-evals
@@ -59,22 +130,39 @@ just golden-evals
 nix build .#checks.x86_64-linux.vm-integration -L
 ~~~
 
-This boots a test VM. It does not activate a contributor's host or publish an
-agent action.
+A non-cached run normally takes several minutes, depending on CPU speed and the
+Nix cache. CI allows up to 45 minutes. The VM log includes this success line:
+
+~~~text
+tentaflake-agent-host-policy v1: 8 cases passed
+~~~
+
+The check boots a disposable test VM. It does not activate the contributor's
+host, contact a public Golden Eval endpoint, or publish an agent action. A
+cached result may complete without showing the internal VM line again.
+
+## Troubleshooting
+
+| Symptom | Meaning and next step |
+|---|---|
+| Nix reports that the `kvm` system feature is missing | The fast schema check can still run. For the VM check, verify that the builder can access `/dev/kvm` and advertises `kvm`; do not report runtime verification from the schema check alone. |
+| Nix cannot fetch a locked input | The required source is absent from the local store/cache. Restore normal access to the pinned input or run the check in the project CI; do not replace it with an unpinned dependency. |
+| `fields mismatch`, `must be a boolean`, or `expected policy projection` | The corpus no longer matches schema v1. Fix the case or intentionally version the schema, runner, unit tests, and this page together. |
+| `audit transition mismatch` | Compare the printed `expected` and `observed` lists. Reordering, duplication, and unexpected terminal events are security-policy changes, not snapshots to accept casually. |
+| The VM build fails after boot | Keep the `-L` output and inspect the derivation log with `nix log .#checks.x86_64-linux.vm-integration`. The failing subtest identifies whether the problem is worker policy, systemd, Docker, or gVisor. |
 
 ## Evolving the corpus
 
 Keep the corpus generic and free of real endpoints, credentials, prompts, or
 deployment identities.
 
-- Use a stable lowercase id.
-- Add a distinct, deterministic policy transition rather than a timing
-  snapshot.
-- State only stable status, artifacts_available, and audit-event projections.
-- Update the runner validation and this document if the schema changes.
+- Use a stable, unique lowercase ID.
+- Keep at least one case for every action class; multiple cases for one class
+  are allowed.
+- Add a deterministic policy transition rather than a timing snapshot.
+- Keep `expected_status`, `artifacts_available`, and `expected_events`
+  aligned with the schema's exact policy projection.
+- Treat the schema as closed: adding or renaming a field requires coordinated
+  runner, unit-test, and documentation changes.
 - Treat a changed expected result as a security-policy change: add a focused
   test, update the threat model where needed, and record it in the changelog.
-
-The runner requires every v1 action class exactly once. A future schema version
-may intentionally change that matrix, but it must preserve the same
-fail-closed policy claim or document the migration.

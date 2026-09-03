@@ -140,10 +140,33 @@
         tentaflake-worker = self.packages.${system}.tentaflake-worker;
         tentaflake-worker-image = self.packages.${system}.tentaflake-worker-image;
         devcontainer-cli = self.packages.${system}.devcontainer-cli;
+        golden-eval-schema =
+          pkgs.runCommand "tentaflake-golden-eval-schema"
+            {
+              nativeBuildInputs = [ pkgs.python3 ];
+            }
+            ''
+              test -f ${./tests}/test_golden_eval_runner.py
+              python3 -B -m unittest discover \
+                -s ${./tests} \
+                -p 'test_golden_eval_runner.py' \
+                -v
+              touch "$out"
+            '';
         image-pinning = import ./lib/pinnedImage-test.nix { inherit pkgs; };
         module-evaluation =
           assert import ./tests/module-eval.nix { nixpkgsPath = nixpkgs.outPath; };
           pkgs.runCommand "tentaflake-module-evaluation" { } "touch $out";
+        sui-attestation-signing-vector =
+          pkgs.runCommand "tentaflake-sui-attestation-signing-vector"
+            {
+              nativeBuildInputs = [ pkgs.python3 ];
+            }
+            ''
+              python3 -B ${./scripts/verify-sui-attestation-vector.py} \
+                ${./integrations/sui-agent-attestation/test-vectors/signing-payload-v1.json}
+              touch "$out"
+            '';
 
         # VM integration test: boots the host and asserts the runtime path
         # (Rust CLI, status, and agent unit/user/state dir).

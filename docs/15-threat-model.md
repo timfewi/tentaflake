@@ -19,6 +19,13 @@ The `dev` profile is a compatibility mode, not a security boundary. The
 `strict` profile fails evaluation because a tested separate-kernel boundary is
 not yet implemented. There is no silent downgrade to either profile.
 
+Per-agent isolation is not a multi-tenant control plane. This template does not
+issue, verify, or propagate end-user tenant identity; it has no tenant-scoped
+API authorization, metering, quota enforcement, or audit partitioning. A
+service for many mutually untrusted users must add and test those controls in
+its deployment/application layer, then map each tenant's authority to distinct
+agent, broker, workspace, credential, and audit boundaries as appropriate.
+
 ## Assets
 
 The model protects:
@@ -166,11 +173,15 @@ the fixed transaction to an exact endpoint after chain-ID and finality checks.
 The shared on-chain objects contain opaque commitments rather than prompts,
 outputs, customer data, or deployment identities.
 
-A valid on-chain record means only that the configured issuer attested fresh
-evidence under the configured registry. A consuming Move package must pin its
-exact package, registry, record, and commitment values; accepting a proof type
-alone is not an authorization boundary. It also does not establish that an
-agent is safe. See [the Sui attestation guide](17-sui-agent-attestation.md).
+A valid on-chain record means only that the configured issuer signed the exact
+commitments and that sequence, issuer epoch, signed epoch window, and the
+consumer's maximum-age rule passed when Move verified them. It does not prove
+that the collector's facts are true or fresh within an epoch. A consuming Move
+package must pin its exact package, registry, record, minimum sequence,
+maximum age, and commitment values, pass the current `TxContext`, and require a
+separate actor/action capability; accepting a proof type alone is not an
+authorization boundary. It also does not establish that an agent is safe. See
+[the Sui attestation guide](17-sui-agent-attestation.md).
 
 ### Telemetry and detection
 
@@ -194,7 +205,7 @@ remain deployment responsibilities.
 | Unauthorized Git write | exact remote and branch host helper | denial tests and least-privilege credential review |
 | Mutable image substitution | digest pin and optional Cosign start gate | verified policy plus failed-signature start test |
 | Optional on-chain evidence replay or false claim | registry-bound issuer signature, sequence, expiry, pause, and revocation | Move, cross-language BCS, host, and relay negative tests |
-| Resource exhaustion | memory, CPU, PID, tmpfs, log, workspace, and fixed worker-state limits | live limits and disk/inode exhaustion tests |
+| Resource exhaustion | memory, CPU, PID, tmpfs, log, workspace, fixed worker-state limits, and optional aggregate broker budget ceilings | live limits, aggregate-budget evaluation, and disk/inode exhaustion tests |
 | Lost state | encrypted Restic policy and success freshness | real fresh-host restore drill |
 | Runtime anomaly | journald, optional observability and Falco | retention, receiver, and response drill |
 | Remote management exposure | loopback listeners and tailnet policy template | live listeners and remote policy audit |
@@ -202,9 +213,15 @@ remain deployment responsibilities.
 Source inspection proves intended code. Nix evaluation proves option types and
 assertions. A successful build proves the closure. VM tests prove only their
 fixture. Activation changes a particular host. Live inspection and adversarial
-tests are required before calling that host secure. Unavailable AF_UNIX,
-container-inspect, tailnet, broker, backup, or alert evidence is unknown, never
-green.
+tests are required before calling that host secure. Container inspection must
+show a running state; the exact declared network set and, for brokered
+capsules, an independently inspected internal bridge; no live port publication;
+each host mount's source, destination, and write mode; the exact secure tmpfs
+set, sizes, and backend-normalized options; and the declared memory, total
+memory-plus-swap, CPU, PID, `nofile`, and `nproc` limits. An extra attachment, exposure, or changed
+limit is drift, not equivalent evidence. A legacy manifest or unavailable or
+incomplete AF_UNIX, container-inspect, network-inspect, tailnet, broker, backup,
+or alert result is unknown, never green.
 
 ## Explicit non-goals and residual risks
 
@@ -249,7 +266,9 @@ Before treating a host as ready for unattended agents:
 7. Configure log retention, workspace and worker-state capacity alerts,
    notification delivery, and an operator response path; validate them end to
    end.
-8. Perform a real encrypted backup and fresh-host restore drill.
+8. Perform a real encrypted backup and fresh-host restore drill. For worker
+   state, stop consumers, reconcile claims, and archive reviewed results/audit
+   rather than treating a live loop-image copy as a replay-safe backup.
 9. Record remaining unknown evidence and accepted residual risks. Do not count
    a warning or unavailable check as a pass.
 10. If the optional Sui integration is selected, verify its Move and

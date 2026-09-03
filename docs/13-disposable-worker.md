@@ -8,10 +8,14 @@ small JSON request. A host-side Rust orchestrator captures the request into
 private state, takes a bounded workspace snapshot, and creates a short-lived
 OCI container with `runsc`, `network=none`, numeric non-root user,
 `cap-drop=ALL`, `no-new-privileges`, read-only root, bounded tmpfs, and
-CPU/RAM/swap/PID/runtime limits. Docker workers explicitly select
+CPU/memory/total-memory-plus-swap/PID/runtime limits. Docker workers
+explicitly select
 `docker-default` AppArmor; Docker/Podman retain their default seccomp policy
 and unconfined overrides are never exposed through the request. The worker
-receives no agent, provider, Git, backup, or infrastructure credential.
+receives no agent, provider, Git, backup, or infrastructure credential. Its
+host-side queue orchestrator is additionally capped at 256 MiB, 64 tasks, 50%
+CPU, and 4,096 file descriptors at reduced scheduling priority; these cgroup
+limits do not loosen or replace the separate capsule limits.
 
 The worker is a second containment boundary. It does not make the controller,
 OCI daemon, kernel, gVisor, worker toolchain, or submitted code trustworthy.
@@ -48,6 +52,15 @@ tentaflake.worker.agents.hermes-coding = {
 ```
 
 ZeroClaw uses `/var/lib/zeroclaw-<name>/data` with UID/GID 65534.
+Evaluation and the Rust worker both reject UID/GID 0, zero or runtime-unlimited
+memory/CPU/tmpfs values, total memory-plus-swap below memory, unsafe workspace
+components, and a timeout above 86,400 seconds. Memory and total
+memory-plus-swap may each be at most 1 TiB, CPU at most 1024 equivalents with
+at most five fractional decimal digits, each worker tmpfs field at most 64 GiB,
+and the per-capsule PID limit at most 65,536. Snapshot capture is capped at
+16 GiB and 2,000,000 entries, with retained logs capped at 64 MiB. Keep the
+tighter 900-second default unless a reviewed workload and maintenance window
+justify more.
 
 ### Private worker-state capacity
 
@@ -58,10 +71,37 @@ Every enabled worker receives a separate fixed-size ext4 state image below
 controller's read-only result bind mount starts. The image contains pending and
 inflight claims, workspace snapshots, artifact staging, retained results, the
 audit log, and control files, so it is a hard host-disk boundary rather than an
-application-only accounting estimate.
+application-only accounting estimate. For hosts running many workers, set
+`tentaflake.worker.maxEnabledAgents` to the reviewed service, mount, and timer
+budget. Set `tentaflake.worker.maxTotalStateVolumeMiB` to the reviewed
+host-disk budget:
+evaluation then rejects a configuration whose enabled state images exceed that
+sum. Set `tentaflake.worker.maxTotalMemoryBytes` separately to the reviewed
+sum of OCI worker memory limits, leaving operating-system and container-runtime
+headroom. Set `tentaflake.worker.maxTotalPids` below the host's reviewed PID
+capacity to prevent many valid per-worker PID limits from collectively
+starving host services. These budgets are deliberately explicit because a
+generic template cannot infer capacity reserved for the OS, backups, container
+images, or a deployment's retention policy.
 
-`stateVolumeMiB` defaults to 8192. Evaluation reserves two full snapshot
-budgets, the maximum pending bytes, the log budget, 4 KiB for each possible
+For perspective, 1,000 workers with the example defaults declare 8,192,000 MiB
+of preallocated state images, 2,000 GiB of possible capsule RAM, and 512,000
+capsule PIDs. That is not a sizing recommendation for one machine: reserve
+headroom for the host and runtime, lower reviewed per-worker limits, or shard
+workers across hosts before enabling that scale. Set all four aggregate options
+to the resulting per-host budget so evaluation makes the deployment decision
+explicit. When the opt-in observability profile is enabled, it exports one
+bounded inventory series, configured pending-request and byte ceilings, state
+volume, and PID limit per enabled worker; it does not scan every private
+worker-state directory on each metrics interval.
+
+`stateVolumeMiB` defaults to 8192. Before mounting, the preparation unit
+preallocates both new and existing images rather than leaving sparse holes, so
+insufficient host disk space fails during activation. Each preparation service
+is additionally capped at 256 MiB, 32 tasks, and 25% CPU at reduced priority,
+so a large boot cannot let filesystem preparation monopolize host resources.
+Evaluation reserves two full snapshot budgets, the maximum pending bytes, the
+log budget, 4 KiB for each possible
 pending file, a 16 MiB control reserve, and ext4 inodes for two snapshot trees
 plus pending metadata and recovery. It reserves a further 12.5% of raw image
 space for the ext4 journal and allocation metadata; images are made with no
@@ -70,13 +110,50 @@ checks actual free blocks and inodes under the worker-wide lock before it
 creates a snapshot; insufficient state capacity produces a terminal `rejected`
 result before the capsule starts.
 
-This is deliberately migration-safe. On first enablement the preparation unit
-refuses to hide a non-empty existing worker state directory, refuses symlinks,
-incomplete images, and size drift, and never formats or copies existing state.
-Stop the matching controller and worker, preserve and review the old state in a
-separate location, leave the exact mountpoint empty, create the new image, and
-restore only reviewed data while the services remain stopped. Resizing likewise
-requires an explicit offline migration; there is no automatic resize.
+This is deliberately fail-closed and is a breaking storage-layout change for
+an already-enabled worker. On first enablement the preparation unit refuses to
+hide a non-empty existing worker state directory, refuses symlinks, incomplete
+images, and size drift, and never formats or copies existing state.
+
+For each affected `<container>`, migrate in a maintenance window:
+
+1. Check that the selected `stateVolumeMiB` fits both the declared budgets and
+   actual retained data, and reserve host space for its non-sparse worst case.
+2. Stop the controller (`docker-<container>.service` or
+   `podman-<container>.service`), `tentaflake-worker-<container>.path`,
+   `tentaflake-worker-<container>.service`,
+   `tentaflake-worker-result-cleanup-<container>.timer`, and
+   `tentaflake-worker-result-cleanup-<container>.service`. Verify that every
+   listed unit is inactive before inspecting, archiving, copying, or unmounting
+   worker state; stopping the timer alone does not stop an already-running
+   cleanup oneshot.
+3. Inspect `pending/` and `inflight/`. Deny or otherwise reconcile each
+   pending request. Treat every inflight request as outcome-unknown; do not
+   replay it or invent a successful result.
+4. Move the old `/var/lib/tentaflake-worker-<container>` directory to a
+   separately named, root-only rollback archive so the exact mountpoint is
+   empty. Keep an independent backup until the migration and rollback drill
+   have both succeeded.
+5. Activate the reviewed generation. Confirm that the state image is the
+   configured size, the exact mount has
+   `nodev,nosuid,noexec,noatime`, and the layout marker, owners, groups, and
+   modes are correct before starting the worker.
+6. While all consumers remain stopped, copy back only reviewed, schema-compatible
+   retained results and audit history. Never restore old `inflight/`,
+   `jobs/`, `worker.lock`, `inbox.cursor`, or the layout marker. Restore a
+   pending request only after explicit side-effect reconciliation; prefer a
+   fresh ID when its prior outcome is uncertain.
+7. Start the worker and controller, run one harmless offline job, inspect the
+   audit/result, reboot once, and repeat the harmless job before deleting the
+   rollback archive.
+
+A rollback across this change also has a data step: stop the same units, archive
+reviewed data from the mounted image, unmount it, select the old generation, and
+restore only data understood by the old worker. Merely selecting the previous
+NixOS generation can expose the empty directory underneath the image. Changing
+`stateVolumeMiB`, changing the result GID, or decommissioning a worker likewise
+requires an explicit stopped, backed-up migration; there is no online resize or
+automatic data copy.
 
 The host service runs with a real group-database entry matching the numeric
 container GID. Tentaflake creates one deterministic `tfw-gid-<gid>` group per
@@ -151,10 +228,12 @@ inode space and each scan bounds one worker activation's CPU, memory, and
 latency cost.
 
 The cursor checkpoint is atomically renamed and its private parent directory is
-synced. The worker also syncs the private pending request before removing an
-inbox source. A request interrupted before its private claim can be re-observed;
-once it is atomically claimed for a terminal decision or execution it is never
-automatically replayed. On the next worker invocation a leftover claim is
+synced. A validated request is first written and synced as an unnamed private
+filesystem file, then linked at its final pending name without replacement and
+followed by a parent-directory sync before the inbox source is removed. A
+partial write therefore never becomes a queue entry. A request interrupted
+before its private claim can be re-observed; once it is atomically claimed for
+a terminal decision or execution it is never automatically replayed. On the next worker invocation a leftover claim is
 cleaned up only after a labeled capsule is removed and becomes a terminal
 `interrupted` / outcome-unknown result when no published result exists. Submit a
 fresh ID only after the operator has reconciled any possible external effect.
@@ -246,8 +325,21 @@ workspace. The worker never writes an artifact directly back into that
 workspace, and the capsule receives no writable host bind for this handoff.
 Result directories expire after 14 days through a post-mount root-owned
 cleanup timer; the prompt-free JSONL audit rotates daily with 14 generations.
-Both live inside the fixed-size worker-state image, so retention cannot grow
-onto the host filesystem outside that image.
+Cleanup traverses only the worker-state filesystem, deletes depth-first without
+following symlinks, and tolerates concurrent disappearance of retained entries.
+Its systemd sandbox permits only local Unix sockets, private temporary storage,
+and the one private state tree; it blocks namespace, kernel, realtime, and
+set-ID transitions. For large fleets, each cleanup receives a stable per-worker offset within a
+six-hour daily window and runs with a five-minute, 128 MiB, 32-task, and
+25%-CPU ceiling at reduced scheduling priority. It therefore cannot turn
+retention into a synchronized host-level resource spike.
+Audit appends use nofollow file opens and require a private regular file, so a
+substituted audit symlink or a permissive existing audit is a failure rather
+than a write to another host path. Pending-request files are written as unnamed
+temporary inodes and atomically linked through symlink-free directory handles;
+a redirected state parent therefore fails rather than publishing outside the
+fixed-size worker-state image. Audit and request retention cannot grow onto the
+host filesystem outside that image.
 
 The path-activated queue service has a ten-second failure-restart delay but no
 aggregate systemd start counter. It uses that restart path deliberately after
@@ -263,8 +355,8 @@ independently.
 
 The post-mount root-owned layout unit establishes the result root as `02750` and
 writes a private state-layout marker. The worker refuses to run without that
-marker, while the worker queue, watcher, cleanup timer, and controller unit are
-bound to the layout and its state mount. A later unmount therefore stops those
+marker, while the worker queue, watcher, both cleanup units, and controller
+unit are bound to the layout and its state mount. A later unmount therefore stops those
 consumers instead of exposing an unmounted writable host directory. The
 orchestrator preserves the inherited setgid bit without trying to reapply it
 inside the hardened systemd unit. Published result files therefore retain the

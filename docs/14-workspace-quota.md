@@ -45,13 +45,17 @@ Enabling the option and activating the resulting NixOS generation creates:
   hermes-coding.img
 ```
 
-The prepare unit creates the exact-size sparse file, formats it as ext4, and
-mounts it with `loop,nodev,nosuid,noatime`. This is an intentional filesystem
-mutation. A source build or evaluation does not perform it and does not
-authorize activation.
+The prepare unit fully preallocates the exact-size backing file, formats it as
+ext4, and mounts it with `loop,nodev,nosuid,noatime`. It also verifies the
+allocation before checking an existing unmounted image, so insufficient host
+disk space fails during activation rather than later under agent load. This is
+an intentional filesystem mutation. A source build or evaluation does not
+perform it and does not authorize activation.
 
 The managed mount starts after the host's ordinary local filesystems and
-tmpfiles setup. Its ownership unit then recreates the private worker-control
+tmpfiles setup. The worker's path activation uses Linux inotify, so the managed
+workspace must be local storage; do not place it on a remote NFS filesystem.
+Its ownership unit then recreates the private worker-control
 directories inside the mounted filesystem before the controller or worker
 watcher may start. The inbox is writable only by the exact agent UID/GID and
 the host worker's statically declared matching service group. Unsafe symlink

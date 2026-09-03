@@ -94,6 +94,8 @@ Packages and checks:
 | `packages.*.piper-voices` | Optional voice assets |
 | `checks.*.image-pinning` | OCI reference tests |
 | `checks.*.module-evaluation` | Profile assertions |
+| `checks.*.golden-eval-schema` | Closed Golden-evaluation schema and exact audit oracle |
+| `checks.*.sui-attestation-signing-vector` | Independent BCS/Ed25519 fixture check; not a Move build |
 | `checks.*.vm-integration` | Boot/runtime test |
 
 ## Core options
@@ -302,10 +304,16 @@ budgets; notification delivery remains deployment-owned. See
 
 `tentaflake doctor --security` combines the generated manifest with narrow
 live checks for root disk, Restic success age, Tailscale Serve/Funnel, and
-backend-specific Docker/Podman inspect drift. Unavailable AF_UNIX, sudo,
-stopped-container, or incomplete-schema evidence is warning/unknown, never
-green. Exact broker `/healthz` endpoints distinguish unreachable/unknown from
-an explicit credential/policy/audit-readiness failure. Backup success is recorded by
+backend-specific Docker/Podman inspect drift. A green container requires an
+explicit running state, the exact declared network set and, for a brokered
+capsule, an independently inspected internal bridge, no actual port
+publication, exact host mounts, the exact hardened tmpfs set and sizes, and
+exact memory/total-memory-plus-swap/CPU/PID and `nofile`/`nproc` limits after
+backend normalization. Unavailable AF_UNIX, sudo,
+stopped-container, legacy-manifest, network-inspect, or incomplete-schema
+evidence is warning/unknown, never green; explicit drift is critical. Exact
+broker `/healthz` endpoints distinguish unreachable/unknown from an explicit
+credential/policy/audit-readiness failure. Backup success is recorded by
 `tentaflake-backup-success.service` in a systemd-managed persistent state
 directory; `modules/hardening.nix` exposes an opt-in PID 1 hardware watchdog
 only for explicitly tested devices. Keep build,
@@ -333,9 +341,15 @@ service. It records issuer-authorized opaque evidence commitments only. A
 balanced agent must not receive Sui RPC access, wallet/gas or issuer keys,
 AdminCap custody, or an arbitrary transaction relay. The optional host-side
 issuer and relayer remain separate, explicitly scoped trust boundaries. A
-consumer must pin its own Registry, AgentRecord, and commitment values through
-`verify_bound`; a `VerifiedAgent` value alone is not an authorization
-boundary. Read `docs/17-sui-agent-attestation.md` before changing it.
+consumer must pin its own Registry, AgentRecord, minimum sequence, maximum
+attestation age, and commitment values. It must pass the current `TxContext` to
+`verify_bound`, immediately re-check a handed-off `VerifiedAgent` through
+`assert_verified_for`, and enforce actor/action authorization separately. The
+committed Python signing-vector check proves exact fixture bytes and raw
+Ed25519 behavior, not Move compilation: production remains gated on a matching
+pinned Sui CLI, generated `Move.lock`, offline dependency closure, compiled
+Move tests, localnet drills, and independent review. Read
+`docs/17-sui-agent-attestation.md` before changing it.
 
 ## Installer
 
@@ -381,6 +395,8 @@ Nix and integration gates:
 
 ```bash
 nix fmt -- --ci
+just golden-eval-schema
+just sui-attestation-vector
 nix flake check
 nix build \
   .#checks.x86_64-linux.vm-integration \

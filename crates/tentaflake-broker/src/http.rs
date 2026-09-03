@@ -90,9 +90,7 @@ pub fn read_request(
         return Err("transfer encoding is not accepted".into());
     }
     let content_length = match headers.get("content-length") {
-        Some(value) => value
-            .parse::<usize>()
-            .map_err(|_| "invalid content-length")?,
+        Some(value) => parse_content_length(value)?,
         None => 0,
     };
     if content_length > max_body_bytes {
@@ -119,6 +117,15 @@ pub fn read_request(
         headers,
         body: raw[header_end..].to_vec(),
     })
+}
+
+fn parse_content_length(value: &str) -> Result<usize, String> {
+    if value.is_empty() || !value.bytes().all(|byte| byte.is_ascii_digit()) {
+        return Err("invalid content-length".into());
+    }
+    value
+        .parse::<usize>()
+        .map_err(|_| "invalid content-length".into())
 }
 
 pub fn write_response(stream: &mut TcpStream, response: Response) -> std::io::Result<()> {
@@ -152,12 +159,13 @@ mod tests {
     use std::net::TcpListener;
     use std::thread;
 
-    fn parse(raw: &'static [u8]) -> Result<Request, String> {
+    fn parse(raw: &[u8]) -> Result<Request, String> {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let address = listener.local_addr().unwrap();
+        let raw = raw.to_vec();
         let writer = thread::spawn(move || {
             let mut stream = TcpStream::connect(address).unwrap();
-            stream.write_all(raw).unwrap();
+            stream.write_all(&raw).unwrap();
         });
         let (mut stream, _) = listener.accept().unwrap();
         let result = read_request(&mut stream, 1024, 1024);
@@ -174,8 +182,20 @@ mod tests {
     }
 
     #[test]
-    fn rejects_duplicate_and_chunked_headers() {
+    fn rejects_duplicate_chunked_and_noncanonical_content_length_headers() {
         assert!(parse(b"GET / HTTP/1.1\r\nHost: a\r\nHost: b\r\n\r\n").is_err());
         assert!(parse(b"POST / HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n").is_err());
+        for content_length in ["+1", "-1", "1e1", "1.0"] {
+            assert!(
+                parse(
+                    format!(
+                        "POST / HTTP/1.1\r\nHost: local\r\nContent-Length: {content_length}\r\n\r\n"
+                    )
+                    .as_bytes()
+                )
+                .is_err(),
+                "accepted invalid Content-Length: {content_length}"
+            );
+        }
     }
 }

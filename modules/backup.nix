@@ -122,6 +122,8 @@ in
         NoNewPrivileges = true;
         PrivateDevices = true;
         PrivateTmp = true;
+        ProtectClock = true;
+        ProtectControlGroups = true;
         ProtectSystem = "strict";
         ProtectHome = true;
         StateDirectory = "tentaflake-backup";
@@ -130,7 +132,9 @@ in
         CapabilityBoundingSet = [ ];
         LockPersonality = true;
         MemoryDenyWriteExecute = true;
+        RestrictNamespaces = true;
         RestrictRealtime = true;
+        RestrictSUIDSGID = true;
         SystemCallArchitectures = "native";
       };
       script = ''

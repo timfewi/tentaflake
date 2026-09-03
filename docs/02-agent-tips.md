@@ -39,7 +39,9 @@ ls -la /var/lib/ | grep hermes
 
 ### Via systemd
 
-Docker containers are managed by systemd. List agent services:
+Docker or Podman OCI containers are managed by systemd. Unit names begin
+with `docker-` or `podman-` according to `tentaflake.containerBackend`. The
+examples below use Docker. List agent services:
 
 ```bash
 sudo systemctl list-units | grep hermes
@@ -364,7 +366,8 @@ store.
 `balanced` agents run in their own internal capsule network, not with host
 networking. The shared builders enforce an explicit non-root uid/gid,
 `cap-drop=ALL`, `no-new-privileges`, a read-only root filesystem, gVisor
-`runsc`, private tmpfs paths, and CPU/RAM/swap/PID/file limits. Only the
+`runsc`, private tmpfs paths, and CPU/memory/total-memory-plus-swap/PID/file
+limits. Only the
 agent's State and Workspace mounts are writable. The broker is the only
 configured external authority.
 

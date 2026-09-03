@@ -3,16 +3,43 @@ let
   isSecure = profile: profile != "dev";
 
   pathWithin = root: path: path == root || lib.hasPrefix "${root}/" path;
+  canonicalPath =
+    path:
+    lib.hasPrefix "/" path
+    && lib.match "^/[A-Za-z0-9._+/-]+$" path != null
+    && !(lib.elem "." (lib.splitString "/" path))
+    && !(lib.elem ".." (lib.splitString "/" path))
+    && !(lib.hasInfix "//" path)
+    && !(lib.hasSuffix "/" path);
+  forbiddenWritableSource = path: lib.any (root: pathWithin root path) sensitiveSources;
+  statePathIsSafe =
+    name: path:
+    canonicalPath path
+    && lib.hasPrefix "/var/lib/" path
+    && lib.hasSuffix "/${name}" path
+    && !(forbiddenWritableSource path)
+    && !(lib.hasPrefix "/var/lib/tentaflake-worker-" path);
   volumeParts = volume: lib.splitString ":" volume;
   volumeSource = volume: lib.head (volumeParts volume);
   volumeDestination = volume: lib.elemAt (volumeParts volume) 1;
-  volumeOptions =
+  volumeMode =
     volume:
     let
       parts = volumeParts volume;
     in
-    if lib.length parts < 3 then [ ] else lib.splitString "," (lib.elemAt parts 2);
-  volumeIsReadOnly = volume: lib.elem "ro" (volumeOptions volume);
+    if lib.length parts == 2 then
+      "rw"
+    else if lib.length parts == 3 then
+      lib.elemAt parts 2
+    else
+      null;
+  volumeSyntaxIsSafe =
+    volume:
+    lib.elem (volumeMode volume) [
+      "rw"
+      "ro"
+    ];
+  volumeIsReadOnly = volume: volumeMode volume == "ro";
 
   sensitiveSources = [
     "/"
@@ -26,6 +53,8 @@ let
     "/sys"
     "/var/lib/containers"
     "/var/lib/docker"
+    "/var/lib/tentaflake-worker-state-volumes"
+    "/var/lib/tentaflake-workspace-volumes"
     "/var/run"
   ];
   sensitiveDestinations = [
@@ -151,26 +180,29 @@ let
       destination = if lib.length parts < 2 then "" else volumeDestination volume;
       sourceAllowedRw = lib.elem source allowedWritableSources;
       destinationAllowedRw = lib.elem destination allowedWritableDestinations;
-      sourceIsAbsolute = lib.hasPrefix "/" source;
       sourceIsApprovedRo = pathWithin "/nix/store" source || lib.elem source approvedReadOnlySources;
-      sourceSyntaxSafe = lib.match "^/[A-Za-z0-9._+/-]*$" source != null;
-      destinationSyntaxSafe = lib.match "^/[A-Za-z0-9._+/-]*$" destination != null;
-      sensitiveSource = lib.any (root: pathWithin root source) sensitiveSources;
+      sourceSyntaxSafe = canonicalPath source;
+      destinationSyntaxSafe = canonicalPath destination;
+      sensitiveSource = forbiddenWritableSource source;
       sensitiveDestination = lib.any (root: pathWithin root destination) sensitiveDestinations;
       readOnly = volumeIsReadOnly volume;
     in
-    lib.length parts >= 2
-    && sourceIsAbsolute
+    volumeSyntaxIsSafe volume
     && sourceSyntaxSafe
     && destinationSyntaxSafe
-    && (sourceAllowedRw || (sourceIsApprovedRo && !sensitiveSource && readOnly))
-    && (
-      destinationAllowedRw || lib.elem destination approvedReadOnlyDestinations || !sensitiveDestination
-    )
+    && !sensitiveSource
+    && (sourceAllowedRw || (sourceIsApprovedRo && readOnly))
+    && (!sensitiveDestination || (readOnly && lib.elem destination approvedReadOnlyDestinations))
     && (readOnly || (sourceAllowedRw && destinationAllowedRw));
 in
 {
-  inherit isSecure containsSensitiveValue;
+  inherit
+    isSecure
+    containsSensitiveValue
+    canonicalPath
+    forbiddenWritableSource
+    statePathIsSafe
+    ;
 
   apply =
     {
@@ -302,7 +334,7 @@ in
             approvedReadOnlySources
             approvedReadOnlyDestinations
           ) volumes;
-          message = "tentaflake: secure agent ${name} has a writable, relative, or sensitive bind mount outside its declared state/workspace boundary.";
+          message = "tentaflake: secure agent ${name} has an unsupported, writable, relative, or sensitive bind mount outside its declared state/workspace boundary.";
         }
         {
           assertion = pidsLimit != null && pidsLimit > 0;

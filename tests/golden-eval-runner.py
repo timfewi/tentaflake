@@ -30,6 +30,29 @@ ACTION_CLASSES = {
     "forbidden",
 }
 CASE_ID = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
+SUITE_FIELDS = {
+    "schema_version",
+    "suite",
+    "description",
+    "sensitive_marker",
+    "cases",
+}
+CASE_REQUIRED_FIELDS = {
+    "id",
+    "action_class",
+    "decision",
+    "expected_status",
+    "artifacts_available",
+    "expected_events",
+}
+CASE_OPTIONAL_FIELDS = {"assert_offline"}
+TERMINAL_AUDIT_EVENTS = {
+    "completed",
+    "denied",
+    "rejected",
+    "interrupted",
+    "outcome-unknown",
+}
 
 
 def fail(message):
@@ -46,50 +69,114 @@ def wait_for(predicate, description, timeout=30):
     fail(f"timed out waiting for {description}")
 
 
-def load_corpus():
-    suite = json.loads(CORPUS_PATH.read_text(encoding="utf-8"))
-    if suite.get("schema_version") != 1:
-        fail("golden eval schema_version must be 1")
-    if suite.get("suite") != "tentaflake-agent-host-policy":
+def assert_exact_fields(value, required, optional, subject):
+    actual = set(value)
+    missing = sorted(required - actual)
+    unexpected = sorted(actual - required - optional)
+    if missing or unexpected:
+        fail(
+            f"{subject} fields mismatch: "
+            f"missing={missing}, unexpected={unexpected}"
+        )
+
+
+def expected_projection(action_class, decision):
+    if action_class == "local-reversible":
+        return "succeeded", True, ["request-accepted", "completed"]
+    if action_class == "forbidden":
+        return "rejected", False, ["request-accepted", "rejected"]
+    if decision == "approve":
+        return "succeeded", True, ["approval-required", "approved", "completed"]
+    return "denied", False, ["approval-required", "denied"]
+
+
+def validate_corpus(suite):
+    if type(suite) is not dict:
+        fail("golden eval suite must be an object")
+    assert_exact_fields(suite, SUITE_FIELDS, set(), "golden eval suite")
+
+    schema_version = suite["schema_version"]
+    if type(schema_version) is not int or schema_version != 1:
+        fail("golden eval schema_version must be integer 1")
+    if (
+        type(suite["suite"]) is not str
+        or suite["suite"] != "tentaflake-agent-host-policy"
+    ):
         fail("golden eval suite name changed unexpectedly")
-    marker = suite.get("sensitive_marker")
-    if not isinstance(marker, str) or not marker:
+    description = suite["description"]
+    if type(description) is not str or not description.strip():
+        fail("golden eval suite must declare a non-empty description")
+    marker = suite["sensitive_marker"]
+    if type(marker) is not str or not marker:
         fail("golden eval suite must declare a non-empty sensitive_marker")
-    cases = suite.get("cases")
-    if not isinstance(cases, list) or not cases:
-        fail("golden eval suite must contain cases")
+    cases = suite["cases"]
+    if type(cases) is not list or not cases:
+        fail("golden eval suite must contain a non-empty cases list")
 
     ids = set()
     classes = set()
-    for case in cases:
-        if not isinstance(case, dict):
-            fail("golden eval case must be an object")
-        case_id = case.get("id")
-        action_class = case.get("action_class")
-        decision = case.get("decision")
-        if not isinstance(case_id, str) or not CASE_ID.fullmatch(case_id):
+    for index, case in enumerate(cases):
+        if type(case) is not dict:
+            fail(f"golden eval case {index} must be an object")
+        assert_exact_fields(
+            case,
+            CASE_REQUIRED_FIELDS,
+            CASE_OPTIONAL_FIELDS,
+            f"golden eval case {index}",
+        )
+        case_id = case["id"]
+        action_class = case["action_class"]
+        decision = case["decision"]
+        expected_status = case["expected_status"]
+        artifacts_available = case["artifacts_available"]
+        expected_events = case["expected_events"]
+
+        if type(case_id) is not str or not CASE_ID.fullmatch(case_id):
             fail(f"invalid golden eval case id: {case_id!r}")
         if case_id in ids:
             fail(f"duplicate golden eval case id: {case_id}")
-        if action_class not in ACTION_CLASSES:
+        if type(action_class) is not str or action_class not in ACTION_CLASSES:
             fail(f"{case_id}: unknown action class {action_class!r}")
-        if action_class in classes:
-            fail(f"{case_id}: each action class must have exactly one v1 case")
-        if decision not in {"auto", "approve", "deny"}:
+        if type(decision) is not str or decision not in {"auto", "approve", "deny"}:
             fail(f"{case_id}: unknown decision {decision!r}")
         if action_class in {"local-reversible", "forbidden"} and decision != "auto":
             fail(f"{case_id}: only automatic handling is valid for {action_class}")
         if action_class not in {"local-reversible", "forbidden"} and decision == "auto":
             fail(f"{case_id}: approval-required action must not run automatically")
-        if not isinstance(case.get("expected_events"), list):
-            fail(f"{case_id}: expected_events must be a list")
+        if type(expected_status) is not str:
+            fail(f"{case_id}: expected_status must be a string")
+        if type(artifacts_available) is not bool:
+            fail(f"{case_id}: artifacts_available must be a boolean")
+        if "assert_offline" in case and type(case["assert_offline"]) is not bool:
+            fail(f"{case_id}: assert_offline must be a boolean")
+        if type(expected_events) is not list or not expected_events:
+            fail(f"{case_id}: expected_events must be a non-empty list")
+        if any(type(event) is not str or not event for event in expected_events):
+            fail(f"{case_id}: expected_events must contain non-empty strings")
+
+        projection = expected_projection(action_class, decision)
+        observed_projection = (
+            expected_status,
+            artifacts_available,
+            expected_events,
+        )
+        if observed_projection != projection:
+            fail(
+                f"{case_id}: expected policy projection {projection!r}, "
+                f"got {observed_projection!r}"
+            )
+
         ids.add(case_id)
         classes.add(action_class)
-    if classes != ACTION_CLASSES:
-        missing = sorted(ACTION_CLASSES - classes)
-        extra = sorted(classes - ACTION_CLASSES)
-        fail(f"golden eval action-class matrix mismatch: missing={missing}, extra={extra}")
+
+    missing = sorted(ACTION_CLASSES - classes)
+    if missing:
+        fail(f"golden eval action-class matrix is missing {missing}")
     return suite, cases, marker
+
+
+def load_corpus():
+    return validate_corpus(json.loads(CORPUS_PATH.read_text(encoding="utf-8")))
 
 
 def write_job(case, sensitive_marker, padding_bytes=0):
@@ -99,7 +186,13 @@ def write_job(case, sensitive_marker, padding_bytes=0):
         "test ! -e /run/docker.sock",
     ]
     if case.get("assert_offline"):
-        script.append("! wget -T 1 -q https://1.1.1.1/ -O /tmp/direct-egress")
+        script.extend(
+            [
+                "set -- /sys/class/net/*",
+                'test "$#" -eq 1',
+                'test "${1##*/}" = lo',
+            ]
+        )
     script.extend(
         [
             "mkdir artifacts",
@@ -152,7 +245,7 @@ def expect_pending_without_side_effect(case):
         fail(f"{case_id}: approval-required action produced an artifact before operator decision")
 
 
-def worker(command, case_id, expect_success):
+def worker(command, case_id, expect_success, expected_stderr=None):
     completed = subprocess.run(
         ["tentaflake-worker", "--config", str(WORKER_CONFIG), command, case_id],
         check=False,
@@ -165,6 +258,12 @@ def worker(command, case_id, expect_success):
         fail(
             f"{case_id}: {command} {outcome}\n"
             f"stdout:\n{completed.stdout}\nstderr:\n{completed.stderr}"
+        )
+    if expected_stderr is not None and completed.stderr.strip() != expected_stderr:
+        fail(
+            f"{case_id}: {command} returned the wrong error\n"
+            f"expected stderr:\n{expected_stderr}\n"
+            f"actual stderr:\n{completed.stderr}"
         )
 
 
@@ -203,18 +302,23 @@ def audit_events(case_id):
 
 
 def assert_audit(case):
-    expected = set(case["expected_events"])
+    expected = case["expected_events"]
 
-    def observed():
-        return {item.get("event") for item in audit_events(case["id"])}
+    def terminal_transition():
+        events = [item.get("event") for item in audit_events(case["id"])]
+        if any(event in TERMINAL_AUDIT_EVENTS for event in events):
+            return events
+        return None
 
-    wait_for(
-        lambda: expected <= observed(),
-        f"audit events {sorted(expected)} for {case['id']}",
+    events = wait_for(
+        terminal_transition,
+        f"terminal audit transition {expected!r} for {case['id']}",
     )
-    events = observed()
-    if not expected <= events:
-        fail(f"{case['id']}: missing audit events {sorted(expected - events)}")
+    if events != expected:
+        fail(
+            f"{case['id']}: audit transition mismatch: "
+            f"expected={expected!r}, observed={events!r}"
+        )
 
 
 def run_case(case, sensitive_marker):
@@ -228,7 +332,14 @@ def run_case(case, sensitive_marker):
         worker(decision, case_id, expect_success=True)
         assert_result(case)
         if decision == "approve":
-            worker("approve", case_id, expect_success=False)
+            worker(
+                "approve",
+                case_id,
+                expect_success=False,
+                expected_stderr=(
+                    f"tentaflake-worker: pending job {case_id} does not exist"
+                ),
+            )
     assert_audit(case)
 
 
@@ -340,6 +451,10 @@ def assert_private_pending_capacity(sensitive_marker):
     for case in cases:
         write_job(case, sensitive_marker)
     systemctl_checked(["start", WORKER_PATH_UNIT], "start worker path watcher")
+    systemctl_checked(
+        ["--no-block", "start", WORKER_UNIT],
+        "start worker for pre-existing pending-count fixture",
+    )
 
     accepted = cases[:limit]
     rejected = cases[-1]
@@ -378,8 +493,8 @@ def assert_private_pending_byte_capacity(sensitive_marker):
     if padding_bytes <= 0 or padding_bytes + 4096 > request_limit:
         fail("golden worker fixture cannot exercise private queue byte capacity")
 
-    systemctl_checked([ "stop", WORKER_PATH_UNIT ], "stop worker path watcher")
-    systemctl_checked([ "stop", WORKER_UNIT ], "stop worker service")
+    systemctl_checked(["stop", WORKER_PATH_UNIT], "stop worker path watcher")
+    systemctl_checked(["stop", WORKER_UNIT], "stop worker service")
     cases = [
         {
             "id": f"golden-pending-bytes-{index}",
@@ -389,7 +504,11 @@ def assert_private_pending_byte_capacity(sensitive_marker):
     ]
     for case in cases:
         write_job(case, sensitive_marker, padding_bytes=padding_bytes)
-    systemctl_checked([ "start", WORKER_PATH_UNIT ], "start worker path watcher")
+    systemctl_checked(["start", WORKER_PATH_UNIT], "start worker path watcher")
+    systemctl_checked(
+        ["--no-block", "start", WORKER_UNIT],
+        "start worker for pre-existing pending-byte fixture",
+    )
 
     accepted, rejected = cases
     wait_for(
@@ -454,12 +573,28 @@ def assert_atomic_claim_race(sensitive_marker):
 
 def assert_state_capacity_admission(sensitive_marker):
     config = json.loads(WORKER_CONFIG.read_text(encoding="utf-8"))
-    required = (
+    systemctl_checked(["stop", WORKER_PATH_UNIT], "stop worker path watcher")
+    systemctl_checked(["stop", WORKER_UNIT], "stop worker service")
+    if list(PENDING_DIR.glob("*.json")) or list((STATE_DIR / "inflight").glob("*.json")):
+        fail("worker-state capacity fixture requires an empty private queue")
+
+    case = {
+        "id": "golden-state-capacity",
+        "action_class": "local-reversible",
+    }
+    write_job(case, sensitive_marker)
+    queued_bytes = (INBOX / f"{case['id']}.json").stat().st_size
+    remaining_pending_bytes = config["max_pending_bytes"] - queued_bytes
+    if remaining_pending_bytes <= 0:
+        fail("worker-state capacity fixture does not leave a pending-byte reserve")
+    required_without_pending = (
         2 * config["max_snapshot_bytes"]
         + config["max_log_bytes"]
         + config["max_pending_requests"] * 4096
         + 16 * 1024 * 1024
     )
+    required = required_without_pending + remaining_pending_bytes
+
     stats = os.statvfs(STATE_DIR)
     block_size = stats.f_frsize or stats.f_bsize
     available = stats.f_bavail * block_size
@@ -483,13 +618,15 @@ def assert_state_capacity_admission(sensitive_marker):
         after = os.statvfs(STATE_DIR)
         after_available = after.f_bavail * (after.f_frsize or after.f_bsize)
         if after_available >= required:
-            fail("worker-state capacity fixture did not consume the reserved headroom")
+            fail("worker-state capacity fixture did not cross the exact reservation")
+        if after_available < required_without_pending:
+            fail("worker-state capacity fixture cannot isolate the pending-byte reserve")
 
-        case = {
-            "id": "golden-state-capacity",
-            "action_class": "local-reversible",
-        }
-        write_job(case, sensitive_marker)
+        systemctl_checked(["start", WORKER_PATH_UNIT], "start worker path watcher")
+        systemctl_checked(
+            ["--no-block", "start", WORKER_UNIT],
+            "start worker for pre-existing state-capacity fixture",
+        )
         result = load_result(case)
         if result.get("status") != "rejected":
             fail(f"{case['id']}: exhausted state capacity did not reject before execution")
