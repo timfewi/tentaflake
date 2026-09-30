@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 ### Added
 ### Fixed
+- Restic backups now include enabled quota workspaces inside selected state
+  paths as separate sources instead of silently skipping their files under
+  `--one-file-system`. Required mounts and mount assertions prevent an
+  unavailable workspace from producing a misleading successful backup.
 ### Breaking
 
 

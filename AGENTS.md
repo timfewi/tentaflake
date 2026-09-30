@@ -53,6 +53,9 @@ still accurate before finishing — and update them in the same change:
 - A balanced agent with `autoStart = true` requires its exact broker, worker,
   and workspace-quota declarations; stopped scaffolds remain `network=none`.
 - `tests/` — NixOS VM test backing `checks.<system>.vm-integration`
+- Restic backups retain filesystem boundaries; selected managed quota mounts
+  are separate sources and required mounts. Verify workspace restore as well
+  as ordinary state when changing backup or quota behavior.
 - `installer/` — installer ISO and disk-install scripts
 - `examples/` — consumer-flake reference
 - `docs/` — user-facing documentation

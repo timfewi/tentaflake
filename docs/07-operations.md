@@ -135,6 +135,15 @@ tentaflake.backup = {
 };
 ```
 
+Enabled managed quota workspaces below a selected path are automatically
+added as separate Restic sources. This preserves `--one-file-system` without
+silently skipping the mounted workspace. Only explicitly selected trees are
+covered; unrelated agents and disabled quotas are excluded. The backup unit
+requires the selected filesystems and asserts that each included quota
+workspace is mounted before it runs. A failed mount prevents a new backup and
+success timestamp. Other nested filesystems require their own explicit entry
+in `paths`.
+
 The job encrypts through Restic, prunes after backup, and runs an integrity
 check. On success, a separate hardened oneshot updates
 `/var/lib/tentaflake-backup/last-success` in a systemd-managed state directory;
@@ -144,9 +153,10 @@ randomized delay. Alert on failed/stale `restic-backups-tentaflake.service`
 runs.
 For a restore drill: install a fresh test host, keep the agent stopped, restore
 its state, verify ownership and file permissions, start the exact unit, and run
-application-level checks. The VM test backs up and restores a fixture into a
-fresh target, but production backend credentials, retention, capacity, and a
-real fresh-host drill remain operator evidence. Backup freshness and restore
+application-level checks. The VM test restores ordinary state and a mounted
+quota workspace into a fresh directory, rejects an unavailable mount, and
+verifies recovery afterward. Production backend credentials, retention,
+capacity, and a real fresh-host drill remain operator evidence. Backup freshness and restore
 readiness beyond freshness still requires an actual restore drill.
 
 ## Incident response and kill switch

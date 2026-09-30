@@ -65,6 +65,14 @@ over existing data, shrinks, grows, or reformats an existing image silently.
 
 ## Existing workspace migration
 
+The Restic backup module includes enabled quota mounts inside its selected
+`paths` as separate sources and requires them to be mounted before backup.
+Selecting the parent agent-state directory covers both state and its quota
+workspace. Other nested filesystems need explicit backup paths. Restore files
+into the mounted workspace with the agent stopped; do not overwrite a live
+backing image. A live file backup does not provide application-level snapshot
+consistency.
+
 Perform this only in an approved maintenance window and adapt paths to the
 exact stopped agent:
 
