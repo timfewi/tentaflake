@@ -55,11 +55,7 @@ let
       brokerEnabled && brokerCfg.fetch.enable
     ) "tentaflake-broker-fetch-${containerName}.service";
   runtimeDependencies = brokerUnits ++ lib.optional quotaEnabled quotaUnit;
-  secureUnitPolicy = {
-    startLimitIntervalSec = 300;
-    startLimitBurst = 5;
-    serviceConfig.RestartSec = "10s";
-  };
+  secureUnitPolicy = import ./serviceRecovery.nix;
   toml = pkgs.formats.toml { };
   configFile = toml.generate "${containerName}-config.toml" settings;
   owner = "65534:65534";
@@ -205,14 +201,13 @@ in
         };
       };
     }
-    // lib.optionalAttrs (secure && runtimeDependencies == [ ]) {
-      ${serviceAttr} = secureUnitPolicy;
-    }
-    // lib.optionalAttrs (runtimeDependencies != [ ]) {
-      ${serviceAttr} = secureUnitPolicy // {
-        requires = runtimeDependencies;
-        after = runtimeDependencies;
-      };
+    // lib.optionalAttrs (secure || runtimeDependencies != [ ]) {
+      ${serviceAttr} =
+        secureUnitPolicy
+        // lib.optionalAttrs (runtimeDependencies != [ ]) {
+          requires = runtimeDependencies;
+          after = runtimeDependencies;
+        };
     };
 
   virtualisation.oci-containers.containers.${containerName} = securityResult.container // {

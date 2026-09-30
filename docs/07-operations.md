@@ -86,10 +86,19 @@ and host-side destination resolution.
 ## Crash and reboot behavior
 
 The upstream NixOS OCI module generates systemd units with
-`Restart=on-failure`. Tentaflake adds a 10-second restart delay and bounded
-start-limit window to secure controllers. Brokers use their own 5-second
-delay/start limit and expose credential/policy-aware `/healthz`; this is not a
-provider end-to-end probe. Declarative `autoStart` controls boot startup.
+`Restart=on-failure`. Secure controllers and brokers share a recovery policy:
+the restart delay increases exponentially from 10 seconds to one minute over
+five steps, then stays at one minute. The start-limit window is disabled so a
+prolonged transient failure does not permanently disable a 24/7 service.
+Each attempt still runs the configured credential, mount, provenance, and
+isolation gates. Persistent errors remain failed attempts; alert on restart
+flapping and investigate their cause. An explicit systemd stop prevents
+automatic restarts; declarative `autoStart` controls boot startup.
+
+Brokers expose credential/policy-aware `/healthz`; this is not a provider
+end-to-end probe. Backoff does not detect a hung or unhealthy process that
+keeps running, or restart a controller after a failed dependency start job.
+Use live health checks and the optional observability profile for those cases.
 
 Hosts with a known, tested watchdog device can also opt in to PID 1 hardware
 watchdog supervision:
