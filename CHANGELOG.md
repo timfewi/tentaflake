@@ -12,6 +12,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   exhaustion after a transient outage. Explicit stops still prevent retries.
 ### Added
 ### Fixed
+- Corrected the Dev Containers CLI offline dependency-cache hash for its
+  committed patched lockfile, restoring the package build and full flake
+  gate without changing source or dependency versions.
+  CI now builds that non-VM check so a stale cache pin cannot pass evaluation
+  without exercising the package build.
 ### Breaking
 
 
