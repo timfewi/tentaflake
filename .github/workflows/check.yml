@@ -61,6 +61,7 @@ jobs:
       - name: nix build (non-VM checks)
         run: |
           nix build --no-link \
+            .#checks.x86_64-linux.devcontainer-cli \
             .#checks.x86_64-linux.image-pinning \
             .#checks.x86_64-linux.tentaflake-broker \
             .#checks.x86_64-linux.tentaflake-cli \

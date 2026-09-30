@@ -53,6 +53,9 @@ nix build .#installer-iso
 `just ci` mirrors the local gate and adds the installer build. GitHub-only
 security services may add checks that cannot be reproduced locally.
 
+The non-VM CI build includes the pinned Dev Containers CLI package so source,
+lockfile, and offline-cache hash drift fail before a change lands.
+
 The GitHub VM integration job is skipped when a pull request or push changes
 only Markdown documentation. It continues to run conservatively for every
 other path, including Nix, Rust, tests, installer, and workflow changes.
