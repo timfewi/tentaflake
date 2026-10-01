@@ -54,10 +54,20 @@ let
     ++ lib.optional (
       brokerEnabled && brokerCfg.fetch.enable
     ) "tentaflake-broker-fetch-${containerName}.service";
-  runtimeDependencies = brokerUnits ++ lib.optional quotaEnabled quotaUnit;
+  research = import ./researchClient.nix {
+    inherit
+      config
+      lib
+      pkgs
+      containerName
+      settings
+      ;
+    hermes = false;
+  };
+  runtimeDependencies = brokerUnits ++ lib.optional quotaEnabled quotaUnit ++ research.units;
   secureUnitPolicy = import ./serviceRecovery.nix;
   toml = pkgs.formats.toml { };
-  configFile = toml.generate "${containerName}-config.toml" settings;
+  configFile = toml.generate "${containerName}-config.toml" research.settings;
   owner = "65534:65534";
 
   baseContainer = {
@@ -70,6 +80,7 @@ let
       "${configFile}:/zeroclaw-data/.zeroclaw/config.toml:ro"
     ]
     ++ lib.optional workerEnabled "${workerResultsDir}:${workerResultsMount}:ro"
+    ++ research.volumes
     ++ extraVolumes;
     ports = lib.optional (
       !secure && hostPort != null
@@ -99,8 +110,10 @@ let
     resources = config.tentaflake.security.resources;
     brokerNetwork = if brokerEnabled then brokerCfg.networkName else null;
     approvedEnvironmentFiles = lib.optional brokerEnabled brokerEnvironmentFile;
-    approvedReadOnlySources = lib.optional workerEnabled workerResultsDir;
-    approvedReadOnlyDestinations = lib.optional workerEnabled workerResultsMount;
+    approvedReadOnlySources = lib.optional workerEnabled workerResultsDir ++ research.readOnlySources;
+    approvedReadOnlyDestinations =
+      lib.optional workerEnabled workerResultsMount ++ research.readOnlyDestinations;
+    researchPolicyEnabled = research.enabled;
     automaticStart = autoStart;
     brokerPolicyEnabled = brokerEnabled;
     inherit workerEnabled;
@@ -110,6 +123,7 @@ in
 {
   assertions =
     securityResult.assertions
+    ++ research.assertions
     ++ lib.optionals secure [
       {
         assertion = !allowMutableImage;

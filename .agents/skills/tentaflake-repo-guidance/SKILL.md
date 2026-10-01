@@ -158,7 +158,9 @@ Common contract:
 - an enabled worker adds one agent-specific read-only result mount; the builder
   asserts that worker workspace and numeric UID/GID match the controller.
 - a stopped balanced scaffold may omit broker/worker/quota policy; a balanced
-  agent with `autoStart = true` must have all three or evaluation fails.
+  agent with `autoStart = true` must have broker/worker/quota plus its research
+  relay or evaluation fails. Research uses only `secure-research-tool`; model
+  calls stay on the LLM broker. See `docs/16-research.md`.
 - caller `--userns` overrides are rejected, but root-managed Docker/Podman do
   not yet prove daemon-level host UID remapping; do not claim that property.
 
@@ -218,6 +220,15 @@ valid. JSON includes `failed_agents` and `unknown_agents`; `--hide` redacts
 host and agent names in either output format.
 
 ## Brokered egress
+
+`modules/research.nix` integrates the pinned public `tentaflake-research` service.
+`tentaflake.research.agents.CONTAINER.uid` selects a distinct host relay identity.
+Builders apply stdio MCP settings after caller settings, disable native web
+tools, and project only the exact client closure and agent socket. Legacy fetch,
+remote MCP and research summarization are rejected. Provider-hosted tools/web
+extensions are rejected by the LLM broker. Never expose the root service socket
+or broad `/run` mounts. The synthetic gVisor VM proves transport and settings,
+not actual vendor agent MCP discovery. See `docs/16-research.md`.
 
 `modules/broker.nix` declares per-container internal networks, virtual
 credentials, LLM/fetch services, budgets, and subnet firewall rules.

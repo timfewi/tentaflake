@@ -62,6 +62,22 @@
         "type": "github"
       }
     },
+    "nixpkgs_2": {
+      "locked": {
+        "lastModified": 1789149629,
+        "narHash": "sha256-H6GwaZzZf+4npqv0tph94w9tZddSjFjmQrVsW0z78uk=",
+        "owner": "NixOS",
+        "repo": "nixpkgs",
+        "rev": "eaad089433ca2bb662274377d33df3d0e51ef28b",
+        "type": "github"
+      },
+      "original": {
+        "owner": "NixOS",
+        "repo": "nixpkgs",
+        "rev": "eaad089433ca2bb662274377d33df3d0e51ef28b",
+        "type": "github"
+      }
+    },
     "npm-lockfile-fix": {
       "inputs": {
         "nixpkgs": [
@@ -80,6 +96,28 @@
       "original": {
         "owner": "jeslie0",
         "repo": "npm-lockfile-fix",
+        "type": "github"
+      }
+    },
+    "project-check": {
+      "inputs": {
+        "nixpkgs": [
+          "tentaflake-research",
+          "nixpkgs"
+        ]
+      },
+      "locked": {
+        "lastModified": 1790788690,
+        "narHash": "sha256-c4Y5939qiLEg28dALcAXJmyccbjemhkBQ0fR+RZ8Iwg=",
+        "owner": "timfewi",
+        "repo": "project-check-nix",
+        "rev": "f70de45d69b9ca9a31f5b9f94e316ac6e43e514e",
+        "type": "github"
+      },
+      "original": {
+        "owner": "timfewi",
+        "repo": "project-check-nix",
+        "rev": "f70de45d69b9ca9a31f5b9f94e316ac6e43e514e",
         "type": "github"
       }
     },
@@ -136,7 +174,27 @@
     "root": {
       "inputs": {
         "hermes-agent": "hermes-agent",
-        "nixpkgs": "nixpkgs"
+        "nixpkgs": "nixpkgs",
+        "tentaflake-research": "tentaflake-research"
+      }
+    },
+    "tentaflake-research": {
+      "inputs": {
+        "nixpkgs": "nixpkgs_2",
+        "project-check": "project-check"
+      },
+      "locked": {
+        "lastModified": 1790847790,
+        "narHash": "sha256-Q2ipKZjML4BSNsirLok5hbhGJv1KOiIT2pfDqNvO+5k=",
+        "owner": "timfewi",
+        "repo": "tentaflake-research",
+        "rev": "f0c3b1d1db060557a4bd744165c051e120dda702",
+        "type": "github"
+      },
+      "original": {
+        "owner": "timfewi",
+        "repo": "tentaflake-research",
+        "type": "github"
       }
     },
     "uv2nix": {

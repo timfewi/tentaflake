@@ -77,6 +77,7 @@ struct SecurityAgent {
     fetch_broker_enabled: bool,
     fetch_broker_endpoint: Option<SocketAddr>,
     broker_network: Option<String>,
+    declared_mounts: Vec<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -396,37 +397,39 @@ fn parse_security_state(text: &str) -> Result<SecurityState, String> {
                     agents: Vec::new(),
                 });
             }
-            Some("agent") if fields.len() == 25 || fields.len() == 26 => {
-                agents.push(SecurityAgent {
-                    name: fields[1].into(),
-                    profile: fields[2].into(),
-                    network_isolated: parse_bool(fields[3], index + 1)?,
-                    ports_private: parse_bool(fields[4], index + 1)?,
-                    unprivileged: parse_bool(fields[5], index + 1)?,
-                    non_root: parse_bool(fields[6], index + 1)?,
-                    capabilities_empty: parse_bool(fields[7], index + 1)?,
-                    no_new_privileges: parse_bool(fields[8], index + 1)?,
-                    read_only_root: parse_bool(fields[9], index + 1)?,
-                    mounts_safe: parse_bool(fields[10], index + 1)?,
-                    runsc: parse_bool(fields[11], index + 1)?,
-                    resources_limited: parse_bool(fields[12], index + 1)?,
-                    image_pinned: parse_bool(fields[13], index + 1)?,
-                    env_files_absent: parse_bool(fields[14], index + 1)?,
-                    disposable_worker: parse_bool(fields[15], index + 1)?,
-                    workspace_quota: parse_bool(fields[16], index + 1)?,
-                    seccomp_confined: parse_bool(fields[17], index + 1)?,
-                    apparmor_confined: parse_bool(fields[18], index + 1)?,
-                    provenance_gate_configured: parse_bool(fields[19], index + 1)?,
-                    brokered_egress: parse_bool(fields[20], index + 1)?,
-                    llm_broker_enabled: parse_bool(fields[21], index + 1)?,
-                    llm_broker_endpoint: parse_optional_socket(fields[22], index + 1)?,
-                    fetch_broker_enabled: parse_bool(fields[23], index + 1)?,
-                    fetch_broker_endpoint: parse_optional_socket(fields[24], index + 1)?,
-                    broker_network: fields
-                        .get(25)
-                        .map_or(Ok(None), |value| parse_optional_network(value, index + 1))?,
-                })
-            }
+            Some("agent") if (25..=27).contains(&fields.len()) => agents.push(SecurityAgent {
+                name: fields[1].into(),
+                profile: fields[2].into(),
+                network_isolated: parse_bool(fields[3], index + 1)?,
+                ports_private: parse_bool(fields[4], index + 1)?,
+                unprivileged: parse_bool(fields[5], index + 1)?,
+                non_root: parse_bool(fields[6], index + 1)?,
+                capabilities_empty: parse_bool(fields[7], index + 1)?,
+                no_new_privileges: parse_bool(fields[8], index + 1)?,
+                read_only_root: parse_bool(fields[9], index + 1)?,
+                mounts_safe: parse_bool(fields[10], index + 1)?,
+                runsc: parse_bool(fields[11], index + 1)?,
+                resources_limited: parse_bool(fields[12], index + 1)?,
+                image_pinned: parse_bool(fields[13], index + 1)?,
+                env_files_absent: parse_bool(fields[14], index + 1)?,
+                disposable_worker: parse_bool(fields[15], index + 1)?,
+                workspace_quota: parse_bool(fields[16], index + 1)?,
+                seccomp_confined: parse_bool(fields[17], index + 1)?,
+                apparmor_confined: parse_bool(fields[18], index + 1)?,
+                provenance_gate_configured: parse_bool(fields[19], index + 1)?,
+                brokered_egress: parse_bool(fields[20], index + 1)?,
+                llm_broker_enabled: parse_bool(fields[21], index + 1)?,
+                llm_broker_endpoint: parse_optional_socket(fields[22], index + 1)?,
+                fetch_broker_enabled: parse_bool(fields[23], index + 1)?,
+                fetch_broker_endpoint: parse_optional_socket(fields[24], index + 1)?,
+                broker_network: fields
+                    .get(25)
+                    .map_or(Ok(None), |value| parse_optional_network(value, index + 1))?,
+                declared_mounts: fields.get(26).map_or(Ok(Vec::new()), |value| {
+                    serde_json::from_str(value)
+                        .map_err(|_| format!("invalid declared mounts on line {}", index + 1))
+                })?,
+            }),
             _ => {
                 return Err(format!(
                     "invalid security manifest record on line {}",
@@ -842,7 +845,7 @@ fn security_live_findings(config: &Config, state: &SecurityState) -> Vec<Finding
                     serde_json::from_slice::<serde_json::Value>(&result.stdout)
                         .ok()
                         .map_or(LiveContainerState::Unknown, |value| {
-                            live_container_security(&value, &config.backend, network)
+                            live_container_security(&value, &config.backend, network, &agent.declared_mounts)
                         })
                 });
                 match state {
@@ -956,6 +959,7 @@ fn live_container_security(
     value: &serde_json::Value,
     backend: &str,
     expected_network: &str,
+    declared_mounts: &[String],
 ) -> LiveContainerState {
     let Some(container) = value
         .as_array()
@@ -1063,7 +1067,15 @@ fn live_container_security(
         mount
             .get("Source")
             .and_then(serde_json::Value::as_str)
-            .is_some_and(|source| !live_mount_source_is_sensitive(source))
+            .is_some_and(|source| {
+                !live_mount_source_is_sensitive(source)
+                    || (live_research_mount_is_safe(
+                        Some(source),
+                        mount.get("Destination").and_then(serde_json::Value::as_str),
+                        mount.get("RW").and_then(serde_json::Value::as_bool),
+                    ) && declared_mounts
+                        .contains(&format!("{source}:/run/tentaflake-research:ro")))
+            })
     });
     let runtime_is_runsc = runtime == "runsc" || runtime.ends_with("/runsc");
     let apparmor = container
@@ -1131,6 +1143,22 @@ fn live_user_is_non_root(user: &str) -> bool {
     fields.next().is_none()
         && uid.parse::<u64>().is_ok_and(|value| value > 0)
         && gid.parse::<u64>().is_ok_and(|value| value > 0)
+}
+
+fn live_research_mount_is_safe(
+    source: Option<&str>,
+    destination: Option<&str>,
+    writable: Option<bool>,
+) -> bool {
+    let name = source.and_then(|source| source.strip_prefix("/run/tentaflake-research/"));
+    name.is_some_and(|name| {
+        !name.is_empty()
+            && name.len() <= 63
+            && name
+                .bytes()
+                .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+    }) && destination == Some("/run/tentaflake-research")
+        && writable == Some(false)
 }
 
 fn live_mount_source_is_sensitive(source: &str) -> bool {
@@ -1923,30 +1951,64 @@ mod tests {
             ]
         }]);
         assert_eq!(
-            live_container_security(&inspect, "docker", "none"),
+            live_container_security(&inspect, "docker", "none", &[]),
             LiveContainerState::Secure
         );
         inspect[0]["HostConfig"]["NetworkMode"] = serde_json::json!("tf-unreviewed");
         assert_eq!(
-            live_container_security(&inspect, "docker", "none"),
+            live_container_security(&inspect, "docker", "none", &[]),
             LiveContainerState::Unsafe
         );
         inspect[0]["HostConfig"]["NetworkMode"] = serde_json::json!("none");
         inspect[0]["HostConfig"]["Privileged"] = serde_json::json!(true);
         assert_eq!(
-            live_container_security(&inspect, "docker", "none"),
+            live_container_security(&inspect, "docker", "none", &[]),
             LiveContainerState::Unsafe
         );
         inspect[0]["HostConfig"]["Privileged"] = serde_json::json!(false);
         inspect[0]["Config"]["User"] = serde_json::json!("0:10000");
         assert_eq!(
-            live_container_security(&inspect, "docker", "none"),
+            live_container_security(&inspect, "docker", "none", &[]),
             LiveContainerState::Unsafe
         );
         inspect[0]["Config"]["User"] = serde_json::json!("10000:10000");
+        inspect[0]["Mounts"][0] = serde_json::json!({
+            "Source": "/run/tentaflake-research/hermes-coding",
+            "Destination": "/run/tentaflake-research",
+            "RW": false
+        });
+        let declared =
+            vec!["/run/tentaflake-research/hermes-coding:/run/tentaflake-research:ro".into()];
+        assert_eq!(
+            live_container_security(&inspect, "docker", "none", &declared),
+            LiveContainerState::Secure
+        );
+        assert_eq!(
+            live_container_security(&inspect, "docker", "none", &[]),
+            LiveContainerState::Unsafe
+        );
+        for (field, value) in [
+            (
+                "Source",
+                serde_json::json!("/run/tentaflake-research/hermes-other"),
+            ),
+            (
+                "Source",
+                serde_json::json!("/run/tentaflake-research/hermes-coding/.."),
+            ),
+            ("Destination", serde_json::json!("/run/other")),
+            ("RW", serde_json::json!(true)),
+        ] {
+            let mut unsafe_mount = inspect.clone();
+            unsafe_mount[0]["Mounts"][0][field] = value;
+            assert_eq!(
+                live_container_security(&unsafe_mount, "docker", "none", &declared),
+                LiveContainerState::Unsafe
+            );
+        }
         inspect[0]["Mounts"][0]["Source"] = serde_json::json!("/var/run/docker.sock");
         assert_eq!(
-            live_container_security(&inspect, "docker", "none"),
+            live_container_security(&inspect, "docker", "none", &[]),
             LiveContainerState::Unsafe
         );
     }
@@ -1976,12 +2038,12 @@ mod tests {
             ]
         }]);
         assert_eq!(
-            live_container_security(&inspect, "podman", "tf-zeroclaw-assistant"),
+            live_container_security(&inspect, "podman", "tf-zeroclaw-assistant", &[]),
             LiveContainerState::Secure
         );
         inspect[0]["EffectiveCaps"] = serde_json::json!(["CAP_NET_RAW"]);
         assert_eq!(
-            live_container_security(&inspect, "podman", "tf-zeroclaw-assistant"),
+            live_container_security(&inspect, "podman", "tf-zeroclaw-assistant", &[]),
             LiveContainerState::Unsafe
         );
         inspect[0]["EffectiveCaps"] = serde_json::json!([]);
@@ -1990,7 +2052,7 @@ mod tests {
             .unwrap()
             .remove("AppArmorProfile");
         assert_eq!(
-            live_container_security(&inspect, "podman", "tf-zeroclaw-assistant"),
+            live_container_security(&inspect, "podman", "tf-zeroclaw-assistant", &[]),
             LiveContainerState::Unknown
         );
     }

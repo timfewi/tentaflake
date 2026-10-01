@@ -26,6 +26,7 @@ Piper TTS, observability, and runtime detection are separate opt-in modules.
 | Hermes and ZeroClaw builders | Core |
 | Rust `tentaflake` CLI | Core |
 | Rust LLM/fetch policy broker | Core, opt-in per agent |
+| `secure-research-tool` web research | Pinned public service; required for balanced auto-start |
 | Disposable no-egress tool worker | Core; required for balanced auto-start |
 | Fixed-size persistent workspace | Core; required for balanced auto-start |
 | Cosign image start gate | Core, opt-in per agent |
@@ -120,8 +121,11 @@ per-agent broker declaration they remain at `network=none`. With one, they
 join exactly one internal network and can reach only their host LLM/fetch
 brokers. `autoStart = false` in the example keeps activation explicit.
 Setting `autoStart = true` under `balanced` is accepted only after the exact
-container also has an enabled broker, disposable worker, and fixed-size
-workspace quota. This prevents an incomplete 24/7 declaration from silently
+container also has an enabled LLM broker, disposable worker, fixed-size
+workspace quota, and research relay. Web access uses the pinned public
+[tentaflake-research](https://github.com/timfewi/tentaflake-research) service;
+native web tools and the legacy fetch broker are disabled for research agents.
+See [configuration and verification](docs/16-research.md). This prevents an incomplete 24/7 declaration from silently
 starting with missing policy boundaries.
 
 Existing configurations that require direct provider credentials or host

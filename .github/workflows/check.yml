@@ -115,4 +115,7 @@ jobs:
           use-flakehub: false
 
       - name: nix build (VM integration test)
-        run: nix build .#checks.x86_64-linux.vm-integration -L
+        run: |
+          nix build --no-link -L \
+            .#checks.x86_64-linux.vm-integration \
+            .#checks.x86_64-linux.research-integration
