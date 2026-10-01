@@ -10,11 +10,12 @@ is implemented yet.
 
 Phase A provides the containment baseline. A stopped balanced scaffold may
 omit a broker and remains `network=none`. An automatically started balanced
-controller must have an enabled broker policy, disposable worker, and fixed
-workspace quota or evaluation fails. Brokered capsules join one dedicated
+controller must have an enabled broker policy, disposable worker, fixed
+workspace quota, and research relay or evaluation fails. Brokered capsules join one dedicated
 internal network. Neither path gives an agent a real provider credential or
-general egress, and the fetch boundary does not claim to stop prompt
-injection. See [the worker guide](13-disposable-worker.md).
+general egress. [Web research](16-research.md) uses only `secure-research-tool`;
+model calls remain on the LLM broker. Retrieved content remains untrusted.
+See [the worker guide](13-disposable-worker.md).
 
 ## Profiles
 
@@ -25,7 +26,7 @@ tentaflake.security.profile = "balanced";
 | Profile | Intended use | Network and credentials |
 |---|---|---|
 | `dev` | trusted local development and migration | legacy host networking, env files, and loopback ports may be configured |
-| `balanced` | installed 24/7 baseline | stopped scaffolds may use `network=none`; auto-start requires one isolated broker network, worker, and quota |
+| `balanced` | installed 24/7 baseline | stopped scaffolds may use `network=none`; auto-start requires one isolated LLM broker network, worker, quota, and research relay |
 | `strict` | future high-risk workloads | evaluation error until a tested MicroVM/separate-kernel implementation exists |
 
 There is no automatic fallback between profiles.
@@ -48,7 +49,8 @@ overrides cannot bypass the final checks. It enforces:
   overrides, runtime sockets, real credential files, or secret-like
   environment keys;
 - the only network/file exceptions are the module-generated internal broker
-  network and its random runtime-only virtual credential environment file;
+  network, its random runtime-only virtual credential environment file, and
+  the agent's exact read-only research socket/client closure;
 - only declared state/workspace writable binds and generated Nix-store files
   read-only; all other host paths are rejected, including other agent state;
 - digest-pinned images; the mutable-image escape hatch is dev-only;
@@ -57,7 +59,8 @@ overrides cannot bypass the final checks. It enforces:
 - AppArmor on the host and no administrative Docker-group membership.
 - the Tailscale management path with `tag:agent-host`, while the public
   OpenSSH module is rejected.
-- an enabled broker, disposable worker, and fixed-size workspace quota before
+- normalized mount paths; `.` and `..` escapes are rejected;
+- an enabled broker, disposable worker, fixed-size workspace quota, and research relay before
   a secure controller may set `autoStart = true`.
 
 Default per-agent limits are configurable under
@@ -121,9 +124,9 @@ host networking, or use mutable images now fail under the installed default.
 Choose one of two explicit paths:
 
 1. Keep the fail-closed balanced capsule, remove direct credentials and ports,
-   and either keep it stopped and offline or declare the broker, worker, and
-   workspace quota required for automatic start. The broker path is described
-   in [brokered egress](12-brokered-egress.md).
+   and either keep it stopped and offline or declare the LLM broker, worker,
+   workspace quota, and research relay required for automatic start. See
+   [brokered egress](12-brokered-egress.md) and [web research](16-research.md).
 2. For a trusted development-only machine, acknowledge the old authority:
 
    ```nix

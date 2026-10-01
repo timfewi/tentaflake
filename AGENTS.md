@@ -10,6 +10,8 @@ nix build .#installer-iso
 nix build \
   .#checks.x86_64-linux.vm-integration \
   -L
+nix build --no-link .#checks.x86_64-linux.research-policy
+nix build --no-link -L .#checks.x86_64-linux.research-integration
 cargo fmt --all -- --check
 cargo clippy --workspace \
   --all-targets -- -D warnings
@@ -57,8 +59,12 @@ still accurate before finishing — and update them in the same change:
   must redact host and agent names in both text and JSON.
 - `lib/mkRustPackage.nix` shares Rust packaging and restricts its source to
   root Cargo files and `crates/`; add required root build inputs explicitly.
-- A balanced agent with `autoStart = true` requires its exact broker, worker,
-  and workspace-quota declarations; stopped scaffolds remain `network=none`.
+- A balanced agent with `autoStart = true` requires its exact LLM broker, worker,
+  workspace-quota, and research relay declarations; stopped scaffolds remain `network=none`.
+- Web/research uses only the pinned `tentaflake-research` stdio MCP server
+  `secure-research-tool`; model calls use the LLM broker. Do not add a second
+  web transport, re-enable legacy fetch, expose other agent sockets, or enable
+  provider-hosted network tools. See `docs/16-research.md` and its evidence limits.
 - Secure controllers and brokers share `lib/serviceRecovery.nix`: bounded
   restart backoff without permanent start-limit exhaustion. Explicit stops
   must still prevent automatic retries.

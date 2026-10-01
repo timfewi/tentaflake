@@ -47,14 +47,20 @@ let
     "/var/run"
   ];
   mountSafe =
-    volume:
+    name: volume:
     let
       parts = lib.splitString ":" volume;
       source = if parts == [ ] then "" else lib.head parts;
     in
-    source != ""
-    && !(lib.any (root: pathWithin root source) dangerousMountRoots)
-    && !(lib.hasSuffix ".sock" source);
+    (
+      builtins.hasAttr name (lib.attrByPath [ "tentaflake" "research" "agents" ] { } config)
+      && volume == "/run/tentaflake-research/${name}:/run/tentaflake-research:ro"
+    )
+    || (
+      source != ""
+      && !(lib.any (root: pathWithin root source) dangerousMountRoots)
+      && !(lib.hasSuffix ".sock" source)
+    );
   portPrivate = port: lib.hasPrefix "127.0.0.1:" port || lib.hasPrefix "[::1]:" port;
   nonRootUser = user: user != null && lib.match "^[1-9][0-9]*:[1-9][0-9]*$" user != null;
   resourcesComplete =
@@ -108,7 +114,7 @@ let
         (bool capabilitiesEmpty)
         (bool (hasOption "--security-opt=no-new-privileges:true" container))
         (bool (hasOption "--read-only" container))
-        (bool (lib.all mountSafe (container.volumes or [ ])))
+        (bool (lib.all (mountSafe name) (container.volumes or [ ])))
         (bool (
           hasOption "--runtime=runsc" container || lib.elem "runsc" (container.preRunExtraOptions or [ ])
         ))
@@ -126,6 +132,7 @@ let
         (bool fetchBrokerEnabled)
         fetchEndpoint
         brokerNetwork
+        (builtins.toJSON (container.volumes or [ ]))
       ];
     in
     lib.concatStringsSep "\t" fields;

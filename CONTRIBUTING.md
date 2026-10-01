@@ -59,6 +59,20 @@ nix build .#installer-iso
 `just ci` mirrors the local gate and adds the installer build. GitHub-only
 security services may add checks that cannot be reproduced locally.
 
+The isolated research module computes exact package closures for its read-only
+mounts during evaluation. A cold `nix flake check --no-build` evaluates read-only
+and cannot instantiate those derivations. CI first runs these non-VM gates:
+
+```bash
+nix build --no-link \
+  .#checks.x86_64-linux.research-policy \
+  .#checks.x86_64-linux.module-evaluation
+nix flake check --no-build
+```
+
+The normal `nix flake check` permits the required builds. Preparation retains
+the exact closure boundary; it does not mount the entire Nix store into agents.
+
 The non-VM CI build includes the pinned Dev Containers CLI package so source,
 lockfile, and offline-cache hash drift fail before a change lands.
 

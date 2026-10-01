@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 ### Security
+- Research-enabled controllers use only `secure-research-tool` for web access.
+  Native web tools and legacy fetch are disabled, per-agent Unix relays preserve
+  distinct job ownership, and model requests stay on the LLM broker. The broker
+  rejects provider-hosted tools and web extensions before budget reservation.
+- Container mounts reject non-normalized path components, including `..` escapes
+  from an approved source or into a sensitive container destination.
 - Update the broker's locked TLS dependency to `rustls 0.23.45` and its
   required `rustls-webpki 0.103.15`, removing the affected version reported by
   OSV for `RUSTSEC-2026-0285` without changing broker policy or adding code.
@@ -23,6 +29,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   backoff from 10 seconds to one minute, avoiding permanent start-limit
   exhaustion after a transient outage. Explicit stops still prevent retries.
 ### Added
+- Pinned public MIT `tentaflake-research` service, `tentaflake.research.agents`,
+  policy checks and a real gVisor stdio-MCP integration fixture. Secure auto-start
+  now requires a research relay alongside the broker, worker and workspace quota.
 ### Fixed
 - Host diagnostics no longer report success when systemd/disk queries fail
   or agent state is unknown. `health` shares `doctor` checks and exit codes;

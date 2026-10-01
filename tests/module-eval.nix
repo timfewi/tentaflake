@@ -1,4 +1,4 @@
-{ nixpkgsPath }:
+{ nixpkgsPath, researchFlake }:
 let
   system = "x86_64-linux";
   pkgs = import nixpkgsPath { inherit system; };
@@ -8,7 +8,7 @@ let
     modules:
     evalConfig {
       inherit system modules;
-      specialArgs = { };
+      specialArgs = { inherit researchFlake; };
     };
   builders = import ../lib { inherit pkgs lib; };
   containerSecurity = import ../lib/containerSecurity.nix { inherit lib; };
@@ -416,16 +416,31 @@ let
       autoStart = false;
     })
     {
+      services.secureResearch = {
+        serviceUid = 4201;
+        egressUid = 4202;
+        vpnInterface = "fixture-vpn";
+        resolvers = [ "9.9.9.9" ];
+      };
       tentaflake = {
+        research.agents.hermes-worker.uid = 62101;
         networking.enable = lib.mkForce true;
         broker.agents.hermes-worker = {
           enable = true;
           networkName = "tf-hermes-worker";
           subnet = "10.203.22.0/30";
           gateway = "10.203.22.1";
-          fetch = {
+          llm = {
             enable = true;
-            allowedHosts = [ "docs.example.com" ];
+            upstreamBaseUrl = "https://api.example.org/v1/";
+            providerCredentialFile = "/run/fixture-model-key";
+            allowedModels = [
+              {
+                name = "fixture-model";
+                inputMicrousdPerMillion = 1;
+                outputMicrousdPerMillion = 1;
+              }
+            ];
           };
         };
         worker.agents = {
@@ -627,7 +642,25 @@ let
     }
   ];
   tailscalePolicy = builtins.fromJSON (builtins.readFile ../docs/tailscale-policy.example.json);
+  escapedReference =
+    volume:
+    eval [
+      ../modules/default.nix
+      (hostModule "balanced")
+      (builders.mkHermesAgent {
+        name = "escaped-reference";
+        autoStart = false;
+        extraVolumes = [ volume ];
+      })
+    ];
+  escapedStoreSource = builtins.tryEval (escapedReference "/nix/store/../../run/fixture-secret:/reference:ro")
+  .config.system.build.toplevel.drvPath;
+  escapedMountDestination = builtins.tryEval (escapedReference "${pkgs.hello}:/reference/../../etc:ro")
+  .config.system.build.toplevel.drvPath;
+
 in
+assert !escapedStoreSource.success;
+assert !escapedMountDestination.success;
 assert core.config.environment.etc."tentaflake/cli.conf".text != "";
 assert core.config.environment.etc."tentaflake/agents.tsv".text == "";
 assert watchdog.config.systemd.settings.Manager.WatchdogDevice == "/dev/watchdog0";
