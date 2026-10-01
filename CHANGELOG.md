@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+### Security
+- Updated the pinned Dev Containers CLI dependencies `@humanfs/node`,
+  `brace-expansion` (all three locked majors), `ip-address`, and `js-yaml` to
+  remove current OSV findings. The required HumanFS dependencies and offline
+  cache hash move together; the CLI release and prior security backports stay
+  unchanged.
 ### Changed
 ### Added
 ### Fixed
