@@ -6,6 +6,83 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+### Security
+- Research-enabled controllers use only `secure-research-tool` for web access.
+  Native web tools and legacy fetch are disabled, per-agent Unix relays preserve
+  distinct job ownership, and model requests stay on the LLM broker. The broker
+  rejects provider-hosted tools and web extensions before budget reservation.
+- Container mounts reject non-normalized path components, including `..` escapes
+  from an approved source or into a sensitive container destination.
+- Update the broker's locked TLS dependency to `rustls 0.23.45` and its
+  required `rustls-webpki 0.103.15`, removing the affected version reported by
+  OSV for `RUSTSEC-2026-0285` without changing broker policy or adding code.
+- Updated the pinned Dev Containers CLI dependencies `@humanfs/node`,
+  `brace-expansion` (all three locked majors), `ip-address`, and `js-yaml` to
+  remove current OSV findings. The required HumanFS dependencies and offline
+  cache hash move together; the CLI release and prior security backports stay
+  unchanged.
+### Changed
+- GitHub selects host/research VMs separately from an imported path policy;
+  contributor-only changes skip them, while unknown/shared changes run both.
+- Rust packages include only their own source plus workspace manifests, so
+  changes to one binary preserve the other binaries' Nix cache entries.
+- Cargo workspace metadata supplies the package/image version and package
+  descriptions. Worker image references follow image metadata; shared agent
+  UID/GID defaults now import `lib/constants.nix`.
+- New installations and fixed-size agent workspaces use Btrfs instead of ext4.
+  Workspace images require at least 128 MiB and use read-only offline checks.
+- Rust CLI, broker, and worker packages share one builder and a Cargo/crate
+  source fileset, removing repeated packaging policy and keeping unrelated
+  documentation and host-configuration edits out of their rebuild inputs.
+- Secure controllers and brokers now share systemd exponential restart
+  backoff from 10 seconds to one minute, avoiding permanent start-limit
+  exhaustion after a transient outage. Explicit stops still prevent retries.
+### Added
+- `just fast` runs the contributor checks, CI-selection regressions and flake
+  evaluation without VM suites or the installer ISO.
+- Pinned public MIT `tentaflake-research` service, `tentaflake.research.agents`,
+  policy checks and a real gVisor stdio-MCP integration fixture. Secure auto-start
+  now requires a research relay alongside the broker, worker and workspace quota.
+### Fixed
+- Pin the verified research client recovery: new MCP calls reconnect after an
+  upstream session loss, without replaying interrupted operations.
+- `just` recipes load the pinned contributor tools from an ordinary shell,
+  avoiding missing Cargo/Statix errors. `just list` now lists available recipes.
+- Generated installed flakes now pin and import the research module explicitly,
+  avoiding a missing module argument and infinite recursion during installation.
+- Broker crash recovery preserves dependent controller processes with systemd
+  direct retries. Six consecutive crashes no longer interrupt the controller;
+  explicit broker stops still stop it and require a separate controller start.
+- Host diagnostics no longer report success when systemd/disk queries fail
+  or agent state is unknown. `health` shares `doctor` checks and exit codes;
+  intentionally stopped agents remain valid. Text `doctor --hide` now
+  redacts host and agent names as advertised, using shared name rendering
+  and a single agent-state snapshot instead of duplicated report logic.
+- CLI help (`help`, `--help`, `-h`) now works before host configuration is
+  installed or while generated inputs are damaged, keeping usage available
+  during setup and recovery. Management commands still require those inputs.
+- Restic backups now include enabled quota workspaces inside selected state
+  paths as separate sources instead of silently skipping their files under
+  `--one-file-system`. Required mounts and mount assertions prevent an
+  unavailable workspace from producing a misleading successful backup.
+- Corrected the Dev Containers CLI offline dependency-cache hash for its
+  committed patched lockfile, restoring the package build and full flake
+  gate without changing source or dependency versions.
+  CI now builds that non-VM check so a stale cache pin cannot pass evaluation
+  without exercising the package build.
+### Breaking
+- Existing ext4 workspace images require a verified backup/restore migration
+  before agents can start with the new Btrfs quota module; no automatic conversion.
+
+
+
+## [0.4.0] - 2026-08-23
+
+### Changed
+- GitHub Actions now skips the expensive VM integration build for
+  documentation-only changes while retaining the visible `vm-test` job for
+  branch-protection compatibility. Every non-Markdown path remains
+  conservatively VM-relevant.
 
 ### Added
 - `just security` now combines a pinned, telemetry-free Semgrep source scan
@@ -43,8 +120,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   The controlled-reboot assertion no longer waits indefinitely or checks an
   undeclared boot service.
 
-## [0.4.0] - 2026-08-21
 
+## [0.4.0-dev] - 2021-08-21
 ### Breaking
 - OpenCode support is removed completely: its builder, image pin, generated
   services, CLI discovery, examples, tests, and current documentation are no
@@ -72,6 +149,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   OUTPUT port filter, not a destination allowlist or container FORWARD policy.
 
 ### Added
+- `just security` now combines a pinned, telemetry-free Semgrep source scan
+  with current OSV checks for the Rust and Dev Containers CLI dependency
+  lockfiles; GitHub Actions referenced by scanned workflows are commit-pinned.
+- Contributor E2E recipes now cover the complete automated gate, a frozen-lock
+  Dev Container smoke test, and an interactive installer/installed-system UEFI
+  VM backed only by an isolated persistent QCOW2 file.
+- A digest-pinned Dev Container can bootstrap Nix and preload the repository's
+  lock-file-backed development shell without mounting runtime sockets or
+  credentials, giving local editors and Codespaces the same contributor
+  toolchain as `nix develop`.
 - A complete threat model covering assets, adversaries, trust boundaries,
   control/evidence mapping, explicit non-goals, residual risks, and the
   deployment acceptance checklist.
@@ -126,6 +213,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   source-address-only allow rule from acting as the authority boundary.
 
 ### Fixed
+- Contributor E2E now uses a source- and dependency-hash-pinned Dev Containers
+  CLI 0.88.0 with the upstream `proxy-from-env` WHATWG URL parsing change
+  backported for its CommonJS consumer, removing the legacy `url.parse()` path
+  that produced Node.js `DEP0169` security deprecation warnings.
+- The installer ISO now embeds its repository below
+  `/etc/tentaflake/source`, avoiding a parent-path collision with generated
+  runtime manifests such as `/etc/tentaflake/security.tsv`.
+- The development shell now uses the canonical `nixfmt` package instead of its
+  deprecated `nixfmt-rfc-style` alias, removing the flake evaluation warning.
+- The local `just ci` gate no longer stops on existing Statix and Deadnix
+  findings; repeated Nix attribute paths are grouped and unused arguments are
+  removed without changing their resulting module options.
+- Security-manifest generation now records an OCI container with no configured
+  user as not non-root instead of passing its `null` user to a string matcher
+  and failing evaluation in the `dev` compatibility profile.
+- The VM integration test now starts its rebooted node with QEMU reboot support
+  enabled and asks systemd to reboot directly instead of relying on a virtual
+  key combination. Its headless agent fixtures also omit kmscon, which can
+  crash on QEMU's synthetic bochs DRM device, and the stopped-controller
+  fixture now declares the broker that its reboot assertion expects to return.
+  The controlled-reboot assertion no longer waits indefinitely or checks an
+  undeclared boot service.
 - The hardened backup-success timestamp service now declares its persistent
   path with systemd `StateDirectory` instead of requiring a nonexistent
   `ReadWritePaths` target before its script could create it. This prevents a
@@ -362,7 +471,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - GitHub Actions CI: `nix flake check` on PR and push to main
 
 [Unreleased]: https://github.com/timfewi/tentaflake/compare/v0.4.0...main
-[0.4.0]: https://github.com/timfewi/tentaflake/compare/v0.3.1...v0.4.0
+[0.4.0]: https://github.com/timfewi/tentaflake/compare/v0.3.9...v0.4.0
 [0.3.1]: https://github.com/timfewi/tentaflake/compare/v0.2.0...v0.3.1
 [0.2.0]: https://github.com/timfewi/tentaflake/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/timfewi/tentaflake/releases/tag/v0.1.0

@@ -1,17 +1,33 @@
 # tentaflake dev commands — run `just` to list them.
 # Everything here mirrors CI plus the installer ISO build CI does not run.
 
-set shell := ["bash", "-euo", "pipefail", "-c"]
+# Use the pinned contributor tools even from an ordinary shell.
+set shell := ["nix", "develop", "--no-write-lock-file", "--command", "bash", "-euo", "pipefail", "-c"]
+export TENTAFLAKE_NO_BANNER := "1"
 
 # List recipes
 default:
     @just --list
 
+alias list := default
+
 # ── The gates ────────────────────────────────────────────────
 
 # Full local gate: everything CI runs + the installer ISO
-ci: fmt-check lint shellcheck rust check generated-flake iso-installer
+ci: fmt-check lint shellcheck rust ci-policy check generated-flake iso-installer
     @echo "==> all green"
+
+# Contributor checks without VM suites or the installer ISO
+fast: fmt-check lint shellcheck rust ci-policy eval generated-flake
+
+# Test VM selection and Rust package cache boundaries
+ci-policy:
+    nix build --no-link .#checks.x86_64-linux.ci-vm-selection .#checks.x86_64-linux.rust-package-sources
+
+# Materialize exact research closures before read-only flake evaluation
+eval:
+    nix build --no-link .#checks.x86_64-linux.research-policy .#checks.x86_64-linux.module-evaluation
+    nix flake check --no-build --no-write-lock-file
 
 # Automated end-to-end gate (alias for the complete local CI path)
 e2e: ci
@@ -44,11 +60,11 @@ build:
 
 # Format the tree in place (nixfmt via `nix fmt`)
 fmt:
-    nix fmt
+    nix fmt -- --tree-root .
 
 # Format check only — fails if anything is unformatted (CI mode)
 fmt-check:
-    nix fmt -- --ci
+    nix fmt -- --tree-root . --ci
 
 # Nix lint: statix (anti-patterns) + deadnix (dead bindings)
 lint:
@@ -86,6 +102,6 @@ iso-installer:
 tag VERSION:
     @test -z "$(git status --porcelain)" || { echo "working tree dirty (staged, unstaged or untracked) — commit first"; exit 1; }
     @grep -q "## \[{{ replace(VERSION, 'v', '') }}\]" CHANGELOG.md \
-        || { echo "no CHANGELOG.md section for {{VERSION}} — write it first"; exit 1; }
-    git tag -a {{VERSION}} -m "{{VERSION}}"
-    @echo "==> tagged {{VERSION}}. Push with: git push origin {{VERSION}}"
+        || { echo "no CHANGELOG.md section for {{ VERSION }} — write it first"; exit 1; }
+    git tag -a {{ VERSION }} -m "{{ VERSION }}"
+    @echo "==> tagged {{ VERSION }}. Push with: git push origin {{ VERSION }}"

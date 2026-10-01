@@ -247,7 +247,7 @@ Proceed?" 16 64 || die "Installation cancelled."
 #        - Required for UEFI boot. The bootloader (systemd-boot)
 #          lives here. Kernel images, initrd, and EFI drivers
 #          are stored on this partition.
-#     2. Root partition: rest of the disk, ext4, type 8300
+#     2. Root partition: rest of the disk, Btrfs, type 8300
 #        - Contains the entire NixOS system: /nix/store, /etc,
 #          /var, /home, everything. NixOS uses a read-only
 #          /nix/store with symlinks from /etc and /run.
@@ -404,15 +404,15 @@ dialog --infobox "Formatting partitions ..." 4 50
 mkfs.fat -F 32 -n BOOT "$EFI_PART" >>"$INSTALL_LOG" 2>&1 ||
   die "Failed to format EFI partition"
 
-# mkfs.ext4 -F -L nixos creates the root ext4 filesystem.
-# -F forces creation even if there are leftover superblock signatures.
+# mkfs.btrfs -f -L nixos creates the root Btrfs filesystem.
+# -f forces creation after the selected disk has been explicitly erased.
 # -L nixos sets the volume label (visible in /dev/disk/by-label/nixos).
-# The kernel's ext4 driver will read this superblock on mount.
-mkfs.ext4 -F -L nixos "$ROOT_PART" >>"$INSTALL_LOG" 2>&1 ||
+# The hardware configuration below records Btrfs for the installed initrd.
+mkfs.btrfs -f -L nixos "$ROOT_PART" >>"$INSTALL_LOG" 2>&1 ||
   die "Failed to format root partition"
 
 # ── Wait after mkfs ──
-# mkfs.ext4 writes a new ext4 superblock and block group descriptors.
+# mkfs.btrfs writes the new filesystem metadata.
 # This changes the partition's content, which triggers a udev "change"
 # event. On NVMe, some udev rules can briefly remove and re-add the
 # partition device node during processing. If mount runs in this window,
@@ -428,7 +428,7 @@ done
 
 # ── Mount ──
 # mount attaches the filesystem to the directory tree at /mnt.
-# The kernel reads the ext4 superblock from $ROOT_PART, validates it,
+# The kernel reads the Btrfs superblock from $ROOT_PART, validates it,
 # and makes the filesystem accessible under /mnt.
 # We mount root first at /mnt, then the ESP at /mnt/boot (so the
 # bootloader files end up on the ESP when nixos-install writes them).
@@ -488,6 +488,10 @@ NIXPKGS_REV=$(jq -r '.nodes.nixpkgs.locked.rev' "$REPO_DIR/flake.lock" 2>/dev/nu
 if [ -z "$NIXPKGS_REV" ] || [ "$NIXPKGS_REV" = "null" ]; then
   die "Could not read nixpkgs revision from $REPO_DIR/flake.lock"
 fi
+RESEARCH_REV=$(jq -r '.nodes["tentaflake-research"].locked.rev' "$REPO_DIR/flake.lock" 2>/dev/null)
+if [ -z "$RESEARCH_REV" ] || [ "$RESEARCH_REV" = "null" ]; then
+  die "Could not read tentaflake-research revision from $REPO_DIR/flake.lock"
+fi
 
 # Generate flake.nix for the installed system
 cat >"$TARGET_NIXOS/flake.nix" <<FLAKEEOF
@@ -495,6 +499,7 @@ cat >"$TARGET_NIXOS/flake.nix" <<FLAKEEOF
   description = "NixOS Agent Machine — ${HOSTNAME}";
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/${NIXPKGS_REV}";
+    tentaflake-research.url = "github:timfewi/tentaflake-research/${RESEARCH_REV}";
   };
   outputs = { self, nixpkgs, ... }@inputs:
     let
@@ -523,7 +528,7 @@ cat >"$TARGET_NIXOS/flake.nix" <<FLAKEEOF
             tentaflake.adminShell = ${ADMIN_SHELL};
             tentaflake.timeZone   = uc.timeZone;
 ${TF_TOGGLES}          }
-          ./modules
+          (import ./modules { researchFlake = inputs.tentaflake-research; })
           ./configuration.nix
         ];
       };

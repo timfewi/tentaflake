@@ -3,24 +3,12 @@
   rustPlatform,
 }:
 
-rustPlatform.buildRustPackage {
+import ../../lib/mkRustPackage.nix { inherit lib rustPlatform; } {
   pname = "tentaflake-cli";
-  version = "0.4.0";
-  src = ../..;
-
-  cargoLock.lockFile = ../../Cargo.lock;
-  cargoBuildFlags = [ "-p=tentaflake-cli" ];
-  cargoTestFlags = [ "-p=tentaflake-cli" ];
+  mainProgram = "tentaflake";
 
   postInstall = ''
     ln -s tentaflake $out/bin/tentaflake-status
     ln -s tentaflake $out/bin/hermes
   '';
-
-  meta = {
-    description = "Operator CLI for tentaflake agent hosts";
-    license = lib.licenses.mit;
-    mainProgram = "tentaflake";
-    platforms = lib.platforms.linux;
-  };
 }

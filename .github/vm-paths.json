@@ -1,0 +1,40 @@
+{
+  "skip": [
+    "*.md",
+    ".devcontainer/**",
+    ".github/ISSUE_TEMPLATE/**",
+    ".github/CODEOWNERS",
+    ".github/dependabot.yml",
+    ".github/workflows/bump.yml",
+    ".github/workflows/dco.yml",
+    ".github/workflows/gitleaks.yml",
+    ".github/workflows/update-flake-lock.yml",
+    ".gitignore",
+    ".editorconfig",
+    "LICENSE",
+    "DCO.txt",
+    "public/**",
+    "justfile",
+    "scripts/generated-flake-test.sh",
+    "tests/module-eval.nix"
+  ],
+  "runtime": [
+    "Cargo.toml",
+    "Cargo.lock",
+    "crates/**",
+    "pkgs/tentaflake-cli/**",
+    "pkgs/tentaflake-broker/**",
+    "pkgs/tentaflake-worker/**",
+    "installer/**",
+    "tests/integration.nix"
+  ],
+  "both": [
+    "lib/**",
+    "modules/**"
+  ],
+  "research": [
+    "lib/researchClient.nix",
+    "modules/research.nix",
+    "tests/research-*.nix"
+  ]
+}

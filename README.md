@@ -11,6 +11,10 @@
 Tentaflake is a generic NixOS flake template for running isolated AI agents
 on one machine. Hermes and ZeroClaw agents are declared as OCI
 containers and supervised by systemd.
+Secure controllers and policy brokers recover from crashes with capped
+systemd restart backoff, including after prolonged transient failures.
+Transient broker crashes preserve the controller process. Explicit broker stops
+still stop dependent controllers; model requests may fail while a broker recovers.
 
 The core is intentionally small. It contains the host modules, agent builders,
 an installer ISO, and a Rust operator CLI. Editor support, Hive Research,
@@ -24,10 +28,11 @@ Piper TTS, observability, and runtime detection are separate opt-in modules.
 | Hermes and ZeroClaw builders | Core |
 | Rust `tentaflake` CLI | Core |
 | Rust LLM/fetch policy broker | Core, opt-in per agent |
+| `secure-research-tool` web research | Pinned public service; required for balanced auto-start |
 | Disposable no-egress tool worker | Core; required for balanced auto-start |
 | Fixed-size persistent workspace | Core; required for balanced auto-start |
 | Cosign image start gate | Core, opt-in per agent |
-| Encrypted Restic backup policy | Core, opt-in |
+| Encrypted Restic backup including selected quota workspaces | Core, opt-in |
 | Installer ISO | Core |
 | Prometheus, Grafana, Loki, Alloy | Optional profile |
 | Falco runtime detection | Optional profile |
@@ -65,14 +70,21 @@ Build the installer ISO:
 nix build .#installer-iso
 ```
 
+New installations use Btrfs for the host root and fixed-size agent workspaces.
+Existing ext4 hosts and workspace images require an explicit migration; see
+[installation](docs/00-install.md) and [workspace migration](docs/14-workspace-quota.md).
+
 The result is written below `result/iso/`. Writing it to a block device is
 destructive; follow [the install guide](docs/00-install.md) and resolve the
 target device explicitly.
 
 Contributor end-to-end entry points keep the pinned tool and VM setup behind
-short recipes:
+short recipes. They load the Nix development tools automatically, so `just lint`,
+`just rust` and `just security` also work from an ordinary shell. `just list`
+lists the available recipes:
 
 ```bash
+just fast                # contributor checks without VM or ISO builds
 just e2e                 # complete automated local gate
 just e2e-devcontainer    # rebuild and smoke-test the locked Dev Container
 just security            # Semgrep source scan + OSV dependency scan
@@ -82,6 +94,8 @@ just e2e-run-vm          # boot that installed VM again
 
 The installer VM never receives a host block device. Its persistent test disk
 and UEFI variables live below `/var/tmp/tentaflake-e2e-<user>/`.
+See [build boundaries](docs/17-builds.md) for fast checks, GitHub VM selection
+and the Nix/Bazel assessment.
 
 ## Define agents
 
@@ -118,8 +132,11 @@ per-agent broker declaration they remain at `network=none`. With one, they
 join exactly one internal network and can reach only their host LLM/fetch
 brokers. `autoStart = false` in the example keeps activation explicit.
 Setting `autoStart = true` under `balanced` is accepted only after the exact
-container also has an enabled broker, disposable worker, and fixed-size
-workspace quota. This prevents an incomplete 24/7 declaration from silently
+container also has an enabled LLM broker, disposable worker, fixed-size
+workspace quota, and research relay. Web access uses the pinned public
+[tentaflake-research](https://github.com/timfewi/tentaflake-research) service;
+native web tools and the legacy fetch broker are disabled for research agents.
+See [configuration and verification](docs/16-research.md). This prevents an incomplete 24/7 declaration from silently
 starting with missing policy boundaries.
 
 Existing configurations that require direct provider credentials or host
@@ -135,6 +152,7 @@ The CLI is built from `crates/tentaflake-cli` and installed by
 `modules/shell.nix`.
 
 ```text
+tentaflake help
 tentaflake status [--json] [--hide]
 tentaflake health [--json] [--hide]
 tentaflake doctor [--json] [--hide]
@@ -151,6 +169,13 @@ tentaflake backup <agent>
 `tentaflake-status` is a status alias. The deprecated `hermes` executable is
 retained as a compatibility shim. `tentaflake top`, `console`, and the agent
 wizard were removed with the old audit stack.
+
+`help`, `--help`, and `-h` work before the host configuration is installed.
+
+`health` and `doctor` return non-zero for failed units, unknown agent states,
+or root-disk usage of at least 90%; unavailable host queries are errors.
+Stopped agents remain valid. `--hide` redacts host and agent names in both
+text and JSON reports.
 
 The `rebuild` and `update` subcommands are explicit runtime operations. Source
 evaluation or a successful build does not authorize activation.
@@ -186,7 +211,7 @@ redirect revalidation, quarantine, and host/FORWARD firewall rules. Agents
 without that explicit declaration stay at `network=none`. Phase C adds an
 opt-in disposable worker with bounded FD-safe snapshots, gVisor, no network or
 secrets, runtime/resource/tmpfs limits, host-side action approval, cleanup, and
-a read-only result path. An opt-in fixed-size ext4 volume places a hard ceiling
+a read-only result path. An opt-in fixed-size Btrfs volume places a hard ceiling
 on each persistent controller workspace; mutable state outside that workspace
 still needs capacity monitoring. The broker marks web material as untrusted;
 it does not claim that prompt injection is solved. Digest pinning is mandatory
@@ -284,7 +309,7 @@ already own a custom container GID can select its existing group with
 `hostGroup`.
 
 The secure example also declares `tentaflake.workspaceQuota.agents` for each
-controller. First activation creates and formats a sparse fixed-size ext4 image
+controller. First activation creates and formats a sparse fixed-size Btrfs image
 for an empty workspace. Existing data is never hidden or migrated implicitly.
 Read [the workspace quota guide](docs/14-workspace-quota.md) before enabling it
 on an existing host.

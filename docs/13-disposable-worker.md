@@ -54,9 +54,10 @@ explicit host GID must match or evaluation fails.
 The default image is built by Nix from the pinned nixpkgs input. It contains an
 offline Rust/C/build toolchain. `CARGO_NET_OFFLINE=true` is set, and the
 worker has no network namespace route regardless of tool configuration. A
-deployment may replace `worker.image` and the matching local
-`worker.imageReference`, but the module loads that Nix derivation locally; it
-does not pull the reference from a registry.
+deployment may replace `worker.image`; its default reference follows the
+image's `imageName` and `imageTag`. Set `worker.imageReference` explicitly for
+images without that metadata. The module loads the Nix derivation locally
+without pulling the reference from a registry.
 
 ## Submit a job
 

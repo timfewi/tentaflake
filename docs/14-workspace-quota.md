@@ -2,9 +2,9 @@
 
 ## Result
 
-`tentaflake.workspaceQuota.agents.<container>` mounts a fixed-size ext4
+`tentaflake.workspaceQuota.agents.<container>` mounts a fixed-size Btrfs
 filesystem at one controller workspace. Its backing file has an exact declared
-size, so both controller writes and worker-inbox writes receive a real
+size of at least 128 MiB, so both controller writes and worker-inbox writes receive a real
 filesystem `ENOSPC` instead of consuming the host root filesystem without a
 per-agent ceiling.
 
@@ -45,7 +45,7 @@ Enabling the option and activating the resulting NixOS generation creates:
   hermes-coding.img
 ```
 
-The prepare unit creates the exact-size sparse file, formats it as ext4, and
+The prepare unit creates the exact-size sparse file, formats it as Btrfs, and
 mounts it with `loop,nodev,nosuid,noatime`. This is an intentional filesystem
 mutation. A source build or evaluation does not perform it and does not
 authorize activation.
@@ -62,8 +62,18 @@ It tolerates only the empty `.tentaflake-worker/inbox` scaffolding that NixOS
 tmpfiles may create during activation. It also rejects a symlink/non-regular
 backing path, a leftover `.new` image, or any size mismatch. It never mounts
 over existing data, shrinks, grows, or reformats an existing image silently.
+Existing ext4 images are rejected without modification and require the explicit
+backup/restore migration below; this update does not convert them in place.
 
 ## Existing workspace migration
+
+The Restic backup module includes enabled quota mounts inside its selected
+`paths` as separate sources and requires them to be mounted before backup.
+Selecting the parent agent-state directory covers both state and its quota
+workspace. Other nested filesystems need explicit backup paths. Restore files
+into the mounted workspace with the agent stopped; do not overwrite a live
+backing image. A live file backup does not provide application-level snapshot
+consistency.
 
 Perform this only in an approved maintenance window and adapt paths to the
 exact stopped agent:
@@ -80,22 +90,34 @@ exact stopped agent:
 Tentaflake intentionally provides no automatic migration command because a
 wrong source, destination, or size would be destructive.
 
+## Migrating existing ext4 quota images
+
+Stop the controller and worker, back up the mounted workspace files, and verify
+that backup. Unmount the workspace and preserve the exact old backing image at
+a separate reviewed path. Declare at least 128 MiB, then activate the Btrfs
+configuration to create a new empty image. Restore the files into that mounted
+workspace and verify ownership, restored contents, the size ceiling, and agent
+startup before discarding any original image or backup. Copy files, not an ext4
+image, into the new Btrfs workspace. No automated in-place conversion is provided.
+
 ## Resize and recovery
 
-Changing `sizeMiB` while the image exists fails closed. Resize requires a
-separate offline procedure: stop the controller/worker, unmount the exact
-workspace, verify a backup, check the filesystem, grow the backing file, run
-`resize2fs`, update the declaration, and rebuild. Shrinking is substantially
-riskier and should use backup/restore into a new image instead.
+Changing `sizeMiB` while the image exists fails closed. Resize requires an
+explicit backup/restore into a new Btrfs image of the declared size, with the
+controller and worker stopped and the old image preserved until verification.
+The module never grows or shrinks a live image automatically.
 
-At boot, the prepare service runs `e2fsck -p` only while the workspace is not
-mounted. Return codes above the automatically repairable class fail the mount
-and therefore fail the controller dependency. Preserve the image and restore
-from backup rather than forcing a damaged filesystem online.
+At boot, the prepare service checks the filesystem type and runs
+`btrfs check --readonly` only while the workspace is not mounted. A failed check
+prevents the mount and therefore prevents controller startup. It performs no
+automatic repair; preserve the image and restore from a verified backup rather
+than running `btrfs check --repair` as an automatic recovery step.
 
 ## Verification boundary
 
 Module tests prove declaration matching, mount dependencies, fixed path/options,
 and the fail-closed non-empty check. The VM test boots the mount, verifies the
-exact backing-file size and ext4 type, and confirms a write beyond the limit
-fails. Without a completed VM/live run, evaluation alone is not quota proof.
+exact backing-file size and Btrfs type, and confirms a write beyond the limit
+fails. It also checks reboot persistence, backup/restore across the mount, and
+rejection of a legacy ext4 image with its checksum unchanged. Without a
+completed VM/live run, evaluation alone is not quota proof.

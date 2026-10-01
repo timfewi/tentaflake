@@ -2,8 +2,9 @@
 
 ## Result
 
-Balanced agents can use external models and explicitly approved web hosts
-without receiving a provider credential or general internet access. The
+Balanced agents can use external models without receiving a provider credential
+or general internet access. Web access uses [secure-research-tool](16-research.md);
+research-enabled agents must disable the legacy fetch broker described below. The
 default remains fail-closed: an agent without a broker declaration uses
 `network=none`.
 
@@ -54,7 +55,7 @@ tentaflake.broker.agents.hermes-coding = {
   };
 
   fetch = {
-    enable = true;
+    enable = false;
     port = 7811;
     allowedHosts = [
       "platform.openai.com"
@@ -68,6 +69,13 @@ tentaflake.broker.agents.hermes-coding = {
   };
 };
 ```
+
+Declare the research relay separately as described in [web research](16-research.md).
+The fetch options remain for stopped compatibility scaffolds; they cannot be
+enabled alongside a research relay. Model allowlists must select inference-only
+models. Local function/custom tool definitions are forwarded; provider-hosted
+tools such as web search, file search and remote MCP, plus `web_search_options`,
+`plugins`, `extensions` and `data_sources`, are rejected before budget reservation.
 
 Use a unique `/30` per agent. The network address must end on a four-address
 boundary and `gateway` must be its first usable address. Evaluation rejects
@@ -163,7 +171,17 @@ call.
 
 `GET /healthz` verifies that the virtual key, provider credential when
 applicable, and prompt-free audit path are readable. Broker units restart on
-failure with a five-second delay and stop after five starts in five minutes.
+failure with exponential backoff from ten seconds to one minute. Explicit
+operator stops prevent further retries.
+Broker units use `RestartMode=direct`: automatic retries keep dependent
+controller processes running instead of stopping and starting them. The broker
+endpoint remains unavailable during recovery, so in-flight calls may fail;
+the existing health probes still report unavailable or non-ready service.
+Explicitly stopping a broker stops its `Requires` controllers. Starting the
+broker afterward does not restart those controllers automatically.
+
+Direct retries skip systemd `OnFailure`/`OnSuccess` hooks. Monitor broker health
+and restart counts rather than relying on those hooks for transient outages.
 The generated security manifest records each exact host endpoint. The security
 doctor treats connection failure as unknown (`TFSEC-035`) and an answering but
 non-ready broker as high severity (`TFSEC-036`). Label/mode/endpoint drift is a

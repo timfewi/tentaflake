@@ -189,12 +189,18 @@ let
     ++ lib.optional (
       brokerEnabled && brokerCfg.fetch.enable
     ) "tentaflake-broker-fetch-${containerName}.service";
-  runtimeDependencies = brokerUnits ++ lib.optional quotaEnabled quotaUnit;
-  secureUnitPolicy = {
-    startLimitIntervalSec = 300;
-    startLimitBurst = 5;
-    serviceConfig.RestartSec = "10s";
+  research = import ./researchClient.nix {
+    inherit
+      config
+      lib
+      pkgs
+      containerName
+      settings
+      ;
+    hermes = true;
   };
+  runtimeDependencies = brokerUnits ++ lib.optional quotaEnabled quotaUnit ++ research.units;
+  secureUnitPolicy = import ./serviceRecovery.nix;
   securityResources = config.tentaflake.security.resources;
   ctrBin = "${pkgs.${backend}}/bin/${backend}";
   tentaflakeCli = pkgs.callPackage ../pkgs/tentaflake-cli { };
@@ -214,8 +220,8 @@ let
   # Generate config.yaml derivation when settings are provided
   yamlFormat = pkgs.formats.yaml { };
   configYaml =
-    if (settings != null && settings != { }) then
-      yamlFormat.generate "hermes-${name}-config.yaml" settings
+    if (research.settings != null && research.settings != { }) then
+      yamlFormat.generate "hermes-${name}-config.yaml" research.settings
     else
       null;
 
@@ -482,6 +488,7 @@ let
     ]
     ++ lib.optional workerEnabled "${workerResultsDir}:${workerResultsMount}:ro"
     ++ lib.optional (configYaml != null) "${configYaml}:${stateDir}/config.yaml:ro"
+    ++ research.volumes
     ++ extraVolumes;
     environment = {
       HERMES_HOME = stateDir;
@@ -509,8 +516,10 @@ let
     resources = securityResources;
     brokerNetwork = if brokerEnabled then brokerCfg.networkName else null;
     approvedEnvironmentFiles = lib.optional brokerEnabled brokerEnvironmentFile;
-    approvedReadOnlySources = lib.optional workerEnabled workerResultsDir;
-    approvedReadOnlyDestinations = lib.optional workerEnabled workerResultsMount;
+    approvedReadOnlySources = lib.optional workerEnabled workerResultsDir ++ research.readOnlySources;
+    approvedReadOnlyDestinations =
+      lib.optional workerEnabled workerResultsMount ++ research.readOnlyDestinations;
+    researchPolicyEnabled = research.enabled;
     automaticStart = autoStart;
     brokerPolicyEnabled = brokerEnabled;
     inherit workerEnabled;
@@ -521,6 +530,7 @@ in
 {
   assertions =
     securityResult.assertions
+    ++ research.assertions
     ++ lib.optionals (gitAutoPush != null) [
       {
         assertion = gitAutoPush ? tokenEnvFile;

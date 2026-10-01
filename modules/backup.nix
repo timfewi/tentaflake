@@ -14,6 +14,24 @@ let
     && !(lib.elem "." (lib.splitString "/" path))
     && !(lib.hasInfix "//" path);
   safeRuntimePath = safePath "/run/";
+  # Restic's filesystem boundary skips nested quota mounts unless each is
+  # an explicit source. Include only mounts inside the operator's selection.
+  workspaces = lib.unique (
+    lib.mapAttrsToList (_: agent: agent.workspace) (
+      lib.filterAttrs (
+        _: agent:
+        agent.enable
+        && lib.any (
+          path:
+          let
+            root = lib.removeSuffix "/" path;
+          in
+          agent.workspace == root || lib.hasPrefix "${root}/" agent.workspace
+        ) cfg.paths
+      ) config.tentaflake.workspaceQuota.agents
+    )
+  );
+  backupPaths = lib.unique (cfg.paths ++ workspaces);
 in
 {
   options.tentaflake.backup = {
@@ -25,7 +43,7 @@ in
         "/var/lib/hermes-coding"
         "/var/lib/tentaflake-broker-llm-hermes-coding"
       ];
-      description = "Explicit agent state, workspace, broker audit, and budget paths to back up.";
+      description = "Explicit agent state, workspace, broker audit, and budget paths to back up. Enabled managed workspace mounts inside these paths are included as separate sources.";
     };
     repositoryFile = lib.mkOption {
       type = lib.types.str;
@@ -97,7 +115,6 @@ in
 
     services.restic.backups.tentaflake = {
       inherit (cfg)
-        paths
         repositoryFile
         passwordFile
         environmentFile
@@ -106,14 +123,17 @@ in
         pruneOpts
         checkOpts
         ;
+      paths = backupPaths;
       runCheck = true;
       inhibitsSleep = true;
       extraBackupArgs = [ "--one-file-system" ];
     };
 
-    systemd.services.restic-backups-tentaflake.unitConfig.OnSuccess = [
-      "tentaflake-backup-success.service"
-    ];
+    systemd.services.restic-backups-tentaflake.unitConfig = {
+      RequiresMountsFor = backupPaths;
+      AssertPathIsMountPoint = workspaces;
+      OnSuccess = [ "tentaflake-backup-success.service" ];
+    };
 
     systemd.services.tentaflake-backup-success = {
       description = "Record the last successful Tentaflake backup";

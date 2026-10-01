@@ -94,6 +94,7 @@ impl Broker {
         let object = payload
             .as_object_mut()
             .ok_or_else(|| Failure::new(400, "llm", "request body must be a JSON object"))?;
+        require_local_tools(object)?;
         if object
             .get("stream")
             .and_then(Value::as_bool)
@@ -412,6 +413,50 @@ fn estimate_cost(model: &ModelPolicy, input_tokens: u64, output_tokens: u64) -> 
         .div_ceil(1_000_000)
 }
 
+fn require_local_tools(payload: &serde_json::Map<String, Value>) -> Result<(), Failure> {
+    let local_tool = |tool: &Value| {
+        matches!(
+            tool.get("type").and_then(Value::as_str),
+            Some("function" | "custom")
+        )
+    };
+    let local_tools = |tools: &Value| {
+        tools
+            .as_array()
+            .is_some_and(|tools| tools.iter().all(local_tool))
+    };
+    let provider_extension = [
+        "web_search_options",
+        "plugins",
+        "extensions",
+        "data_sources",
+    ]
+    .iter()
+    .any(|field| payload.contains_key(*field));
+    let tools_allowed = payload.get("tools").is_none_or(local_tools);
+    let choice_allowed = payload
+        .get("tool_choice")
+        .is_none_or(|choice| match choice {
+            Value::Null => true,
+            Value::String(choice) => matches!(choice.as_str(), "auto" | "none" | "required"),
+            Value::Object(_) if local_tool(choice) => true,
+            Value::Object(_)
+                if choice.get("type").and_then(Value::as_str) == Some("allowed_tools") =>
+            {
+                choice.get("tools").is_some_and(local_tools)
+            }
+            _ => false,
+        });
+    if provider_extension || !tools_allowed || !choice_allowed {
+        return Err(Failure::new(
+            403,
+            "llm",
+            "provider tools and extensions are disabled; use secure-research-tool for web access",
+        ));
+    }
+    Ok(())
+}
+
 fn conservative_input_tokens(body_bytes: usize) -> u64 {
     u64::try_from(body_bytes).unwrap_or(u64::MAX)
 }
@@ -522,6 +567,8 @@ mod tests {
             let (mut stream, _) = listener.accept().unwrap();
             let request = read_request(&mut stream, 32 * 1024, 1024 * 1024).unwrap();
             let authorization = request.headers.get("authorization").cloned();
+            let payload: Value = serde_json::from_slice(&request.body).unwrap();
+            assert_eq!(payload["tools"][0]["type"], "function");
             let response = b"{\"id\":\"completion-fixture\"}";
             write!(
                 stream,
@@ -575,7 +622,7 @@ mod tests {
         };
         config.validate().unwrap();
         let broker = Broker::new(config).unwrap();
-        let body = br#"{"model":"example/model","messages":[{"role":"user","content":"SENSITIVE_PROMPT_FIXTURE"}],"max_tokens":8}"#.to_vec();
+        let body = br#"{"model":"example/model","messages":[{"role":"user","content":"SENSITIVE_PROMPT_FIXTURE"}],"max_tokens":8,"tools":[{"type":"function","function":{"name":"research_fetch","parameters":{"type":"object","properties":{}}}}],"tool_choice":{"type":"function","function":{"name":"research_fetch"}}}"#.to_vec();
         let response = broker.handle(Request {
             method: "POST".into(),
             path: "/v1/chat/completions".into(),
@@ -604,6 +651,48 @@ mod tests {
             body: br#"{"model":"not-allowed","messages":[]}"#.to_vec(),
         });
         assert_eq!(denied.status, 403);
+
+        // All rejected provider-side tools must fail before reserving budget or
+        // attempting to connect to the (now closed) upstream fixture.
+        let budget_before = fs::read(&broker.config.budget_state_file).unwrap();
+        let features = [
+            json!({"tools": [{"type": "web_search"}]}),
+            json!({"tools": [{"type": "web_search_preview"}]}),
+            json!({"tools": [{"type": "mcp", "server_url": "https://connector.example.org"}]}),
+            json!({"tools": [{"type": "code_interpreter"}]}),
+            json!({"tools": [{"type": "file_search"}]}),
+            json!({"tools": [{"type": "future_provider_tool"}]}),
+            json!({"tool_choice": {"type": "web_search"}}),
+            json!({"tool_choice": {"type": "allowed_tools", "tools": [{"type": "mcp"}]}}),
+            json!({"web_search_options": {}}),
+            json!({"plugins": [{"id": "web"}]}),
+            json!({"extensions": []}),
+            json!({"data_sources": []}),
+        ];
+        for path in ["/v1/chat/completions", "/v1/responses"] {
+            for feature in &features {
+                let mut payload =
+                    json!({"model": "example/model", "messages": [], "input": "fixture"});
+                payload
+                    .as_object_mut()
+                    .unwrap()
+                    .extend(feature.as_object().unwrap().clone());
+                let response = broker.handle(Request {
+                    method: "POST".into(),
+                    path: path.into(),
+                    headers: HashMap::from([
+                        ("authorization".into(), "Bearer virtual-agent-key".into()),
+                        ("content-type".into(), "application/json".into()),
+                    ]),
+                    body: serde_json::to_vec(&payload).unwrap(),
+                });
+                assert_eq!(response.status, 403, "{path}: {feature}");
+                assert_eq!(
+                    fs::read(&broker.config.budget_state_file).unwrap(),
+                    budget_before
+                );
+            }
+        }
         fs::remove_dir_all(directory).unwrap();
     }
 

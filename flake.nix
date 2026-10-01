@@ -2,6 +2,7 @@
   description = "Generic NixOS flake template for running isolated Hermes and ZeroClaw agents on one headless machine";
 
   inputs = {
+    tentaflake-research.url = "github:timfewi/tentaflake-research";
     # Tracks nixos-unstable, pinned to an exact revision by the committed flake.lock
     # (so builds are reproducible — run `nix flake update` to bump deliberately).
     # The pinned revision provides the container and Rust toolchains used by the
@@ -65,7 +66,7 @@
       inherit ((import ./lib { inherit pkgs lib; })) agentsFromData;
 
       # Module set imported by external consumers and built-in hosts
-      tentaflakeModules = import ./modules/default.nix;
+      tentaflakeModules = import ./modules/default.nix { researchFlake = inputs.tentaflake-research; };
 
       # Contributor E2E tooling can move ahead of the nixpkgs package while
       # remaining source- and dependency-hash pinned.
@@ -140,9 +141,14 @@
         tentaflake-worker = self.packages.${system}.tentaflake-worker;
         tentaflake-worker-image = self.packages.${system}.tentaflake-worker-image;
         devcontainer-cli = self.packages.${system}.devcontainer-cli;
+        ci-vm-selection = import ./tests/ci-vm-selection.nix { inherit pkgs; };
+        rust-package-sources = import ./tests/rust-package-sources.nix { inherit self pkgs; };
         image-pinning = import ./lib/pinnedImage-test.nix { inherit pkgs; };
         module-evaluation =
-          assert import ./tests/module-eval.nix { nixpkgsPath = nixpkgs.outPath; };
+          assert import ./tests/module-eval.nix {
+            nixpkgsPath = nixpkgs.outPath;
+            researchFlake = inputs.tentaflake-research;
+          };
           pkgs.runCommand "tentaflake-module-evaluation" { } "touch $out";
 
         # VM integration test: boots the host and asserts the runtime path
@@ -150,6 +156,8 @@
         vm-integration = pkgs.testers.runNixOSTest (
           import ./tests/integration.nix { inherit self mkHermesAgent mkZeroClawAgent; }
         );
+        research-integration = import ./tests/research-integration.nix { inherit self pkgs; };
+        research-policy = import ./tests/research-policy.nix { inherit self pkgs; };
       };
 
       # ── tentaflake: Installed system, consumes my-agents.nix ──

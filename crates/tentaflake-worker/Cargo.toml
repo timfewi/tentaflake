@@ -1,6 +1,6 @@
 [package]
 name = "tentaflake-worker"
-version = "0.4.0"
+version.workspace = true
 edition = "2024"
 license = "MIT"
 description = "Fail-closed disposable tool-worker orchestrator for tentaflake"
