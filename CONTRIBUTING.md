@@ -60,9 +60,9 @@ The GitHub VM integration job is skipped when a pull request or push changes
 only Markdown documentation. It continues to run conservatively for every
 other path, including Nix, Rust, tests, installer, and workflow changes.
 
-`just security` runs the pinned Semgrep CLI and rule snapshot against tracked
-source, then checks both `Cargo.lock` and the patched Dev Containers CLI
-`yarn.lock` against OSV's current advisory database. Semgrep does not contact
+`just security` first checks `Cargo.lock` and the patched Dev Containers CLI
+`yarn.lock` against OSV's current advisory database, then runs the pinned
+Semgrep CLI and rule snapshot against tracked source. Semgrep does not contact
 its registry or send metrics; the OSV portion needs network access for current
 advisories, so it remains a separate pre-PR gate rather than part of `just ci`.
 

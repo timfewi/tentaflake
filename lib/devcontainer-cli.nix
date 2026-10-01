@@ -25,7 +25,7 @@ pkgs.devcontainer.overrideAttrs (
 
     yarnOfflineCache = pkgs.fetchYarnDeps {
       yarnLock = "${finalAttrs.src}/yarn.lock";
-      hash = "sha256-607BK6aItSjCT9SjaRiio2vFnHcT9zMruW/FPtOssbI=";
+      hash = "sha256-aUW9oIaqbyn7lgOOom1pLRuOJyckkAHEQELZROGwcxE=";
     };
 
     # proxy-agent 6.5.0 still constrains proxy-from-env to the CommonJS-only 1.x
