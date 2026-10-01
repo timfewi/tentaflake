@@ -16,6 +16,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   cache hash move together; the CLI release and prior security backports stay
   unchanged.
 ### Changed
+- Rust CLI, broker, and worker packages share one builder and a Cargo/crate
+  source fileset, removing repeated packaging policy and keeping unrelated
+  documentation and host-configuration edits out of their rebuild inputs.
 - Secure controllers and brokers now share systemd exponential restart
   backoff from 10 seconds to one minute, avoiding permanent start-limit
   exhaustion after a transient outage. Explicit stops still prevent retries.

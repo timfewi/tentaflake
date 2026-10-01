@@ -16,6 +16,12 @@ nix develop
 The development shell provides Nix tooling, Rust, Cargo, Clippy, Rustfmt,
 ShellCheck, Statix, Deadnix, and `just`.
 
+The three Rust packages share `lib/mkRustPackage.nix`. Their build source
+contains the root Cargo manifest, lockfile, and complete `crates/` tree;
+repository documentation and host configuration do not trigger Rust rebuilds.
+Keep additional build-time files inside their crate, or explicitly add them
+to the shared fileset when a build requires a root-level input.
+
 As an alternative to installing Nix on the host, open the repository in a
 Dev Container-compatible editor and select **Reopen in Container**. The
 container installs Nix and preloads this same `nix develop` environment. Its

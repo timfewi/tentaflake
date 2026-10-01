@@ -48,9 +48,12 @@ tentaflake/
 │   ├── mkHermesAgent.nix
 │   ├── mkZeroClawAgent.nix
 │   ├── agentsFromData.nix
+│   ├── mkRustPackage.nix
 │   └── pinnedImage.nix
 ├── pkgs/
 │   ├── tentaflake-cli/
+│   ├── tentaflake-broker/
+│   ├── tentaflake-worker/
 │   └── piper-voices/
 ├── installer/
 ├── tests/
@@ -183,6 +186,12 @@ store-visible and is not a secret channel.
 The workspace root is `Cargo.toml`; the binary source is
 `crates/tentaflake-cli/src/main.rs`. `pkgs/tentaflake-cli/default.nix` packages
 it with the locked Cargo dependency graph.
+
+CLI, broker, and worker packaging share `lib/mkRustPackage.nix`, whose source
+fileset contains only the root Cargo files and `crates/`. Keep crate fixtures
+and build scripts inside their crate; declare additional root build inputs
+in that fileset when needed. Documentation and host configuration stay outside
+the Rust package source.
 
 `modules/shell.nix` writes `/etc/tentaflake/cli.conf` and
 `/etc/tentaflake/agents.tsv`, installs the binary, and configures shell QoL.
@@ -344,9 +353,9 @@ disk below `/var/tmp/tentaflake-e2e-<user>/`; it never passes a host block
 device. `just e2e-run-vm` reboots that installed test disk without the ISO.
 The wrappers deliberately do not delete or reset VM state.
 
-`just security` runs source- and rule-pinned Semgrep without registry access or
-metrics, then scans the Rust and Dev Containers CLI lockfiles against OSV's
-current advisory database. It needs network access for OSV and is intentionally
+`just security` scans the Rust and Dev Containers CLI lockfiles against OSV's
+current advisory database, then runs source- and rule-pinned Semgrep without
+registry access or metrics. It needs network access for OSV and is intentionally
 separate from the reproducible `just ci` gate.
 
 Focused Rust gate:
