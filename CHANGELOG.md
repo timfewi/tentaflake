@@ -22,6 +22,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   cache hash move together; the CLI release and prior security backports stay
   unchanged.
 ### Changed
+- Installer and VM fixture import the same disk library, replacing fragile
+  extraction of executable code by fixed comment strings.
 - GitHub selects host/research VMs separately from an imported path policy;
   contributor-only changes skip them, while unknown/shared changes run both.
 - Rust packages include only their own source plus workspace manifests, so
@@ -44,6 +46,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   policy checks and a real gVisor stdio-MCP integration fixture. Secure auto-start
   now requires a research relay alongside the broker, worker and workspace quota.
 ### Fixed
+- Installer disk cleanup no longer stops swap or LVM globally. It follows the
+  selected device stack, preserves unrelated volumes and refuses cross-disk VGs
+  before mutation; encrypted target mappings are identified by device type.
 - Pin the verified research client recovery: new MCP calls reconnect after an
   upstream session loss, without replaying interrupted operations.
 - `just` recipes load the pinned contributor tools from an ordinary shell,

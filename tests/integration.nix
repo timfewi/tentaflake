@@ -71,7 +71,10 @@
           oci-containers.backend = "docker";
           docker.enable = true;
           # Only this disposable guest disk is exposed to installer formatting.
-          emptyDiskImages = [ 3072 ];
+          emptyDiskImages = [
+            3072
+            1024 # Unrelated swap/LVM must survive installer disk cleanup.
+          ];
         };
 
         # The stopped controller does not pull in its broker at boot. Make the
@@ -84,7 +87,7 @@
         environment = {
           etc = {
             "tentaflake/network-test-image".source = networkTestImage;
-            "tentaflake/installer-fixture".source = ../installer/installer.sh;
+            "tentaflake/installer-disk-library".source = ../installer/disk.sh;
           };
           systemPackages = [
             pkgs.btrfs-progs
@@ -435,17 +438,30 @@
         machine.succeed("test -d /var/lib/zeroclaw-assistant/data")
 
     with subtest("installer formats Btrfs root and records the boot filesystems"):
-        installer = machine.succeed("cat /etc/tentaflake/installer-fixture")
-        mount_helper = "mount_retry() {" + installer.split("mount_retry() {", 1)[1].split("\n}\n", 1)[0] + "\n}\n"
-        start = 'dialog --infobox "Partitioning $DISK ..." 4 50'
-        partitioning = start + installer.split(start, 1)[1].split("# STEP 9: Generate hardware config", 1)[0]
         script = (
-            'set -euo pipefail\nDISK=/dev/vdb\nINSTALL_LOG=/tmp/installer-filesystems.log\n'
-            'dialog() { :; }\ndie() { cat "$INSTALL_LOG" >&2; echo "$1" >&2; exit 1; }\n'
-            + mount_helper + partitioning
+            'set -euo pipefail\nINSTALL_LOG=/tmp/installer-filesystems.log\n'
+            'dialog() { :; }\ndie() { if [ -f "$INSTALL_LOG" ]; then cat "$INSTALL_LOG" >&2; fi; echo "$1" >&2; exit 1; }\n'
+            'source /etc/tentaflake/installer-disk-library\n'
+            'prepare_disk "$1" "$INSTALL_LOG"\n'
         )
         machine.succeed("printf %s " + shlex.quote(script) + " > /tmp/installer-filesystems.sh")
-        machine.succeed("bash /tmp/installer-filesystems.sh")
+        machine.succeed("printf untouched > /tmp/not-a-disk")
+        refused = machine.fail("bash /tmp/installer-filesystems.sh /tmp/not-a-disk 2>&1")
+        assert "not a block device" in refused
+        assert machine.succeed("cat /tmp/not-a-disk") == "untouched"
+        machine.succeed(
+            "set -eu; sgdisk -o -n 1:0:+64M -t 1:8200 -n 2:0:+128M -t 2:8e00 -n 3:0:0 /dev/vdc; "
+            "udevadm settle; mkswap /dev/vdc1; swapon /dev/vdc1; "
+            "pvcreate /dev/vdc2; vgcreate unrelated-vg /dev/vdc2; "
+            "lvcreate -L 32M -n preserved unrelated-vg; "
+            "pvcreate /dev/vdb; vgcreate selected-vg /dev/vdb; "
+            "lvcreate -L 32M -n erased selected-vg"
+        )
+        machine.succeed("swapon --show=NAME --noheadings --raw | grep -Fx /dev/vdc1")
+        machine.succeed("bash /tmp/installer-filesystems.sh /dev/vdb")
+        machine.succeed("swapon --show=NAME --noheadings --raw | grep -Fx /dev/vdc1")
+        machine.succeed("test -b /dev/unrelated-vg/preserved")
+        machine.succeed("test ! -e /dev/selected-vg/erased")
         machine.succeed("findmnt --mountpoint /mnt -n -o FSTYPE | grep -Fx btrfs")
         machine.succeed("findmnt --mountpoint /mnt/boot -n -o FSTYPE | grep -Fx vfat")
         machine.succeed("blkid -s LABEL -o value /dev/vdb2 | grep -Fx nixos")
@@ -456,6 +472,39 @@
         assert machine.succeed("cat /mnt/probe").strip() == "installer-persistence"
         # Avoid a duplicate nixos label interfering with the later guest reboot.
         machine.succeed("umount /mnt; btrfs filesystem label /dev/vdb2 installer-test-root")
+
+        # A VG spanning the confirmed disk and another disk must be refused
+        # before cleanup, leaving even the selected PV metadata unchanged.
+        machine.succeed(
+            "set -eu; wipefs -a /dev/vdb2; pvcreate /dev/vdb2 /dev/vdc3; "
+            "vgcreate shared-vg /dev/vdb2 /dev/vdc3"
+        )
+        pv_header = machine.succeed("dd if=/dev/vdb2 bs=1M count=1 status=none | sha256sum")
+        refused = machine.fail("bash /tmp/installer-filesystems.sh /dev/vdb 2>&1")
+        assert "spans another disk" in refused
+        assert machine.succeed("dd if=/dev/vdb2 bs=1M count=1 status=none | sha256sum") == pv_header
+        machine.succeed("swapon --show=NAME --noheadings --raw | grep -Fx /dev/vdc1")
+        machine.succeed("test -b /dev/unrelated-vg/preserved")
+
+        # Non-luks-prefixed target mappings and LVM-on-crypt need graph-based
+        # cleanup, while an unrelated encrypted mapper must remain open.
+        machine.succeed(
+            "set -eu; vgremove -fy shared-vg; pvremove -fy /dev/vdb2 /dev/vdc3; "
+            "cryptsetup open --type plain --key-file /dev/zero --keyfile-size 32 --key-size 256 "
+            "/dev/vdb2 installer-target-crypt; "
+            "cryptsetup open --type plain --key-file /dev/zero --keyfile-size 32 --key-size 256 "
+            "/dev/vdc3 unrelated-crypt; "
+            "pvcreate /dev/mapper/installer-target-crypt; "
+            "vgcreate encrypted-selected-vg /dev/mapper/installer-target-crypt; "
+            "lvcreate -L 32M -n erased encrypted-selected-vg"
+        )
+        machine.succeed("bash /tmp/installer-filesystems.sh /dev/vdb")
+        machine.succeed("test ! -e /dev/mapper/installer-target-crypt")
+        machine.succeed("test -b /dev/mapper/unrelated-crypt; test -b /dev/unrelated-vg/preserved")
+        machine.succeed("swapon --show=NAME --noheadings --raw | grep -Fx /dev/vdc1")
+        machine.succeed("umount -R /mnt; btrfs filesystem label /dev/vdb2 installer-test-root")
+        machine.succeed("cryptsetup close unrelated-crypt")
+        machine.succeed("swapoff /dev/vdc1; vgchange -an unrelated-vg")
 
     with subtest("persistent workspaces have fixed-size mounted filesystems"):
         for name, path in [

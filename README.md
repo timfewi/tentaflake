@@ -73,6 +73,8 @@ nix build .#installer-iso
 New installations use Btrfs for the host root and fixed-size agent workspaces.
 Existing ext4 hosts and workspace images require an explicit migration; see
 [installation](docs/00-install.md) and [workspace migration](docs/14-workspace-quota.md).
+Installer cleanup preserves other disks' swap, LVM and encrypted mappings;
+LVM groups spanning the selected and another disk require migration first.
 
 The result is written below `result/iso/`. Writing it to a block device is
 destructive; follow [the install guide](docs/00-install.md) and resolve the

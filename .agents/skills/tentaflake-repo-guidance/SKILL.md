@@ -366,6 +366,11 @@ configuration. Both Nixpkgs and research inputs retain the ISO lockfile revision
 `scripts/generated-flake-test.sh` checks the generated flake
 with a JSON agent fixture.
 
+`installer/disk.sh` supplies the wizard's disk operations and is imported
+directly by the VM fixture. Never extract executable blocks by comment text.
+Cleanup is limited to the selected disk stack; cross-disk VGs are refused
+before mutation. Unrelated swap/VGs/encrypted mappings must remain active.
+
 Building the ISO is safe verification. Writing it to USB, partitioning a disk,
 and installing NixOS are destructive runtime operations and need an exact,
 confirmed target.
