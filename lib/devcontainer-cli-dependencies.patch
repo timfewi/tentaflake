@@ -30,6 +30,15 @@ diff --git a/yarn.lock b/yarn.lock
 +  version "0.15.0"
 +  resolved "https://registry.yarnpkg.com/@humanfs/types/-/types-0.15.0.tgz#f2a09f62012390b2bff3fc6fb248ddec8c09a090"
 +  integrity sha512-ZZ1w0aoQkwuUuC7Yf+7sdeaNfqQiiLcSRbfI08oAxqLtpXQr9AIVX7Ay7HLDuiLYAaFPu8oBYNq/QIi9URHJ3Q==
+@@ -649,4 +657,4 @@
+-basic-ftp@^5.0.2:
+-  version "5.3.1"
+-  resolved "https://registry.yarnpkg.com/basic-ftp/-/basic-ftp-5.3.1.tgz#3148ee9af43c0522514a4f973fecb1d3cbb6d71e"
+-  integrity sha512-bopVNp6ugyA150DDuZfPFdt1KZ5a94ZDiwX4hMgZDzF+GttD80lEy8kj98kbyhLXnPvhtIo93mdnLIjpCAeeOw==
++basic-ftp@6.2.1, basic-ftp@^5.0.2:
++  version "6.2.1"
++  resolved "https://registry.yarnpkg.com/basic-ftp/-/basic-ftp-6.2.1.tgz#4e48a39c87baee0314e1a0fa9bcca73b1e251e53"
++  integrity sha512-bK67isD+lKq46AU8vNtjvMaT2ZqAOAmNCbxUHlFBRD4k15NWxyEjmaKtZPlgce58So4BNTjITGQOVTjL9y0ECA==
 @@ -656,3 +664,3 @@
 -  version "1.1.13"
 -  resolved "https://registry.yarnpkg.com/brace-expansion/-/brace-expansion-1.1.13.tgz#d37875c01dc9eff988dd49d112a57cb67b54efe6"
@@ -91,7 +100,8 @@ diff --git a/yarn.lock b/yarn.lock
 diff --git a/package.json b/package.json
 --- a/package.json
 +++ b/package.json
-@@ -109,1 +109,2 @@
+@@ -109,1 +109,3 @@
 -		"serialize-javascript": "^7.0.5"
++		"basic-ftp": "6.2.1",
 +		"diff": "8.0.3",
 +		"serialize-javascript": "^7.0.5"

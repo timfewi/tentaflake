@@ -80,9 +80,25 @@
         # The stopped controller does not pull in its broker at boot. Make the
         # fetch broker an explicit fixture service so the reboot subtest can
         # verify its credential, network, and health restoration independently.
-        systemd.services."tentaflake-broker-fetch-zeroclaw-assistant".wantedBy = [
-          "multi-user.target"
-        ];
+        systemd = {
+          services = {
+            "tentaflake-broker-fetch-zeroclaw-assistant".wantedBy = [ "multi-user.target" ];
+            # Exercise the actual credential unit's mount namespace.
+            "tentaflake-broker-credentials-zeroclaw-assistant".serviceConfig.ExecStartPost =
+              pkgs.writeShellScript "check-credential-write-boundary" ''
+                set -eu
+                test -w "$RUNTIME_DIRECTORY"
+                ${pkgs.gnugrep}/bin/grep -Eq '^CapBnd:[[:space:]]+0+$' /proc/self/status
+                for forbidden in /run/tentaflake-broker/outside /run/tentaflake-broker/other-agent/outside /etc/tentaflake-credential-outside; do
+                  if ${pkgs.coreutils}/bin/touch "$forbidden" 2>/dev/null; then
+                    echo "credential unit escaped its writable directory: $forbidden" >&2
+                    exit 1
+                  fi
+                done
+              '';
+          };
+          tmpfiles.rules = [ "d /run/tentaflake-broker/other-agent 0700 root root -" ];
+        };
 
         environment = {
           etc = {
@@ -255,6 +271,62 @@
     # can reject the sandbox bootstrap before the workload starts, so keep
     # the runtime probes bounded while leaving headroom for gVisor itself.
     runtime_probe_pids_limit = 64
+
+    def check_live_doctor(node, backend, image, network, endpoint):
+        name = "tf-doctor-fixture"
+        apparmor = "--security-opt=apparmor=docker-default " if backend == "docker" else ""
+        node.succeed(
+            f"{backend} run -d --name {name} --runtime=runsc --network={network} "
+            "--read-only --user=65534:65534 --cap-drop=ALL "
+            "--security-opt=no-new-privileges " + apparmor +
+            "--memory=64m --memory-swap=64m --cpus=0.5 --pids-limit=64 "
+            "--ulimit=nofile=128:128 --ulimit=nproc=64:64 "
+            "--tmpfs=/tmp:rw,nosuid,nodev,noexec,size=8m "
+            "--tmpfs=/run:rw,nosuid,nodev,noexec,size=8m "
+            "--tmpfs=/var/tmp:rw,nosuid,nodev,noexec,size=8m "
+            f"{image} sleep 120"
+        )
+        resources = dict(memoryBytes=67108864, memorySwapBytes=67108864,
+                         nanoCpus=500000000, pidsLimit=64, nofile=128, nproc=64)
+        tmpfs = {path: 8388608 for path in ("/tmp", "/run", "/var/tmp")}
+        fields = ["agent", name, "balanced"] + ["true"] * 17
+        fields += ["true", "false", "-", "true", endpoint, network,
+                   "[]", json.dumps(tmpfs), "true", json.dumps(resources)]
+        manifest = "host\tbalanced\tfalse\ttrue\ttrue\ttrue\ttrue\tfalse\t36\n"
+        manifest += "\t".join(fields) + "\n"
+        config = (f"backend={backend}\nflake_dir=/fixture\nhost_name=fixture\n"
+                  "agents_file=/tmp/doctor-agents.tsv\nsecurity_profile=balanced\n"
+                  "security_file=/tmp/doctor-security.tsv\n")
+        for path, content in (("/tmp/doctor.conf", config),
+                              ("/tmp/doctor-security.tsv", manifest),
+                              ("/tmp/doctor-agents.tsv", "")):
+            node.succeed(f"printf %s {shlex.quote(content)} > {path}")
+        command = "TENTAFLAKE_CONFIG=/tmp/doctor.conf tentaflake doctor --security --json"
+        status, report = node.execute(command)
+        findings = json.loads(report)["findings"]
+        live = [item for item in findings if item["id"] in ("TFSEC-033", "TFSEC-034")]
+        if backend == "podman":
+            # The pinned Podman/runsc combination reports no AppArmor profile
+            # and null capability fields. Preserve the real negative evidence;
+            # a synthetic complete-schema unit fixture is not runtime proof.
+            observed = json.loads(node.succeed(f"podman inspect {name}"))[0]
+            assert observed["AppArmorProfile"] == "", observed
+            assert observed["EffectiveCaps"] is None, observed
+            assert observed["BoundingCaps"] is None, observed
+            assert status == 1, report
+            assert any(item["id"] == "TFSEC-034" and item["severity"] == "critical"
+                       for item in live), report
+            node.succeed(f"podman rm --force {name}")
+            return
+        if status not in (0, 1) or live:
+            print(node.succeed(f"{backend} inspect {name}"))
+            raise AssertionError(f"valid {backend} fixture did not pass live inspection: {report}")
+        node.succeed(f"{backend} update --memory=128m --memory-swap=128m {name}")
+        status, report = node.execute(command)
+        assert status == 1, report
+        assert any(item["id"] == "TFSEC-034" and item["severity"] == "critical"
+                   for item in json.loads(report)["findings"]), report
+        node.succeed(f"{backend} rm --force {name}")
 
     def unit_with_start_script(node, service):
         unit = node.succeed(f"systemctl cat {service}")
@@ -545,6 +617,32 @@
             "https://github.com/example/allowed.git"
         )
 
+    with subtest("credentials stay private and stable across service restarts"):
+        credentials = "tentaflake-broker-credentials-zeroclaw-assistant.service"
+        runtime_dir = "/run/tentaflake-broker/zeroclaw-assistant"
+        broker = "tentaflake-broker-fetch-zeroclaw-assistant.service"
+        machine.wait_for_unit(credentials)
+        machine.succeed(f"test $(stat -c %a {runtime_dir}) = 700")
+        for filename in ("agent-token", "agent.env"):
+            machine.succeed(f"test $(stat -c %a {runtime_dir}/{filename}) = 400")
+        token_digest = machine.succeed(f"sha256sum {runtime_dir}/agent-token")
+        for transition in ("restart", "stop-start"):
+            if transition == "restart":
+                machine.succeed(f"systemctl restart {credentials}")
+            else:
+                machine.succeed(f"systemctl stop {credentials}")
+                machine.succeed(f"systemctl start {credentials}")
+            machine.wait_for_unit(credentials)
+            assert machine.succeed(f"sha256sum {runtime_dir}/agent-token") == token_digest
+            machine.succeed(f"test ! -e {runtime_dir}/agent.env.tmp")
+            machine.succeed(f"systemctl restart {broker}")
+            machine.wait_for_unit(broker)
+            wait_for_broker_health(machine, "10.203.30.1:7811", f"journalctl -b -u {broker} -n 100")
+        broker_pid = machine.succeed(f"systemctl show -p MainPID --value {broker}").strip()
+        machine.succeed(f"grep -Eq '^CapBnd:[[:space:]]+0+$' /proc/{broker_pid}/status")
+        for property_name, expected in (("MemoryMax", "134217728"), ("TasksMax", "64"), ("LimitNOFILE", "4096")):
+            assert machine.succeed(f"systemctl show -p {property_name} --value {broker}").strip() == expected
+
     with subtest("fetch broker rejects unauthenticated and SSRF requests"):
         machine.succeed(
             "systemctl start "
@@ -739,6 +837,8 @@
         podman.succeed(
             "podman load < /etc/tentaflake/podman-test-image"
         )
+        check_live_doctor(podman, "podman", "tentaflake-podman-test:latest",
+                          "tf-zeroclaw-podman", "10.203.50.1:7811")
         podman_base = (
             "podman run --rm --runtime runsc "
             "--network none --read-only "
@@ -873,6 +973,8 @@
             f".[0].HostConfig.PidsLimit == {runtime_probe_pids_limit}'"
         )
         machine.succeed("docker rm --force tf-resource-limits")
+        check_live_doctor(machine, "docker", "tentaflake-network-test:latest",
+                          "tf-zeroclaw-assistant", "10.203.30.1:7811")
         machine.succeed(base + "sh -c 'test $(id -u) = 65534'")
         machine.succeed(
             base

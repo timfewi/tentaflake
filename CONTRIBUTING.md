@@ -145,9 +145,10 @@ Do not stage, overwrite, or remove unrelated work in a dirty checkout.
 ## Adding modules
 
 Core modules belong in `modules/` and must be imported by
-`modules/default.nix`. Optional integrations belong in `modules/optional/`;
-profiles belong in `modules/profiles/`. Export optional modules explicitly from
-`flake.nix` and document their trust boundary.
+`modules/default.nix`. Optional profiles belong in `modules/profiles/`; export
+them explicitly from `flake.nix` and document their trust boundary. Editor,
+Hive Research and speech integrations belong in consumer flakes. The core
+secure research transport remains in `modules/research.nix`.
 
 ## Signing and licensing
 

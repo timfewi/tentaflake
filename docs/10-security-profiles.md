@@ -44,7 +44,9 @@ overrides cannot bypass the final checks. It enforces:
   Podman path requires host AppArmor and forbids an unconfined override;
 - private tmpfs mounts for `/tmp`, `/run`, and `/var/tmp` with `nosuid`,
   `nodev`, `noexec`, and size ceilings;
-- CPU, memory, swap, PID, open-file, and process limits;
+- CPU, memory, swap, PID, open-file, and process limits; controller memory and
+  total memory-plus-swap are bounded to 1 TiB each, tmpfs to 64 GiB each, and
+  CPU quota to 1024 with at most five fractional digits;
 - no published ports, caller networks, devices, caller-supplied host namespace
   overrides, runtime sockets, real credential files, or secret-like
   environment keys;
@@ -195,10 +197,15 @@ effective/bounding capabilities, AppArmor profile, and Docker-compatible
 unparseable probe is a warning, never green. Configured broker endpoints are
 also checked for credential, policy, and audit-path readiness through
 `/healthz`. The generated manifest records each capsule's exact broker-network
-name, and live inspection treats a different network as unsafe; a legacy
-manifest without that field remains unknown rather than accepted. The check
-still does not prove complete controller-tool audit
-coverage, remote policy delivery, or cross-agent network denial; those require
+name, bind mounts, tmpfs sizes, absence of ports, and exact resource limits.
+Inspection requires `State.Running=true`, the exact network set and internal
+broker bridge, no published ports, and matching mounts and limits. Missing or
+legacy manifest fields remain unknown. Each OCI subprocess has a five-second
+deadline and an 8 MiB combined stdout/stderr ceiling, including inherited
+output handles; overflow remains unknown. Broker
+health probes run in batches of at most 16. The check still does not prove
+complete controller-tool audit coverage, remote policy delivery, or cross-agent
+network denial; those require
 target-host runtime and VM evidence.
 
 The VM suite supplies part of that runtime evidence with separate Docker,
@@ -207,9 +214,15 @@ images under `runsc`. It checks public-listener denial, direct
 DNS/Internet/loopback/private/tailnet/link-local/metadata denial,
 an actual scoped LLM-broker response, deterministic bridge interfaces,
 non-root/empty capabilities/read-only root, bounded workspace and PID behavior,
-Docker live resource-limit inspection, hidden sensitive state/sockets,
+Docker live resource-limit inspection and doctor detection of deliberately
+changed memory limits, hidden sensitive state/sockets,
 changed-remote rejection, worker timeout/approval/cleanup, broker crash
 restart, unsafe-doctor exit status, backup/restore, and a controlled VM reboot.
+The pinned Podman/runsc fixture reports an empty AppArmor profile and `null`
+effective/bounding capability fields. Its live doctor result is therefore
+critical for absent AppArmor; the VM verifies that negative result, not full
+Podman confinement. Complete-schema Rust fixtures test parsing independently.
+
 It does not emulate a real tailnet policy, upstream provider, production
 registry, or a production-host activation/reboot drill.
 

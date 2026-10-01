@@ -159,6 +159,45 @@ let
   ];
   unlimitedResourceAttempt = builtins.tryEval unlimitedResourceFixture.config.system.build.toplevel.drvPath;
 
+  oversizedControllerMemoryFixture = eval [
+    ../modules/default.nix
+    (hostModule "balanced")
+    {
+      tentaflake.security.resources = {
+        memory = "1025g";
+        memorySwap = "1025g";
+      };
+    }
+  ];
+  oversizedControllerMemoryAttempt = builtins.tryEval oversizedControllerMemoryFixture.config.system.build.toplevel.drvPath;
+
+  oversizedControllerTmpfsFixture = eval [
+    ../modules/default.nix
+    (hostModule "balanced")
+    {
+      tentaflake.security.resources.tmpfsSize = "65g";
+    }
+  ];
+  oversizedControllerTmpfsAttempt = builtins.tryEval oversizedControllerTmpfsFixture.config.system.build.toplevel.drvPath;
+
+  oversizedControllerCpuFixture = eval [
+    ../modules/default.nix
+    (hostModule "balanced")
+    {
+      tentaflake.security.resources.cpus = "1025";
+    }
+  ];
+  oversizedControllerCpuAttempt = builtins.tryEval oversizedControllerCpuFixture.config.system.build.toplevel.drvPath;
+
+  overpreciseControllerCpuFixture = eval [
+    ../modules/default.nix
+    (hostModule "balanced")
+    {
+      tentaflake.security.resources.cpus = "0.000001";
+    }
+  ];
+  overpreciseControllerCpuAttempt = builtins.tryEval overpreciseControllerCpuFixture.config.system.build.toplevel.drvPath;
+
   missingManagementFixture = eval [
     ../modules/default.nix
     (hostModule "balanced")
@@ -414,6 +453,106 @@ let
   brokerBridge = "tfb-${builtins.substring 0 8 (builtins.hashString "sha256" "hermes-brokered")}";
   brokerManifest = brokerCapsule.config.environment.etc."tentaflake/security.tsv".text;
   brokerAttempt = builtins.tryEval brokerCapsule.config.system.build.toplevel.drvPath;
+
+  # Exercise the generated services' budgets, including disabled agents.
+  brokerHostBudgetAccepted =
+    option: value:
+    let
+      fixture = brokerCapsule.extendModules {
+        modules = [ { tentaflake.broker.${option} = value; } ];
+      };
+    in
+    lib.all (item: item.assertion) fixture.config.assertions;
+  controllerResourcesAccepted =
+    resources:
+    let
+      fixture = capsule.extendModules {
+        modules = [ { tentaflake.security.resources = resources; } ];
+      };
+    in
+    lib.all (item: item.assertion) fixture.config.assertions;
+  brokerModeBudgetsAccepted =
+    modes: concurrency: rate:
+    let
+      fixture = brokerCapsule.extendModules {
+        modules = [
+          {
+            tentaflake.broker = {
+              maxTotalConcurrency = concurrency;
+              maxTotalRequestsPerMinute = rate;
+              agents = lib.mkForce (
+                builtins.listToAttrs (
+                  lib.imap0 (index: mode: {
+                    name = "mode-${toString index}";
+                    value = brokerCapsule.config.tentaflake.broker.agents.hermes-brokered // {
+                      inherit (mode) enable;
+                      maxConcurrency = 4;
+                      maxRequestsPerMinute = 30;
+                      llm = brokerCapsule.config.tentaflake.broker.agents.hermes-brokered.llm // {
+                        enable = mode.llm;
+                      };
+                      fetch = brokerCapsule.config.tentaflake.broker.agents.hermes-brokered.fetch // {
+                        enable = mode.fetch;
+                      };
+                    };
+                  }) modes
+                )
+              );
+            };
+          }
+        ];
+      };
+      # Successful NixOS assertions may carry lazy messages that are only
+      # valid on failure (for example Docker containers' unused Podman user).
+      failures = lib.filter (item: !item.assertion) fixture.config.assertions;
+    in
+    lib.all (
+      item:
+      !(lib.hasInfix "maxTotalConcurrency" item.message)
+      && !(lib.hasInfix "maxTotalRequestsPerMinute" item.message)
+    ) failures;
+  llmMode = {
+    enable = true;
+    llm = true;
+    fetch = false;
+  };
+  fetchMode = {
+    enable = true;
+    llm = false;
+    fetch = true;
+  };
+  dualMode = {
+    enable = true;
+    llm = true;
+    fetch = true;
+  };
+
+  brokerAggregateBudgetFixture = eval [
+    ../modules/default.nix
+    (hostModule "balanced")
+    (builders.mkHermesAgent {
+      name = "broker-overbudget";
+      autoStart = false;
+    })
+    {
+      tentaflake = {
+        networking.enable = lib.mkForce true;
+        broker = {
+          maxTotalConcurrency = 3;
+          agents.hermes-broker-overbudget = {
+            enable = true;
+            subnet = "10.203.24.0/30";
+            gateway = "10.203.24.1";
+            fetch = {
+              enable = true;
+              allowedHosts = [ "docs.example.com" ];
+            };
+          };
+        };
+      };
+    }
+  ];
+  brokerAggregateBudgetAttempt = builtins.tryEval brokerAggregateBudgetFixture.config.system.build.toplevel.drvPath;
 
   workerCapsule = eval [
     ../modules/default.nix
@@ -702,6 +841,51 @@ assert lib.all
     brokerCapsule.config.systemd.services.tentaflake-broker-llm-hermes-brokered
     brokerCapsule.config.systemd.services.tentaflake-broker-fetch-hermes-brokered
   ];
+
+assert lib.all
+  (
+    unit:
+    unit.serviceConfig.MemoryMax == 128 * 1024 * 1024
+    && unit.serviceConfig.TasksMax == 64
+    && unit.serviceConfig.LimitNOFILE == 4096
+  )
+  [
+    brokerCapsule.config.systemd.services.tentaflake-broker-llm-hermes-brokered
+    brokerCapsule.config.systemd.services.tentaflake-broker-fetch-hermes-brokered
+  ];
+assert
+  let
+    credentials =
+      brokerCapsule.config.systemd.services.tentaflake-broker-credentials-hermes-brokered.serviceConfig;
+  in
+  credentials.RuntimeDirectory == "tentaflake-broker/hermes-brokered"
+  && credentials.RuntimeDirectoryMode == "0700"
+  && credentials.RuntimeDirectoryPreserve == "yes"
+  && credentials.ProtectSystem == "strict"
+  && credentials.CapabilityBoundingSet == ""
+  && credentials.ReadOnlyPaths == [ "/run/tentaflake-broker" ]
+  && credentials.ReadWritePaths == [ "/run/tentaflake-broker/hermes-brokered" ];
+assert
+  let
+    agentLines = lib.filter (lib.hasPrefix "agent\t") (lib.splitString "\n" capsuleManifest);
+    fields = lib.splitString "\t" (builtins.unsafeDiscardStringContext (lib.head agentLines));
+    resources = builtins.fromJSON (lib.elemAt fields 29);
+  in
+  lib.length fields == 30
+  && builtins.fromJSON (lib.elemAt fields 26) == hermesCapsule.volumes
+  &&
+    builtins.fromJSON (lib.elemAt fields 27) == {
+      "/run" = 64 * 1024 * 1024;
+      "/tmp" = 256 * 1024 * 1024;
+      "/var/tmp" = 256 * 1024 * 1024;
+    }
+  && lib.elemAt fields 28 == "true"
+  && resources.memoryBytes == 2 * 1024 * 1024 * 1024
+  && resources.memorySwapBytes == resources.memoryBytes
+  && resources.nanoCpus == 2000000000
+  && resources.pidsLimit == 512
+  && resources.nproc == resources.pidsLimit
+  && resources.nofile == 4096;
 assert provenanceAttempt.success;
 assert !missingProvenanceAttempt.success;
 assert lib.hasInfix "cosign verify --certificate-identity"
@@ -711,6 +895,10 @@ assert lib.elem "tentaflake-image-verify-hermes-signed.service"
 assert podmanAttempt.success;
 assert !strictAttempt.success;
 assert !unlimitedResourceAttempt.success;
+assert !oversizedControllerMemoryAttempt.success;
+assert !oversizedControllerTmpfsAttempt.success;
+assert !oversizedControllerCpuAttempt.success;
+assert !overpreciseControllerCpuAttempt.success;
 assert !missingManagementAttempt.success;
 assert !publicSshAttempt.success;
 assert gitAttempt.success;
@@ -758,6 +946,37 @@ assert lib.elem "--network=host" devContainer.extraOptions;
 assert lib.elem "--env-file=/run/tentaflake/dev.env" devContainer.extraOptions;
 assert !(lib.elem "--runtime=runsc" devContainer.extraOptions);
 assert brokerAttempt.success;
+assert brokerHostBudgetAccepted "maxEnabledAgents" 1;
+assert brokerHostBudgetAccepted "maxTotalDailyTokenBudget" 1000000;
+assert !(brokerHostBudgetAccepted "maxTotalDailyTokenBudget" 999999);
+assert brokerHostBudgetAccepted "maxTotalDailyCostMicrousd" 10000000;
+assert !(brokerHostBudgetAccepted "maxTotalDailyCostMicrousd" 9999999);
+assert controllerResourcesAccepted {
+  memory = "1t";
+  memorySwap = "1t";
+  tmpfsSize = "64g";
+  runTmpfsSize = "64g";
+  cpus = "1024";
+};
+assert controllerResourcesAccepted { cpus = "0.00001"; };
+assert !(controllerResourcesAccepted { memory = "99999999999999999999999999999999t"; });
+assert !(controllerResourcesAccepted { cpus = "99999999999999999999999999999999"; });
+assert !brokerAggregateBudgetAttempt.success;
+assert brokerModeBudgetsAccepted [ llmMode ] 4 30;
+assert brokerModeBudgetsAccepted [ fetchMode ] 4 30;
+assert !(brokerModeBudgetsAccepted [ llmMode ] 3 30);
+assert !(brokerModeBudgetsAccepted [ fetchMode ] 4 29);
+assert !(brokerModeBudgetsAccepted [ dualMode ] 4 60);
+assert !(brokerModeBudgetsAccepted [ dualMode ] 8 30);
+assert brokerModeBudgetsAccepted [ dualMode ] 8 60;
+assert brokerModeBudgetsAccepted [
+  dualMode
+  (dualMode // { enable = false; })
+] 8 60;
+assert brokerModeBudgetsAccepted [ llmMode fetchMode dualMode ] 16 120;
+assert !(brokerModeBudgetsAccepted [ llmMode fetchMode dualMode ] 15 120);
+assert !(brokerModeBudgetsAccepted [ llmMode fetchMode dualMode ] 16 119);
+
 assert workerAttempt.success;
 assert
   !(builtins.tryEval tooSmallQuota.config.tentaflake.workspaceQuota.agents.hermes-worker.sizeMiB)
@@ -857,7 +1076,7 @@ assert
   ];
 assert
   brokerCapsule.config.systemd.services."tentaflake-broker-fetch-hermes-brokered".serviceConfig.CapabilityBoundingSet
-  == [ ];
+  == "";
 assert lib.hasInfix "ip saddr 10.203.20.0/30 counter drop"
   brokerCapsule.config.networking.firewall.extraForwardRules;
 assert lib.hasInfix "iifname \"${brokerBridge}\" ip saddr 10.203.20.0/30"

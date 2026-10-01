@@ -52,7 +52,8 @@ monitoring.
 
 ## Optional profiles
 
-Import observability, Falco, Hive Research, Piper TTS, or editor support only
-when the deployment needs them. Each integration has a separate package,
+Import observability or Falco only when the deployment needs them. Keep editor,
+Hive Research and speech integrations in the consumer flake. Web/research uses
+the core [secure research transport](16-research.md). Each optional integration has a separate package,
 credential, network, or privilege boundary; see
 [observability and detection](09-observability.md).

@@ -37,10 +37,6 @@ tentaflake/
 │   ├── worker.nix
 │   ├── workspace-quota.nix
 │   ├── image-provenance.nix
-│   ├── optional/
-│   │   ├── editor.nix
-│   │   ├── hive-research.nix
-│   │   └── piper-tts-server.nix
 │   └── profiles/
 │       ├── observability.nix
 │       └── falco.nix
@@ -53,8 +49,7 @@ tentaflake/
 ├── pkgs/
 │   ├── tentaflake-cli/
 │   ├── tentaflake-broker/
-│   ├── tentaflake-worker/
-│   └── piper-voices/
+│   └── tentaflake-worker/
 ├── installer/
 ├── tests/
 └── docs/
@@ -79,9 +74,6 @@ Core and optional modules:
 |---|---|
 | `nixosModules.default` | Core module set |
 | `nixosModules.installer` | Installer ISO |
-| `nixosModules.editor` | Optional editor |
-| `nixosModules.hiveResearch` | Optional web research |
-| `nixosModules.piperTts` | Optional TTS |
 | `nixosModules.observability` | Optional metrics/logs |
 | `nixosModules.falco` | Optional runtime detection |
 
@@ -94,7 +86,6 @@ Packages and checks:
 | `packages.*.tentaflake-worker` | Host worker orchestrator |
 | `packages.*.tentaflake-worker-image` | Nix-built offline worker image |
 | `packages.*.installer-iso` | Installer image |
-| `packages.*.piper-voices` | Optional voice assets |
 | `checks.*.image-pinning` | OCI reference tests |
 | `checks.*.module-evaluation` | Profile assertions |
 | `checks.*.vm-integration` | Boot/runtime test |
@@ -247,6 +238,13 @@ Do not treat source evaluation as proof that Docker/Podman internal networking,
 nftables, systemd credentials, or live provider TLS work on an activated host.
 See `docs/12-brokered-egress.md`.
 
+Broker processes default to 128 MiB, 64 tasks, and 4096 open files. Optional
+host admission ceilings bound agent count, summed concurrency/rate per enabled
+LLM/fetch mode, and declared token/cost budgets per enabled agent. Credential
+setup has one private preserved runtime directory under `ProtectSystem=strict`,
+an explicitly read-only parent and exact writable child, and no capabilities.
+Use an empty string to clear `CapabilityBoundingSet`; an empty list omits it.
+
 ## Disposable execution and approval
 
 `modules/worker.nix` declares per-container queues. The host-side
@@ -326,7 +324,14 @@ failure/success hooks; health and restart counts remain the outage evidence.
 
 `tentaflake doctor --security` combines the generated manifest with narrow
 live checks for root disk, Restic success age, Tailscale Serve/Funnel, and
-backend-specific Docker/Podman inspect drift. Unavailable AF_UNIX, sudo,
+backend-specific Docker/Podman inspect drift against exact declared mounts,
+networks, tmpfs sizes, and resource limits. OCI inspection captures stdout and
+stderr within five seconds and an 8 MiB combined output budget; overflow
+remains unknown. Broker probes use batches of at most 16. Controller
+limits cap memory/swap at 1 TiB, tmpfs at 64 GiB, and CPU at 1024 with at most
+five fractional digits. The pinned Podman/runsc VM reports an empty AppArmor
+profile and null capability fields; its expected doctor result is critical,
+not proof of full confinement. Unavailable AF_UNIX, sudo,
 stopped-container, or incomplete-schema evidence is warning/unknown, never
 green. Exact broker `/healthz` endpoints distinguish unreachable/unknown from
 an explicit credential/policy/audit-readiness failure. Backup success is recorded by
@@ -350,11 +355,11 @@ resource, and ptrace access.
 Evaluation is not runtime proof. Verify kernel BTF/ring-buffer support, event
 capture, rules, and alert delivery on the exact activated host.
 
-## Optional integrations
+## Integration boundary
 
-Editor, Hive Research, and Piper live below `modules/optional/` and are exported
-individually. Do not import them from `modules/default.nix`. External inputs,
-credentials, network listeners, and voice assets remain opt-in.
+Editor, Hive Research, and Piper modules and voice packages have been removed.
+Keep deployment-specific integrations in consumer flakes. The template exports
+only observability and Falco as optional profiles.
 
 ## Installer
 

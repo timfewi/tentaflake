@@ -61,6 +61,8 @@ still accurate before finishing — and update them in the same change:
 
 ## Module Boundaries
 
+- Editor, Hive Research, and Piper integrations belong in consumer flakes;
+  the template no longer exports these modules or Piper voice assets.
 - `modules/` — reusable NixOS modules, including security, brokered egress,
   image-provenance gates, disposable workers, workspace quotas, encrypted
   backup, and generic options
@@ -87,6 +89,13 @@ still accurate before finishing — and update them in the same change:
   provider-hosted network tools. See `docs/16-research.md` and its evidence limits.
   Research client recovery must never replay dispatched operations or reopen
   after explicit close; every new session repeats negotiation and UID checks.
+- Security manifests carry exact live mount, tmpfs, network, and resource
+  expectations. Incomplete/legacy runtime evidence must remain unknown.
+  OCI inspection has a deadline and a combined output-byte ceiling; failures
+  remain unknown and raw container environment data must not reach reports.
+- Broker host concurrency/rate admission counts each enabled LLM/fetch mode.
+  Clear systemd capability sets with an empty string; an empty list omits the
+  directive. Verify credential write boundaries inside the unit namespace.
 - Secure controllers and brokers share `lib/serviceRecovery.nix`: bounded
   restart backoff without permanent start-limit exhaustion. Explicit stops
   must still prevent automatic retries.

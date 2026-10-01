@@ -1,5 +1,7 @@
 # Tentaflake
 
+![Tentaflake octopus and snowflake logo with agent mascots](public/tentaflake-readme.jpg)
+
 > [!WARNING]
 > **Pre-1.0 project:** Tentaflake is under active development and has not yet
 > reached version 1.0. APIs, NixOS options, defaults, installation flows,
@@ -17,8 +19,8 @@ Transient broker crashes preserve the controller process. Explicit broker stops
 still stop dependent controllers; model requests may fail while a broker recovers.
 
 The core is intentionally small. It contains the host modules, agent builders,
-an installer ISO, and a Rust operator CLI. Editor support, Hive Research,
-Piper TTS, observability, and runtime detection are separate opt-in modules.
+an installer ISO, and a Rust operator CLI. Observability and runtime detection
+are separate opt-in profiles.
 
 ## Current scope
 
@@ -36,7 +38,6 @@ Piper TTS, observability, and runtime detection are separate opt-in modules.
 | Installer ISO | Core |
 | Prometheus, Grafana, Loki, Alloy | Optional profile |
 | Falco runtime detection | Optional profile |
-| Hive Research, Piper TTS, editor | Optional integration |
 
 There is no live-agent ISO, bundled audit daemon, SQLite event store, custom
 web console, or Go workspace.
@@ -226,7 +227,6 @@ software is harmless.
 ```text
 flake.nix
 ├── modules/             core NixOS modules, brokers, worker
-├── modules/optional/    editor, Hive, Piper
 ├── modules/profiles/    observability, Falco
 ├── lib/                 agent builders/helpers
 ├── crates/              Rust workspace
@@ -241,9 +241,7 @@ The default module imports only:
   provenance policy, Nix settings;
 - base packages, users, SSH, Tailscale, and operator shell.
 
-Optional capabilities must be imported explicitly from the flake output.
-The editor additionally requires the consumer to add the `nvf` input and pass
-its `inputs` through `specialArgs`.
+Optional profiles must be imported explicitly from the flake output.
 
 ## Brokered egress
 
@@ -359,19 +357,21 @@ The service uses Falco's modern eBPF engine. See
 [observability and detection](docs/09-observability.md) for prerequisites and
 trust boundaries.
 
-## Optional integrations
+## Optional profiles
 
 These modules are exported but not imported by the core:
 
 | Output | Source |
 |---|---|
-| `nixosModules.editor` | `modules/optional/editor.nix` |
-| `nixosModules.hiveResearch` | `modules/optional/hive-research.nix` |
-| `nixosModules.piperTts` | `modules/optional/piper-tts-server.nix` |
 | `nixosModules.observability` | `modules/profiles/observability.nix` |
 | `nixosModules.falco` | `modules/profiles/falco.nix` |
 
-Piper voice assets remain available as `packages.x86_64-linux.piper-voices`.
+Editor, Hive Research, and Piper TTS modules and voice assets have been removed.
+Remove their imports, options, and package references when updating a consumer;
+deployment-specific integrations belong in the consumer flake.
+
+See the [archive comparison](docs/archive-comparison.md) for selected backports,
+preserved current fixes, and the next useful archive changes.
 
 ## Build and test
 
@@ -433,3 +433,5 @@ behavior changes, verification, and documentation synchronized. See
 
 Tentaflake is MIT-licensed. The name and logo are covered separately by
 [TRADEMARK.md](TRADEMARK.md).
+The [artwork overview](public/README.md) links the logo, illustrations, and
+wallpaper downloads.
