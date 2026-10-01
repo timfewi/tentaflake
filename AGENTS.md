@@ -50,6 +50,8 @@ still accurate before finishing — and update them in the same change:
   backup, and generic options
 - `lib/` — helpers (`mkHermesAgent`, `mkZeroClawAgent`, `agentsFromData`, `pinnedImage`, `constants`, `devshell`)
 - `crates/` and `pkgs/` — Rust CLI/broker/worker workspace and Nix packages
+- `lib/mkRustPackage.nix` shares Rust packaging and restricts its source to
+  root Cargo files and `crates/`; add required root build inputs explicitly.
 - A balanced agent with `autoStart = true` requires its exact broker, worker,
   and workspace-quota declarations; stopped scaffolds remain `network=none`.
 - Secure controllers and brokers share `lib/serviceRecovery.nix`: bounded
