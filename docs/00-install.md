@@ -19,6 +19,15 @@ Or use the wrapper:
 
 The image is written below `result/iso/`.
 
+After disk confirmation, the wizard imports `installer/disk.sh` for partitioning,
+formatting and mounts. Its cleanup stops swap, LVM and encrypted mappings only
+in the selected disk's stack. An LVM group spanning another disk is refused
+before cleanup; migrate that group explicitly first. Other disks' swap and
+volume groups remain active. The host VM regression imports this same file and
+uses disposable disks to check filesystem types, preservation and refusal.
+The wizard runs in the dedicated installer ISO, where `/mnt` is reserved for
+its installation staging tree.
+
 ## Test in a disposable VM
 
 From the contributor shell, the repository can build the ISO, resolve its

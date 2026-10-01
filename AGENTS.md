@@ -33,6 +33,9 @@ just security
 New host installs and managed workspace images use Btrfs. Workspace images
 require at least 128 MiB; never automatically reformat or convert existing ext4
 images. Follow `docs/14-workspace-quota.md` for explicit migration.
+Installer disk operations live in `installer/disk.sh`, imported by the wizard
+and VM fixture. Keep cleanup within the selected disk stack; refuse cross-disk
+VGs before mutation and preserve unrelated swap, VGs and encrypted mappings.
 
 ## Conventions
 
