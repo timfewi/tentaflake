@@ -111,3 +111,19 @@ production VPN policy, ARM and arbitrary kernel escapes still require deployment
 acceptance. No production host is activated by these checks. Retrieved content
 remains untrusted; the network boundary does not prevent prompt injection or
 disclosure of sensitive text intentionally sent to an allowed destination.
+
+## Client recovery
+
+The pinned stdio client reconnects future calls after a lost upstream Unix RPC
+session. Each fresh session repeats protocol negotiation and host peer-UID
+authorization. Interrupted calls fail without replaying dispatched operations;
+caller cancellation and explicit client close remain enforced. If the service
+is unavailable, connection retries remain bounded. Socket revocation still
+closes accepted relays and prevents research access.
+
+The public research service fixture verifies a real upstream SIGKILL followed
+by a successful new call from the same stdio process, plus the idle-session and
+live socket-revocation regressions. Tentaflake's separate Docker/gVisor fixture
+checks the packaged MCP interface, exact closure/socket mounts and UID policy.
+These synthetic fixtures do not establish actual vendor-agent workloads or
+production VPN/provider acceptance.

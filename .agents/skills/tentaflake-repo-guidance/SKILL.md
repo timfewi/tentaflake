@@ -432,3 +432,10 @@ Behavior, option, or usage changes must update:
 
 Do not call a change complete without a linked reason, a focused verification,
 and synchronized docs.
+
+### Research client lifecycle
+
+The pinned MCP adapter reconnects future calls after a lost Unix session, with
+bounded retries and fresh negotiation/UID authorization. Never replay dispatched
+operations or reopen after explicit close. Verify actual gVisor MCP behavior and
+live socket revocation after changing the client pin; see `docs/16-research.md`.

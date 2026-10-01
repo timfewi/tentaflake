@@ -75,6 +75,8 @@ still accurate before finishing — and update them in the same change:
   `secure-research-tool`; model calls use the LLM broker. Do not add a second
   web transport, re-enable legacy fetch, expose other agent sockets, or enable
   provider-hosted network tools. See `docs/16-research.md` and its evidence limits.
+  Research client recovery must never replay dispatched operations or reopen
+  after explicit close; every new session repeats negotiation and UID checks.
 - Secure controllers and brokers share `lib/serviceRecovery.nix`: bounded
   restart backoff without permanent start-limit exhaustion. Explicit stops
   must still prevent automatic retries.

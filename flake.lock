@@ -184,11 +184,11 @@
         "project-check": "project-check"
       },
       "locked": {
-        "lastModified": 1790847790,
-        "narHash": "sha256-Q2ipKZjML4BSNsirLok5hbhGJv1KOiIT2pfDqNvO+5k=",
+        "lastModified": 1790861447,
+        "narHash": "sha256-JyhXUlqxMPzBZZ+wLT1hxNHue4BwALRdHfSSwkITmNI=",
         "owner": "timfewi",
         "repo": "tentaflake-research",
-        "rev": "f0c3b1d1db060557a4bd744165c051e120dda702",
+        "rev": "e31fce294e792763b770469a3664b875f4951f08",
         "type": "github"
       },
       "original": {
