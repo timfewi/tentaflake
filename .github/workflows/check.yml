@@ -52,6 +52,15 @@ jobs:
       # Eval-only: the VM test in `checks` needs /dev/kvm, which not every runner
       # has. Evaluating still catches assertion/module errors; the VM is actually
       # built in the separate `vm-test` job below.
+      # Read-only flake evaluation cannot instantiate an uncached closureInfo
+      # derivation. Build the non-VM policy gates first; they materialize the
+      # exact research closures without widening any sandbox mount.
+      - name: prepare research evaluation closures
+        run: |
+          nix build --no-link \
+            .#checks.x86_64-linux.research-policy \
+            .#checks.x86_64-linux.module-evaluation
+
       - name: nix flake check (eval)
         run: nix flake check --no-build
 
