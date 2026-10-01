@@ -949,7 +949,7 @@
         assert "approval-required" in audit, audit
         assert '"event":"approved"' in audit, audit
 
-    with subtest("encrypted backup restores test state"):
+    with subtest("encrypted backup restores state and the mounted quota workspace"):
         machine.succeed(
             "install -d -m 0700 "
             "/run/tentaflake-backup"
@@ -971,6 +971,10 @@
         machine.succeed(
             "printf '%s\\n' 'restore-fixture' > "
             "/var/lib/hermes-test/restore-fixture"
+        )
+        machine.succeed(
+            "printf '%s\\n' 'workspace-restore-fixture' > "
+            "/var/lib/hermes-test/workspace/restore-fixture"
         )
         machine.succeed(
             "systemctl start "
@@ -1013,6 +1017,44 @@
             "restore-fixture"
         ).strip()
         assert restored == "restore-fixture", restored
+        restored_workspace = machine.succeed(
+            "cat /tmp/restore/var/lib/hermes-test/workspace/restore-fixture"
+        ).strip()
+        assert restored_workspace == "workspace-restore-fixture", restored_workspace
+
+    with subtest("backup fails with an unavailable quota mount and recovers afterward"):
+        machine.succeed(
+            "cp -p /var/lib/tentaflake-backup/last-success /tmp/backup-last-success; "
+            "mount_unit=$(systemd-escape --path --suffix=mount "
+            "/var/lib/hermes-test/workspace); "
+            "systemctl stop \"$mount_unit\"; "
+            "mv /var/lib/tentaflake-workspace-volumes/hermes-test.img "
+            "/tmp/hermes-test.img; "
+            "mkdir /var/lib/tentaflake-workspace-volumes/hermes-test.img"
+        )
+        machine.fail("findmnt --mountpoint /var/lib/hermes-test/workspace")
+        machine.fail("systemctl start restic-backups-tentaflake.service")
+        machine.succeed(
+            "test \"$(stat -c %y /var/lib/tentaflake-backup/last-success)\" = "
+            "\"$(stat -c %y /tmp/backup-last-success)\""
+        )
+        machine.succeed(
+            "restic -r /var/lib/tentaflake-test-restic "
+            "--password-file /run/tentaflake-backup/password "
+            "snapshots --json | jq -e 'length == 1'"
+        )
+        machine.succeed(
+            "rmdir /var/lib/tentaflake-workspace-volumes/hermes-test.img; "
+            "mv /tmp/hermes-test.img "
+            "/var/lib/tentaflake-workspace-volumes/hermes-test.img; "
+            "systemctl start restic-backups-tentaflake.service; "
+            "systemctl start tentaflake-workspace-quota-hermes-test.service"
+        )
+        machine.succeed(
+            "restic -r /var/lib/tentaflake-test-restic "
+            "--password-file /run/tentaflake-backup/password "
+            "snapshots --json | jq -e 'length == 2'"
+        )
 
     with subtest("security doctor reports an intentionally unsafe fixture"):
         machine.succeed(

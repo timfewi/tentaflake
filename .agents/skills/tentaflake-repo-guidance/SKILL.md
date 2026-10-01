@@ -287,7 +287,12 @@ stopped-container, or incomplete-schema evidence is warning/unknown, never
 green. Exact broker `/healthz` endpoints distinguish unreachable/unknown from
 an explicit credential/policy/audit-readiness failure. Backup success is recorded by
 `tentaflake-backup-success.service` in a systemd-managed persistent state
-directory; `modules/hardening.nix` exposes an opt-in PID 1 hardware watchdog
+directory. The Restic module adds enabled quota mounts inside selected backup
+paths as separate sources, retains `--one-file-system`, and requires/asserts
+those mounts before backup. Other nested filesystems require explicit paths;
+live file backup is not an application-consistent snapshot. VM coverage checks
+state/workspace restore, missing-mount failure, and recovery.
+`modules/hardening.nix` exposes an opt-in PID 1 hardware watchdog
 only for explicitly tested devices. Keep build,
 activation, live checks, and restore drills as separate evidence gates.
 

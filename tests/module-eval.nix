@@ -522,18 +522,42 @@ let
   ];
   unsafeBrokerAttempt = builtins.tryEval unsafeBrokerFixture.config.system.build.toplevel.drvPath;
 
-  backup = eval [
-    ../modules/default.nix
-    (hostModule "balanced")
-    {
-      tentaflake.backup = {
-        enable = true;
-        paths = [ "/var/lib/hermes-fixture" ];
-        repositoryFile = "/run/credentials/restic-repository";
-        passwordFile = "/run/credentials/restic-password";
-      };
-    }
-  ];
+  backupWithPaths =
+    paths:
+    eval [
+      ../modules/default.nix
+      (hostModule "balanced")
+      (builders.mkHermesAgent {
+        name = "fixture";
+        autoStart = false;
+      })
+      (builders.mkHermesAgent {
+        name = "fixture-other";
+        autoStart = false;
+      })
+      {
+        tentaflake.workspaceQuota.agents = {
+          hermes-fixture = {
+            enable = true;
+            workspace = "/var/lib/hermes-fixture/workspace";
+          };
+          hermes-fixture-other = {
+            enable = true;
+            workspace = "/var/lib/hermes-fixture-other/workspace";
+          };
+          disabled.workspace = "/var/lib/hermes-fixture/disabled";
+        };
+        tentaflake.backup = {
+          inherit paths;
+          enable = true;
+          repositoryFile = "/run/credentials/restic-repository";
+          passwordFile = "/run/credentials/restic-password";
+        };
+      }
+    ];
+  backup = backupWithPaths [ "/var/lib/hermes-fixture/" ];
+  explicitWorkspaceBackup = backupWithPaths [ "/var/lib/hermes-fixture/workspace" ];
+  unrelatedBackup = backupWithPaths [ "/var/lib/unrelated" ];
   backupAttempt = builtins.tryEval backup.config.system.build.toplevel.drvPath;
 
   unsafeBackup = eval [
@@ -679,6 +703,29 @@ assert backupAttempt.success;
 assert !unsafeBackupAttempt.success;
 assert backup.config.services.restic.backups.tentaflake.runCheck;
 assert backup.config.services.restic.backups.tentaflake.inhibitsSleep;
+assert
+  backup.config.services.restic.backups.tentaflake.paths == [
+    "/var/lib/hermes-fixture/"
+    "/var/lib/hermes-fixture/workspace"
+  ];
+assert
+  explicitWorkspaceBackup.config.services.restic.backups.tentaflake.paths == [
+    "/var/lib/hermes-fixture/workspace"
+  ];
+assert unrelatedBackup.config.services.restic.backups.tentaflake.paths == [ "/var/lib/unrelated" ];
+assert backup.config.services.restic.backups.tentaflake.extraBackupArgs == [ "--one-file-system" ];
+assert
+  backup.config.systemd.services.restic-backups-tentaflake.unitConfig.RequiresMountsFor == [
+    "/var/lib/hermes-fixture/"
+    "/var/lib/hermes-fixture/workspace"
+  ];
+assert
+  backup.config.systemd.services.restic-backups-tentaflake.unitConfig.AssertPathIsMountPoint == [
+    "/var/lib/hermes-fixture/workspace"
+  ];
+assert
+  unrelatedBackup.config.systemd.services.restic-backups-tentaflake.unitConfig.AssertPathIsMountPoint
+  == [ ];
 assert
   backup.config.systemd.services.restic-backups-tentaflake.unitConfig.OnSuccess == [
     "tentaflake-backup-success.service"
