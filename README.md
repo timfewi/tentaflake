@@ -27,7 +27,7 @@ Piper TTS, observability, and runtime detection are separate opt-in modules.
 | Disposable no-egress tool worker | Core; required for balanced auto-start |
 | Fixed-size persistent workspace | Core; required for balanced auto-start |
 | Cosign image start gate | Core, opt-in per agent |
-| Encrypted Restic backup policy | Core, opt-in |
+| Encrypted Restic backup including selected quota workspaces | Core, opt-in |
 | Installer ISO | Core |
 | Prometheus, Grafana, Loki, Alloy | Optional profile |
 | Falco runtime detection | Optional profile |
