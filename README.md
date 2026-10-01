@@ -84,6 +84,7 @@ short recipes. They load the Nix development tools automatically, so `just lint`
 lists the available recipes:
 
 ```bash
+just fast                # contributor checks without VM or ISO builds
 just e2e                 # complete automated local gate
 just e2e-devcontainer    # rebuild and smoke-test the locked Dev Container
 just security            # Semgrep source scan + OSV dependency scan
@@ -93,6 +94,8 @@ just e2e-run-vm          # boot that installed VM again
 
 The installer VM never receives a host block device. Its persistent test disk
 and UEFI variables live below `/var/tmp/tentaflake-e2e-<user>/`.
+See [build boundaries](docs/17-builds.md) for fast checks, GitHub VM selection
+and the Nix/Bazel assessment.
 
 ## Define agents
 

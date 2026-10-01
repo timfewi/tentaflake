@@ -2,20 +2,26 @@
 
 {
   pname,
-  description,
   mainProgram ? pname,
   postInstall ? "",
 }:
 
+let
+  crate = ../crates + "/${pname}";
+  inherit (builtins.fromTOML (builtins.readFile (crate + "/Cargo.toml"))) package;
+  inherit (builtins.fromTOML (builtins.readFile ../Cargo.toml)) workspace;
+in
 rustPlatform.buildRustPackage {
   inherit pname postInstall;
-  version = "0.4.0";
+  inherit (workspace.package) version;
   src = lib.fileset.toSource {
     root = ../.;
     fileset = lib.fileset.unions [
       ../Cargo.toml
       ../Cargo.lock
-      ../crates
+      # Cargo resolves the whole workspace, but only builds this member.
+      (lib.fileset.fileFilter (file: file.name == "Cargo.toml") ../crates)
+      crate
     ];
   };
 
@@ -24,7 +30,8 @@ rustPlatform.buildRustPackage {
   cargoTestFlags = [ "-p=${pname}" ];
 
   meta = {
-    inherit description mainProgram;
+    inherit (package) description;
+    inherit mainProgram;
     license = lib.licenses.mit;
     platforms = lib.platforms.linux;
   };

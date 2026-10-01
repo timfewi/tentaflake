@@ -189,11 +189,14 @@ The workspace root is `Cargo.toml`; the binary source is
 `crates/tentaflake-cli/src/main.rs`. `pkgs/tentaflake-cli/default.nix` packages
 it with the locked Cargo dependency graph.
 
-CLI, broker, and worker packaging share `lib/mkRustPackage.nix`, whose source
-fileset contains only the root Cargo files and `crates/`. Keep crate fixtures
-and build scripts inside their crate; declare additional root build inputs
-in that fileset when needed. Documentation and host configuration stay outside
-the Rust package source.
+`lib/mkRustPackage.nix` includes root Cargo files, every member manifest, and
+only the selected crate's source. Keep build inputs inside their crate unless
+explicitly declared in that fileset. Versions inherit `[workspace.package]`
+from `Cargo.toml`; package descriptions use crate manifests. The worker image
+uses the same workspace version, and its default reference follows image
+metadata. Container identity defaults are imported from `lib/constants.nix`.
+
+Documentation and host configuration stay outside the Rust package source.
 
 `modules/shell.nix` writes `/etc/tentaflake/cli.conf` and
 `/etc/tentaflake/agents.tsv`, installs the binary, and configures shell QoL.
@@ -368,6 +371,13 @@ and installing NixOS are destructive runtime operations and need an exact,
 confirmed target.
 
 ## Verification
+
+Start with `just fast` for contributor checks without VMs or ISO builds.
+GitHub imports `.github/vm-paths.json` to select host/research suites separately.
+A research-only lock update runs the research suite; shared runtime changes,
+unknown paths and unavailable history run both. `checks.*.ci-vm-selection`
+verifies these decisions with actual Git histories, including renamed/deleted
+files and malformed lock data. Full `just e2e` retains both VM suites and ISO.
 
 `just` recipes load the pinned development shell even from an ordinary shell;
 `just list` aliases the recipe listing. Direct Cargo/lint commands need `nix develop`.

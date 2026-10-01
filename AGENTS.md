@@ -6,6 +6,9 @@ NixOS flake template for running isolated AI agents (Hermes and ZeroClaw) in Doc
 
 `just` recipes load the pinned contributor tools automatically; `just list`
 lists them. Enter `nix develop` before running Cargo or lint tools directly.
+Start with `just fast`; use affected VM suites for runtime/security changes.
+GitHub VM selection imports `.github/vm-paths.json`; unknown paths require both
+runtime and research suites. Keep its real-Git regression check passing.
 
 ```bash
 nix flake check
@@ -19,6 +22,7 @@ cargo fmt --all -- --check
 cargo clippy --workspace \
   --all-targets -- -D warnings
 cargo test --workspace
+just fast
 just e2e
 just e2e-devcontainer
 just e2e-installer
@@ -64,8 +68,11 @@ still accurate before finishing — and update them in the same change:
 - Host diagnostics share checked systemd/disk evidence; failed or unknown
   agent states are problems, while stopped agents remain valid. `--hide`
   must redact host and agent names in both text and JSON.
-- `lib/mkRustPackage.nix` shares Rust packaging and restricts its source to
-  root Cargo files and `crates/`; add required root build inputs explicitly.
+- `lib/mkRustPackage.nix` shares Rust packaging: root Cargo files, all member
+  manifests, and only the selected crate's source. Add required root inputs
+  explicitly. Versions come from the root Cargo workspace; descriptions from
+  crate manifests. Derive worker image references from the image metadata.
+  Shared container identities live in `lib/constants.nix`.
 - A balanced agent with `autoStart = true` requires its exact LLM broker, worker,
   workspace-quota, and research relay declarations; stopped scaffolds remain `network=none`.
 - Brokers retry with `RestartMode=direct` so temporary failures preserve the

@@ -58,4 +58,8 @@
   # on $HERMES_HOME. Override via mkHermesAgent's `containerUid`/`containerGid`.
   containerUid = 10000;
   containerGid = 10000;
+
+  # ZeroClaw uses the standard nobody/nogroup identity in its pinned image.
+  nobodyUid = 65534;
+  nobodyGid = 65534;
 }

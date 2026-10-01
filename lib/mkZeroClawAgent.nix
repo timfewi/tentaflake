@@ -68,7 +68,8 @@ let
   secureUnitPolicy = import ./serviceRecovery.nix;
   toml = pkgs.formats.toml { };
   configFile = toml.generate "${containerName}-config.toml" research.settings;
-  owner = "65534:65534";
+  inherit (constants) nobodyUid nobodyGid;
+  owner = "${toString nobodyUid}:${toString nobodyGid}";
 
   baseContainer = {
     inherit autoStart;
@@ -154,24 +155,25 @@ in
         message = "tentaflake: worker workspace for ${containerName} must exactly match ${stateDir}/data.";
       }
       {
-        assertion = !workerEnabled || (workerCfg.containerUid == 65534 && workerCfg.containerGid == 65534);
-        message = "tentaflake: worker uid/gid for ${containerName} must match 65534:65534.";
+        assertion =
+          !workerEnabled || (workerCfg.containerUid == nobodyUid && workerCfg.containerGid == nobodyGid);
+        message = "tentaflake: worker uid/gid for ${containerName} must match ${owner}.";
       }
       {
         assertion = !quotaEnabled || quotaCfg.workspace == "${stateDir}/data";
         message = "tentaflake: workspaceQuota for ${containerName} must exactly mount ${stateDir}/data.";
       }
       {
-        assertion = !quotaEnabled || (quotaCfg.ownerUid == 65534 && quotaCfg.ownerGid == 65534);
-        message = "tentaflake: workspaceQuota owner for ${containerName} must match 65534:65534.";
+        assertion = !quotaEnabled || (quotaCfg.ownerUid == nobodyUid && quotaCfg.ownerGid == nobodyGid);
+        message = "tentaflake: workspaceQuota owner for ${containerName} must match ${owner}.";
       }
     ];
 
   systemd.tmpfiles.rules = [
-    "d ${stateDir} 0700 65534 65534 -"
-    "d ${stateDir}/.zeroclaw 0700 65534 65534 -"
-    "d ${stateDir}/.zeroclaw/data 0700 65534 65534 -"
-    "d ${stateDir}/data 0700 65534 65534 -"
+    "d ${stateDir} 0700 ${toString nobodyUid} ${toString nobodyGid} -"
+    "d ${stateDir}/.zeroclaw 0700 ${toString nobodyUid} ${toString nobodyGid} -"
+    "d ${stateDir}/.zeroclaw/data 0700 ${toString nobodyUid} ${toString nobodyGid} -"
+    "d ${stateDir}/data 0700 ${toString nobodyUid} ${toString nobodyGid} -"
   ];
 
   systemd.services =
@@ -184,8 +186,8 @@ in
         serviceConfig = {
           Type = "oneshot";
           RemainAfterExit = true;
-          User = "65534";
-          Group = "65534";
+          User = toString nobodyUid;
+          Group = toString nobodyGid;
           UMask = "0077";
         };
         script = ''

@@ -41,6 +41,17 @@ let
     { tentaflake.shell.enable = lib.mkForce true; }
   ];
 
+  customWorkerImage = eval [
+    ../modules/default.nix
+    (hostModule "dev")
+    {
+      tentaflake.worker.image = pkgs.dockerTools.buildLayeredImage {
+        name = "fixture-worker";
+        tag = "fixture-version";
+      };
+    }
+  ];
+
   watchdog = eval [
     ../modules/default.nix
     (hostModule "dev")
@@ -662,6 +673,8 @@ let
   .config.system.build.toplevel.drvPath;
 
 in
+assert
+  customWorkerImage.config.tentaflake.worker.imageReference == "fixture-worker:fixture-version";
 assert !escapedStoreSource.success;
 assert !escapedMountDestination.success;
 assert core.config.environment.etc."tentaflake/cli.conf".text != "";

@@ -5,3 +5,6 @@ members = [
   "crates/tentaflake-worker",
 ]
 resolver = "2"
+
+[workspace.package]
+version = "0.4.0"

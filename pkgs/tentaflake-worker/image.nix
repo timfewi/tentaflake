@@ -15,9 +15,13 @@
   pkg-config,
 }:
 
+let
+  inherit (builtins.fromTOML (builtins.readFile ../../crates/tentaflake-worker/Cargo.toml)) package;
+  inherit (builtins.fromTOML (builtins.readFile ../../Cargo.toml)) workspace;
+in
 dockerTools.buildLayeredImage {
-  name = "tentaflake-worker";
-  tag = "0.4.0";
+  inherit (package) name;
+  tag = workspace.package.version;
   maxLayers = 100;
 
   contents = [

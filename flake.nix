@@ -141,6 +141,8 @@
         tentaflake-worker = self.packages.${system}.tentaflake-worker;
         tentaflake-worker-image = self.packages.${system}.tentaflake-worker-image;
         devcontainer-cli = self.packages.${system}.devcontainer-cli;
+        ci-vm-selection = import ./tests/ci-vm-selection.nix { inherit pkgs; };
+        rust-package-sources = import ./tests/rust-package-sources.nix { inherit self pkgs; };
         image-pinning = import ./lib/pinnedImage-test.nix { inherit pkgs; };
         module-evaluation =
           assert import ./tests/module-eval.nix {
