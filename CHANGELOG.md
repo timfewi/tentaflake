@@ -24,6 +24,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   exhaustion after a transient outage. Explicit stops still prevent retries.
 ### Added
 ### Fixed
+- CLI help (`help`, `--help`, `-h`) now works before host configuration is
+  installed or while generated inputs are damaged, keeping usage available
+  during setup and recovery. Management commands still require those inputs.
 - Restic backups now include enabled quota workspaces inside selected state
   paths as separate sources instead of silently skipping their files under
   `--one-file-system`. Required mounts and mount assertions prevent an

@@ -200,13 +200,16 @@ It does not implement the CLI in shell.
 Primary commands:
 
 ```text
-status health doctor stats logs
+help status health doctor stats logs
 restart start stop shell exec ps backup
 rebuild update
 ```
 
 `tentaflake-status` is a status alias. The deprecated `hermes` name is a shim.
 The rebuild/apply paths are explicit runtime operations.
+
+`help`, `--help`, and `-h` work without valid generated host inputs;
+management commands continue to require them.
 
 ## Brokered egress
 

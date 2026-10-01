@@ -137,6 +137,7 @@ The CLI is built from `crates/tentaflake-cli` and installed by
 `modules/shell.nix`.
 
 ```text
+tentaflake help
 tentaflake status [--json] [--hide]
 tentaflake health [--json] [--hide]
 tentaflake doctor [--json] [--hide]
@@ -153,6 +154,8 @@ tentaflake backup <agent>
 `tentaflake-status` is a status alias. The deprecated `hermes` executable is
 retained as a compatibility shim. `tentaflake top`, `console`, and the agent
 wizard were removed with the old audit stack.
+
+`help`, `--help`, and `-h` work before the host configuration is installed.
 
 The `rebuild` and `update` subcommands are explicit runtime operations. Source
 evaluation or a successful build does not authorize activation.

@@ -119,12 +119,17 @@ fn main() -> ExitCode {
 
 fn run(mut args: Vec<String>) -> Result<u8, String> {
     let mode = take_output_flags(&mut args);
-    if args.first().map(String::as_str) == Some("remote-check") {
-        return remote_check(&args[1..]);
+    let command = args.first().map(String::as_str).unwrap_or("status");
+    match command {
+        "remote-check" => return remote_check(&args[1..]),
+        "help" | "--help" | "-h" => {
+            print_help();
+            return Ok(0);
+        }
+        _ => {}
     }
     let config = load_config()?;
     let agents = load_agents(&config.agents_file)?;
-    let command = args.first().map(String::as_str).unwrap_or("status");
 
     match command {
         "status" => status(&config, &agents, mode),
@@ -146,10 +151,6 @@ fn run(mut args: Vec<String>) -> Result<u8, String> {
             "the interactive agent wizard was removed; edit agents.json or my-agents.nix, then rebuild"
                 .into(),
         ),
-        "help" | "--help" | "-h" => {
-            print_help(&config.backend);
-            Ok(0)
-        }
         "top" | "console" => Err(format!(
             "`{command}` was removed with the auditd/SQLite web-console stack; use the observability profile"
         )),
@@ -1614,10 +1615,11 @@ fn json_escape(input: &str) -> String {
     escaped
 }
 
-fn print_help(backend: &str) {
+fn print_help() {
     println!(
-        "Tentaflake — manage declarative agent containers (backend: {backend})\n\n\
+        "Tentaflake — manage declarative agent containers with Docker or Podman\n\n\
          USAGE\n\
+           tentaflake help|--help|-h\n\
            tentaflake [status] [--hide] [--json]\n\
            tentaflake logs <name> [journalctl args]\n\
            tentaflake restart|start|stop <name>\n\

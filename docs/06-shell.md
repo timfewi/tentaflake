@@ -17,6 +17,7 @@ Do not hand-edit them. Change the Nix configuration and rebuild explicitly.
 ## Commands
 
 ```text
+tentaflake help
 tentaflake status [--json] [--hide]
 tentaflake health [--json] [--hide]
 tentaflake doctor [--json] [--hide]
@@ -37,6 +38,10 @@ tentaflake update
 `status` is the default command. `--json` provides machine-readable status;
 `--hide` redacts the host and agent names. `tentaflake-status` invokes the same
 status renderer and is used by the login banner.
+
+`help`, `--help`, and `-h` display usage even when the generated host
+configuration or inventory is missing or invalid. Management commands still
+require the generated inputs.
 
 `health` reports load, root disk usage, and failed agent count. `doctor` checks
 failed systemd units, high root-disk use, and failed agent units. A successful
