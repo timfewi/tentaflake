@@ -229,6 +229,8 @@
   };
 
   testScript = ''
+    import json
+
     # runsc's sandbox helpers share the container PID cgroup. A limit of 16
     # can reject the sandbox bootstrap before the workload starts, so keep
     # the runtime probes bounded while leaving headroom for gVisor itself.
@@ -327,6 +329,41 @@
         )
         machine.succeed("test -s /etc/tentaflake/cli.conf")
         machine.succeed("test -s /etc/tentaflake/agents.tsv")
+
+    with subtest("host diagnostics accept stopped agents and redact names"):
+        for flag in ["help", "--help", "-h"]:
+            machine.succeed(f"TENTAFLAKE_CONFIG=/dev/null tentaflake {flag}")
+        reports = []
+        for command in ["doctor", "health"]:
+            text = machine.succeed(f"tentaflake {command} --hide")
+            assert "agent-host" not in text, text
+            assert " assistant " not in text, text
+            assert " test " not in text, text
+            assert "agent-1" in text, text
+            report = json.loads(machine.succeed(f"tentaflake {command} --json --hide"))
+            assert report["host"] == "redacted", report
+            assert report["problems"] == 0, report
+            assert report["failed_agents"] == [], report
+            assert report["unknown_agents"] == [], report
+            assert 0 <= report["disk_percent"] < 90, report
+            reports.append(report)
+        assert reports[0] == reports[1], reports
+
+        machine.succeed(
+            "printf 'hermes\\tmissing-fixture\\tmissing-fixture\\t"
+            "tentaflake-diagnostics-nonexistent-fixture.service\\t/tmp/missing-fixture\\n' "
+            "> /tmp/tentaflake-diagnostics-missing.tsv"
+        )
+        machine.succeed(
+            "sed 's@^agents_file=.*@agents_file=/tmp/tentaflake-diagnostics-missing.tsv@' "
+            "/etc/tentaflake/cli.conf > /tmp/tentaflake-diagnostics-missing.conf"
+        )
+        code, report = machine.execute(
+            "TENTAFLAKE_CONFIG=/tmp/tentaflake-diagnostics-missing.conf "
+            "tentaflake doctor --json --hide"
+        )
+        assert code == 1, report
+        assert json.loads(report)["unknown_agents"] == ["agent-1"], report
 
     with subtest("security doctor accepts the fail-closed balanced capsule"):
         report = machine.succeed("tentaflake doctor --security --json")
