@@ -22,6 +22,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   cache hash move together; the CLI release and prior security backports stay
   unchanged.
 ### Changed
+- GitHub selects host/research VMs separately from an imported path policy;
+  contributor-only changes skip them, while unknown/shared changes run both.
+- Rust packages include only their own source plus workspace manifests, so
+  changes to one binary preserve the other binaries' Nix cache entries.
+- Cargo workspace metadata supplies the package/image version and package
+  descriptions. Worker image references follow image metadata; shared agent
+  UID/GID defaults now import `lib/constants.nix`.
 - New installations and fixed-size agent workspaces use Btrfs instead of ext4.
   Workspace images require at least 128 MiB and use read-only offline checks.
 - Rust CLI, broker, and worker packages share one builder and a Cargo/crate
@@ -31,6 +38,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   backoff from 10 seconds to one minute, avoiding permanent start-limit
   exhaustion after a transient outage. Explicit stops still prevent retries.
 ### Added
+- `just fast` runs the contributor checks, CI-selection regressions and flake
+  evaluation without VM suites or the installer ISO.
 - Pinned public MIT `tentaflake-research` service, `tentaflake.research.agents`,
   policy checks and a real gVisor stdio-MCP integration fixture. Secure auto-start
   now requires a research relay alongside the broker, worker and workspace quota.

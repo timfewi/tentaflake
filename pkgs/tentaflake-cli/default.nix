@@ -5,7 +5,6 @@
 
 import ../../lib/mkRustPackage.nix { inherit lib rustPlatform; } {
   pname = "tentaflake-cli";
-  description = "Operator CLI for tentaflake agent hosts";
   mainProgram = "tentaflake";
 
   postInstall = ''

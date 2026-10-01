@@ -12,26 +12,22 @@ jobs:
   changes:
     runs-on: ubuntu-latest
     outputs:
-      vm: ${{ steps.filter.outputs.vm }}
+      runtime: ${{ steps.filter.outputs.runtime }}
+      research: ${{ steps.filter.outputs.research }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
 
-      # Keep the required VM job visible, but avoid its expensive build when a
-      # change only touches Markdown documentation.
+      # Shared rules classify runtime/research independently; unknown changes
+      # and missing comparison history require both suites.
       - name: Detect VM-relevant changes
         id: filter
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
           HEAD_SHA: ${{ github.sha }}
         run: |
-          files=$(git diff --name-only "$BASE_SHA" "$HEAD_SHA")
-          if printf '%s\n' "$files" | grep -qEv '(^docs/|\.md$)'; then
-            echo "vm=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "vm=false" >> "$GITHUB_OUTPUT"
-          fi
+          python3 scripts/ci_vm_changes.py "$BASE_SHA" "$HEAD_SHA" >> "$GITHUB_OUTPUT"
 
   check:
     runs-on: ubuntu-latest
@@ -71,6 +67,8 @@ jobs:
         run: |
           nix build --no-link \
             .#checks.x86_64-linux.devcontainer-cli \
+            .#checks.x86_64-linux.ci-vm-selection \
+            .#checks.x86_64-linux.rust-package-sources \
             .#checks.x86_64-linux.image-pinning \
             .#checks.x86_64-linux.tentaflake-broker \
             .#checks.x86_64-linux.tentaflake-cli \
@@ -111,7 +109,7 @@ jobs:
   # KVM-less or slow runner degrades this one job instead of the whole check.
   vm-test:
     needs: changes
-    if: needs.changes.outputs.vm == 'true'
+    if: needs.changes.outputs.runtime == 'true' || needs.changes.outputs.research == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
@@ -126,8 +124,10 @@ jobs:
         with:
           use-flakehub: false
 
-      - name: nix build (VM integration test)
-        run: |
-          nix build --no-link -L \
-            .#checks.x86_64-linux.vm-integration \
-            .#checks.x86_64-linux.research-integration
+      - name: nix build (runtime VM integration test)
+        if: needs.changes.outputs.runtime == 'true'
+        run: nix build --no-link -L .#checks.x86_64-linux.vm-integration
+
+      - name: nix build (research VM integration test)
+        if: needs.changes.outputs.research == 'true'
+        run: nix build --no-link -L .#checks.x86_64-linux.research-integration

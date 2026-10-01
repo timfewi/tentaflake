@@ -19,9 +19,12 @@ The `just` recipes enter this pinned environment automatically, including when
 called from an ordinary shell. `just list` lists them. Direct Cargo/lint commands
 still require the contributor shell.
 
-The three Rust packages share `lib/mkRustPackage.nix`. Their build source
-contains the root Cargo manifest, lockfile, and complete `crates/` tree;
-repository documentation and host configuration do not trigger Rust rebuilds.
+The three Rust packages share `lib/mkRustPackage.nix`. Each build source
+contains the root Cargo manifest and lockfile, all workspace manifests, and only
+the selected crate's complete source. Editing CLI source does not rebuild the
+broker or worker. Package versions come from `[workspace.package]` in
+`Cargo.toml`; descriptions come from each crate manifest. The worker image tag
+uses that same version, and its default reference follows the image metadata.
 Keep additional build-time files inside their crate, or explicitly add them
 to the shared fileset when a build requires a root-level input.
 
@@ -59,7 +62,11 @@ Installer image when its path changes:
 nix build .#installer-iso
 ```
 
-`just ci` mirrors the local gate and adds the installer build. GitHub-only
+Start with `just fast`: formatting, lint, ShellCheck, Rust checks, CI selection
+regressions, read-only flake evaluation and the generated installed flake.
+It builds the necessary non-VM policy closures but runs no VM or ISO builds.
+Run affected VM suites for runtime/security changes; `just ci` runs the full
+local gate and adds the installer build. GitHub-only
 security services may add checks that cannot be reproduced locally.
 
 The isolated research module computes exact package closures for its read-only
@@ -79,9 +86,16 @@ the exact closure boundary; it does not mount the entire Nix store into agents.
 The non-VM CI build includes the pinned Dev Containers CLI package so source,
 lockfile, and offline-cache hash drift fail before a change lands.
 
-The GitHub VM integration job is skipped when a pull request or push changes
-only Markdown documentation. It continues to run conservatively for every
-other path, including Nix, Rust, tests, installer, and workflow changes.
+GitHub selects the runtime and research VM suites independently through
+`.github/vm-paths.json` and `scripts/ci_vm_changes.py`. Documentation, contributor
+tooling and other explicitly listed paths avoid VM builds. Runtime Rust,
+packages and installer changes select the host VM; research-specific changes
+and a research-only lock pin select the research VM. Shared Nix modules, other
+lock changes, selection-policy changes, unknown paths and missing comparison
+history require both. Renames include the old path. Formatting, lint, package,
+policy and evaluation checks still run on every change.
+See [build boundaries](docs/17-builds.md) for cache guarantees and the
+Nix/Bazel assessment.
 
 `just security` first checks `Cargo.lock` and the patched Dev Containers CLI
 `yarn.lock` against OSV's current advisory database, then runs the pinned

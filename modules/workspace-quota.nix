@@ -5,6 +5,7 @@
   ...
 }:
 let
+  constants = import ../lib/constants.nix;
   cfg = config.tentaflake.workspaceQuota;
   utils = import (pkgs.path + "/nixos/lib/utils.nix") { inherit lib config pkgs; };
   enabledAgents = lib.filterAttrs (_: agent: agent.enable) cfg.agents;
@@ -34,11 +35,11 @@ let
         };
         ownerUid = lib.mkOption {
           type = lib.types.ints.unsigned;
-          default = 10000;
+          default = constants.containerUid;
         };
         ownerGid = lib.mkOption {
           type = lib.types.ints.unsigned;
-          default = 10000;
+          default = constants.containerGid;
         };
       };
     }
