@@ -25,12 +25,12 @@ let
           type = lib.types.str;
           default = "";
           example = "/var/lib/hermes-coding/workspace";
-          description = "Exact controller workspace used as the ext4 mount point.";
+          description = "Exact controller workspace used as the Btrfs mount point.";
         };
         sizeMiB = lib.mkOption {
-          type = lib.types.ints.between 32 1048576;
+          type = lib.types.ints.between 128 1048576;
           default = 8192;
-          description = "Immutable ext4 image size in MiB; resizing requires an explicit migration.";
+          description = "Immutable Btrfs image size in MiB (at least 128); resizing requires an explicit migration.";
         };
         ownerUid = lib.mkOption {
           type = lib.types.ints.unsigned;
@@ -64,7 +64,7 @@ let
     };
     path = [
       pkgs.coreutils
-      pkgs.e2fsprogs
+      pkgs.btrfs-progs
       pkgs.findutils
       pkgs.util-linux
     ];
@@ -91,13 +91,13 @@ let
           echo "migrate it explicitly before enabling the fixed-size volume" >&2
           exit 1
         fi
-        if [ -e "$image_tmp" ]; then
+        if [ -e "$image_tmp" ] || [ -L "$image_tmp" ]; then
           echo "tentaflake: incomplete image exists: $image_tmp" >&2
           echo "inspect and remove that exact file before retrying" >&2
           exit 1
         fi
         truncate --size "$expected" "$image_tmp"
-        mkfs.ext4 -F -q -m 0 "$image_tmp"
+        mkfs.btrfs -q "$image_tmp"
         chmod 0600 "$image_tmp"
         mv -T "$image_tmp" "$image"
       fi
@@ -109,13 +109,14 @@ let
         exit 1
       fi
 
+      if [ "$(blkid -p -s TYPE -o value "$image")" != btrfs ]; then
+        echo "tentaflake: workspace image is not Btrfs: $image" >&2
+        echo "back up and migrate existing ext4 images explicitly; no automatic reformat" >&2
+        exit 1
+      fi
+
       if ! findmnt --noheadings --mountpoint "$workspace" >/dev/null; then
-        rc=0
-        e2fsck -p "$image" || rc=$?
-        if [ "$rc" -gt 1 ]; then
-          echo "tentaflake: e2fsck failed for $image with status $rc" >&2
-          exit "$rc"
-        fi
+        btrfs check --readonly "$image"
       fi
     '';
   };
@@ -168,6 +169,8 @@ in
   };
 
   config = {
+    boot.supportedFilesystems = lib.mkIf (enabledAgents != { }) [ "btrfs" ];
+
     assertions = [
       {
         assertion = enabledAgents == { } || config.tentaflake.security.profile != "dev";
@@ -211,7 +214,7 @@ in
         description = "Fixed-size persistent workspace for ${name}";
         what = imagePath name;
         where = agent.workspace;
-        type = "ext4";
+        type = "btrfs";
         options = "loop,nodev,nosuid,noatime";
         requires = [ (prepareUnit name) ];
         after = [

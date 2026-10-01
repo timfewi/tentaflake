@@ -69,7 +69,7 @@ Default per-agent limits are configurable under
 `runTmpfsSize = "64m"`. PID defaults remain runtime-builder specific.
 
 `tentaflake.workspaceQuota.agents` provides a backend-independent hard
-workspace ceiling by mounting a fixed-size ext4 image before the controller.
+workspace ceiling by mounting a fixed-size Btrfs image before the controller.
 It is opt-in because first activation formats a new backing file and existing
 data requires an explicit migration. See
 [persistent workspace quota](14-workspace-quota.md). Runtime-specific mutable

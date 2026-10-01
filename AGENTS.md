@@ -26,6 +26,10 @@ just e2e-run-vm
 just security
 ```
 
+New host installs and managed workspace images use Btrfs. Workspace images
+require at least 128 MiB; never automatically reformat or convert existing ext4
+images. Follow `docs/14-workspace-quota.md` for explicit migration.
+
 ## Conventions
 
 - Nix: `nix fmt` (nixfmt), 2-space indent

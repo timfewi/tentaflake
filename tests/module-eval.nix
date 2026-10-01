@@ -16,7 +16,7 @@ let
     system.stateVersion = "26.05";
     fileSystems."/" = {
       device = "/dev/disk/by-label/nixos";
-      fsType = "ext4";
+      fsType = "btrfs";
     };
     boot.loader.grub.devices = [ "nodev" ];
     virtualisation.oci-containers.backend = "docker";
@@ -458,7 +458,7 @@ let
         workspaceQuota.agents.hermes-worker = {
           enable = true;
           workspace = "/var/lib/hermes-worker/workspace";
-          sizeMiB = 32;
+          sizeMiB = 128;
         };
       };
     }
@@ -469,6 +469,9 @@ let
   workerPath = workerCapsule.config.systemd.paths.tentaflake-worker-hermes-worker;
   workerOwnerService = workerCapsule.config.systemd.services.tentaflake-workspace-quota-hermes-worker;
   workerAttempt = builtins.tryEval workerCapsule.config.system.build.toplevel.drvPath;
+  tooSmallQuota = workerCapsule.extendModules {
+    modules = [ { tentaflake.workspaceQuota.agents.hermes-worker.sizeMiB = lib.mkForce 32; } ];
+  };
   workerMount = lib.findFirst (
     mount: mount.where == "/var/lib/hermes-worker/workspace"
   ) null workerCapsule.config.systemd.mounts;
@@ -743,6 +746,9 @@ assert lib.elem "--env-file=/run/tentaflake/dev.env" devContainer.extraOptions;
 assert !(lib.elem "--runtime=runsc" devContainer.extraOptions);
 assert brokerAttempt.success;
 assert workerAttempt.success;
+assert
+  !(builtins.tryEval tooSmallQuota.config.tentaflake.workspaceQuota.agents.hermes-worker.sizeMiB)
+  .success;
 assert !incompleteAutostartAttempt.success;
 assert !unsafeWorkerAttempt.success;
 assert !unsafeQuotaAttempt.success;

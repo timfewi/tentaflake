@@ -91,6 +91,14 @@ partitioning and runs `nixos-install` only after the selected disk is shown.
 Disk formatting and installation are runtime mutations. A successful ISO build
 does not authorize either operation.
 
+New installations use Btrfs for the root partition and FAT32 for the UEFI
+boot partition. The generated hardware configuration records both filesystem
+types for subsequent boots. The template does not convert an existing ext4
+host during an update; preserve a verified backup and plan a separate migration
+or fresh installation. Agent workspace images also use Btrfs; see the
+[workspace migration guide](14-workspace-quota.md) before updating existing
+quota-enabled deployments.
+
 After installation and reboot, continue with
 [the quick start](01-quickstart.md).
 

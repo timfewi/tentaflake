@@ -67,8 +67,12 @@
         # OCI backend + docker are wired in the template's configuration.nix, which
         # we don't import here (it pulls in hardware config / my-agents.nix); set
         # the pieces the agent unit needs directly.
-        virtualisation.oci-containers.backend = "docker";
-        virtualisation.docker.enable = true;
+        virtualisation = {
+          oci-containers.backend = "docker";
+          docker.enable = true;
+          # Only this disposable guest disk is exposed to installer formatting.
+          emptyDiskImages = [ 3072 ];
+        };
 
         # The stopped controller does not pull in its broker at boot. Make the
         # fetch broker an explicit fixture service so the reboot subtest can
@@ -77,13 +81,25 @@
           "multi-user.target"
         ];
 
-        environment.etc."tentaflake/network-test-image".source = networkTestImage;
-        environment.systemPackages = [
-          pkgs.git
-          pkgs.python3
-          pkgs.restic
-          brokerPackage
-        ];
+        environment = {
+          etc = {
+            "tentaflake/network-test-image".source = networkTestImage;
+            "tentaflake/installer-fixture".source = ../installer/installer.sh;
+          };
+          systemPackages = [
+            pkgs.btrfs-progs
+            pkgs.cryptsetup
+            pkgs.dosfstools
+            pkgs.e2fsprogs # Only for the explicit legacy-image refusal fixture.
+            pkgs.gptfdisk
+            pkgs.git
+            pkgs.lvm2
+            pkgs.nixos-install-tools
+            pkgs.python3
+            pkgs.restic
+            brokerPackage
+          ];
+        };
 
         tentaflake = {
           hostName = "agent-host";
@@ -150,12 +166,12 @@
             hermes-test = {
               enable = true;
               workspace = "/var/lib/hermes-test/workspace";
-              sizeMiB = 32;
+              sizeMiB = 128;
             };
             zeroclaw-assistant = {
               enable = true;
               workspace = "/var/lib/zeroclaw-assistant/data";
-              sizeMiB = 32;
+              sizeMiB = 128;
               ownerUid = 65534;
               ownerGid = 65534;
             };
@@ -229,6 +245,7 @@
   };
 
   testScript = ''
+    import shlex
     import json
 
     # runsc's sandbox helpers share the container PID cgroup. A limit of 16
@@ -417,17 +434,40 @@
         assert zero_perms == "700", f"expected 0700 zeroclaw state dir, got {zero_perms}"
         machine.succeed("test -d /var/lib/zeroclaw-assistant/data")
 
+    with subtest("installer formats Btrfs root and records the boot filesystems"):
+        installer = machine.succeed("cat /etc/tentaflake/installer-fixture")
+        mount_helper = "mount_retry() {" + installer.split("mount_retry() {", 1)[1].split("\n}\n", 1)[0] + "\n}\n"
+        start = 'dialog --infobox "Partitioning $DISK ..." 4 50'
+        partitioning = start + installer.split(start, 1)[1].split("# STEP 9: Generate hardware config", 1)[0]
+        script = (
+            'set -euo pipefail\nDISK=/dev/vdb\nINSTALL_LOG=/tmp/installer-filesystems.log\n'
+            'dialog() { :; }\ndie() { cat "$INSTALL_LOG" >&2; echo "$1" >&2; exit 1; }\n'
+            + mount_helper + partitioning
+        )
+        machine.succeed("printf %s " + shlex.quote(script) + " > /tmp/installer-filesystems.sh")
+        machine.succeed("bash /tmp/installer-filesystems.sh")
+        machine.succeed("findmnt --mountpoint /mnt -n -o FSTYPE | grep -Fx btrfs")
+        machine.succeed("findmnt --mountpoint /mnt/boot -n -o FSTYPE | grep -Fx vfat")
+        machine.succeed("blkid -s LABEL -o value /dev/vdb2 | grep -Fx nixos")
+        machine.succeed("nixos-generate-config --root /mnt --show-hardware-config > /tmp/installer-hardware.nix")
+        machine.succeed("grep -F 'fsType = \"btrfs\";' /tmp/installer-hardware.nix")
+        machine.succeed("grep -F 'fsType = \"vfat\";' /tmp/installer-hardware.nix")
+        machine.succeed("echo installer-persistence > /mnt/probe; umount -R /mnt; mount /dev/vdb2 /mnt")
+        assert machine.succeed("cat /mnt/probe").strip() == "installer-persistence"
+        # Avoid a duplicate nixos label interfering with the later guest reboot.
+        machine.succeed("umount /mnt; btrfs filesystem label /dev/vdb2 installer-test-root")
+
     with subtest("persistent workspaces have fixed-size mounted filesystems"):
         for name, path in [
             ("hermes-test", "/var/lib/hermes-test/workspace"),
             ("zeroclaw-assistant", "/var/lib/zeroclaw-assistant/data"),
         ]:
             machine.wait_for_unit(f"tentaflake-workspace-quota-{name}.service")
-            machine.succeed(f"findmnt --mountpoint {path} -n -o FSTYPE | grep -Fx ext4")
+            machine.succeed(f"findmnt --mountpoint {path} -n -o FSTYPE | grep -Fx btrfs")
             size = int(machine.succeed(f"stat -c %s /var/lib/tentaflake-workspace-volumes/{name}.img").strip())
-            assert size == 32 * 1024 * 1024, (name, size)
+            assert size == 128 * 1024 * 1024, (name, size)
         machine.fail(
-            "fallocate -l 40M "
+            "fallocate -l 160M "
             "/var/lib/hermes-test/workspace/over-quota"
         )
         machine.succeed(
@@ -1199,6 +1239,30 @@
             "docker network inspect tf-zeroclaw-assistant | "
             "jq -e '.[0].Internal == true'"
         )
+
+    with subtest("legacy ext4 workspace images fail without being reformatted"):
+        image = "/var/lib/tentaflake-workspace-volumes/hermes-test.img"
+        machine.succeed(
+            "mount_unit=$(systemd-escape --path --suffix=mount /var/lib/hermes-test/workspace); "
+            "systemctl stop \"$mount_unit\"; "
+            f"mv {image} {image}.btrfs-saved; "
+            f"truncate -s 128M {image}; mkfs.ext4 -F -q {image}"
+        )
+        before = machine.succeed(f"sha256sum {image}").split()[0]
+        machine.fail("systemctl start tentaflake-workspace-quota-prepare-hermes-test.service")
+        assert machine.succeed(f"sha256sum {image}").split()[0] == before
+        machine.succeed(f"blkid -p -s TYPE -o value {image} | grep -Fx ext4")
+        machine.succeed(
+            "journalctl -u tentaflake-workspace-quota-prepare-hermes-test.service --no-pager "
+            "| grep -F 'workspace image is not Btrfs'"
+        )
+        machine.succeed(
+            f"rm {image}; mv {image}.btrfs-saved {image}; "
+            "systemctl reset-failed tentaflake-workspace-quota-prepare-hermes-test.service; "
+            "systemctl start tentaflake-workspace-quota-hermes-test.service"
+        )
+        machine.succeed("findmnt --mountpoint /var/lib/hermes-test/workspace -n -o FSTYPE | grep -Fx btrfs")
+        assert machine.succeed("cat /var/lib/hermes-test/workspace/restore-fixture").strip() == "workspace-restore-fixture"
 
   '';
 }
