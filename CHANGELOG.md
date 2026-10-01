@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+### Security
+- Update the broker's locked TLS dependency to `rustls 0.23.45` and its
+  required `rustls-webpki 0.103.15`, removing the affected version reported by
+  OSV for `RUSTSEC-2026-0285` without changing broker policy or adding code.
 ### Changed
 ### Added
 ### Fixed
