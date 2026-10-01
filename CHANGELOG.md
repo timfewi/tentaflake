@@ -33,6 +33,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   policy checks and a real gVisor stdio-MCP integration fixture. Secure auto-start
   now requires a research relay alongside the broker, worker and workspace quota.
 ### Fixed
+- Broker crash recovery preserves dependent controller processes with systemd
+  direct retries. Six consecutive crashes no longer interrupt the controller;
+  explicit broker stops still stop it and require a separate controller start.
 - Host diagnostics no longer report success when systemd/disk queries fail
   or agent state is unknown. `health` shares `doctor` checks and exit codes;
   intentionally stopped agents remain valid. Text `doctor --hide` now

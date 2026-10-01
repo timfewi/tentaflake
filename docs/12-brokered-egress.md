@@ -173,6 +173,15 @@ call.
 applicable, and prompt-free audit path are readable. Broker units restart on
 failure with exponential backoff from ten seconds to one minute. Explicit
 operator stops prevent further retries.
+Broker units use `RestartMode=direct`: automatic retries keep dependent
+controller processes running instead of stopping and starting them. The broker
+endpoint remains unavailable during recovery, so in-flight calls may fail;
+the existing health probes still report unavailable or non-ready service.
+Explicitly stopping a broker stops its `Requires` controllers. Starting the
+broker afterward does not restart those controllers automatically.
+
+Direct retries skip systemd `OnFailure`/`OnSuccess` hooks. Monitor broker health
+and restart counts rather than relying on those hooks for transient outages.
 The generated security manifest records each exact host endpoint. The security
 doctor treats connection failure as unknown (`TFSEC-035`) and an answering but
 non-ready broker as high severity (`TFSEC-036`). Label/mode/endpoint drift is a

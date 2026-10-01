@@ -676,8 +676,17 @@
             + "https://1.1.1.1/"
         )
 
-    with subtest("broker survives six crashes and respects an explicit stop"):
+    with subtest("broker recovery preserves dependents and respects an explicit stop"):
         unit = "tentaflake-broker-fetch-zeroclaw-assistant.service"
+        dependent = "tentaflake-broker-dependent-fixture.service"
+        machine.succeed(
+            f"systemd-run --unit={dependent} "
+            f"--property=Requires={unit} --property=After={unit} "
+            "/run/current-system/sw/bin/sleep infinity"
+        )
+        machine.wait_for_unit(dependent)
+        dependent_pid = int(machine.succeed(f"systemctl show -p MainPID --value {dependent}").strip())
+        assert dependent_pid > 0, dependent_pid
         policy = machine.succeed(
             f"systemctl cat {unit}"
         )
@@ -703,9 +712,13 @@
                 timeout=30,
             )
             wait_for_broker_health(machine, "10.203.30.1:7811", f"journalctl -u {unit} -n 50")
+            machine.succeed(f"systemctl is-active --quiet {dependent}")
+            observed_pid = int(machine.succeed(f"systemctl show -p MainPID --value {dependent}").strip())
+            assert observed_pid == dependent_pid, (crash, dependent_pid, observed_pid)
         machine.succeed(f"systemctl stop {unit}")
         machine.sleep(1)
         machine.fail(f"systemctl is-active --quiet {unit}")
+        machine.fail(f"systemctl is-active --quiet {dependent}")
         machine.succeed(f"rm /run/systemd/system/{unit}.d/test.conf; systemctl daemon-reload; systemctl start {unit}")
         wait_for_broker_health(
             machine,
@@ -713,6 +726,7 @@
             f"systemctl --no-pager --full status {unit}; "
             f"journalctl --no-pager -b -u {unit} -n 100",
         )
+        machine.fail(f"systemctl is-active --quiet {dependent}")
 
     with subtest("internal capsule network blocks direct authority"):
         machine.succeed(
