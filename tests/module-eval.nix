@@ -638,6 +638,21 @@ assert !(core.options.tentaflake ? editor);
 assert !(builtins.hasAttr "hive-research" core.options.services);
 assert !(builtins.hasAttr "piper-tts-server" core.options.services);
 assert capsuleAttempt.success;
+assert lib.all
+  (
+    unit:
+    unit.startLimitIntervalSec == 0
+    && unit.serviceConfig.Restart == "on-failure"
+    && unit.serviceConfig.RestartSec == "10s"
+    && unit.serviceConfig.RestartSteps == 5
+    && unit.serviceConfig.RestartMaxDelaySec == "1min"
+  )
+  [
+    capsule.config.systemd.services.docker-hermes-hermes-fixture
+    capsule.config.systemd.services.docker-zeroclaw-zeroclaw-fixture
+    brokerCapsule.config.systemd.services.tentaflake-broker-llm-hermes-brokered
+    brokerCapsule.config.systemd.services.tentaflake-broker-fetch-hermes-brokered
+  ];
 assert provenanceAttempt.success;
 assert !missingProvenanceAttempt.success;
 assert lib.hasInfix "cosign verify --certificate-identity"

@@ -10,6 +10,7 @@ let
   backend = config.virtualisation.oci-containers.backend;
   runtime = lib.getExe pkgs.${backend};
   json = pkgs.formats.json { };
+  serviceRecovery = import ../lib/serviceRecovery.nix;
   enabledAgents = lib.filterAttrs (_: agent: agent.enable) cfg.agents;
   containerNames = lib.attrNames config.virtualisation.oci-containers.containers;
   bridgeName = name: "tfb-${builtins.substring 0 8 (builtins.hashString "sha256" name)}";
@@ -277,53 +278,51 @@ let
     };
   };
 
-  hardenedService = name: mode: configFile: loadCredential: {
-    description = "Tentaflake ${mode} policy broker for ${name}";
-    requires = [
-      "tentaflake-broker-credentials-${name}.service"
-      "tentaflake-broker-network-${name}.service"
-    ];
-    after = [
-      "tentaflake-broker-credentials-${name}.service"
-      "tentaflake-broker-network-${name}.service"
-      "network-online.target"
-    ];
-    wants = [ "network-online.target" ];
-    serviceConfig = {
-      Type = "simple";
-      DynamicUser = true;
-      StateDirectory = "tentaflake-broker-${mode}-${name}";
-      StateDirectoryMode = "0700";
-      LoadCredential = loadCredential;
-      ExecStart = "${lib.getExe brokerPackage} --config ${configFile}";
-      Restart = "on-failure";
-      RestartSec = "5s";
-      UMask = "0077";
-      NoNewPrivileges = true;
-      PrivateDevices = true;
-      PrivateTmp = true;
-      ProtectClock = true;
-      ProtectControlGroups = true;
-      ProtectHome = true;
-      ProtectHostname = true;
-      ProtectKernelLogs = true;
-      ProtectKernelModules = true;
-      ProtectKernelTunables = true;
-      ProtectSystem = "strict";
-      RestrictAddressFamilies = [
-        "AF_UNIX"
-        "AF_INET"
-        "AF_INET6"
+  hardenedService =
+    name: mode: configFile: loadCredential:
+    lib.recursiveUpdate serviceRecovery {
+      description = "Tentaflake ${mode} policy broker for ${name}";
+      requires = [
+        "tentaflake-broker-credentials-${name}.service"
+        "tentaflake-broker-network-${name}.service"
       ];
-      RestrictRealtime = true;
-      RestrictSUIDSGID = true;
-      LockPersonality = true;
-      CapabilityBoundingSet = [ ];
-      SystemCallArchitectures = "native";
+      after = [
+        "tentaflake-broker-credentials-${name}.service"
+        "tentaflake-broker-network-${name}.service"
+        "network-online.target"
+      ];
+      wants = [ "network-online.target" ];
+      serviceConfig = {
+        Type = "simple";
+        DynamicUser = true;
+        StateDirectory = "tentaflake-broker-${mode}-${name}";
+        StateDirectoryMode = "0700";
+        LoadCredential = loadCredential;
+        ExecStart = "${lib.getExe brokerPackage} --config ${configFile}";
+        UMask = "0077";
+        NoNewPrivileges = true;
+        PrivateDevices = true;
+        PrivateTmp = true;
+        ProtectClock = true;
+        ProtectControlGroups = true;
+        ProtectHome = true;
+        ProtectHostname = true;
+        ProtectKernelLogs = true;
+        ProtectKernelModules = true;
+        ProtectKernelTunables = true;
+        ProtectSystem = "strict";
+        RestrictAddressFamilies = [
+          "AF_UNIX"
+          "AF_INET"
+          "AF_INET6"
+        ];
+        RestrictRealtime = true;
+        RestrictSUIDSGID = true;
+        LockPersonality = true;
+        CapabilityBoundingSet = [ ];
+        SystemCallArchitectures = "native";
+      };
     };
-    startLimitIntervalSec = 300;
-    startLimitBurst = 5;
-  };
 
   servicesFor =
     name: agent:

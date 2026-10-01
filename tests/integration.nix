@@ -360,7 +360,9 @@
         assert " -p " not in rendered, rendered
         assert "Restart=on-failure" in unit, unit
         assert "RestartSec=10s" in unit, unit
-        assert "StartLimitBurst=5" in unit, unit
+        assert "StartLimitIntervalSec=0" in unit, unit
+        assert "RestartSteps=5" in unit, unit
+        assert "RestartMaxDelaySec=1min" in unit, unit
 
     with subtest("declared agent produced its system user and state dir"):
         machine.succeed("id hermes-test")
@@ -637,23 +639,37 @@
             + "https://1.1.1.1/"
         )
 
-    with subtest("broker crash restarts with bounded policy"):
+    with subtest("broker survives six crashes and respects an explicit stop"):
         unit = "tentaflake-broker-fetch-zeroclaw-assistant.service"
-        pid = machine.succeed(
-            f"systemctl show -p MainPID --value {unit}"
-        ).strip()
-        machine.succeed(f"kill -9 {pid}")
-        machine.wait_until_succeeds(
-            "test $(systemctl show -p NRestarts "
-            f"--value {unit}) -ge 1",
-            timeout=30,
-        )
-        machine.wait_for_unit(unit)
         policy = machine.succeed(
             f"systemctl cat {unit}"
         )
-        assert "RestartSec=5s" in policy, policy
-        assert "StartLimitBurst=5" in policy, policy
+        assert "RestartSec=10s" in policy, policy
+        assert "StartLimitIntervalSec=0" in policy, policy
+        assert "RestartSteps=5" in policy, policy
+        assert "RestartMaxDelaySec=1min" in policy, policy
+        # Accelerate the same recovery policy; all six crashes still happen
+        # inside the former five-start window without resetting its counters.
+        machine.succeed(
+            f"mkdir -p /run/systemd/system/{unit}.d; "
+            "printf '%s\\n' '[Service]' 'RestartSec=100ms' "
+            f"'RestartMaxDelaySec=200ms' > /run/systemd/system/{unit}.d/test.conf; "
+            "systemctl daemon-reload"
+        )
+        for crash in range(6):
+            pid = machine.succeed(f"systemctl show -p MainPID --value {unit}").strip()
+            assert int(pid) > 0, pid
+            machine.succeed(f"kill -9 {pid}")
+            machine.wait_until_succeeds(
+                f"test $(systemctl show -p NRestarts --value {unit}) -ge {crash + 1} "
+                f"&& systemctl is-active --quiet {unit}",
+                timeout=30,
+            )
+            wait_for_broker_health(machine, "10.203.30.1:7811", f"journalctl -u {unit} -n 50")
+        machine.succeed(f"systemctl stop {unit}")
+        machine.sleep(1)
+        machine.fail(f"systemctl is-active --quiet {unit}")
+        machine.succeed(f"rm /run/systemd/system/{unit}.d/test.conf; systemctl daemon-reload; systemctl start {unit}")
         wait_for_broker_health(
             machine,
             "10.203.30.1:7811",

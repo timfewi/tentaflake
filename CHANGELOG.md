@@ -11,6 +11,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   required `rustls-webpki 0.103.15`, removing the affected version reported by
   OSV for `RUSTSEC-2026-0285` without changing broker policy or adding code.
 ### Changed
+- Secure controllers and brokers now share systemd exponential restart
+  backoff from 10 seconds to one minute, avoiding permanent start-limit
+  exhaustion after a transient outage. Explicit stops still prevent retries.
 ### Added
 ### Fixed
 - Restic backups now include enabled quota workspaces inside selected state
