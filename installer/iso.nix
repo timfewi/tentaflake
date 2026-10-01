@@ -23,6 +23,8 @@
   isoImage.makeEfiBootable = true;
   isoImage.makeUsbBootable = true;
 
+  boot.supportedFilesystems = [ "btrfs" ];
+
   # ── Embed the full repo source ──
   environment.etc."tentaflake/source".source = repoRoot;
 
@@ -33,7 +35,7 @@
     parted # Partitioning
     gptfdisk # GPT disk tools (sgdisk)
     dosfstools # mkfs.fat
-    e2fsprogs # mkfs.ext4
+    btrfs-progs # mkfs.btrfs
     nixos-install-tools # nixos-install, nixos-generate-config
     git # For potential flake operations
     cryptsetup # luksClose for previously-encrypted disks

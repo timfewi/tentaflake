@@ -3,6 +3,10 @@ let
   isSecure = profile: profile != "dev";
 
   pathWithin = root: path: path == root || lib.hasPrefix "${root}/" path;
+  normalizedPath =
+    path:
+    lib.hasPrefix "/" path
+    && lib.all (part: part != "" && part != "." && part != "..") (lib.tail (lib.splitString "/" path));
   volumeParts = volume: lib.splitString ":" volume;
   volumeSource = volume: lib.head (volumeParts volume);
   volumeDestination = volume: lib.elemAt (volumeParts volume) 1;
@@ -153,8 +157,9 @@ let
       destinationAllowedRw = lib.elem destination allowedWritableDestinations;
       sourceIsAbsolute = lib.hasPrefix "/" source;
       sourceIsApprovedRo = pathWithin "/nix/store" source || lib.elem source approvedReadOnlySources;
-      sourceSyntaxSafe = lib.match "^/[A-Za-z0-9._+/-]*$" source != null;
-      destinationSyntaxSafe = lib.match "^/[A-Za-z0-9._+/-]*$" destination != null;
+      sourceSyntaxSafe = lib.match "^/[A-Za-z0-9._+/-]*$" source != null && normalizedPath source;
+      destinationSyntaxSafe =
+        lib.match "^/[A-Za-z0-9._+/-]*$" destination != null && normalizedPath destination;
       sensitiveSource = lib.any (root: pathWithin root source) sensitiveSources;
       sensitiveDestination = lib.any (root: pathWithin root destination) sensitiveDestinations;
       readOnly = volumeIsReadOnly volume;
@@ -163,7 +168,10 @@ let
     && sourceIsAbsolute
     && sourceSyntaxSafe
     && destinationSyntaxSafe
-    && (sourceAllowedRw || (sourceIsApprovedRo && !sensitiveSource && readOnly))
+    && (
+      sourceAllowedRw
+      || (sourceIsApprovedRo && (!sensitiveSource || lib.elem source approvedReadOnlySources) && readOnly)
+    )
     && (
       destinationAllowedRw || lib.elem destination approvedReadOnlyDestinations || !sensitiveDestination
     )
@@ -192,6 +200,7 @@ in
       brokerPolicyEnabled ? false,
       workerEnabled ? false,
       workspaceQuotaEnabled ? false,
+      researchPolicyEnabled ? false,
     }:
     let
       secure = isSecure profile;
@@ -248,6 +257,10 @@ in
         {
           assertion = !automaticStart || workerEnabled;
           message = "tentaflake: automatically started secure agent ${name} requires an enabled disposable worker; keep it stopped while wiring runtime tools to the worker queue.";
+        }
+        {
+          assertion = !automaticStart || researchPolicyEnabled;
+          message = "tentaflake: automatically started secure agent ${name} requires its isolated Research relay; web tools must use secure-research-tool.";
         }
         {
           assertion = !automaticStart || workspaceQuotaEnabled;

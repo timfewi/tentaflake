@@ -210,8 +210,8 @@ agenix -e secrets/hermes-coding.env.age
 Each `.age` file contains the environment variables for one agent:
 
 ```
-OPENROUTER_API_KEY=sk-or-v1-abc123...
-TELEGRAM_BOT_TOKEN=123456:ABC-DEF1234...
+OPENROUTER_API_KEY=<replace-with-your-secret>
+TELEGRAM_BOT_TOKEN=<replace-with-your-secret>
 ```
 
 The same works for a **ZeroClaw** agent — see `zeroclaw.env.example` for its

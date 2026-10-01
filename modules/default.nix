@@ -1,4 +1,7 @@
-{ ... }:
+{
+  researchFlake ? null,
+  ...
+}:
 {
   imports = [
     ./options.nix
@@ -18,5 +21,6 @@
     ./users.nix
     ./worker.nix
     ./workspace-quota.nix
-  ];
+  ]
+  ++ (if researchFlake == null then [ ] else [ (import ./research.nix { inherit researchFlake; }) ]);
 }

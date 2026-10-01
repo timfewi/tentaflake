@@ -48,9 +48,12 @@ tentaflake/
 │   ├── mkHermesAgent.nix
 │   ├── mkZeroClawAgent.nix
 │   ├── agentsFromData.nix
+│   ├── mkRustPackage.nix
 │   └── pinnedImage.nix
 ├── pkgs/
 │   ├── tentaflake-cli/
+│   ├── tentaflake-broker/
+│   ├── tentaflake-worker/
 │   └── piper-voices/
 ├── installer/
 ├── tests/
@@ -155,7 +158,9 @@ Common contract:
 - an enabled worker adds one agent-specific read-only result mount; the builder
   asserts that worker workspace and numeric UID/GID match the controller.
 - a stopped balanced scaffold may omit broker/worker/quota policy; a balanced
-  agent with `autoStart = true` must have all three or evaluation fails.
+  agent with `autoStart = true` must have broker/worker/quota plus its research
+  relay or evaluation fails. Research uses only `secure-research-tool`; model
+  calls stay on the LLM broker. See `docs/16-research.md`.
 - caller `--userns` overrides are rejected, but root-managed Docker/Podman do
   not yet prove daemon-level host UID remapping; do not claim that property.
 
@@ -184,6 +189,15 @@ The workspace root is `Cargo.toml`; the binary source is
 `crates/tentaflake-cli/src/main.rs`. `pkgs/tentaflake-cli/default.nix` packages
 it with the locked Cargo dependency graph.
 
+`lib/mkRustPackage.nix` includes root Cargo files, every member manifest, and
+only the selected crate's source. Keep build inputs inside their crate unless
+explicitly declared in that fileset. Versions inherit `[workspace.package]`
+from `Cargo.toml`; package descriptions use crate manifests. The worker image
+uses the same workspace version, and its default reference follows image
+metadata. Container identity defaults are imported from `lib/constants.nix`.
+
+Documentation and host configuration stay outside the Rust package source.
+
 `modules/shell.nix` writes `/etc/tentaflake/cli.conf` and
 `/etc/tentaflake/agents.tsv`, installs the binary, and configures shell QoL.
 It does not implement the CLI in shell.
@@ -191,7 +205,7 @@ It does not implement the CLI in shell.
 Primary commands:
 
 ```text
-status health doctor stats logs
+help status health doctor stats logs
 restart start stop shell exec ps backup
 rebuild update
 ```
@@ -199,7 +213,25 @@ rebuild update
 `tentaflake-status` is a status alias. The deprecated `hermes` name is a shim.
 The rebuild/apply paths are explicit runtime operations.
 
+`help`, `--help`, and `-h` work without valid generated host inputs;
+management commands continue to require them.
+
+`health` and `doctor` share host diagnostics: exit `0` means healthy, `1`
+means failed units, unknown agent states, or root-disk usage at least 90%,
+and `2` means systemd/disk evidence was unavailable. Stopped agents remain
+valid. JSON includes `failed_agents` and `unknown_agents`; `--hide` redacts
+host and agent names in either output format.
+
 ## Brokered egress
+
+`modules/research.nix` integrates the pinned public `tentaflake-research` service.
+`tentaflake.research.agents.CONTAINER.uid` selects a distinct host relay identity.
+Builders apply stdio MCP settings after caller settings, disable native web
+tools, and project only the exact client closure and agent socket. Legacy fetch,
+remote MCP and research summarization are rejected. Provider-hosted tools/web
+extensions are rejected by the LLM broker. Never expose the root service socket
+or broad `/run` mounts. The synthetic gVisor VM proves transport and settings,
+not actual vendor agent MCP discovery. See `docs/16-research.md`.
 
 `modules/broker.nix` declares per-container internal networks, virtual
 credentials, LLM/fetch services, budgets, and subnet firewall rules.
@@ -240,9 +272,11 @@ tool configuration routed every shell command through the queue. See
 
 ## Persistent workspace ceiling
 
-`modules/workspace-quota.nix` optionally mounts an exact-size ext4 backing file
-at each controller workspace. Builder assertions bind key/path/UID/GID to the
-agent and the container/worker units require the mount owner service. The
+`modules/workspace-quota.nix` optionally mounts an exact-size Btrfs backing file
+of at least 128 MiB. Existing ext4 images fail closed without reformatting;
+backup/restore migration is required. Offline checks use `btrfs check --readonly`.
+Each image mounts at its controller workspace. Builder assertions bind
+key/path/UID/GID to the agent and the container/worker units require the mount owner service. The
 managed mount starts after ordinary local filesystems; ownership and the
 private worker-control directories are restored inside it before the path
 watcher starts. First activation is a real disk mutation and fails when the
@@ -280,6 +314,16 @@ budgets; notification delivery remains deployment-owned. See
 
 ## Runtime posture and recovery
 
+Secure controllers and brokers use `lib/serviceRecovery.nix`: on-failure
+restarts with exponential delays from 10 seconds to one minute over five
+steps, no permanent start-limit exhaustion, and no restart after an explicit
+stop. Dependencies and security gates still apply on each start. VM coverage
+accelerates the delays to exercise six consecutive broker crashes and stop.
+Broker units additionally use `RestartMode=direct` so automatic retries preserve
+the dependent controller PID. Explicit broker stop still stops that controller;
+starting the broker does not implicitly resume it. Direct retries skip systemd
+failure/success hooks; health and restart counts remain the outage evidence.
+
 `tentaflake doctor --security` combines the generated manifest with narrow
 live checks for root disk, Restic success age, Tailscale Serve/Funnel, and
 backend-specific Docker/Podman inspect drift. Unavailable AF_UNIX, sudo,
@@ -287,7 +331,12 @@ stopped-container, or incomplete-schema evidence is warning/unknown, never
 green. Exact broker `/healthz` endpoints distinguish unreachable/unknown from
 an explicit credential/policy/audit-readiness failure. Backup success is recorded by
 `tentaflake-backup-success.service` in a systemd-managed persistent state
-directory; `modules/hardening.nix` exposes an opt-in PID 1 hardware watchdog
+directory. The Restic module adds enabled quota mounts inside selected backup
+paths as separate sources, retains `--one-file-system`, and requires/asserts
+those mounts before backup. Other nested filesystems require explicit paths;
+live file backup is not an application-consistent snapshot. VM coverage checks
+state/workspace restore, missing-mount failure, and recovery.
+`modules/hardening.nix` exposes an opt-in PID 1 hardware watchdog
 only for explicitly tested devices. Keep build,
 activation, live checks, and restore drills as separate evidence gates.
 
@@ -309,9 +358,12 @@ credentials, network listeners, and voice assets remain opt-in.
 
 ## Installer
 
-The only ISO is `installer-iso`. `installer/installer.sh` copies the core Nix
+The only ISO is `installer-iso`. New root partitions use Btrfs; the UEFI ESP
+remains FAT32. Generated hardware configuration records these types. Existing
+hosts are not converted during an update. `installer/installer.sh` copies the core Nix
 sources plus `Cargo.toml`, `Cargo.lock`, `crates/`, and `pkgs/` into the target
-configuration. `scripts/generated-flake-test.sh` checks the generated flake
+configuration. Both Nixpkgs and research inputs retain the ISO lockfile revisions.
+`scripts/generated-flake-test.sh` checks the generated flake
 with a JSON agent fixture.
 
 Building the ISO is safe verification. Writing it to USB, partitioning a disk,
@@ -319,6 +371,16 @@ and installing NixOS are destructive runtime operations and need an exact,
 confirmed target.
 
 ## Verification
+
+Start with `just fast` for contributor checks without VMs or ISO builds.
+GitHub imports `.github/vm-paths.json` to select host/research suites separately.
+A research-only lock update runs the research suite; shared runtime changes,
+unknown paths and unavailable history run both. `checks.*.ci-vm-selection`
+verifies these decisions with actual Git histories, including renamed/deleted
+files and malformed lock data. Full `just e2e` retains both VM suites and ISO.
+
+`just` recipes load the pinned development shell even from an ordinary shell;
+`just list` aliases the recipe listing. Direct Cargo/lint commands need `nix develop`.
 
 The optional contributor Dev Container installs Nix only; `flake.lock` and
 `lib/devshell.nix` remain the toolchain source of truth. Its base image and Nix
@@ -333,9 +395,9 @@ disk below `/var/tmp/tentaflake-e2e-<user>/`; it never passes a host block
 device. `just e2e-run-vm` reboots that installed test disk without the ISO.
 The wrappers deliberately do not delete or reset VM state.
 
-`just security` runs source- and rule-pinned Semgrep without registry access or
-metrics, then scans the Rust and Dev Containers CLI lockfiles against OSV's
-current advisory database. It needs network access for OSV and is intentionally
+`just security` scans the Rust and Dev Containers CLI lockfiles against OSV's
+current advisory database, then runs source- and rule-pinned Semgrep without
+registry access or metrics. It needs network access for OSV and is intentionally
 separate from the reproducible `just ci` gate.
 
 Focused Rust gate:
@@ -380,3 +442,10 @@ Behavior, option, or usage changes must update:
 
 Do not call a change complete without a linked reason, a focused verification,
 and synchronized docs.
+
+### Research client lifecycle
+
+The pinned MCP adapter reconnects future calls after a lost Unix session, with
+bounded retries and fresh negotiation/UID authorization. Never replay dispatched
+operations or reopen after explicit close. Verify actual gVisor MCP behavior and
+live socket revocation after changing the client pin; see `docs/16-research.md`.

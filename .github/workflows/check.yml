@@ -12,26 +12,22 @@ jobs:
   changes:
     runs-on: ubuntu-latest
     outputs:
-      vm: ${{ steps.filter.outputs.vm }}
+      runtime: ${{ steps.filter.outputs.runtime }}
+      research: ${{ steps.filter.outputs.research }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
 
-      # Keep the required VM job visible, but avoid its expensive build when a
-      # change only touches Markdown documentation.
+      # Shared rules classify runtime/research independently; unknown changes
+      # and missing comparison history require both suites.
       - name: Detect VM-relevant changes
         id: filter
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
           HEAD_SHA: ${{ github.sha }}
         run: |
-          files=$(git diff --name-only "$BASE_SHA" "$HEAD_SHA")
-          if printf '%s\n' "$files" | grep -qEv '(^docs/|\.md$)'; then
-            echo "vm=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "vm=false" >> "$GITHUB_OUTPUT"
-          fi
+          python3 scripts/ci_vm_changes.py "$BASE_SHA" "$HEAD_SHA" >> "$GITHUB_OUTPUT"
 
   check:
     runs-on: ubuntu-latest
@@ -44,7 +40,7 @@ jobs:
           extra-conf: |
             accept-flake-config = true
 
-      - uses: DeterminateSystems/magic-nix-cache-action@908b263ff629f4cc17666315b7fd3ec127c6244d # v14
+      - uses: DeterminateSystems/magic-nix-cache-action@84c0677f58dcedf3b91f8223ce36a9ea5b3c84b7 # v15
         with:
           # No FlakeHub account; skip the doomed OIDC login and use the GH cache.
           use-flakehub: false
@@ -52,6 +48,15 @@ jobs:
       # Eval-only: the VM test in `checks` needs /dev/kvm, which not every runner
       # has. Evaluating still catches assertion/module errors; the VM is actually
       # built in the separate `vm-test` job below.
+      # Read-only flake evaluation cannot instantiate an uncached closureInfo
+      # derivation. Build the non-VM policy gates first; they materialize the
+      # exact research closures without widening any sandbox mount.
+      - name: prepare research evaluation closures
+        run: |
+          nix build --no-link \
+            .#checks.x86_64-linux.research-policy \
+            .#checks.x86_64-linux.module-evaluation
+
       - name: nix flake check (eval)
         run: nix flake check --no-build
 
@@ -61,6 +66,9 @@ jobs:
       - name: nix build (non-VM checks)
         run: |
           nix build --no-link \
+            .#checks.x86_64-linux.devcontainer-cli \
+            .#checks.x86_64-linux.ci-vm-selection \
+            .#checks.x86_64-linux.rust-package-sources \
             .#checks.x86_64-linux.image-pinning \
             .#checks.x86_64-linux.tentaflake-broker \
             .#checks.x86_64-linux.tentaflake-cli \
@@ -69,6 +77,9 @@ jobs:
 
       - name: nix build (tentaflake toplevel)
         run: nix build .#nixosConfigurations.tentaflake.config.system.build.toplevel --no-link
+
+      - name: generated installed flake
+        run: nix develop --command ./scripts/generated-flake-test.sh
 
       - name: nix fmt check
         run: nix fmt -- --ci
@@ -98,7 +109,7 @@ jobs:
   # KVM-less or slow runner degrades this one job instead of the whole check.
   vm-test:
     needs: changes
-    if: needs.changes.outputs.vm == 'true'
+    if: needs.changes.outputs.runtime == 'true' || needs.changes.outputs.research == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
@@ -109,9 +120,14 @@ jobs:
           extra-conf: |
             accept-flake-config = true
 
-      - uses: DeterminateSystems/magic-nix-cache-action@908b263ff629f4cc17666315b7fd3ec127c6244d # v14
+      - uses: DeterminateSystems/magic-nix-cache-action@84c0677f58dcedf3b91f8223ce36a9ea5b3c84b7 # v15
         with:
           use-flakehub: false
 
-      - name: nix build (VM integration test)
-        run: nix build .#checks.x86_64-linux.vm-integration -L
+      - name: nix build (runtime VM integration test)
+        if: needs.changes.outputs.runtime == 'true'
+        run: nix build --no-link -L .#checks.x86_64-linux.vm-integration
+
+      - name: nix build (research VM integration test)
+        if: needs.changes.outputs.research == 'true'
+        run: nix build --no-link -L .#checks.x86_64-linux.research-integration

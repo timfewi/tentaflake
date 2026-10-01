@@ -86,10 +86,19 @@ and host-side destination resolution.
 ## Crash and reboot behavior
 
 The upstream NixOS OCI module generates systemd units with
-`Restart=on-failure`. Tentaflake adds a 10-second restart delay and bounded
-start-limit window to secure controllers. Brokers use their own 5-second
-delay/start limit and expose credential/policy-aware `/healthz`; this is not a
-provider end-to-end probe. Declarative `autoStart` controls boot startup.
+`Restart=on-failure`. Secure controllers and brokers share a recovery policy:
+the restart delay increases exponentially from 10 seconds to one minute over
+five steps, then stays at one minute. The start-limit window is disabled so a
+prolonged transient failure does not permanently disable a 24/7 service.
+Each attempt still runs the configured credential, mount, provenance, and
+isolation gates. Persistent errors remain failed attempts; alert on restart
+flapping and investigate their cause. An explicit systemd stop prevents
+automatic restarts; declarative `autoStart` controls boot startup.
+
+Brokers expose credential/policy-aware `/healthz`; this is not a provider
+end-to-end probe. Backoff does not detect a hung or unhealthy process that
+keeps running, or restart a controller after a failed dependency start job.
+Use live health checks and the optional observability profile for those cases.
 
 Hosts with a known, tested watchdog device can also opt in to PID 1 hardware
 watchdog supervision:
@@ -135,6 +144,15 @@ tentaflake.backup = {
 };
 ```
 
+Enabled managed quota workspaces below a selected path are automatically
+added as separate Restic sources. This preserves `--one-file-system` without
+silently skipping the mounted workspace. Only explicitly selected trees are
+covered; unrelated agents and disabled quotas are excluded. The backup unit
+requires the selected filesystems and asserts that each included quota
+workspace is mounted before it runs. A failed mount prevents a new backup and
+success timestamp. Other nested filesystems require their own explicit entry
+in `paths`.
+
 The job encrypts through Restic, prunes after backup, and runs an integrity
 check. On success, a separate hardened oneshot updates
 `/var/lib/tentaflake-backup/last-success` in a systemd-managed state directory;
@@ -144,9 +162,10 @@ randomized delay. Alert on failed/stale `restic-backups-tentaflake.service`
 runs.
 For a restore drill: install a fresh test host, keep the agent stopped, restore
 its state, verify ownership and file permissions, start the exact unit, and run
-application-level checks. The VM test backs up and restores a fixture into a
-fresh target, but production backend credentials, retention, capacity, and a
-real fresh-host drill remain operator evidence. Backup freshness and restore
+application-level checks. The VM test restores ordinary state and a mounted
+quota workspace into a fresh directory, rejects an unavailable mount, and
+verifies recovery afterward. Production backend credentials, retention,
+capacity, and a real fresh-host drill remain operator evidence. Backup freshness and restore
 readiness beyond freshness still requires an actual restore drill.
 
 ## Incident response and kill switch

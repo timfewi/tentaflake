@@ -1,4 +1,4 @@
-{ nixpkgsPath }:
+{ nixpkgsPath, researchFlake }:
 let
   system = "x86_64-linux";
   pkgs = import nixpkgsPath { inherit system; };
@@ -8,7 +8,7 @@ let
     modules:
     evalConfig {
       inherit system modules;
-      specialArgs = { };
+      specialArgs = { inherit researchFlake; };
     };
   builders = import ../lib { inherit pkgs lib; };
   containerSecurity = import ../lib/containerSecurity.nix { inherit lib; };
@@ -16,7 +16,7 @@ let
     system.stateVersion = "26.05";
     fileSystems."/" = {
       device = "/dev/disk/by-label/nixos";
-      fsType = "ext4";
+      fsType = "btrfs";
     };
     boot.loader.grub.devices = [ "nodev" ];
     virtualisation.oci-containers.backend = "docker";
@@ -39,6 +39,17 @@ let
     ../modules/default.nix
     (hostModule "dev")
     { tentaflake.shell.enable = lib.mkForce true; }
+  ];
+
+  customWorkerImage = eval [
+    ../modules/default.nix
+    (hostModule "dev")
+    {
+      tentaflake.worker.image = pkgs.dockerTools.buildLayeredImage {
+        name = "fixture-worker";
+        tag = "fixture-version";
+      };
+    }
   ];
 
   watchdog = eval [
@@ -416,16 +427,31 @@ let
       autoStart = false;
     })
     {
+      services.secureResearch = {
+        serviceUid = 4201;
+        egressUid = 4202;
+        vpnInterface = "fixture-vpn";
+        resolvers = [ "9.9.9.9" ];
+      };
       tentaflake = {
+        research.agents.hermes-worker.uid = 62101;
         networking.enable = lib.mkForce true;
         broker.agents.hermes-worker = {
           enable = true;
           networkName = "tf-hermes-worker";
           subnet = "10.203.22.0/30";
           gateway = "10.203.22.1";
-          fetch = {
+          llm = {
             enable = true;
-            allowedHosts = [ "docs.example.com" ];
+            upstreamBaseUrl = "https://api.example.org/v1/";
+            providerCredentialFile = "/run/fixture-model-key";
+            allowedModels = [
+              {
+                name = "fixture-model";
+                inputMicrousdPerMillion = 1;
+                outputMicrousdPerMillion = 1;
+              }
+            ];
           };
         };
         worker.agents = {
@@ -443,7 +469,7 @@ let
         workspaceQuota.agents.hermes-worker = {
           enable = true;
           workspace = "/var/lib/hermes-worker/workspace";
-          sizeMiB = 32;
+          sizeMiB = 128;
         };
       };
     }
@@ -454,6 +480,9 @@ let
   workerPath = workerCapsule.config.systemd.paths.tentaflake-worker-hermes-worker;
   workerOwnerService = workerCapsule.config.systemd.services.tentaflake-workspace-quota-hermes-worker;
   workerAttempt = builtins.tryEval workerCapsule.config.system.build.toplevel.drvPath;
+  tooSmallQuota = workerCapsule.extendModules {
+    modules = [ { tentaflake.workspaceQuota.agents.hermes-worker.sizeMiB = lib.mkForce 32; } ];
+  };
   workerMount = lib.findFirst (
     mount: mount.where == "/var/lib/hermes-worker/workspace"
   ) null workerCapsule.config.systemd.mounts;
@@ -522,18 +551,42 @@ let
   ];
   unsafeBrokerAttempt = builtins.tryEval unsafeBrokerFixture.config.system.build.toplevel.drvPath;
 
-  backup = eval [
-    ../modules/default.nix
-    (hostModule "balanced")
-    {
-      tentaflake.backup = {
-        enable = true;
-        paths = [ "/var/lib/hermes-fixture" ];
-        repositoryFile = "/run/credentials/restic-repository";
-        passwordFile = "/run/credentials/restic-password";
-      };
-    }
-  ];
+  backupWithPaths =
+    paths:
+    eval [
+      ../modules/default.nix
+      (hostModule "balanced")
+      (builders.mkHermesAgent {
+        name = "fixture";
+        autoStart = false;
+      })
+      (builders.mkHermesAgent {
+        name = "fixture-other";
+        autoStart = false;
+      })
+      {
+        tentaflake.workspaceQuota.agents = {
+          hermes-fixture = {
+            enable = true;
+            workspace = "/var/lib/hermes-fixture/workspace";
+          };
+          hermes-fixture-other = {
+            enable = true;
+            workspace = "/var/lib/hermes-fixture-other/workspace";
+          };
+          disabled.workspace = "/var/lib/hermes-fixture/disabled";
+        };
+        tentaflake.backup = {
+          inherit paths;
+          enable = true;
+          repositoryFile = "/run/credentials/restic-repository";
+          passwordFile = "/run/credentials/restic-password";
+        };
+      }
+    ];
+  backup = backupWithPaths [ "/var/lib/hermes-fixture/" ];
+  explicitWorkspaceBackup = backupWithPaths [ "/var/lib/hermes-fixture/workspace" ];
+  unrelatedBackup = backupWithPaths [ "/var/lib/unrelated" ];
   backupAttempt = builtins.tryEval backup.config.system.build.toplevel.drvPath;
 
   unsafeBackup = eval [
@@ -603,7 +656,27 @@ let
     }
   ];
   tailscalePolicy = builtins.fromJSON (builtins.readFile ../docs/tailscale-policy.example.json);
+  escapedReference =
+    volume:
+    eval [
+      ../modules/default.nix
+      (hostModule "balanced")
+      (builders.mkHermesAgent {
+        name = "escaped-reference";
+        autoStart = false;
+        extraVolumes = [ volume ];
+      })
+    ];
+  escapedStoreSource = builtins.tryEval (escapedReference "/nix/store/../../run/fixture-secret:/reference:ro")
+  .config.system.build.toplevel.drvPath;
+  escapedMountDestination = builtins.tryEval (escapedReference "${pkgs.hello}:/reference/../../etc:ro")
+  .config.system.build.toplevel.drvPath;
+
 in
+assert
+  customWorkerImage.config.tentaflake.worker.imageReference == "fixture-worker:fixture-version";
+assert !escapedStoreSource.success;
+assert !escapedMountDestination.success;
 assert core.config.environment.etc."tentaflake/cli.conf".text != "";
 assert core.config.environment.etc."tentaflake/agents.tsv".text == "";
 assert watchdog.config.systemd.settings.Manager.WatchdogDevice == "/dev/watchdog0";
@@ -614,6 +687,21 @@ assert !(core.options.tentaflake ? editor);
 assert !(builtins.hasAttr "hive-research" core.options.services);
 assert !(builtins.hasAttr "piper-tts-server" core.options.services);
 assert capsuleAttempt.success;
+assert lib.all
+  (
+    unit:
+    unit.startLimitIntervalSec == 0
+    && unit.serviceConfig.Restart == "on-failure"
+    && unit.serviceConfig.RestartSec == "10s"
+    && unit.serviceConfig.RestartSteps == 5
+    && unit.serviceConfig.RestartMaxDelaySec == "1min"
+  )
+  [
+    capsule.config.systemd.services.docker-hermes-hermes-fixture
+    capsule.config.systemd.services.docker-zeroclaw-zeroclaw-fixture
+    brokerCapsule.config.systemd.services.tentaflake-broker-llm-hermes-brokered
+    brokerCapsule.config.systemd.services.tentaflake-broker-fetch-hermes-brokered
+  ];
 assert provenanceAttempt.success;
 assert !missingProvenanceAttempt.success;
 assert lib.hasInfix "cosign verify --certificate-identity"
@@ -671,6 +759,9 @@ assert lib.elem "--env-file=/run/tentaflake/dev.env" devContainer.extraOptions;
 assert !(lib.elem "--runtime=runsc" devContainer.extraOptions);
 assert brokerAttempt.success;
 assert workerAttempt.success;
+assert
+  !(builtins.tryEval tooSmallQuota.config.tentaflake.workspaceQuota.agents.hermes-worker.sizeMiB)
+  .success;
 assert !incompleteAutostartAttempt.success;
 assert !unsafeWorkerAttempt.success;
 assert !unsafeQuotaAttempt.success;
@@ -679,6 +770,29 @@ assert backupAttempt.success;
 assert !unsafeBackupAttempt.success;
 assert backup.config.services.restic.backups.tentaflake.runCheck;
 assert backup.config.services.restic.backups.tentaflake.inhibitsSleep;
+assert
+  backup.config.services.restic.backups.tentaflake.paths == [
+    "/var/lib/hermes-fixture/"
+    "/var/lib/hermes-fixture/workspace"
+  ];
+assert
+  explicitWorkspaceBackup.config.services.restic.backups.tentaflake.paths == [
+    "/var/lib/hermes-fixture/workspace"
+  ];
+assert unrelatedBackup.config.services.restic.backups.tentaflake.paths == [ "/var/lib/unrelated" ];
+assert backup.config.services.restic.backups.tentaflake.extraBackupArgs == [ "--one-file-system" ];
+assert
+  backup.config.systemd.services.restic-backups-tentaflake.unitConfig.RequiresMountsFor == [
+    "/var/lib/hermes-fixture/"
+    "/var/lib/hermes-fixture/workspace"
+  ];
+assert
+  backup.config.systemd.services.restic-backups-tentaflake.unitConfig.AssertPathIsMountPoint == [
+    "/var/lib/hermes-fixture/workspace"
+  ];
+assert
+  unrelatedBackup.config.systemd.services.restic-backups-tentaflake.unitConfig.AssertPathIsMountPoint
+  == [ ];
 assert
   backup.config.systemd.services.restic-backups-tentaflake.unitConfig.OnSuccess == [
     "tentaflake-backup-success.service"

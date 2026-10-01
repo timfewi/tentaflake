@@ -17,6 +17,7 @@ Do not hand-edit them. Change the Nix configuration and rebuild explicitly.
 ## Commands
 
 ```text
+tentaflake help
 tentaflake status [--json] [--hide]
 tentaflake health [--json] [--hide]
 tentaflake doctor [--json] [--hide]
@@ -38,9 +39,18 @@ tentaflake update
 `--hide` redacts the host and agent names. `tentaflake-status` invokes the same
 status renderer and is used by the login banner.
 
-`health` reports load, root disk usage, and failed agent count. `doctor` checks
-failed systemd units, high root-disk use, and failed agent units. A successful
-doctor run is host evidence only; it does not prove external provider access.
+`help`, `--help`, and `-h` display usage even when the generated host
+configuration or inventory is missing or invalid. Management commands still
+require the generated inputs.
+
+`health` adds host load to the same diagnosis used by `doctor`. Both check
+failed systemd units, root-disk usage of at least 90%, and failed or unknown
+agent states. They return `0` for a healthy diagnosis, `1` for detected
+problems, and `2` when systemd or disk evidence cannot be obtained. An
+intentionally stopped agent is valid. JSON reports include `failed_agents`
+and `unknown_agents`; `--hide` redacts names in both text and JSON. A
+successful diagnosis is host evidence only; it does not prove external
+provider access.
 
 `doctor --security` reads the Nix-generated desired-state security manifest.
 It emits stable `TFSEC-*` findings with severity and remediation; critical or

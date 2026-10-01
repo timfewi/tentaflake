@@ -6,10 +6,73 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+### Security
+- Research-enabled controllers use only `secure-research-tool` for web access.
+  Native web tools and legacy fetch are disabled, per-agent Unix relays preserve
+  distinct job ownership, and model requests stay on the LLM broker. The broker
+  rejects provider-hosted tools and web extensions before budget reservation.
+- Container mounts reject non-normalized path components, including `..` escapes
+  from an approved source or into a sensitive container destination.
+- Update the broker's locked TLS dependency to `rustls 0.23.45` and its
+  required `rustls-webpki 0.103.15`, removing the affected version reported by
+  OSV for `RUSTSEC-2026-0285` without changing broker policy or adding code.
+- Updated the pinned Dev Containers CLI dependencies `@humanfs/node`,
+  `brace-expansion` (all three locked majors), `ip-address`, and `js-yaml` to
+  remove current OSV findings. The required HumanFS dependencies and offline
+  cache hash move together; the CLI release and prior security backports stay
+  unchanged.
 ### Changed
+- GitHub selects host/research VMs separately from an imported path policy;
+  contributor-only changes skip them, while unknown/shared changes run both.
+- Rust packages include only their own source plus workspace manifests, so
+  changes to one binary preserve the other binaries' Nix cache entries.
+- Cargo workspace metadata supplies the package/image version and package
+  descriptions. Worker image references follow image metadata; shared agent
+  UID/GID defaults now import `lib/constants.nix`.
+- New installations and fixed-size agent workspaces use Btrfs instead of ext4.
+  Workspace images require at least 128 MiB and use read-only offline checks.
+- Rust CLI, broker, and worker packages share one builder and a Cargo/crate
+  source fileset, removing repeated packaging policy and keeping unrelated
+  documentation and host-configuration edits out of their rebuild inputs.
+- Secure controllers and brokers now share systemd exponential restart
+  backoff from 10 seconds to one minute, avoiding permanent start-limit
+  exhaustion after a transient outage. Explicit stops still prevent retries.
 ### Added
+- `just fast` runs the contributor checks, CI-selection regressions and flake
+  evaluation without VM suites or the installer ISO.
+- Pinned public MIT `tentaflake-research` service, `tentaflake.research.agents`,
+  policy checks and a real gVisor stdio-MCP integration fixture. Secure auto-start
+  now requires a research relay alongside the broker, worker and workspace quota.
 ### Fixed
+- Pin the verified research client recovery: new MCP calls reconnect after an
+  upstream session loss, without replaying interrupted operations.
+- `just` recipes load the pinned contributor tools from an ordinary shell,
+  avoiding missing Cargo/Statix errors. `just list` now lists available recipes.
+- Generated installed flakes now pin and import the research module explicitly,
+  avoiding a missing module argument and infinite recursion during installation.
+- Broker crash recovery preserves dependent controller processes with systemd
+  direct retries. Six consecutive crashes no longer interrupt the controller;
+  explicit broker stops still stop it and require a separate controller start.
+- Host diagnostics no longer report success when systemd/disk queries fail
+  or agent state is unknown. `health` shares `doctor` checks and exit codes;
+  intentionally stopped agents remain valid. Text `doctor --hide` now
+  redacts host and agent names as advertised, using shared name rendering
+  and a single agent-state snapshot instead of duplicated report logic.
+- CLI help (`help`, `--help`, `-h`) now works before host configuration is
+  installed or while generated inputs are damaged, keeping usage available
+  during setup and recovery. Management commands still require those inputs.
+- Restic backups now include enabled quota workspaces inside selected state
+  paths as separate sources instead of silently skipping their files under
+  `--one-file-system`. Required mounts and mount assertions prevent an
+  unavailable workspace from producing a misleading successful backup.
+- Corrected the Dev Containers CLI offline dependency-cache hash for its
+  committed patched lockfile, restoring the package build and full flake
+  gate without changing source or dependency versions.
+  CI now builds that non-VM check so a stale cache pin cannot pass evaluation
+  without exercising the package build.
 ### Breaking
+- Existing ext4 workspace images require a verified backup/restore migration
+  before agents can start with the new Btrfs quota module; no automatic conversion.
 
 
 

@@ -104,17 +104,21 @@ delete its own data. State outside that mount needs separate capacity policy.
 ### Controller to external services
 
 A balanced controller either has `network=none` or joins one agent-specific
-internal bridge. The bridge exposes only that agent's host LLM and fetch
-brokers. Deterministic interface and source-subnet firewall rules reject
+internal bridge. Research-enabled agents use only that agent's host LLM broker
+on the bridge; legacy fetch is rejected. Deterministic interface and source-subnet firewall rules reject
 forwarding and unrelated host services. The controller receives only a
 runtime virtual key, never the upstream credential.
 
 The LLM broker enforces exact routes and models, clamps completion size, and
-applies concurrency, rate, token, and cost budgets. The fetch broker permits
-only configured HTTPS hosts and media types, resolves public addresses, pins
-the connection address, revalidates redirects, ignores environment proxies,
-bounds responses, and labels returned content as untrusted. These controls do
-not make retrieved content safe to execute or trust.
+applies concurrency, rate, token, and cost budgets. It rejects provider-hosted
+tools and known web extension fields; operators must select inference-only
+models. [Web research](16-research.md) uses a per-agent Unix socket capability
+and the public isolated service. Each relay has a distinct host UID even when
+container UIDs match. Only its exact socket directory and client closure are
+projected read-only; gVisor can open these sockets but cannot create host sockets.
+VPN readiness, public-address checks, budgets and worker isolation constrain
+research egress. These controls do not make retrieved content safe to execute
+or trust, or prevent disclosure of text supplied to an allowed remote service.
 
 ### Controller to disposable worker
 

@@ -67,8 +67,12 @@
         # OCI backend + docker are wired in the template's configuration.nix, which
         # we don't import here (it pulls in hardware config / my-agents.nix); set
         # the pieces the agent unit needs directly.
-        virtualisation.oci-containers.backend = "docker";
-        virtualisation.docker.enable = true;
+        virtualisation = {
+          oci-containers.backend = "docker";
+          docker.enable = true;
+          # Only this disposable guest disk is exposed to installer formatting.
+          emptyDiskImages = [ 3072 ];
+        };
 
         # The stopped controller does not pull in its broker at boot. Make the
         # fetch broker an explicit fixture service so the reboot subtest can
@@ -77,13 +81,25 @@
           "multi-user.target"
         ];
 
-        environment.etc."tentaflake/network-test-image".source = networkTestImage;
-        environment.systemPackages = [
-          pkgs.git
-          pkgs.python3
-          pkgs.restic
-          brokerPackage
-        ];
+        environment = {
+          etc = {
+            "tentaflake/network-test-image".source = networkTestImage;
+            "tentaflake/installer-fixture".source = ../installer/installer.sh;
+          };
+          systemPackages = [
+            pkgs.btrfs-progs
+            pkgs.cryptsetup
+            pkgs.dosfstools
+            pkgs.e2fsprogs # Only for the explicit legacy-image refusal fixture.
+            pkgs.gptfdisk
+            pkgs.git
+            pkgs.lvm2
+            pkgs.nixos-install-tools
+            pkgs.python3
+            pkgs.restic
+            brokerPackage
+          ];
+        };
 
         tentaflake = {
           hostName = "agent-host";
@@ -150,12 +166,12 @@
             hermes-test = {
               enable = true;
               workspace = "/var/lib/hermes-test/workspace";
-              sizeMiB = 32;
+              sizeMiB = 128;
             };
             zeroclaw-assistant = {
               enable = true;
               workspace = "/var/lib/zeroclaw-assistant/data";
-              sizeMiB = 32;
+              sizeMiB = 128;
               ownerUid = 65534;
               ownerGid = 65534;
             };
@@ -229,6 +245,9 @@
   };
 
   testScript = ''
+    import shlex
+    import json
+
     # runsc's sandbox helpers share the container PID cgroup. A limit of 16
     # can reject the sandbox bootstrap before the workload starts, so keep
     # the runtime probes bounded while leaving headroom for gVisor itself.
@@ -328,6 +347,41 @@
         machine.succeed("test -s /etc/tentaflake/cli.conf")
         machine.succeed("test -s /etc/tentaflake/agents.tsv")
 
+    with subtest("host diagnostics accept stopped agents and redact names"):
+        for flag in ["help", "--help", "-h"]:
+            machine.succeed(f"TENTAFLAKE_CONFIG=/dev/null tentaflake {flag}")
+        reports = []
+        for command in ["doctor", "health"]:
+            text = machine.succeed(f"tentaflake {command} --hide")
+            assert "agent-host" not in text, text
+            assert " assistant " not in text, text
+            assert " test " not in text, text
+            assert "agent-1" in text, text
+            report = json.loads(machine.succeed(f"tentaflake {command} --json --hide"))
+            assert report["host"] == "redacted", report
+            assert report["problems"] == 0, report
+            assert report["failed_agents"] == [], report
+            assert report["unknown_agents"] == [], report
+            assert 0 <= report["disk_percent"] < 90, report
+            reports.append(report)
+        assert reports[0] == reports[1], reports
+
+        machine.succeed(
+            "printf 'hermes\\tmissing-fixture\\tmissing-fixture\\t"
+            "tentaflake-diagnostics-nonexistent-fixture.service\\t/tmp/missing-fixture\\n' "
+            "> /tmp/tentaflake-diagnostics-missing.tsv"
+        )
+        machine.succeed(
+            "sed 's@^agents_file=.*@agents_file=/tmp/tentaflake-diagnostics-missing.tsv@' "
+            "/etc/tentaflake/cli.conf > /tmp/tentaflake-diagnostics-missing.conf"
+        )
+        code, report = machine.execute(
+            "TENTAFLAKE_CONFIG=/tmp/tentaflake-diagnostics-missing.conf "
+            "tentaflake doctor --json --hide"
+        )
+        assert code == 1, report
+        assert json.loads(report)["unknown_agents"] == ["agent-1"], report
+
     with subtest("security doctor accepts the fail-closed balanced capsule"):
         report = machine.succeed("tentaflake doctor --security --json")
         machine.succeed(
@@ -360,7 +414,9 @@
         assert " -p " not in rendered, rendered
         assert "Restart=on-failure" in unit, unit
         assert "RestartSec=10s" in unit, unit
-        assert "StartLimitBurst=5" in unit, unit
+        assert "StartLimitIntervalSec=0" in unit, unit
+        assert "RestartSteps=5" in unit, unit
+        assert "RestartMaxDelaySec=1min" in unit, unit
 
     with subtest("declared agent produced its system user and state dir"):
         machine.succeed("id hermes-test")
@@ -378,17 +434,40 @@
         assert zero_perms == "700", f"expected 0700 zeroclaw state dir, got {zero_perms}"
         machine.succeed("test -d /var/lib/zeroclaw-assistant/data")
 
+    with subtest("installer formats Btrfs root and records the boot filesystems"):
+        installer = machine.succeed("cat /etc/tentaflake/installer-fixture")
+        mount_helper = "mount_retry() {" + installer.split("mount_retry() {", 1)[1].split("\n}\n", 1)[0] + "\n}\n"
+        start = 'dialog --infobox "Partitioning $DISK ..." 4 50'
+        partitioning = start + installer.split(start, 1)[1].split("# STEP 9: Generate hardware config", 1)[0]
+        script = (
+            'set -euo pipefail\nDISK=/dev/vdb\nINSTALL_LOG=/tmp/installer-filesystems.log\n'
+            'dialog() { :; }\ndie() { cat "$INSTALL_LOG" >&2; echo "$1" >&2; exit 1; }\n'
+            + mount_helper + partitioning
+        )
+        machine.succeed("printf %s " + shlex.quote(script) + " > /tmp/installer-filesystems.sh")
+        machine.succeed("bash /tmp/installer-filesystems.sh")
+        machine.succeed("findmnt --mountpoint /mnt -n -o FSTYPE | grep -Fx btrfs")
+        machine.succeed("findmnt --mountpoint /mnt/boot -n -o FSTYPE | grep -Fx vfat")
+        machine.succeed("blkid -s LABEL -o value /dev/vdb2 | grep -Fx nixos")
+        machine.succeed("nixos-generate-config --root /mnt --show-hardware-config > /tmp/installer-hardware.nix")
+        machine.succeed("grep -F 'fsType = \"btrfs\";' /tmp/installer-hardware.nix")
+        machine.succeed("grep -F 'fsType = \"vfat\";' /tmp/installer-hardware.nix")
+        machine.succeed("echo installer-persistence > /mnt/probe; umount -R /mnt; mount /dev/vdb2 /mnt")
+        assert machine.succeed("cat /mnt/probe").strip() == "installer-persistence"
+        # Avoid a duplicate nixos label interfering with the later guest reboot.
+        machine.succeed("umount /mnt; btrfs filesystem label /dev/vdb2 installer-test-root")
+
     with subtest("persistent workspaces have fixed-size mounted filesystems"):
         for name, path in [
             ("hermes-test", "/var/lib/hermes-test/workspace"),
             ("zeroclaw-assistant", "/var/lib/zeroclaw-assistant/data"),
         ]:
             machine.wait_for_unit(f"tentaflake-workspace-quota-{name}.service")
-            machine.succeed(f"findmnt --mountpoint {path} -n -o FSTYPE | grep -Fx ext4")
+            machine.succeed(f"findmnt --mountpoint {path} -n -o FSTYPE | grep -Fx btrfs")
             size = int(machine.succeed(f"stat -c %s /var/lib/tentaflake-workspace-volumes/{name}.img").strip())
-            assert size == 32 * 1024 * 1024, (name, size)
+            assert size == 128 * 1024 * 1024, (name, size)
         machine.fail(
-            "fallocate -l 40M "
+            "fallocate -l 160M "
             "/var/lib/hermes-test/workspace/over-quota"
         )
         machine.succeed(
@@ -637,29 +716,57 @@
             + "https://1.1.1.1/"
         )
 
-    with subtest("broker crash restarts with bounded policy"):
+    with subtest("broker recovery preserves dependents and respects an explicit stop"):
         unit = "tentaflake-broker-fetch-zeroclaw-assistant.service"
-        pid = machine.succeed(
-            f"systemctl show -p MainPID --value {unit}"
-        ).strip()
-        machine.succeed(f"kill -9 {pid}")
-        machine.wait_until_succeeds(
-            "test $(systemctl show -p NRestarts "
-            f"--value {unit}) -ge 1",
-            timeout=30,
+        dependent = "tentaflake-broker-dependent-fixture.service"
+        machine.succeed(
+            f"systemd-run --unit={dependent} "
+            f"--property=Requires={unit} --property=After={unit} "
+            "/run/current-system/sw/bin/sleep infinity"
         )
-        machine.wait_for_unit(unit)
+        machine.wait_for_unit(dependent)
+        dependent_pid = int(machine.succeed(f"systemctl show -p MainPID --value {dependent}").strip())
+        assert dependent_pid > 0, dependent_pid
         policy = machine.succeed(
             f"systemctl cat {unit}"
         )
-        assert "RestartSec=5s" in policy, policy
-        assert "StartLimitBurst=5" in policy, policy
+        assert "RestartSec=10s" in policy, policy
+        assert "StartLimitIntervalSec=0" in policy, policy
+        assert "RestartSteps=5" in policy, policy
+        assert "RestartMaxDelaySec=1min" in policy, policy
+        # Accelerate the same recovery policy; all six crashes still happen
+        # inside the former five-start window without resetting its counters.
+        machine.succeed(
+            f"mkdir -p /run/systemd/system/{unit}.d; "
+            "printf '%s\\n' '[Service]' 'RestartSec=100ms' "
+            f"'RestartMaxDelaySec=200ms' > /run/systemd/system/{unit}.d/test.conf; "
+            "systemctl daemon-reload"
+        )
+        for crash in range(6):
+            pid = machine.succeed(f"systemctl show -p MainPID --value {unit}").strip()
+            assert int(pid) > 0, pid
+            machine.succeed(f"kill -9 {pid}")
+            machine.wait_until_succeeds(
+                f"test $(systemctl show -p NRestarts --value {unit}) -ge {crash + 1} "
+                f"&& systemctl is-active --quiet {unit}",
+                timeout=30,
+            )
+            wait_for_broker_health(machine, "10.203.30.1:7811", f"journalctl -u {unit} -n 50")
+            machine.succeed(f"systemctl is-active --quiet {dependent}")
+            observed_pid = int(machine.succeed(f"systemctl show -p MainPID --value {dependent}").strip())
+            assert observed_pid == dependent_pid, (crash, dependent_pid, observed_pid)
+        machine.succeed(f"systemctl stop {unit}")
+        machine.sleep(1)
+        machine.fail(f"systemctl is-active --quiet {unit}")
+        machine.fail(f"systemctl is-active --quiet {dependent}")
+        machine.succeed(f"rm /run/systemd/system/{unit}.d/test.conf; systemctl daemon-reload; systemctl start {unit}")
         wait_for_broker_health(
             machine,
             "10.203.30.1:7811",
             f"systemctl --no-pager --full status {unit}; "
             f"journalctl --no-pager -b -u {unit} -n 100",
         )
+        machine.fail(f"systemctl is-active --quiet {dependent}")
 
     with subtest("internal capsule network blocks direct authority"):
         machine.succeed(
@@ -949,7 +1056,7 @@
         assert "approval-required" in audit, audit
         assert '"event":"approved"' in audit, audit
 
-    with subtest("encrypted backup restores test state"):
+    with subtest("encrypted backup restores state and the mounted quota workspace"):
         machine.succeed(
             "install -d -m 0700 "
             "/run/tentaflake-backup"
@@ -971,6 +1078,10 @@
         machine.succeed(
             "printf '%s\\n' 'restore-fixture' > "
             "/var/lib/hermes-test/restore-fixture"
+        )
+        machine.succeed(
+            "printf '%s\\n' 'workspace-restore-fixture' > "
+            "/var/lib/hermes-test/workspace/restore-fixture"
         )
         machine.succeed(
             "systemctl start "
@@ -1013,6 +1124,44 @@
             "restore-fixture"
         ).strip()
         assert restored == "restore-fixture", restored
+        restored_workspace = machine.succeed(
+            "cat /tmp/restore/var/lib/hermes-test/workspace/restore-fixture"
+        ).strip()
+        assert restored_workspace == "workspace-restore-fixture", restored_workspace
+
+    with subtest("backup fails with an unavailable quota mount and recovers afterward"):
+        machine.succeed(
+            "cp -p /var/lib/tentaflake-backup/last-success /tmp/backup-last-success; "
+            "mount_unit=$(systemd-escape --path --suffix=mount "
+            "/var/lib/hermes-test/workspace); "
+            "systemctl stop \"$mount_unit\"; "
+            "mv /var/lib/tentaflake-workspace-volumes/hermes-test.img "
+            "/tmp/hermes-test.img; "
+            "mkdir /var/lib/tentaflake-workspace-volumes/hermes-test.img"
+        )
+        machine.fail("findmnt --mountpoint /var/lib/hermes-test/workspace")
+        machine.fail("systemctl start restic-backups-tentaflake.service")
+        machine.succeed(
+            "test \"$(stat -c %y /var/lib/tentaflake-backup/last-success)\" = "
+            "\"$(stat -c %y /tmp/backup-last-success)\""
+        )
+        machine.succeed(
+            "restic -r /var/lib/tentaflake-test-restic "
+            "--password-file /run/tentaflake-backup/password "
+            "snapshots --json | jq -e 'length == 1'"
+        )
+        machine.succeed(
+            "rmdir /var/lib/tentaflake-workspace-volumes/hermes-test.img; "
+            "mv /tmp/hermes-test.img "
+            "/var/lib/tentaflake-workspace-volumes/hermes-test.img; "
+            "systemctl start restic-backups-tentaflake.service; "
+            "systemctl start tentaflake-workspace-quota-hermes-test.service"
+        )
+        machine.succeed(
+            "restic -r /var/lib/tentaflake-test-restic "
+            "--password-file /run/tentaflake-backup/password "
+            "snapshots --json | jq -e 'length == 2'"
+        )
 
     with subtest("security doctor reports an intentionally unsafe fixture"):
         machine.succeed(
@@ -1090,6 +1239,30 @@
             "docker network inspect tf-zeroclaw-assistant | "
             "jq -e '.[0].Internal == true'"
         )
+
+    with subtest("legacy ext4 workspace images fail without being reformatted"):
+        image = "/var/lib/tentaflake-workspace-volumes/hermes-test.img"
+        machine.succeed(
+            "mount_unit=$(systemd-escape --path --suffix=mount /var/lib/hermes-test/workspace); "
+            "systemctl stop \"$mount_unit\"; "
+            f"mv {image} {image}.btrfs-saved; "
+            f"truncate -s 128M {image}; mkfs.ext4 -F -q {image}"
+        )
+        before = machine.succeed(f"sha256sum {image}").split()[0]
+        machine.fail("systemctl start tentaflake-workspace-quota-prepare-hermes-test.service")
+        assert machine.succeed(f"sha256sum {image}").split()[0] == before
+        machine.succeed(f"blkid -p -s TYPE -o value {image} | grep -Fx ext4")
+        machine.succeed(
+            "journalctl -u tentaflake-workspace-quota-prepare-hermes-test.service --no-pager "
+            "| grep -F 'workspace image is not Btrfs'"
+        )
+        machine.succeed(
+            f"rm {image}; mv {image}.btrfs-saved {image}; "
+            "systemctl reset-failed tentaflake-workspace-quota-prepare-hermes-test.service; "
+            "systemctl start tentaflake-workspace-quota-hermes-test.service"
+        )
+        machine.succeed("findmnt --mountpoint /var/lib/hermes-test/workspace -n -o FSTYPE | grep -Fx btrfs")
+        assert machine.succeed("cat /var/lib/hermes-test/workspace/restore-fixture").strip() == "workspace-restore-fixture"
 
   '';
 }

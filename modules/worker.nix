@@ -5,6 +5,7 @@
   ...
 }:
 let
+  constants = import ../lib/constants.nix;
   cfg = config.tentaflake.worker;
   backend = config.virtualisation.oci-containers.backend;
   runtime = lib.getExe pkgs.${backend};
@@ -19,7 +20,7 @@ let
     agent:
     if agent.hostGroup != null then
       agent.hostGroup
-    else if agent.containerGid == 65534 then
+    else if agent.containerGid == constants.nobodyGid then
       "nogroup"
     else
       "tfw-gid-${toString agent.containerGid}";
@@ -28,7 +29,7 @@ let
     let
       group = workerGroup agent;
     in
-    if agent.hostGroup == null && agent.containerGid != 65534 then
+    if agent.hostGroup == null && agent.containerGid != constants.nobodyGid then
       groups // { ${group}.gid = agent.containerGid; }
     else
       groups
@@ -47,11 +48,11 @@ let
         };
         containerUid = lib.mkOption {
           type = lib.types.ints.unsigned;
-          default = 10000;
+          default = constants.containerUid;
         };
         containerGid = lib.mkOption {
           type = lib.types.ints.unsigned;
-          default = 10000;
+          default = constants.containerGid;
         };
         hostGroup = lib.mkOption {
           type = lib.types.nullOr (lib.types.strMatching "^[a-z_][a-z0-9_-]{0,30}$");
@@ -233,7 +234,8 @@ in
     };
     imageReference = lib.mkOption {
       type = lib.types.str;
-      default = "tentaflake-worker:0.4.0";
+      default = "${cfg.image.imageName}:${cfg.image.imageTag}";
+      defaultText = lib.literalExpression ''"''${cfg.image.imageName}:''${cfg.image.imageTag}"'';
       description = "Exact local reference emitted by worker.image; this is not pulled from a registry.";
     };
     agents = lib.mkOption {
