@@ -15,6 +15,9 @@ nix develop
 
 The development shell provides Nix tooling, Rust, Cargo, Clippy, Rustfmt,
 ShellCheck, Statix, Deadnix, and `just`.
+The `just` recipes enter this pinned environment automatically, including when
+called from an ordinary shell. `just list` lists them. Direct Cargo/lint commands
+still require the contributor shell.
 
 The three Rust packages share `lib/mkRustPackage.nix`. Their build source
 contains the root Cargo manifest, lockfile, and complete `crates/` tree;

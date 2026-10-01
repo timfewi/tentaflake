@@ -1,11 +1,15 @@
 # tentaflake dev commands — run `just` to list them.
 # Everything here mirrors CI plus the installer ISO build CI does not run.
 
-set shell := ["bash", "-euo", "pipefail", "-c"]
+# Use the pinned contributor tools even from an ordinary shell.
+set shell := ["nix", "develop", "--no-write-lock-file", "--command", "bash", "-euo", "pipefail", "-c"]
+export TENTAFLAKE_NO_BANNER := "1"
 
 # List recipes
 default:
     @just --list
+
+alias list := default
 
 # ── The gates ────────────────────────────────────────────────
 
@@ -86,6 +90,6 @@ iso-installer:
 tag VERSION:
     @test -z "$(git status --porcelain)" || { echo "working tree dirty (staged, unstaged or untracked) — commit first"; exit 1; }
     @grep -q "## \[{{ replace(VERSION, 'v', '') }}\]" CHANGELOG.md \
-        || { echo "no CHANGELOG.md section for {{VERSION}} — write it first"; exit 1; }
-    git tag -a {{VERSION}} -m "{{VERSION}}"
-    @echo "==> tagged {{VERSION}}. Push with: git push origin {{VERSION}}"
+        || { echo "no CHANGELOG.md section for {{ VERSION }} — write it first"; exit 1; }
+    git tag -a {{ VERSION }} -m "{{ VERSION }}"
+    @echo "==> tagged {{ VERSION }}. Push with: git push origin {{ VERSION }}"

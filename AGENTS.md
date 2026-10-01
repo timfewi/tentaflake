@@ -4,6 +4,9 @@ NixOS flake template for running isolated AI agents (Hermes and ZeroClaw) in Doc
 
 ## Build & Test
 
+`just` recipes load the pinned contributor tools automatically; `just list`
+lists them. Enter `nix develop` before running Cargo or lint tools directly.
+
 ```bash
 nix flake check
 nix build .#installer-iso
