@@ -364,6 +364,9 @@ confirmed target.
 
 ## Verification
 
+`just` recipes load the pinned development shell even from an ordinary shell;
+`just list` aliases the recipe listing. Direct Cargo/lint commands need `nix develop`.
+
 The optional contributor Dev Container installs Nix only; `flake.lock` and
 `lib/devshell.nix` remain the toolchain source of truth. Its base image and Nix
 Feature are digest-locked, and it must not mount runtime sockets or credentials.

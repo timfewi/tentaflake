@@ -33,6 +33,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   policy checks and a real gVisor stdio-MCP integration fixture. Secure auto-start
   now requires a research relay alongside the broker, worker and workspace quota.
 ### Fixed
+- `just` recipes load the pinned contributor tools from an ordinary shell,
+  avoiding missing Cargo/Statix errors. `just list` now lists available recipes.
 - Broker crash recovery preserves dependent controller processes with systemd
   direct retries. Six consecutive crashes no longer interrupt the controller;
   explicit broker stops still stop it and require a separate controller start.

@@ -29,6 +29,9 @@ interactive UEFI installer:
 just e2e-installer
 ```
 
+The recipe loads the pinned contributor tools automatically; entering a separate
+`nix develop` shell is optional.
+
 The VM receives no host block device. The installer can erase only
 `/var/tmp/tentaflake-e2e-<user>/tentaflake.qcow2`, and still asks for
 confirmation in its TUI. The first boot uses the ISO once and then prefers the

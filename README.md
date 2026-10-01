@@ -75,7 +75,9 @@ destructive; follow [the install guide](docs/00-install.md) and resolve the
 target device explicitly.
 
 Contributor end-to-end entry points keep the pinned tool and VM setup behind
-short recipes:
+short recipes. They load the Nix development tools automatically, so `just lint`,
+`just rust` and `just security` also work from an ordinary shell. `just list`
+lists the available recipes:
 
 ```bash
 just e2e                 # complete automated local gate
