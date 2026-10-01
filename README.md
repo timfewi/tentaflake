@@ -11,6 +11,8 @@
 Tentaflake is a generic NixOS flake template for running isolated AI agents
 on one machine. Hermes and ZeroClaw agents are declared as OCI
 containers and supervised by systemd.
+Secure controllers and policy brokers recover from crashes with capped
+systemd restart backoff, including after prolonged transient failures.
 
 The core is intentionally small. It contains the host modules, agent builders,
 an installer ISO, and a Rust operator CLI. Editor support, Hive Research,

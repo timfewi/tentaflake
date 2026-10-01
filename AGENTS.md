@@ -52,6 +52,9 @@ still accurate before finishing — and update them in the same change:
 - `crates/` and `pkgs/` — Rust CLI/broker/worker workspace and Nix packages
 - A balanced agent with `autoStart = true` requires its exact broker, worker,
   and workspace-quota declarations; stopped scaffolds remain `network=none`.
+- Secure controllers and brokers share `lib/serviceRecovery.nix`: bounded
+  restart backoff without permanent start-limit exhaustion. Explicit stops
+  must still prevent automatic retries.
 - `tests/` — NixOS VM test backing `checks.<system>.vm-integration`
 - Restic backups retain filesystem boundaries; selected managed quota mounts
   are separate sources and required mounts. Verify workspace restore as well

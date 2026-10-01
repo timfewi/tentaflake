@@ -190,11 +190,7 @@ let
       brokerEnabled && brokerCfg.fetch.enable
     ) "tentaflake-broker-fetch-${containerName}.service";
   runtimeDependencies = brokerUnits ++ lib.optional quotaEnabled quotaUnit;
-  secureUnitPolicy = {
-    startLimitIntervalSec = 300;
-    startLimitBurst = 5;
-    serviceConfig.RestartSec = "10s";
-  };
+  secureUnitPolicy = import ./serviceRecovery.nix;
   securityResources = config.tentaflake.security.resources;
   ctrBin = "${pkgs.${backend}}/bin/${backend}";
   tentaflakeCli = pkgs.callPackage ../pkgs/tentaflake-cli { };

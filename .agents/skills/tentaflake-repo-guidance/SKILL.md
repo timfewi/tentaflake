@@ -280,6 +280,12 @@ budgets; notification delivery remains deployment-owned. See
 
 ## Runtime posture and recovery
 
+Secure controllers and brokers use `lib/serviceRecovery.nix`: on-failure
+restarts with exponential delays from 10 seconds to one minute over five
+steps, no permanent start-limit exhaustion, and no restart after an explicit
+stop. Dependencies and security gates still apply on each start. VM coverage
+accelerates the delays to exercise six consecutive broker crashes and stop.
+
 `tentaflake doctor --security` combines the generated manifest with narrow
 live checks for root disk, Restic success age, Tailscale Serve/Funnel, and
 backend-specific Docker/Podman inspect drift. Unavailable AF_UNIX, sudo,
