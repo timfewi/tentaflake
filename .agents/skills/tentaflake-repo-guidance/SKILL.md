@@ -269,9 +269,11 @@ tool configuration routed every shell command through the queue. See
 
 ## Persistent workspace ceiling
 
-`modules/workspace-quota.nix` optionally mounts an exact-size ext4 backing file
-at each controller workspace. Builder assertions bind key/path/UID/GID to the
-agent and the container/worker units require the mount owner service. The
+`modules/workspace-quota.nix` optionally mounts an exact-size Btrfs backing file
+of at least 128 MiB. Existing ext4 images fail closed without reformatting;
+backup/restore migration is required. Offline checks use `btrfs check --readonly`.
+Each image mounts at its controller workspace. Builder assertions bind
+key/path/UID/GID to the agent and the container/worker units require the mount owner service. The
 managed mount starts after ordinary local filesystems; ownership and the
 private worker-control directories are restored inside it before the path
 watcher starts. First activation is a real disk mutation and fails when the
@@ -353,9 +355,12 @@ credentials, network listeners, and voice assets remain opt-in.
 
 ## Installer
 
-The only ISO is `installer-iso`. `installer/installer.sh` copies the core Nix
+The only ISO is `installer-iso`. New root partitions use Btrfs; the UEFI ESP
+remains FAT32. Generated hardware configuration records these types. Existing
+hosts are not converted during an update. `installer/installer.sh` copies the core Nix
 sources plus `Cargo.toml`, `Cargo.lock`, `crates/`, and `pkgs/` into the target
-configuration. `scripts/generated-flake-test.sh` checks the generated flake
+configuration. Both Nixpkgs and research inputs retain the ISO lockfile revisions.
+`scripts/generated-flake-test.sh` checks the generated flake
 with a JSON agent fixture.
 
 Building the ISO is safe verification. Writing it to USB, partitioning a disk,

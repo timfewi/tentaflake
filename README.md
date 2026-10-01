@@ -70,6 +70,10 @@ Build the installer ISO:
 nix build .#installer-iso
 ```
 
+New installations use Btrfs for the host root and fixed-size agent workspaces.
+Existing ext4 hosts and workspace images require an explicit migration; see
+[installation](docs/00-install.md) and [workspace migration](docs/14-workspace-quota.md).
+
 The result is written below `result/iso/`. Writing it to a block device is
 destructive; follow [the install guide](docs/00-install.md) and resolve the
 target device explicitly.
@@ -204,7 +208,7 @@ redirect revalidation, quarantine, and host/FORWARD firewall rules. Agents
 without that explicit declaration stay at `network=none`. Phase C adds an
 opt-in disposable worker with bounded FD-safe snapshots, gVisor, no network or
 secrets, runtime/resource/tmpfs limits, host-side action approval, cleanup, and
-a read-only result path. An opt-in fixed-size ext4 volume places a hard ceiling
+a read-only result path. An opt-in fixed-size Btrfs volume places a hard ceiling
 on each persistent controller workspace; mutable state outside that workspace
 still needs capacity monitoring. The broker marks web material as untrusted;
 it does not claim that prompt injection is solved. Digest pinning is mandatory
@@ -302,7 +306,7 @@ already own a custom container GID can select its existing group with
 `hostGroup`.
 
 The secure example also declares `tentaflake.workspaceQuota.agents` for each
-controller. First activation creates and formats a sparse fixed-size ext4 image
+controller. First activation creates and formats a sparse fixed-size Btrfs image
 for an empty workspace. Existing data is never hidden or migrated implicitly.
 Read [the workspace quota guide](docs/14-workspace-quota.md) before enabling it
 on an existing host.

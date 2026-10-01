@@ -80,6 +80,9 @@ jobs:
       - name: nix build (tentaflake toplevel)
         run: nix build .#nixosConfigurations.tentaflake.config.system.build.toplevel --no-link
 
+      - name: generated installed flake
+        run: nix develop --command ./scripts/generated-flake-test.sh
+
       - name: nix fmt check
         run: nix fmt -- --ci
 

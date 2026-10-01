@@ -22,6 +22,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   cache hash move together; the CLI release and prior security backports stay
   unchanged.
 ### Changed
+- New installations and fixed-size agent workspaces use Btrfs instead of ext4.
+  Workspace images require at least 128 MiB and use read-only offline checks.
 - Rust CLI, broker, and worker packages share one builder and a Cargo/crate
   source fileset, removing repeated packaging policy and keeping unrelated
   documentation and host-configuration edits out of their rebuild inputs.
@@ -35,6 +37,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 - `just` recipes load the pinned contributor tools from an ordinary shell,
   avoiding missing Cargo/Statix errors. `just list` now lists available recipes.
+- Generated installed flakes now pin and import the research module explicitly,
+  avoiding a missing module argument and infinite recursion during installation.
 - Broker crash recovery preserves dependent controller processes with systemd
   direct retries. Six consecutive crashes no longer interrupt the controller;
   explicit broker stops still stop it and require a separate controller start.
@@ -56,6 +60,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   CI now builds that non-VM check so a stale cache pin cannot pass evaluation
   without exercising the package build.
 ### Breaking
+- Existing ext4 workspace images require a verified backup/restore migration
+  before agents can start with the new Btrfs quota module; no automatic conversion.
 
 
 

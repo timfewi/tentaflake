@@ -13,6 +13,9 @@
 # Usage: ./scripts/generated-flake-test.sh
 set -euo pipefail
 
+# The disposable fixture must not inherit the caller's Git repository or index.
+unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_COMMON_DIR
+
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
@@ -48,7 +51,7 @@ EOF
 cat >"$TARGET_NIXOS/hardware-configuration.nix" <<'EOF'
 { lib, ... }:
 {
-  fileSystems."/" = { device = "/dev/disk/by-label/nixos"; fsType = "ext4"; };
+  fileSystems."/" = { device = "/dev/disk/by-label/nixos"; fsType = "btrfs"; };
   boot.loader.systemd-boot.enable = true;
   nixpkgs.hostPlatform = lib.mkDefault "x86_64-linux";
 }
@@ -73,6 +76,8 @@ EOF
 # Extracted from the real source (not a copy) so this test cannot go stale.
 export NIXPKGS_REV
 NIXPKGS_REV=$(jq -r '.nodes.nixpkgs.locked.rev' "$REPO_DIR/flake.lock")
+export RESEARCH_REV
+RESEARCH_REV=$(jq -r '.nodes["tentaflake-research"].locked.rev' "$REPO_DIR/flake.lock")
 # Both single-quoted strings below are deliberate: the first is literal Nix the
 # heredoc must emit verbatim, the second is a sed script. Neither may expand.
 # shellcheck disable=SC2016

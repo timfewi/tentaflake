@@ -46,7 +46,7 @@ currently fails evaluation and must not be advertised as deployed.
 
 Enable and migrate to `tentaflake.workspaceQuota.agents.<container>` for every
 persistent controller workspace that needs a hard ceiling. The generic module
-uses an exact-size ext4 backing image and refuses to hide existing non-empty
+uses an exact-size Btrfs backing image and refuses to hide existing non-empty
 data; runtime-specific state outside the workspace still needs capacity
 monitoring.
 

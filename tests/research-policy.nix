@@ -6,7 +6,7 @@ let
     system.stateVersion = "26.05";
     fileSystems."/" = {
       device = "/dev/disk/by-label/nixos";
-      fsType = "ext4";
+      fsType = "btrfs";
     };
     boot.loader.grub.devices = [ "nodev" ];
     virtualisation.oci-containers.backend = "docker";
