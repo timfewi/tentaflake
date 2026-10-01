@@ -52,6 +52,9 @@ still accurate before finishing — and update them in the same change:
 - `crates/` and `pkgs/` — Rust CLI/broker/worker workspace and Nix packages
 - CLI help is configuration-free; management commands require generated
   host configuration and inventory.
+- Host diagnostics share checked systemd/disk evidence; failed or unknown
+  agent states are problems, while stopped agents remain valid. `--hide`
+  must redact host and agent names in both text and JSON.
 - `lib/mkRustPackage.nix` shares Rust packaging and restricts its source to
   root Cargo files and `crates/`; add required root build inputs explicitly.
 - A balanced agent with `autoStart = true` requires its exact broker, worker,

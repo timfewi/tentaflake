@@ -36,6 +36,20 @@ struct OutputMode {
     json: bool,
 }
 
+impl OutputMode {
+    fn host(self, name: &str) -> &str {
+        if self.hide { "redacted" } else { name }
+    }
+
+    fn agent(self, index: usize, name: &str) -> String {
+        if self.hide {
+            format!("agent-{}", index + 1)
+        } else {
+            name.to_owned()
+        }
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct SecurityAgent {
     name: String,
@@ -133,11 +147,10 @@ fn run(mut args: Vec<String>) -> Result<u8, String> {
 
     match command {
         "status" => status(&config, &agents, mode),
-        "health" => health(&config, &agents, mode),
         "doctor" if args[1..].iter().any(|arg| arg == "--security") => {
             security_doctor(&config, mode)
         }
-        "doctor" => doctor(&config, &agents, mode),
+        "health" | "doctor" => diagnostics(&config, &agents, mode, command),
         "stats" => stats(&config, &agents),
         "logs" => logs(&agents, &args[1..]),
         "restart" | "start" | "stop" => lifecycle(command, &agents, &args[1..]),
@@ -1237,11 +1250,7 @@ fn status(config: &Config, agents: &[Agent], mode: OutputMode) -> Result<u8, Str
     if mode.json {
         print!(
             "{{\"host\":\"{}\",\"backend\":\"{}\",\"security_profile\":\"{}\",\"agents\":[",
-            json_escape(if mode.hide {
-                "redacted"
-            } else {
-                &config.host_name
-            }),
+            json_escape(mode.host(&config.host_name)),
             json_escape(&config.backend),
             json_escape(&config.security_profile)
         );
@@ -1249,11 +1258,7 @@ fn status(config: &Config, agents: &[Agent], mode: OutputMode) -> Result<u8, Str
             if index != 0 {
                 print!(",");
             }
-            let name = if mode.hide {
-                format!("agent-{}", index + 1)
-            } else {
-                agent.name.clone()
-            };
+            let name = mode.agent(index, &agent.name);
             print!(
                 "{{\"name\":\"{}\",\"runtime\":\"{}\",\"state\":\"{}\"}}",
                 json_escape(&name),
@@ -1266,11 +1271,7 @@ fn status(config: &Config, agents: &[Agent], mode: OutputMode) -> Result<u8, Str
     }
 
     let color = io::stdout().is_terminal() && env::var_os("NO_COLOR").is_none();
-    let host = if mode.hide {
-        "redacted"
-    } else {
-        &config.host_name
-    };
+    let host = mode.host(&config.host_name);
     println!(
         "tentaflake {host} · {} · security {}",
         config.backend, config.security_profile
@@ -1288,111 +1289,72 @@ fn status(config: &Config, agents: &[Agent], mode: OutputMode) -> Result<u8, Str
             "active" => "●",
             _ => "○",
         };
-        let name = if mode.hide {
-            format!("agent-{}", index + 1)
-        } else {
-            agent.name.clone()
-        };
+        let name = mode.agent(index, &agent.name);
         println!("  {marker} {name:<20} {:<10} {state}", agent.runtime);
     }
     Ok(0)
 }
 
-fn health(config: &Config, agents: &[Agent], mode: OutputMode) -> Result<u8, String> {
-    if mode.json {
-        return doctor(config, agents, mode);
-    }
-    let host = if mode.hide {
-        "redacted"
-    } else {
-        &config.host_name
-    };
-    println!("tentaflake health · {host}");
-    if let Ok(load) = fs::read_to_string("/proc/loadavg") {
-        println!(
-            "  load: {}",
-            load.split_whitespace()
-                .take(3)
-                .collect::<Vec<_>>()
-                .join(" ")
-        );
-    }
-    let disk = output("df", &["-P", "/"])?;
-    if let Some(line) = String::from_utf8_lossy(&disk.stdout).lines().nth(1) {
-        println!("  disk: {line}");
-    }
-    let failed = agents
+fn diagnostics(
+    config: &Config,
+    agents: &[Agent],
+    mode: OutputMode,
+    command: &str,
+) -> Result<u8, String> {
+    let failed_units = checked_output("systemctl", &["--failed", "--no-legend", "--plain"])?;
+    let failed_units_absent = failed_units.stdout.iter().all(u8::is_ascii_whitespace);
+    let disk = checked_output("df", &["-P", "/"])?;
+    let disk_pct = parse_disk_percent(&String::from_utf8_lossy(&disk.stdout))
+        .ok_or("cannot determine root disk usage from df output")?;
+    let rows: Vec<(&Agent, String)> = agents
         .iter()
-        .filter(|agent| unit_state(&agent.unit) == "failed")
-        .count();
-    println!("  agents: {} total, {failed} failed", agents.len());
-    Ok(if failed == 0 { 0 } else { 1 })
-}
-
-fn doctor(config: &Config, agents: &[Agent], mode: OutputMode) -> Result<u8, String> {
-    let failed_units = output("systemctl", &["--failed", "--no-legend", "--plain"])?;
-    let failed_units_text = String::from_utf8_lossy(&failed_units.stdout)
-        .trim()
-        .to_owned();
-    let disk = output("df", &["-P", "/"])?;
-    let disk_pct = String::from_utf8_lossy(&disk.stdout)
-        .lines()
-        .nth(1)
-        .and_then(|line| line.split_whitespace().nth(4))
-        .and_then(|value| value.trim_end_matches('%').parse::<u8>().ok());
-    let agent_failures: Vec<&Agent> = agents
-        .iter()
-        .filter(|agent| unit_state(&agent.unit) == "failed")
+        .map(|agent| (agent, unit_state(&agent.unit)))
         .collect();
-    let mut problems = usize::from(!failed_units_text.is_empty()) + agent_failures.len();
-    if disk_pct.is_some_and(|value| value >= 90) {
-        problems += 1;
-    }
+    let names = |state: &str| {
+        rows.iter()
+            .enumerate()
+            .filter(|(_, (_, observed))| observed == state)
+            .map(|(index, (agent, _))| mode.agent(index, &agent.name))
+            .collect::<Vec<_>>()
+    };
+    let failed_agents = names("failed");
+    let unknown_agents = names("unknown");
+    let problems = usize::from(!failed_units_absent)
+        + usize::from(disk_pct >= 90)
+        + failed_agents.len()
+        + unknown_agents.len();
 
     if mode.json {
         println!(
-            "{{\"host\":\"{}\",\"problems\":{},\"failed_systemd_units\":{},\"disk_percent\":{},\"failed_agents\":[{}]}}",
-            json_escape(if mode.hide {
-                "redacted"
-            } else {
-                &config.host_name
-            }),
-            problems,
-            if failed_units_text.is_empty() {
-                "false"
-            } else {
-                "true"
-            },
-            disk_pct.map_or("null".into(), |value| value.to_string()),
-            agent_failures
-                .iter()
-                .enumerate()
-                .map(|(index, agent)| {
-                    let name = if mode.hide {
-                        format!("agent-{}", index + 1)
-                    } else {
-                        agent.name.clone()
-                    };
-                    format!("\"{}\"", json_escape(&name))
-                })
-                .collect::<Vec<_>>()
-                .join(",")
+            "{}",
+            serde_json::json!({
+                "host": mode.host(&config.host_name),
+                "problems": problems,
+                "failed_systemd_units": !failed_units_absent,
+                "disk_percent": disk_pct,
+                "failed_agents": failed_agents,
+                "unknown_agents": unknown_agents,
+            })
         );
     } else {
-        println!("Tentaflake doctor — {}", config.host_name);
-        finding(failed_units_text.is_empty(), "no failed systemd units");
-        finding(
-            disk_pct.is_none_or(|value| value < 90),
-            &format!(
-                "root disk usage: {}%",
-                disk_pct.map_or("?".into(), |v| v.to_string())
-            ),
-        );
-        for agent in agents {
-            let state = unit_state(&agent.unit);
+        println!("tentaflake {command} — {}", mode.host(&config.host_name));
+        if command == "health"
+            && let Ok(load) = fs::read_to_string("/proc/loadavg")
+        {
+            println!(
+                "  load: {}",
+                load.split_whitespace()
+                    .take(3)
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            );
+        }
+        finding(failed_units_absent, "no failed systemd units");
+        finding(disk_pct < 90, &format!("root disk usage: {disk_pct}%"));
+        for (index, (agent, state)) in rows.iter().enumerate() {
             finding(
-                state != "failed",
-                &format!("agent {} is {state}", agent.name),
+                state != "failed" && state != "unknown",
+                &format!("agent {} is {state}", mode.agent(index, &agent.name)),
             );
         }
         println!("{problems} problem(s) found");
@@ -1585,14 +1547,36 @@ fn output(program: &str, args: &[&str]) -> Result<Output, String> {
         .map_err(|error| format!("cannot execute {program}: {error}"))
 }
 
+fn checked_output(program: &str, args: &[&str]) -> Result<Output, String> {
+    let result = output(program, args)?;
+    if result.status.success() {
+        Ok(result)
+    } else {
+        Err(format!("{program} exited with {}", result.status))
+    }
+}
+
 fn unit_state(unit: &str) -> String {
     Command::new("systemctl")
         .args(["is-active", unit])
         .output()
         .ok()
+        .filter(|output| matches!(output.status.code(), Some(0) | Some(3)))
         .and_then(|output| String::from_utf8(output.stdout).ok())
         .map(|state| state.trim().to_owned())
-        .filter(|state| !state.is_empty())
+        .filter(|state| {
+            matches!(
+                state.as_str(),
+                "active"
+                    | "inactive"
+                    | "failed"
+                    | "activating"
+                    | "deactivating"
+                    | "reloading"
+                    | "maintenance"
+                    | "refreshing"
+            )
+        })
         .unwrap_or_else(|| "unknown".into())
 }
 

@@ -157,6 +157,11 @@ wizard were removed with the old audit stack.
 
 `help`, `--help`, and `-h` work before the host configuration is installed.
 
+`health` and `doctor` return non-zero for failed units, unknown agent states,
+or root-disk usage of at least 90%; unavailable host queries are errors.
+Stopped agents remain valid. `--hide` redacts host and agent names in both
+text and JSON reports.
+
 The `rebuild` and `update` subcommands are explicit runtime operations. Source
 evaluation or a successful build does not authorize activation.
 

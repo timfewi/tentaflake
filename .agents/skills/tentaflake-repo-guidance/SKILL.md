@@ -211,6 +211,12 @@ The rebuild/apply paths are explicit runtime operations.
 `help`, `--help`, and `-h` work without valid generated host inputs;
 management commands continue to require them.
 
+`health` and `doctor` share host diagnostics: exit `0` means healthy, `1`
+means failed units, unknown agent states, or root-disk usage at least 90%,
+and `2` means systemd/disk evidence was unavailable. Stopped agents remain
+valid. JSON includes `failed_agents` and `unknown_agents`; `--hide` redacts
+host and agent names in either output format.
+
 ## Brokered egress
 
 `modules/broker.nix` declares per-container internal networks, virtual

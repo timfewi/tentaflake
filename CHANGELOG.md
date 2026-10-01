@@ -24,6 +24,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   exhaustion after a transient outage. Explicit stops still prevent retries.
 ### Added
 ### Fixed
+- Host diagnostics no longer report success when systemd/disk queries fail
+  or agent state is unknown. `health` shares `doctor` checks and exit codes;
+  intentionally stopped agents remain valid. Text `doctor --hide` now
+  redacts host and agent names as advertised, using shared name rendering
+  and a single agent-state snapshot instead of duplicated report logic.
 - CLI help (`help`, `--help`, `-h`) now works before host configuration is
   installed or while generated inputs are damaged, keeping usage available
   during setup and recovery. Management commands still require those inputs.
