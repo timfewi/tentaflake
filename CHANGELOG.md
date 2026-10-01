@@ -35,6 +35,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   policy checks and a real gVisor stdio-MCP integration fixture. Secure auto-start
   now requires a research relay alongside the broker, worker and workspace quota.
 ### Fixed
+- Pin the verified research client recovery: new MCP calls reconnect after an
+  upstream session loss, without replaying interrupted operations.
 - `just` recipes load the pinned contributor tools from an ordinary shell,
   avoiding missing Cargo/Statix errors. `just list` now lists available recipes.
 - Generated installed flakes now pin and import the research module explicitly,
