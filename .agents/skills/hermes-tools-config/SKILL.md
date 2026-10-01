@@ -19,6 +19,14 @@ metadata:
 > See `my-agents.nix.example` for the `toolsets`, `tool_output`,
 > `web.backend`, and `terminal.backend` options.
 
+> **Secure research boundary:** In research-enabled Tentaflake capsules,
+> web/research uses only the pinned `secure-research-tool` stdio MCP server.
+> Builders disable native `web`/`browser` toolsets after caller settings; the
+> legacy fetch broker, remote MCP endpoints, and provider-hosted network tools
+> must stay disabled. The direct web/browser backend examples below describe
+> upstream Hermes capabilities, not supported secure Tentaflake routing.
+> Model calls continue through the LLM broker. See `docs/16-research.md`.
+
 ## When to Use
 
 - Enable/disable specific tools per platform

@@ -13,6 +13,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   rejects provider-hosted tools and web extensions before budget reservation.
 - Container mounts reject non-normalized path components, including `..` escapes
   from an approved source or into a sensitive container destination.
+- Selectively adopt the archive's exact Docker/Podman posture comparisons and
+  bounded OCI subprocess capture: incomplete evidence remains unknown, while
+  changed mounts, networks, ports, tmpfs, or resource limits report drift.
+  Broker health probes run in bounded batches without serial endpoint delays.
+  OCI inspection also caps combined stdout/stderr at 8 MiB and rejects
+  overflow as unknown instead of retaining unbounded output until timeout.
+- Broker services now have memory/task/file ceilings and optional aggregate
+  admission limits. Dual-mode agents count twice for concurrency and rate.
+  Credential setup uses only its private preserved runtime directory under
+  strict filesystem protection, retaining keys across service restarts.
+  VM verification additionally caught the nested runtime directory exposing
+  its parent and empty capability lists omitting the directive; explicit
+  read-only/writable paths and empty-string capability sets close both gaps.
 - Update the broker's locked TLS dependency to `rustls 0.23.45` and its
   required `rustls-webpki 0.103.15`, removing the affected version reported by
   OSV for `RUSTSEC-2026-0285` without changing broker policy or adding code.
@@ -22,6 +35,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   cache hash move together; the CLI release and prior security backports stay
   unchanged.
 ### Changed
+- Link the retained project artwork from the README and an asset overview,
+  making logo and wallpaper variants discoverable after removing the old
+  ASCII assets.
 - Installer and VM fixture import the same disk library, replacing fragile
   extraction of executable code by fixed comment strings.
 - GitHub selects host/research VMs separately from an imported path policy;
@@ -46,6 +62,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   policy checks and a real gVisor stdio-MCP integration fixture. Secure auto-start
   now requires a research relay alongside the broker, worker and workspace quota.
 ### Fixed
+- Pin the Dev Containers CLI's transitive `basic-ftp` dependency to 6.2.1
+  for `GHSA-c475-qrg2-pj4r`, with the patched Yarn resolution and offline-cache
+  hash updated together. The CLI release stays at 0.88.0.
 - Installer disk cleanup no longer stops swap or LVM globally. It follows the
   selected device stack, preserves unrelated volumes and refuses cross-disk VGs
   before mutation; encrypted target mappings are identified by device type.
@@ -78,6 +97,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Breaking
 - Existing ext4 workspace images require a verified backup/restore migration
   before agents can start with the new Btrfs quota module; no automatic conversion.
+- Remove the optional Editor, Hive Research, and Piper TTS modules, their flake
+  exports, and Piper voice assets. Consumers must remove these imports/options
+  and own any replacement integration in their flake.
+- Secure controller resource validation now rejects memory/swap above 1 TiB,
+  tmpfs above 64 GiB, CPU above 1024, or CPU precision beyond five fractional
+  digits, keeping generated limits representable by both OCI backends.
 
 
 

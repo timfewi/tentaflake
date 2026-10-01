@@ -83,6 +83,30 @@ duplicate networks/subnets, unrelated gateways, missing modes, plain HTTP
 providers, provider files outside `/run`, duplicate models, wildcard hosts,
 wildcard media types, and deterministic bridge-interface collisions.
 
+## Host resource admission
+
+Each LLM and fetch process has a systemd memory ceiling of 128 MiB, 64 tasks,
+and 4096 open files. Override `tentaflake.broker.serviceMemoryMaxBytes`,
+`serviceTasksMax`, or `serviceNoFileLimit` when a reviewed workload needs more.
+The existing capped restart backoff still applies after failure or exhaustion.
+
+Optional host admission ceilings live below `tentaflake.broker` and default to
+`null` (no aggregate ceiling):
+
+| Option | Counted declarations |
+|---|---|
+| `maxEnabledAgents` | Enabled broker agents |
+| `maxTotalConcurrency` | `maxConcurrency` per enabled LLM/fetch service |
+| `maxTotalRequestsPerMinute` | Request-rate budget per enabled LLM/fetch service |
+| `maxTotalDailyTokenBudget` | Declared daily token budget per enabled agent |
+| `maxTotalDailyCostMicrousd` | Declared daily cost budget per enabled agent |
+
+An agent enabling both modes counts twice for concurrency and request rate.
+Disabled agents do not count. Token/cost sums conservatively include every
+enabled agent, even fetch-only declarations. Exceeding a ceiling rejects the
+configuration during evaluation. These are admission checks on declared
+budgets, not a shared runtime counter or a guarantee of total host memory use.
+
 ## Credential boundary
 
 The real provider credential is supplied to the LLM unit through systemd
@@ -102,6 +126,14 @@ The credential setup unit creates:
 /run/tentaflake-broker/<container>/agent-token
 /run/tentaflake-broker/<container>/agent.env
 ```
+
+The credential unit owns only its agent-specific `RuntimeDirectory`, mode
+`0700`, under `ProtectSystem=strict`; token and environment files use `0400`.
+The shared parent is explicitly read-only and only the exact agent directory
+is reopened writable. Credential and broker units explicitly clear their
+capability bounding sets; an empty Nix list would omit that systemd directive.
+The runtime directory survives unit stop/start and restart, so existing
+brokers and controllers retain the same virtual key until the next boot.
 
 The environment file contains the virtual key, `OPENAI_BASE_URL`, and the
 Tentaflake broker URLs. It is the only environment file accepted by the

@@ -63,7 +63,12 @@ command is unavailable or blocked, the result is an explicit warning rather
 than green. A non-interactive backend inspect also compares a running Docker or
 Podman container's privilege, user, root filesystem, runtime, network,
 capabilities, AppArmor, security options, resource limits, and mounts with the
-secure invariants. A stopped/missing container, incomplete backend schema, or
+exact manifest values, including every bind mount, hardened tmpfs size, and
+CPU/memory/PID/ulimit setting. Brokered networks are separately inspected for
+the exact internal bridge. Each OCI inspection captures both output streams
+and has a five-second deadline and an 8 MiB combined stdout/stderr limit;
+raw Inspect environment data never reaches
+the report. A stopped/missing container, incomplete backend schema, or
 unavailable approved sudo path is reported as unknown. Configured broker
 `/healthz` endpoints are probed directly: connection failures stay unknown,
 while an explicit non-ready response is high severity because broker health
@@ -95,19 +100,6 @@ All options live below `tentaflake.shell`:
 | `zoxide.enable` | `true` | Directory jumping |
 | `lazygit.enable` | `false` | Git TUI |
 | `tmux.enable` | `false` | Terminal multiplexer |
-
-## Optional editor
-
-Editor support is not part of `nixosModules.default`. Import it explicitly:
-
-```nix
-imports = [
-  inputs.tentaflake.nixosModules.editor
-];
-```
-
-Consumers must add an `nvf` input and pass their `inputs` through `specialArgs`.
-Core evaluation and the installer do not pull that dependency.
 
 ## Physical console
 

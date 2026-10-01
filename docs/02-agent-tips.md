@@ -404,7 +404,6 @@ The following direct variables are legacy `dev` configuration only:
 |---------|-----------------|
 | `model.provider = "openrouter"` | `OPENROUTER_API_KEY` |
 | `stt.provider = "groq"` | `GROQ_API_KEY` |
-| `web.backend = "firecrawl"` | `FIRECRAWL_API_KEY` |
 
 ### Model provider
 
@@ -440,41 +439,16 @@ The default Hermes agent container (`docker.io/nousresearch/hermes-agent`) is
 **Python-based** and may not include Node.js. MCP servers using `npx`
 will fail with "command not found". Solutions:
 
-1. **Build a custom Docker image** extending the Hermes one with Node.js
-2. **Use a Python-based MCP server** (e.g. `mcp-server-filesystem` Python package)
-3. **Build a pinned custom agent image** containing Node.js when it is
+1. **Build a pinned custom agent image** containing Node.js when it is
    required. Do not bind-mount `/usr/bin/node` or other host binaries into a
    secure capsule.
+2. **Use a local Python stdio MCP server** when the pinned image already
+   contains its dependencies.
 
-4. **Use the broker fetch gateway** for web retrieval in `balanced`. It
-   constrains destinations, redirects, DNS answers, response size, and
-   provenance. The optional Hive Research module
-   (`modules/optional/hive-research.nix`) is outside the core and may be used
-   by an operator or an explicit `dev` integration, but a balanced capsule
-   cannot reach host loopback and must not be given its key-bearing endpoint:
-
-   ```nix
-   services.hive-research = {
-     enable  = true;
-     package = inputs.hive-research.packages.${pkgs.system}.default;
-     keyFiles.BRAVE_API_KEY_FILE = "/run/agenix/hive-brave-api-key";
-   };
-   ```
-
-   A `dev`-profile agent can explicitly configure its MCP client with:
-
-   ```yaml
-   mcp_servers:
-     hive-research:
-       url: "http://127.0.0.1:7815/mcp"
-   ```
-
-### Optional Piper voice files
-
-Piper is not part of the core. A secure agent image must contain any required
-voice assets at build time and be pinned by digest; mounting host voice paths
-is a `dev`-only compatibility option. Online TTS also needs an explicit
-brokered/policy-controlled integration rather than direct agent egress.
+3. **Use the pinned `secure-research-tool` stdio MCP server** for every web or
+   research operation. The builders install its exact client closure; Node.js
+   is not required. Native web/browser toolsets and the legacy fetch broker
+   stay disabled for research-enabled agents. See [research](16-research.md).
 
 ### Toolsets
 
@@ -482,8 +456,12 @@ brokered/policy-controlled integration rather than direct agent egress.
 management, system operations). Prefer explicit:
 
 ```nix
-toolsets = [ "terminal" "web" "memory" "file" "skills" ];
+toolsets = [ "terminal" "memory" "file" "skills" ];
 ```
+
+Web/research tools come from `secure-research-tool`; model calls use the LLM
+broker. Caller settings cannot re-enable native web/browser toolsets when the
+research policy is active.
 
 ### Provider timeouts
 

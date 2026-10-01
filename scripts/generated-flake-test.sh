@@ -83,8 +83,6 @@ RESEARCH_REV=$(jq -r '.nodes["tentaflake-research"].locked.rev' "$REPO_DIR/flake
 # shellcheck disable=SC2016
 export ADMIN_SHELL='"${pkgs.bash}/bin/bash"'
 export TF_TOGGLES=""
-export NVF_INPUT=""
-export NVF_MODULE_LINE=""
 export HOSTNAME="$HOSTNAME_T"
 
 {

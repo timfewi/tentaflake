@@ -106,12 +106,9 @@
       nixosModules = {
         default = tentaflakeModules;
 
-        # Installer and optional profiles/integrations are exported explicitly;
+        # Installer and optional profiles are exported explicitly;
         # none of them enlarge nixosModules.default.
         installer = import ./installer/iso.nix;
-        editor = import ./modules/optional/editor.nix;
-        hiveResearch = import ./modules/optional/hive-research.nix;
-        piperTts = import ./modules/optional/piper-tts-server.nix;
         observability = import ./modules/profiles/observability.nix;
         falco = import ./modules/profiles/falco.nix;
       };
@@ -233,7 +230,6 @@
         tentaflake-worker = pkgs.callPackage ./pkgs/tentaflake-worker { };
         tentaflake-worker-image = pkgs.callPackage ./pkgs/tentaflake-worker/image.nix { };
         installer-iso = self.nixosConfigurations.installer-iso.config.system.build.isoImage;
-        piper-voices = pkgs.callPackage ./pkgs/piper-voices { };
       };
     };
 }

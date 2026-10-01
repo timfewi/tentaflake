@@ -96,6 +96,9 @@ Docker remapping would change every persistent bind-mount owner, and Podman's
 `keep-id`/`nomap` modes are rootless-only. `runsc` and the non-root container
 UID are enforced boundaries; separate host UID mapping remains an explicit
 residual risk until an ownership migration and both runtime paths are tested.
+The pinned Podman/runsc VM also reports no AppArmor profile and incomplete
+capability metadata; the security doctor treats the absent profile as critical.
+Host AppArmor enablement alone is not proof of that capsule's confinement.
 
 The controller workspace is persistent and writable. An optional exact-size
 filesystem bounds that workspace, but the controller may still corrupt or
@@ -119,6 +122,14 @@ projected read-only; gVisor can open these sockets but cannot create host socket
 VPN readiness, public-address checks, budgets and worker isolation constrain
 research egress. These controls do not make retrieved content safe to execute
 or trust, or prevent disclosure of text supplied to an allowed remote service.
+
+Each broker process has
+systemd memory/task/file ceilings. Optional aggregate admission checks count
+LLM and fetch separately for concurrency and request rate. The credential
+setup unit has no capabilities and uses an explicitly read-only broker parent
+with one writable agent directory. It preserves its virtual key across unit
+restarts. These host controls preserve the existing
+provider-credential boundary; they do not add a new external integration.
 
 ### Controller to disposable worker
 
