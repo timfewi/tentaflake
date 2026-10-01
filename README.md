@@ -13,6 +13,8 @@ on one machine. Hermes and ZeroClaw agents are declared as OCI
 containers and supervised by systemd.
 Secure controllers and policy brokers recover from crashes with capped
 systemd restart backoff, including after prolonged transient failures.
+Transient broker crashes preserve the controller process. Explicit broker stops
+still stop dependent controllers; model requests may fail while a broker recovers.
 
 The core is intentionally small. It contains the host modules, agent builders,
 an installer ISO, and a Rust operator CLI. Editor support, Hive Research,

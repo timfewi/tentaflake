@@ -294,6 +294,8 @@ let
       wants = [ "network-online.target" ];
       serviceConfig = {
         Type = "simple";
+        # Retry in place so a transient broker failure does not stop controllers.
+        RestartMode = "direct";
         DynamicUser = true;
         StateDirectory = "tentaflake-broker-${mode}-${name}";
         StateDirectoryMode = "0700";

@@ -314,6 +314,10 @@ restarts with exponential delays from 10 seconds to one minute over five
 steps, no permanent start-limit exhaustion, and no restart after an explicit
 stop. Dependencies and security gates still apply on each start. VM coverage
 accelerates the delays to exercise six consecutive broker crashes and stop.
+Broker units additionally use `RestartMode=direct` so automatic retries preserve
+the dependent controller PID. Explicit broker stop still stops that controller;
+starting the broker does not implicitly resume it. Direct retries skip systemd
+failure/success hooks; health and restart counts remain the outage evidence.
 
 `tentaflake doctor --security` combines the generated manifest with narrow
 live checks for root disk, Restic success age, Tailscale Serve/Funnel, and

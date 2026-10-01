@@ -61,6 +61,9 @@ still accurate before finishing — and update them in the same change:
   root Cargo files and `crates/`; add required root build inputs explicitly.
 - A balanced agent with `autoStart = true` requires its exact LLM broker, worker,
   workspace-quota, and research relay declarations; stopped scaffolds remain `network=none`.
+- Brokers retry with `RestartMode=direct` so temporary failures preserve the
+  controller process. Explicit broker stops must still stop `Requires` controllers.
+  Direct retries skip systemd failure hooks; verify health/restart evidence in a VM.
 - Web/research uses only the pinned `tentaflake-research` stdio MCP server
   `secure-research-tool`; model calls use the LLM broker. Do not add a second
   web transport, re-enable legacy fetch, expose other agent sockets, or enable
