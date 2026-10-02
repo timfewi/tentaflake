@@ -1,5 +1,10 @@
 {
-  "_securityNote": "This compatibility schema requires tentaflake.security.profile=dev because it passes real env files and ports to agents.",
+  "schemaVersion": 1,
+  "agents": [
+    { "adapter": "hermes", "name": "coding", "autoStart": false },
+    { "adapter": "openclaw", "name": "assistant", "autoStart": false }
+  ],
+  "_securityNote": "The legacy arrays below require an explicit dev profile for direct env files and ports. Generic stopped agents can use balanced.",
   "hermes": [
     {
       "name": "example",

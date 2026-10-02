@@ -246,6 +246,7 @@ TARGET_NIXOS="/mnt/etc/nixos"
 # Copy the declarative system and Rust CLI workspace from the embedded repo.
 cp -r "$REPO_DIR/modules" "$TARGET_NIXOS/modules"
 cp -r "$REPO_DIR/lib" "$TARGET_NIXOS/lib"
+cp -r "$REPO_DIR/adapters" "$TARGET_NIXOS/adapters"
 cp -r "$REPO_DIR/pkgs" "$TARGET_NIXOS/pkgs"
 cp -r "$REPO_DIR/crates" "$TARGET_NIXOS/crates"
 cp "$REPO_DIR/Cargo.toml" "$TARGET_NIXOS/Cargo.toml"
@@ -291,7 +292,7 @@ cat >"$TARGET_NIXOS/flake.nix" <<FLAKEEOF
       pkgs      = nixpkgs.legacyPackages.\${system};
       lib       = nixpkgs.lib;
       uc        = import ./user-config.nix;
-      # Splat the whole helper set (mkHermesAgent, mkZeroClawAgent,
+      # Splat the whole helper set (mkAgent, adapters, mkHermesAgent, mkZeroClawAgent,
       # agentsFromData, constants) instead of listing helpers by hand, so this
       # generated flake cannot drift out of sync with what configuration.nix
       # asks for. Drift does not fail loudly: configuration.nix consumes these

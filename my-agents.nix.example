@@ -1,10 +1,16 @@
-{ mkHermesAgent, mkZeroClawAgent }:
+{ mkAgent, mkHermesAgent, mkZeroClawAgent }:
 
 # Installed systems use the balanced security profile by default. These
 # examples create fail-closed capsules and do not inject provider credentials
 # or publish services. They stay stopped until an exact broker policy is
 # declared and the operator explicitly starts them.
 [
+  # OpenClaw is a stopped scaffold only; it creates no runtime container.
+  (mkAgent {
+    adapter = "openclaw";
+    name = "preview";
+    autoStart = false;
+  })
   (mkHermesAgent {
     name = "coding";
     autoStart = false;
@@ -46,7 +52,7 @@
       };
     };
 
-    # Fixed-size persistent ext4 workspaces. Enabling these on a non-empty
+    # Fixed-size persistent Btrfs workspaces. Enabling these on a non-empty
     # existing workspace fails closed; follow the migration guide first.
     tentaflake.workspaceQuota.agents = {
       hermes-coding = {

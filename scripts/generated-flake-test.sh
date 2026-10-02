@@ -23,7 +23,7 @@ TARGET_NIXOS="$WORK/nixos"
 mkdir -p "$TARGET_NIXOS"
 
 # ── Mirror installer.sh's file layout (STEP 10) ──
-cp -r "$REPO_DIR/lib" "$REPO_DIR/modules" \
+cp -r "$REPO_DIR/lib" "$REPO_DIR/adapters" "$REPO_DIR/modules" \
   "$REPO_DIR/pkgs" "$REPO_DIR/crates" \
   "$TARGET_NIXOS/"
 cp "$REPO_DIR/Cargo.toml" \
@@ -31,10 +31,12 @@ cp "$REPO_DIR/Cargo.toml" \
   "$TARGET_NIXOS/"
 cp "$REPO_DIR/configuration.nix" "$TARGET_NIXOS/configuration.nix"
 cat >"$TARGET_NIXOS/my-agents.nix" <<'EOF'
-{ mkHermesAgent }:
+{ mkAgent, mkHermesAgent }:
 [
-  # agents.json is the explicit dev-only compatibility schema.
+  # Legacy JSON entries below explicitly exercise dev compatibility.
   { tentaflake.security.profile = "dev"; }
+  (mkAgent { adapter = "hermes"; name = "generic-nix"; autoStart = false; })
+  (mkHermesAgent { name = "legacy-nix"; autoStart = false; })
 ]
 EOF
 
@@ -60,6 +62,11 @@ EOF
 # The trigger: one declarative JSON agent fixture.
 cat >"$TARGET_NIXOS/agents.json" <<'EOF'
 {
+  "schemaVersion": 1,
+  "agents": [
+    { "adapter": "hermes", "name": "generic-json", "autoStart": false },
+    { "adapter": "openclaw", "name": "assistant", "autoStart": false }
+  ],
   "hermes": [
     { "name": "coding", "provider": "openrouter", "model": "anthropic/claude-opus-4",
       "base_url": null, "envFile": "/etc/tentaflake/secrets/hermes-coding.env" }

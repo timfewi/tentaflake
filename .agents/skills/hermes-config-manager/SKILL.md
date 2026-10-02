@@ -13,11 +13,13 @@ metadata:
 # Hermes Config Manager
 
 > **Tentaflake context:** In this repo, agents are defined declaratively in
-> `my-agents.nix` via the `settings` attribute on `mkHermesAgent`. When
+> `my-agents.nix` via `settings` on `mkHermesAgent` or `mkAgent` with
+> `adapter = "hermes"`. The implementation is `adapters/hermes.nix`. When
 > `settings` is set, the resulting `config.yaml` is mounted read-only inside
 > the container — interactive `hermes config set` changes won't persist
 > across restarts. Use `my-agents.nix.example` as your reference for the
-> declarative approach. API keys belong in `/run/secrets/hermes-<name>.env`.
+> declarative approach. Under balanced policy, real provider keys belong only
+> in host broker runtime credentials; direct agent env files require dev.
 > This skill is still useful as an in-container reference for Hermes' native
 > config options and for troubleshooting inside a running agent.
 

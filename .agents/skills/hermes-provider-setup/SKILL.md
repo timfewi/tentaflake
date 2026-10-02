@@ -17,8 +17,10 @@ metadata:
 > `settings` attrset in `my-agents.nix`, the `config.yaml` inside the
 > container is **read-only** (mounted `:ro`). Interactive changes are lost
 > on restart. For a persistent configuration, put settings in `my-agents.nix`
-> instead and rebuild. API keys always go in `/run/secrets/hermes-<name>.env`
-> (or agenix), not via `hermes config set`.
+> instead and rebuild. `mkAgent` with `adapter = "hermes"` accepts the same
+> settings. Under balanced policy, provider keys stay in host broker runtime
+> credentials; direct agent env files and provider setup below require dev.
+> Never put keys in generated settings or the Nix store.
 
 ## When to Use
 

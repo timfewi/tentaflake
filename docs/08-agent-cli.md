@@ -2,7 +2,7 @@
 
 The interactive `tentaflake agent` wizard was removed. Agent definitions are
 reviewable inputs: use `my-agents.nix` for the full builder API or
-`agents.json` for the smaller data schema.
+`agents.json` for versioned adapter arguments or the legacy data schema.
 
 ## Nix definitions
 
@@ -34,8 +34,10 @@ This evaluates under the default `balanced` profile. The capsules have no
 direct network and receive no real credentials. Keep them stopped until a
 reviewed broker path exists.
 
-Use `mkHermesAgent` or `mkZeroClawAgent` according to the runtime contract.
-See the builder comments and example file for runtime-specific options.
+Use `mkAgent { adapter = "hermes"; ... }` or the compatible runtime-specific
+builders according to the runtime contract. See [agent adapters](agent-adapters.md)
+for the lazy registry and OpenClaw's stopped scaffold and acceptance limits.
+See the adapter implementations and example file for runtime-specific options.
 
 ## JSON definitions
 
@@ -46,19 +48,23 @@ cp agents.json.example agents.json
 jq -e . agents.json
 ```
 
-`agentsFromData` turns the committed, non-secret data into Hermes and ZeroClaw
-modules. The JSON file may name an `envFile`; it must never contain the secret
-value itself.
+`agentsFromData` accepts `schemaVersion: 1` and a generic `agents` array of
+builder arguments including `adapter`, `name`, and `autoStart`. Stopped generic
+entries can use balanced policy. The legacy `hermes` and `zeroclaw` arrays retain
+their fields and defaults. Both forms are additive; unknown fields/adapters and
+effective container collisions fail. The informational `_securityNote` is
+accepted for compatibility. Input may name a runtime credential path, but must
+never contain a credential value.
 
-The current JSON compatibility schema always wires environment files and, for
-ZeroClaw, ports. It therefore evaluates only when the host deliberately sets:
+Legacy entries with direct environment files or ZeroClaw ports require the
+host to deliberately select:
 
 ```nix
 tentaflake.security.profile = "dev";
 ```
 
 This is a migration bridge, not a secure 24/7 configuration. Prefer the Nix
-builder API for balanced capsules.
+builder API or generic `agents` entries for balanced capsules.
 
 ## Apply deliberately
 

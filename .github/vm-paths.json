@@ -29,6 +29,7 @@
     "tests/integration.nix"
   ],
   "both": [
+    "adapters/**",
     "lib/**",
     "modules/**"
   ],

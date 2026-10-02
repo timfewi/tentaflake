@@ -129,12 +129,23 @@ Shell options:
 
 ## Agent builders
 
-`lib/default.nix` exports all builders plus `agentsFromData`, `pinnedImage`,
-and constants.
+`lib/default.nix` exports `mkAgent`, the lazy `adapters` registry, compatible
+`mkHermesAgent`/`mkZeroClawAgent`, `agentsFromData`, and constants.
+`lib/pinnedImage.nix` owns OCI reference validation.
+
+Runtime implementations and Research settings hooks live in `adapters/`.
+The common builder validates schema-v1 contracts and emits explicit instance
+metadata; CLI inventory retains five columns and unmanaged OCI fallback.
+OpenClaw v2026.9.7 is a stopped refusal scaffold with no selected artifact,
+model transport acceptance, Research discovery or worker execution mediation.
+Its inspected built-in OpenAI request builders use streaming, which the current
+broker rejects; a separate reviewed transport design is required.
+See `docs/agent-adapters.md` and `checks.*.agent-adapters`; synthetic checks
+never establish actual upstream operational support.
 
 Common contract:
 
-- one systemd-managed OCI container per agent;
+- one systemd-managed OCI container per integrated runtime instance;
 - digest-pinned, shell-safe images by default;
 - private state directory;
 - balanced/strict reject direct runtime credential files; `envFile` and
@@ -157,8 +168,8 @@ Common contract:
 
 Use the runtime-specific source as authority:
 
-- `lib/mkHermesAgent.nix`
-- `lib/mkZeroClawAgent.nix`
+- `adapters/hermes.nix` (legacy wrapper: `lib/mkHermesAgent.nix`)
+- `adapters/zeroclaw.nix` (legacy wrapper: `lib/mkZeroClawAgent.nix`)
 
 Before changing a builder, inspect the generated container definition,
 systemd dependencies, tmpfiles rules, assertions, and tests. A navigation index
@@ -168,8 +179,12 @@ does not replace current source.
 
 `configuration.nix` imports `my-agents.nix` when present. It also converts the
 secret-free `agents.json` schema through `agentsFromData`. Both are declarative;
-there is no command that mutates them. The current JSON schema is dev-only
-because it describes direct env files and ports.
+there is no command that mutates them. The generic `agents` array requires
+`schemaVersion = 1` and accepts adapter arguments, including stopped balanced
+capsules. Legacy arrays preserve env-file/port fields and defaults; populated
+credentials or published ports still require an explicit dev profile.
+Generic and legacy arrays are additive; unknown fields/adapters and effective
+container collisions fail. The informational `_securityNote` remains accepted.
 
 Secret values must remain in runtime-only files. `extraEnvironment` is Nix
 store-visible and is not a secret channel.

@@ -652,9 +652,66 @@ mod tests {
         });
         assert_eq!(denied.status, 403);
 
+        // OpenClaw v2026.9.7's built-in OpenAI request builders set stream=true.
+        // These source-derived probes document the broker incompatibility;
+        // they do not establish actual OpenClaw runtime acceptance.
+        let budget_before = fs::read(&broker.config.budget_state_file).unwrap();
+        let streaming_requests = [
+            (
+                "/v1/chat/completions",
+                json!({
+                    "model": "example/model",
+                    "messages": [{"role": "user", "content": "OPENCLAW_MODEL_PROMPT_FIXTURE"}],
+                    "stream": true,
+                    "stream_options": {"include_usage": true},
+                    "store": false,
+                    "max_tokens": 8,
+                }),
+            ),
+            (
+                "/v1/responses",
+                json!({
+                    "model": "example/model",
+                    "input": [{"role": "user", "content": "OPENCLAW_MODEL_PROMPT_FIXTURE"}],
+                    "stream": true,
+                    "store": false,
+                    "max_output_tokens": 8,
+                }),
+            ),
+        ];
+        for (path, payload) in streaming_requests {
+            let response = broker.handle(Request {
+                method: "POST".into(),
+                path: path.into(),
+                headers: HashMap::from([
+                    ("authorization".into(), "Bearer virtual-agent-key".into()),
+                    ("content-type".into(), "application/json".into()),
+                ]),
+                body: serde_json::to_vec(&payload).unwrap(),
+            });
+            assert_eq!(response.status, 400, "{path}");
+            assert_eq!(
+                serde_json::from_slice::<Value>(&response.body).unwrap(),
+                json!({"error": "streaming is disabled"}),
+                "{path}"
+            );
+            assert_eq!(
+                fs::read(&broker.config.budget_state_file).unwrap(),
+                budget_before
+            );
+        }
+        let audit = fs::read_to_string(&audit_file).unwrap();
+        assert!(audit.contains("streaming is disabled"));
+        for excluded in [
+            "OPENCLAW_MODEL_PROMPT_FIXTURE",
+            "virtual-agent-key",
+            "real-provider-key",
+        ] {
+            assert!(!audit.contains(excluded));
+        }
+
         // All rejected provider-side tools must fail before reserving budget or
         // attempting to connect to the (now closed) upstream fixture.
-        let budget_before = fs::read(&broker.config.budget_state_file).unwrap();
         let features = [
             json!({"tools": [{"type": "web_search"}]}),
             json!({"tools": [{"type": "web_search_preview"}]}),

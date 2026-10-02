@@ -6,7 +6,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+### Added
+- Add a lazy agent adapter registry and `mkAgent`, preserving Hermes/ZeroClaw
+  public arguments, container/unit identities, ownership and existing state.
+  Explicit metadata drives CLI inventory; versioned generic JSON is additive
+  to legacy arrays and rejects unknown fields/adapters and identity collisions.
+- Investigate OpenClaw v2026.9.7 and add an explicitly stopped refusal scaffold.
+  A reviewed image, broker transport, actual Research discovery and worker tool
+  routing remain acceptance prerequisites; this is not operational support.
+  Versioned source confirms built-in OpenAI streaming requests, incompatible
+  with the current non-streaming broker; deterministic rejection probes retain
+  the existing budget and credential boundaries.
 ### Security
+- Automatic-start admission checks the effective OCI setting, closing an
+  override path that could start a stopped capsule without its required
+  broker, worker, workspace quota and Research declarations.
+- Research capability validation uses registered adapter metadata rather than
+  trusting runtime-like OCI names. Upstream settings hooks share the existing
+  exact read-only closure/socket projection; remote MCP remains rejected.
 - Research-enabled controllers use only `secure-research-tool` for web access.
   Native web tools and legacy fetch are disabled, per-agent Unix relays preserve
   distinct job ownership, and model requests stay on the LLM broker. The broker

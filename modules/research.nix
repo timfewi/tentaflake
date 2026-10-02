@@ -8,6 +8,8 @@
 let
   cfg = config.tentaflake.research;
   containers = config.virtualisation.oci-containers.containers;
+  instances = config.tentaflake.agentInstances;
+  adapters = import ../adapters { inherit pkgs lib; };
   secure = config.tentaflake.security.profile != "dev";
   runsc = pkgs.writeShellScriptBin "runsc" ''
     exec ${lib.getExe' pkgs.gvisor "runsc"} --host-uds=open "$@"
@@ -51,13 +53,21 @@ in
         message = "Tentaflake Research must leave summarization disabled; model calls use the LLM broker.";
       }
     ]
-    ++ lib.mapAttrsToList (name: _: {
-      assertion =
-        builtins.hasAttr name containers
-        && (lib.hasPrefix "hermes-" name || lib.hasPrefix "zeroclaw-" name)
-        && !(lib.attrByPath [ name "fetch" "enable" ] false config.tentaflake.broker.agents);
-      message = "Research agent ${name} must be a declared Hermes/ZeroClaw container and disable its legacy fetch broker.";
-    }) cfg.agents
+    ++ lib.mapAttrsToList (
+      name: _:
+      let
+        instance = instances.${name} or null;
+        registered = instance != null && builtins.hasAttr instance.adapter adapters;
+      in
+      {
+        assertion =
+          builtins.hasAttr name containers
+          && registered
+          && adapters.${instance.adapter}.research.supported
+          && !(lib.attrByPath [ name "fetch" "enable" ] false config.tentaflake.broker.agents);
+        message = "Research agent ${name} must be a declared registered adapter with Research capability and disable its legacy fetch broker.";
+      }
+    ) cfg.agents
     ++ lib.mapAttrsToList (
       name: _:
       let

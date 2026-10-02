@@ -48,6 +48,7 @@
       # ZeroClaw agents work the same way: pass definitions to
       # mkZeroClawAgent.
       mkHermesAgent = tentaflake.lib.${system}.mkHermesAgent;
+      mkAgent = tentaflake.lib.${system}.mkAgent;
       mkZeroClawAgent = tentaflake.lib.${system}.mkZeroClawAgent;
       constants = tentaflake.lib.${system}.constants;
 
@@ -56,6 +57,7 @@
         inherit
           self
           mkHermesAgent
+          mkAgent
           mkZeroClawAgent
           constants
           ;

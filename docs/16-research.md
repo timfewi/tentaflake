@@ -12,7 +12,8 @@ The template does not create an Internet route or obtain provider credentials.
 
 ## Configuration
 
-Declare an agent with either builder, then use its complete OCI container name:
+Declare a registered Research-capable adapter with `mkAgent` or either
+compatible runtime builder, then use its complete OCI container name:
 
 ```nix
 tentaflake.research.agents = {
@@ -50,7 +51,7 @@ research-enabled agent; its configuration fails evaluation otherwise.
 
 ## Enforced boundary
 
-The builders install the pinned `research-client` and its exact runtime closure
+The shared projection installs the pinned `research-client` and its exact runtime closure
 as read-only mounts. Only `/run/tentaflake-research/CONTAINER` is projected into
 that agent as `/run/tentaflake-research`. The root-only host parent hides other
 agents' sockets. The container receives no research credentials or upstream
@@ -64,6 +65,12 @@ gVisor runs with `--host-uds=open` to connect to projected sockets; host socket
 creation remains disabled. Agent IP networking still permits only its declared
 LLM broker, or remains `network=none`. Browser, HTTP and shell networking cannot
 gain general egress by changing a tool setting.
+
+Adapter hooks generate upstream-specific settings after shared socket/closure
+projection. An arbitrary OCI container with a runtime-like prefix cannot opt
+into Research; validation checks explicit registered instance metadata and the
+adapter's accepted capability. OpenClaw's stopped scaffold has no accepted
+Research discovery integration. See [agent adapters](agent-adapters.md).
 
 Hermes settings disable the `web` and `browser` toolsets and register
 `mcp_servers.secure-research-tool`. Additional MCP entries must be local stdio

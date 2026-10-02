@@ -2576,6 +2576,26 @@ mod tests {
     }
 
     #[test]
+    fn adapter_inventory_preserves_explicit_identity_and_unit() {
+        let agents = parse_agents(
+            "openclaw\thermes-assistant\topenclaw-hermes-assistant\tpodman-openclaw-hermes-assistant.service\t/var/lib/custom-state\n\
+             hermes\tzeroclaw-coding\thermes-zeroclaw-coding\tdocker-hermes-zeroclaw-coding.service\t/var/lib/existing-state\n",
+        )
+        .unwrap();
+        let openclaw = find_agent(&agents, Some(&"hermes-assistant".into())).unwrap();
+        assert_eq!(openclaw.runtime, "openclaw");
+        assert_eq!(openclaw.container, "openclaw-hermes-assistant");
+        assert_eq!(openclaw.unit, "podman-openclaw-hermes-assistant.service");
+        assert_eq!(openclaw.state_dir, PathBuf::from("/var/lib/custom-state"));
+        assert_eq!(
+            find_agent(&agents, Some(&"hermes-zeroclaw-coding".into()))
+                .unwrap()
+                .name,
+            "zeroclaw-coding"
+        );
+    }
+
+    #[test]
     fn rejects_malformed_agent_records() {
         assert!(parse_agents("hermes\tmissing\tfields\n").is_err());
     }

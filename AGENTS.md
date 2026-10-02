@@ -67,6 +67,14 @@ still accurate before finishing — and update them in the same change:
   image-provenance gates, disposable workers, workspace quotas, encrypted
   backup, and generic options
 - `lib/` — helpers (`mkHermesAgent`, `mkZeroClawAgent`, `agentsFromData`, `pinnedImage`, `constants`, `devshell`)
+- `adapters/` — lazy runtime registry and schema-v1 contracts; `lib/mkAgent.nix`
+  selects one adapter. Legacy wrappers preserve their APIs and state. OpenClaw
+  is a stopped scaffold without an OCI artifact; never advertise operational
+  support before real model/Research/execution/lifecycle acceptance.
+- Instance inventory uses explicit `tentaflake.agentInstances` metadata for
+  adapters, retaining unmanaged OCI fallback. Generic JSON requires
+  `schemaVersion = 1`; generic and legacy arrays are additive with collisions
+  rejected. See `docs/agent-adapters.md` and `checks.*.agent-adapters`.
 - `crates/` and `pkgs/` — Rust CLI/broker/worker workspace and Nix packages
 - CLI help is configuration-free; management commands require generated
   host configuration and inventory.

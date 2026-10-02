@@ -14,28 +14,11 @@ let
   rebuildCmd = "sudo nixos-rebuild switch --flake ${flakeDir}#${hostName}";
   cli = pkgs.callPackage ../pkgs/tentaflake-cli { };
 
-  agentContainers = config.virtualisation.oci-containers.containers;
-  agentRecords = lib.concatStringsSep "\n" (
-    lib.mapAttrsToList (
-      container: def:
-      let
-        runtime =
-          if lib.hasPrefix "zeroclaw-" container then
-            "zeroclaw"
-          else if lib.hasPrefix "hermes-" container then
-            "hermes"
-          else
-            "agent";
-        name = lib.removePrefix "${runtime}-" container;
-        stateDir =
-          if def.volumes == [ ] then
-            "/var/lib/${container}"
-          else
-            lib.head (lib.splitString ":" (lib.head def.volumes));
-      in
-      "${runtime}\t${name}\t${container}\t${backend}-${container}.service\t${stateDir}"
-    ) agentContainers
-  );
+  agentRecords = import ../lib/agentInventory.nix { inherit lib; } {
+    inherit backend;
+    containers = config.virtualisation.oci-containers.containers;
+    instances = config.tentaflake.agentInstances;
+  };
 
   sharedAliases = {
     ".." = "cd ..";

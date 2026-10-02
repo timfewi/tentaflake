@@ -5,7 +5,7 @@
   pkgs,
   containerName,
   settings,
-  hermes ? false,
+  adapter ? null,
 }:
 let
   cfg = lib.attrByPath [ "tentaflake" "research" ] { agents = { }; } config;
@@ -29,51 +29,36 @@ let
     ];
   };
   original = if settings == null then { } else settings;
-  policy =
-    if hermes then
+  registry = import ../adapters { inherit pkgs lib; };
+  integration =
+    if adapter == null then
       {
-        agent.disabled_toolsets = lib.unique (
-          (original.agent.disabled_toolsets or [ ])
-          ++ [
-            "web"
-            "browser"
-          ]
-        );
-        mcp_servers.secure-research-tool = server // {
-          keepalive_interval = 20;
+        supported = false;
+        configure = _: {
+          settings = { };
+          valid = true;
         };
       }
+    else if builtins.hasAttr adapter registry then
+      registry.${adapter}.research
     else
-      {
-        browser.enabled = false;
-        http_request.enabled = false;
-        web_fetch.enabled = false;
-        web_search.enabled = false;
-        mcp = {
-          enabled = true;
-          servers = [
-            (
-              server
-              // {
-                name = "secure-research-tool";
-                transport = "stdio";
-              }
-            )
-          ];
-        };
-      };
+      throw "tentaflake: unknown Research adapter ${adapter}.";
+  projection = integration.configure { inherit original server; };
+
 in
 {
   inherit enabled paths;
-  assertions = lib.optionals (enabled && hermes) [
+  assertions = lib.optionals (enabled && adapter != null) [
     {
-      assertion = lib.all (entry: builtins.isAttrs entry && entry ? command && !(entry ? url)) (
-        lib.attrValues (original.mcp_servers or { })
-      );
+      assertion = integration.supported;
+      message = "tentaflake: Research adapter ${adapter} for ${containerName} has no accepted tool discovery integration.";
+    }
+    {
+      assertion = projection.valid;
       message = "tentaflake: Research agent ${containerName} may add only local stdio MCP servers; remote network tools are disabled.";
     }
   ];
-  settings = if enabled then lib.recursiveUpdate original policy else settings;
+  settings = if enabled then lib.recursiveUpdate original projection.settings else settings;
   volumes =
     map (path: "${path}:${path}:ro") paths ++ lib.optional enabled "${directory}:${destination}:ro";
   readOnlySources = lib.optional enabled directory;

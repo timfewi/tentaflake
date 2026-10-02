@@ -61,6 +61,7 @@
       constants = import ./lib/constants.nix;
 
       # ── Shared agent builders ──
+      inherit ((import ./lib { inherit pkgs lib; })) mkAgent adapters;
       inherit ((import ./lib { inherit pkgs lib; })) mkHermesAgent;
       inherit ((import ./lib { inherit pkgs lib; })) mkZeroClawAgent;
       inherit ((import ./lib { inherit pkgs lib; })) agentsFromData;
@@ -96,6 +97,7 @@
           mkHermesAgent
           mkZeroClawAgent
           agentsFromData
+          mkAgent
           repoRoot
           constants
           ;
@@ -119,6 +121,8 @@
           mkHermesAgent
           mkZeroClawAgent
           agentsFromData
+          mkAgent
+          adapters
           constants
           ;
       };
@@ -141,6 +145,9 @@
         ci-vm-selection = import ./tests/ci-vm-selection.nix { inherit pkgs; };
         rust-package-sources = import ./tests/rust-package-sources.nix { inherit self pkgs; };
         image-pinning = import ./lib/pinnedImage-test.nix { inherit pkgs; };
+        agent-adapters =
+          assert import ./tests/agent-adapters.nix { inherit pkgs; };
+          pkgs.runCommand "tentaflake-agent-adapters" { } "touch $out";
         module-evaluation =
           assert import ./tests/module-eval.nix {
             nixpkgsPath = nixpkgs.outPath;

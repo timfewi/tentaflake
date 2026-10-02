@@ -205,6 +205,7 @@ in
     let
       secure = isSecure profile;
       merged = lib.recursiveUpdate baseConfig overrides;
+      effectiveAutomaticStart = automaticStart || (merged.autoStart or false);
       extraOptions = merged.extraOptions or [ ];
       preRunExtraOptions = merged.preRunExtraOptions or [ ];
       volumes = merged.volumes or [ ];
@@ -251,19 +252,19 @@ in
           message = "tentaflake: secure agent ${name} may not be privileged.";
         }
         {
-          assertion = !automaticStart || brokerPolicyEnabled;
+          assertion = !effectiveAutomaticStart || brokerPolicyEnabled;
           message = "tentaflake: automatically started secure agent ${name} requires an enabled broker policy; keep it stopped while defining the policy.";
         }
         {
-          assertion = !automaticStart || workerEnabled;
+          assertion = !effectiveAutomaticStart || workerEnabled;
           message = "tentaflake: automatically started secure agent ${name} requires an enabled disposable worker; keep it stopped while wiring runtime tools to the worker queue.";
         }
         {
-          assertion = !automaticStart || researchPolicyEnabled;
+          assertion = !effectiveAutomaticStart || researchPolicyEnabled;
           message = "tentaflake: automatically started secure agent ${name} requires its isolated Research relay; web tools must use secure-research-tool.";
         }
         {
-          assertion = !automaticStart || workspaceQuotaEnabled;
+          assertion = !effectiveAutomaticStart || workspaceQuotaEnabled;
           message = "tentaflake: automatically started secure agent ${name} requires an enabled fixed-size workspace quota; keep it stopped until the quota migration is complete.";
         }
         {

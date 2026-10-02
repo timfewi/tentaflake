@@ -25,7 +25,10 @@ metadata:
 > legacy fetch broker, remote MCP endpoints, and provider-hosted network tools
 > must stay disabled. The direct web/browser backend examples below describe
 > upstream Hermes capabilities, not supported secure Tentaflake routing.
-> Model calls continue through the LLM broker. See `docs/16-research.md`.
+> Model calls continue through the LLM broker. Upstream settings are owned by
+> `adapters/hermes.nix`; shared read-only projection is `lib/researchClient.nix`.
+> A declared worker does not automatically intercept Hermes execution tools.
+> See `docs/16-research.md` and `docs/agent-adapters.md`.
 
 ## When to Use
 

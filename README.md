@@ -27,7 +27,7 @@ are separate opt-in profiles.
 | Component | Status |
 |---|---|
 | Installed NixOS host | Core |
-| Hermes and ZeroClaw builders | Core |
+| Adapter registry and Hermes/ZeroClaw builders | Core |
 | Rust `tentaflake` CLI | Core |
 | Rust LLM/fetch policy broker | Core, opt-in per agent |
 | `secure-research-tool` web research | Pinned public service; required for balanced auto-start |
@@ -108,7 +108,7 @@ Copy the example and keep it generic in this repository:
 cp my-agents.nix.example my-agents.nix
 ```
 
-`my-agents.nix` may return any combination of the two builders:
+`my-agents.nix` may use `mkAgent` or the compatible runtime-specific builders:
 
 ```nix
 { mkHermesAgent, mkZeroClawAgent, ... }:
@@ -125,6 +125,10 @@ cp my-agents.nix.example my-agents.nix
 ```
 
 Alternatively, use the non-secret data shape in `agents.json.example`.
+The versioned generic `agents` array accepts the same adapter arguments.
+See [agent adapters](docs/agent-adapters.md) for the contract, complete secure
+consumer example and evidence limits. OpenClaw v2026.9.7 is a stopped scaffold;
+it creates no runtime container and is not operationally supported yet.
 `agents.json` is declarative input; the removed interactive wizard no longer
 edits it.
 

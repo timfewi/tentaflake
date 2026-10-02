@@ -4,6 +4,7 @@
 }:
 {
   imports = [
+    ./agent-instances.nix
     ./options.nix
     ./boot.nix
     ./backup.nix

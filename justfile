@@ -26,7 +26,7 @@ ci-policy:
 
 # Materialize exact research closures before read-only flake evaluation
 eval:
-    nix build --no-link .#checks.x86_64-linux.research-policy .#checks.x86_64-linux.module-evaluation
+    nix build --no-link .#checks.x86_64-linux.research-policy .#checks.x86_64-linux.module-evaluation .#checks.x86_64-linux.agent-adapters
     nix flake check --no-build --no-write-lock-file
 
 # Automated end-to-end gate (alias for the complete local CI path)

@@ -71,12 +71,61 @@ let
   duplicateUid = evaluate { } {
     services.secureResearch.containerClients.another.uid = 62101;
   };
+  unregistered = evaluate { } {
+    tentaflake.research.agents.hermes-unmanaged.uid = 62104;
+    virtualisation.oci-containers.containers.hermes-unmanaged = {
+      image = builders.constants.hermesImage;
+      autoStart = false;
+    };
+  };
+  zeroValid = evaluate { } {
+    imports = [
+      (builders.mkAgent {
+        adapter = "zeroclaw";
+        name = "policy";
+        autoStart = false;
+      })
+    ];
+    tentaflake.research.agents.zeroclaw-policy.uid = 62105;
+  };
+  zeroRemote = evaluate { } {
+    imports = [
+      (builders.mkAgent {
+        adapter = "zeroclaw";
+        name = "policy";
+        autoStart = false;
+        settings.mcp.servers = [
+          {
+            url = "https://connector.example.org/mcp";
+            transport = "sse";
+          }
+        ];
+      })
+    ];
+    tentaflake.research.agents.zeroclaw-policy.uid = 62105;
+  };
+  secureExample = evaluate { } {
+    imports = [
+      (import ../examples/adapter-secure.nix {
+        inherit (builders) mkAgent;
+        model = "fixture-model";
+        inputMicrousdPerMillion = 1;
+        outputMicrousdPerMillion = 1;
+        providerCredentialFile = "/run/credentials/fixture-provider";
+        upstreamBaseUrl = "https://api.example.invalid/v1/";
+        vpnInterface = "fixture-vpn";
+        researchPolicy.resolvers = [ "9.9.9.9" ];
+      })
+    ];
+    tentaflake.networking.enable = lib.mkForce true;
+    tentaflake.research.agents.hermes-policy.uid = lib.mkForce 62106;
+  };
   client = import ../lib/researchClient.nix {
     inherit lib pkgs;
     config = valid;
     containerName = "hermes-policy";
     settings.agent.disabled_toolsets = [ "terminal" ];
-    hermes = true;
+    adapter = "hermes";
   };
   record = lib.findFirst (line: lib.hasPrefix "agent\thermes-policy\t" line) "" (
     lib.splitString "\n" valid.environment.etc."tentaflake/security.tsv".text
@@ -94,4 +143,9 @@ assert denies "retain its exact read-only" missingMounts;
 assert denies "disable its legacy fetch broker" legacy;
 assert denies "leave summarization disabled" summary;
 assert denies "distinct upstream client UIDs" duplicateUid;
+assert denies "declared registered adapter" unregistered;
+assert failures zeroValid == [ ];
+assert denies "only local stdio MCP" zeroRemote;
+assert lib.assertMsg (failures secureExample == [ ]) (builtins.toJSON (failures secureExample));
+assert secureExample.virtualisation.oci-containers.containers.hermes-assistant.autoStart;
 pkgs.runCommand "tentaflake-research-policy" { } "touch $out"

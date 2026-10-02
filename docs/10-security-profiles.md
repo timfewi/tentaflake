@@ -136,8 +136,9 @@ Choose one of two explicit paths:
    ```
 
 The second path restores compatibility; it is not recommended for untrusted
-24/7 agents. `agents.json` is currently a dev-only compatibility schema because
-it always describes direct environment files and service ports.
+24/7 agents. Legacy `agents.json` entries with direct environment files or
+service ports require dev. The schema-v1 generic `agents` array accepts stopped
+balanced adapter declarations; see [agent adapters](agent-adapters.md).
 
 The former `tentaflake.networking.egress` option is renamed to
 `tentaflake.networking.legacyPortEgress`. It is permitted only in `dev`. It

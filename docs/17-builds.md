@@ -2,7 +2,9 @@
 
 Start with `just fast`. It runs formatting, Nix lint, ShellCheck, Rust checks,
 the CI-selection/source-boundary regressions, read-only flake evaluation and
-the generated installed flake. Required research closure preparation uses
+the generated installed flake, including focused adapter evaluation.
+`checks.*.agent-adapters` covers compatible mappings, JSON, inventory, lazy
+selection, stopped OpenClaw and negative host policy. Required research closure preparation uses
 non-VM builds. `just e2e` still runs the complete gate, both VM suites and the
 installer ISO. Run an affected VM suite when changing runtime or security
 behavior; use the ISO gate when changing installation.
@@ -38,7 +40,7 @@ The imported policy is `.github/vm-paths.json`; its consumer is
 | Explicitly listed docs/contributor-only paths | None |
 | Runtime Rust, package, installer or host VM fixture | Runtime |
 | Research module/client/fixture or research-only input pin | Research |
-| Shared modules/helpers, other lock updates, unknown paths | Both |
+| Adapters, shared modules/helpers, other lock updates, unknown paths | Both |
 | Selection-policy changes or unavailable comparison history | Both |
 
 The selector reads NUL-delimited Git paths and includes deleted/old rename

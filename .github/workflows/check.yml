@@ -70,6 +70,7 @@ jobs:
             .#checks.x86_64-linux.ci-vm-selection \
             .#checks.x86_64-linux.rust-package-sources \
             .#checks.x86_64-linux.image-pinning \
+            .#checks.x86_64-linux.agent-adapters \
             .#checks.x86_64-linux.tentaflake-broker \
             .#checks.x86_64-linux.tentaflake-cli \
             .#checks.x86_64-linux.tentaflake-worker \
