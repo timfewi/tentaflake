@@ -1190,6 +1190,17 @@ assert
     "AF_UNIX"
     "AF_NETLINK"
   ];
+# Manual enrollment has no authKeyFile: security settings must still be
+# applied by tailscaled-set, not hidden behind the autoconnect-only up flags.
+assert capsule.config.services.tailscale.authKeyFile == null;
+assert
+  capsule.config.services.tailscale.extraSetFlags == [
+    "--advertise-tags=tag:agent-host"
+    "--hostname=eval-host"
+    "--ssh"
+  ];
+assert builtins.hasAttr "tailscaled-set" capsule.config.systemd.services;
+assert lib.hasInfix " set " capsule.config.systemd.services.tailscaled-set.script;
 assert builtins.length tailscalePolicy.grants == 1;
 assert builtins.length tailscalePolicy.ssh == 1;
 assert (builtins.head tailscalePolicy.ssh).action == "check";
