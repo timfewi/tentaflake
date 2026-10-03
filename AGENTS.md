@@ -69,6 +69,9 @@ are already published or require access to another repository for public checks.
 
 - Editor, Hive Research, and Piper integrations belong in consumer flakes;
   the template no longer exports these modules or Piper voice assets.
+- Management-plane Tailscale preferences use `extraSetFlags`; `extraUpFlags`
+  only runs with NixOS auth-key enrollment. Keep management access separate from
+  Research VPN readiness and never infer remote grants from a local enable flag.
 - `modules/` — reusable NixOS modules, including security, brokered egress,
   image-provenance gates, disposable workers, workspace quotas, encrypted
   backup, and generic options
