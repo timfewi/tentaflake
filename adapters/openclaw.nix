@@ -1,9 +1,9 @@
 # Investigated upstream v2026.9.7. This is deliberately a stopped scaffold:
-# no runtime artifact, incompatible built-in model transport, and no accepted tool routing.
+# no reviewed runtime artifact or accepted model/Research/execution routing.
 # See docs/agent-adapters.md before adding an OCI image or enabling startup.
 { lib, ... }:
 let
-  reason = "OpenClaw is a stopped scaffold: its built-in OpenAI transports request streaming, which the current LLM broker rejects. A reviewed image digest, accepted model transport, actual Research discovery, and disposable-worker tool routing require acceptance evidence. See docs/agent-adapters.md.";
+  reason = "OpenClaw is a stopped scaffold. The LLM broker supports opt-in streaming, but acceptance with the pinned OpenClaw executable is unverified. A reviewed image digest, accepted model transport, actual Research discovery, and disposable-worker tool routing require acceptance evidence. See docs/agent-adapters.md.";
 in
 {
   schemaVersion = 1;

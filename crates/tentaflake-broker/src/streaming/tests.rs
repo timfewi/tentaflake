@@ -221,6 +221,14 @@ fn forwards_chat_before_completion_with_fragmented_utf8_tools_and_usage() {
     assert!(prefix.starts_with(b"HTTP/1.1 200"));
     assert!(String::from_utf8_lossy(&prefix).contains("Transfer-Encoding: chunked"));
     send.send(()).unwrap();
+    let mut prefix = prefix;
+    prefix.extend(exchange.read_until(b"data: [DONE]\n\n"));
+    assert!(
+        exchange
+            .directory
+            .audit()
+            .contains("\"outcome\":\"completed\"")
+    );
     let (raw, audit, budget) = exchange.finish(prefix);
     let raw = String::from_utf8(raw).unwrap();
     assert!(raw.contains("local_tool"));
@@ -250,6 +258,14 @@ fn forwards_responses_function_deltas_and_terminal_usage() {
     );
     let prefix = exchange.read_until(b"PRIVATE_OUTPUT_FIXTURE");
     send.send(()).unwrap();
+    let mut prefix = prefix;
+    prefix.extend(exchange.read_until(b"event: response.completed\n"));
+    assert!(
+        exchange
+            .directory
+            .audit()
+            .contains("\"outcome\":\"completed\"")
+    );
     let (raw, audit, budget) = exchange.finish(prefix);
     assert!(
         String::from_utf8(raw)

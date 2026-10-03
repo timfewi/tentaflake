@@ -1,0 +1,6 @@
+{
+  "schemaVersion": 1,
+  "agents": [{"adapter": "hermes", "name": "from-data"}],
+  "hermes": [{"name": "from-data", "model": "fixture-model", "provider": "fixture-provider", "envFile": null, "base_url": "http://fixture.invalid/v1"}],
+  "zeroclaw": [{"name": "from-data", "model": "fixture-model", "provider": "fixture-provider", "envFile": null, "hostPort": null, "servePort": null}]
+}
