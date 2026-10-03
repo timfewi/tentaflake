@@ -95,46 +95,17 @@ let
       stateDir = "/declared-state";
     };
   };
+  # Real source files work even during read-only flake evaluation on a cold
+  # store. toFile returns an unregistered path in that mode, masking validation.
   json =
-    value:
+    file:
     builders.agentsFromData {
-      file = builtins.toFile "adapter-input.json" (builtins.toJSON value);
+      inherit file;
       inherit (builders) mkAgent mkHermesAgent mkZeroClawAgent;
     };
-  legacy = {
-    hermes = [
-      {
-        name = "from-data";
-        model = "fixture-model";
-        provider = "fixture-provider";
-        envFile = null;
-        base_url = "http://fixture.invalid/v1";
-      }
-    ];
-    zeroclaw = [
-      {
-        name = "from-data";
-        model = "fixture-model";
-        provider = "fixture-provider";
-        envFile = null;
-        hostPort = null;
-        servePort = null;
-      }
-    ];
-  };
-  generic = {
-    schemaVersion = 1;
-    agents = [
-      {
-        adapter = "hermes";
-        name = "generic";
-        autoStart = false;
-        settings.model.default = "fixture-model";
-      }
-    ];
-  };
   dataConfig = eval (
-    (json (legacy // generic)) ++ [ { tentaflake.security.profile = lib.mkForce "dev"; } ]
+    (json ./fixtures/adapter-input/mixed.json)
+    ++ [ { tentaflake.security.profile = lib.mkForce "dev"; } ]
   );
   registryNames = builtins.attrNames (
     import ../adapters {
@@ -174,36 +145,9 @@ assert
 assert lib.all (unit: !(lib.hasInfix "zeroclaw" unit) && !(lib.hasInfix "openclaw" unit)) (
   builtins.attrNames single.systemd.services
 );
-assert rejects (json {
-  schemaVersion = 1;
-  agents = [
-    {
-      adapter = "hermes";
-      name = "invalid";
-      unknown = true;
-    }
-  ];
-});
-assert rejects (json {
-  schemaVersion = 1;
-  agents = [
-    {
-      adapter = "hermes";
-      name = "invalid";
-      autoStart = "yes";
-    }
-  ];
-});
-assert rejects (json {
-  schemaVersion = 1;
-  agents = [
-    {
-      adapter = "hermes";
-      name = "invalid";
-      settings.model.api_key = "fixture-only";
-    }
-  ];
-});
+assert rejects (json ./fixtures/adapter-input/unknown-agent-field.json);
+assert rejects (json ./fixtures/adapter-input/invalid-auto-start.json);
+assert rejects (json ./fixtures/adapter-input/secret-setting.json);
 assert
   registryNames == [
     "hermes"
@@ -242,6 +186,9 @@ assert
 assert records.openclaw-assistant.runnable == false;
 assert config.systemd.services.docker-openclaw-assistant.wantedBy == [ ];
 assert lib.hasInfix "acceptance evidence" config.systemd.services.docker-openclaw-assistant.script;
+assert lib.hasInfix "opt-in streaming" config.systemd.services.docker-openclaw-assistant.script;
+assert
+  !(lib.hasInfix "current LLM broker rejects" config.systemd.services.docker-openclaw-assistant.script);
 assert lib.elem "--network=none" containers.hermes-zeroclaw-named.extraOptions;
 assert failures config == [ ];
 assert lib.hasInfix
@@ -251,41 +198,12 @@ assert lib.hasInfix "agent\tunmanaged\tunmanaged\tpodman-unmanaged.service\t/leg
   inventory;
 assert dataConfig.tentaflake.agentInstances.hermes-generic.name == "generic";
 assert dataConfig.virtualisation.oci-containers.containers.hermes-from-data.autoStart;
-assert rejects (json {
-  agents = [ ];
-});
-assert rejects (json {
-  schemaVersion = 2;
-});
-assert rejects (json {
-  extra = [ ];
-});
-assert rejects (json {
-  hermes = [ { name = "incomplete"; } ];
-});
-assert rejects (json {
-  schemaVersion = 1;
-  agents = [
-    {
-      adapter = "unknown";
-      name = "invalid";
-    }
-  ];
-});
-assert rejects (
-  json (
-    legacy
-    // {
-      schemaVersion = 1;
-      agents = [
-        {
-          adapter = "hermes";
-          name = "from-data";
-        }
-      ];
-    }
-  )
-);
+assert rejects (json ./fixtures/adapter-input/missing-schema.json);
+assert rejects (json ./fixtures/adapter-input/unsupported-schema.json);
+assert rejects (json ./fixtures/adapter-input/unknown-root-field.json);
+assert rejects (json ./fixtures/adapter-input/incomplete-legacy.json);
+assert rejects (json ./fixtures/adapter-input/unknown-adapter.json);
+assert rejects (json ./fixtures/adapter-input/duplicate-identity.json);
 assert rejects
   (eval [
     (instance "hermes" "same")

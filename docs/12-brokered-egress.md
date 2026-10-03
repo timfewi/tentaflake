@@ -218,7 +218,9 @@ an exhausted whole-exchange deadline closes the connection. After output starts,
 a failure closes the incomplete chunked response. The broker never manufactures
 `[DONE]` or a Responses completion. Valid `response.failed` and
 `response.incomplete` events retain their actual outcomes. A terminal event is
-released only after audit persistence succeeds; later client delivery failure
+released only after the audit record is durably synced and its parent directory
+is synced to preserve log creation or rotation. A sync failure closes the stream
+without releasing that event. Later client delivery failure
 is recorded as an abort when the audit remains writable. Audit completion
 admission is not proof that the client received every byte.
 

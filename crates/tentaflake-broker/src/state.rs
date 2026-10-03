@@ -153,7 +153,15 @@ impl Audit {
         serde_json::to_writer(&mut file, &event)
             .map_err(|error| format!("cannot encode audit: {error}"))?;
         file.write_all(b"\n")
-            .map_err(|error| format!("cannot write audit: {error}"))
+            .map_err(|error| format!("cannot write audit: {error}"))?;
+        file.sync_data()
+            .map_err(|error| format!("cannot sync audit log: {error}"))?;
+        // Creation and rotation change directory entries. Sync the parent too
+        // so a durable terminal record remains reachable after a crash.
+        let parent = self.path.parent().ok_or("audit path has no parent")?;
+        fs::File::open(parent)
+            .and_then(|directory| directory.sync_all())
+            .map_err(|error| format!("cannot sync audit directory: {error}"))
     }
 
     pub fn check_ready(&self) -> Result<(), String> {
@@ -284,6 +292,39 @@ mod tests {
         assert!(constant_time_eq(b"secret", b"secret"));
         assert!(!constant_time_eq(b"secret", b"secreu"));
         assert!(!constant_time_eq(b"secret", b"secret-long"));
+    }
+
+    #[test]
+    fn audit_record_fails_when_durable_sync_is_unavailable() {
+        // /dev/null accepts the complete JSON write but rejects fdatasync.
+        // This detects a write-only implementation without mocking the filesystem.
+        let audit = Audit::new(PathBuf::from("/dev/null"), u64::MAX);
+        let error = audit
+            .record("fixture", "llm", "completed", json!({ "streaming": true }))
+            .unwrap_err();
+        assert!(error.contains("cannot sync audit log"), "{error}");
+    }
+
+    #[test]
+    fn durable_audit_records_survive_rotation() {
+        let path = test_path("rotation");
+        let audit = Audit::new(path.clone(), 1);
+        for outcome in ["ready", "completed"] {
+            audit.record("fixture", "llm", outcome, json!({})).unwrap();
+        }
+        let rotated = path.with_extension("jsonl.1");
+        assert!(
+            fs::read_to_string(&rotated)
+                .unwrap()
+                .contains("\"outcome\":\"ready\"")
+        );
+        assert!(
+            fs::read_to_string(&path)
+                .unwrap()
+                .contains("\"outcome\":\"completed\"")
+        );
+        fs::remove_file(path).unwrap();
+        fs::remove_file(rotated).unwrap();
     }
 
     #[test]
