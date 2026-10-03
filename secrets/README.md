@@ -1,41 +1,47 @@
-# Secrets Directory
+# Encrypted secrets
 
-This directory holds **encrypted** `.age` files for [agenix](https://github.com/ryantm/agenix).
+This directory holds encrypted `.age` files for
+[Agenix](https://github.com/ryantm/agenix). Plaintext environment files, private
+keys and unencrypted credentials must never be committed. Deployment secrets
+and recipient identities belong in the deployment fork.
 
-## What goes here
+## Balanced deployments
 
-- `*.env.age` — encrypted agent environment files (API keys, tokens)
-- `*.age` — any other encrypted configuration files
+Encrypt a single provider value in a reviewed recipient setup, declare the
+host-side secret, and point the LLM broker at its runtime path:
 
-## What does NOT go here
+```nix
+age.secrets.provider-key = {
+  file = ./secrets/provider-key.age;
+  owner = "root";
+  group = "root";
+  mode = "0400";
+};
 
-- `*.env` — plaintext env files (gitignored, never committed)
-- `*.key` — private keys (never committed)
-- Any unencrypted credentials
-
-## Quick Reference
-
-```bash
-# Create an encrypted secret for an agent
-echo "OPENROUTER_API_KEY=sk-or-..." | agenix -e secrets/hermes-MYAGENT.env.age --stdin
-
-# Edit an existing secret
-agenix -e secrets/hermes-MYAGENT.env.age
-
-# Wire it in my-agents.nix
-mkHermesAgent {
-  name       = "MYAGENT";
-  # Dev compatibility only. Balanced loads real keys into a broker, not agent.
-  agenixFile = "/run/agenix/hermes-MYAGENT-env";
-}
-
-# Verify after rebuild (check permissions, not contents!)
-ls -l /run/agenix/
-stat -c '%U %G %a %n' /run/agenix/hermes-MYAGENT-env
+# Within an enabled, otherwise complete per-agent broker declaration:
+tentaflake.broker.agents.hermes-assistant.llm.providerCredentialFile =
+  config.age.secrets.provider-key.path;
 ```
 
-## Detailed Guide
+The broker expects the provider value, not a `KEY=value` environment file. The
+agent receives only a virtual broker key. See the
+[Agenix guide](../docs/04-agenix-secrets.md) and
+[broker guide](../docs/12-brokered-egress.md) for the complete setup.
 
-See [`docs/04-agenix-secrets.md`](../docs/04-agenix-secrets.md) for the full setup guide.
+Verify paths and permissions without displaying contents:
 
-See [`secrets.nix.example`](../secrets.nix.example) for the NixOS module template.
+```bash
+stat -c '%U %G %a %n' /run/agenix/provider-key
+```
+
+## Dev compatibility
+
+Encrypted `*.env.age` files can supply `agenixFile` directly to a runtime only
+when the host deliberately selects the `dev` profile. Balanced rejects both
+`envFile` and `agenixFile` on the agent. Keep direct-provider examples separate
+from secure deployment instructions; dev is not an untrusted 24/7 boundary.
+
+Use `agenix -e <encrypted-file>` from your reviewed, pinned agenix setup to
+create or edit a secret. Keep at least one protected recovery recipient and
+rotate secret values as well as recipients when a key is compromised. See
+[secrets.nix.example](../secrets.nix.example) for the recipient template.

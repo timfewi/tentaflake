@@ -12,7 +12,7 @@ A deliberately small verification discipline for changes to the tentaflake
 template. It borrows one idea from heavyweight AI-engineering frameworks —
 **traceability: every change ties back to a reason and forward to a check** —
 but strips the ceremony (no ISO matrices, no multi-cycle lifecycle, no
-red-team gates). It is sized for a ~30-file NixOS template maintained by
+red-team gates). It is sized for a NixOS template maintained by
 Conventional Commits + PRs.
 
 The goal: stop "orphaned" changes (code with no stated reason), silent
@@ -54,15 +54,15 @@ applicable command from the repo's real toolchain:
 
 | Change touches | Verification |
 |---|---|
-| Any `.nix` (module/lib/config) | `nix flake check` |
-| Host config / new option | `nix build .#nixosConfigurations.tentaflake.config.system.build.toplevel --no-link` (the attr follows `constants.hostName`) |
-| Runtime behavior (unit, state dir, CLI) | `nix build .#checks.x86_64-linux.vm-integration -L` |
+| Ordinary source or configuration changes | Start with `just fast`; use focused policy/adapter evaluation |
+| Host config / new option | Evaluate the affected option/assertions; a system build is a separately selected larger check |
+| Runtime behavior (unit, state dir, CLI) | Select the affected runtime/research VM suite explicitly; do not start it as an ordinary fast check |
 | Container image pin | `nix build .#checks.x86_64-linux.image-pinning` |
 | Formatting | `nix fmt` (CI runs `nix fmt -- --ci`) |
 | Rust workspace | `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets -- -D warnings`, and `cargo test --workspace` |
 | Shell scripts | `shellcheck installer/*.sh scripts/*.sh` |
 | Installer-generated flake | `./scripts/generated-flake-test.sh` |
-| ISO changes | `nix build .#installer-iso` |
+| ISO changes | Focused installer checks first; build the ISO when that workload is explicitly selected |
 
 Prefer a fresh check over self-grading: don't just assert "it builds" — paste
 the command you ran. If a behavior can't be exercised by an existing check,
@@ -85,6 +85,11 @@ until its docs move in the same change. Check each surface:
 - `CHANGELOG.md` — add the entry under `## [Unreleased]`, in the section that
   fits (`⚠ Breaking` / `Security` / `Added` / `Changed` / `Fixed`). This
   changelog explains *why*, not just what — match the surrounding voice.
+
+The public repository owns these sources. The website presents a pinned release;
+identify new/renamed/removed guides in the PR, but do not require website access
+for public contributors or claim dirty checkout changes are published. See
+`docs/18-documentation.md`.
 
 ## Traceability (the through-line)
 

@@ -1,5 +1,9 @@
 # Selective archive comparison
 
+This is a historical review and verification record. Current architecture and
+support limits are documented in [agent adapters](agent-adapters.md) and the
+[README](../README.md); the follow-up decisions below describe the review date.
+
 Requirement: remove the Editor, Hive Research, and Piper TTS integrations;
 compare the archived Tentaflake tree; adopt useful foundations on top of the
 current changes without Sui.

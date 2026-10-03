@@ -13,6 +13,7 @@ pub struct Response {
     pub status: u16,
     pub content_type: String,
     pub body: Vec<u8>,
+    pub streaming: Option<Box<crate::streaming::StreamingResponse>>,
 }
 
 impl Response {
@@ -22,6 +23,7 @@ impl Response {
             content_type: "application/json".into(),
             body: serde_json::to_vec(&value)
                 .unwrap_or_else(|_| b"{\"error\":\"encoding\"}".to_vec()),
+            streaming: None,
         }
     }
 }
@@ -122,6 +124,9 @@ pub fn read_request(
 }
 
 pub fn write_response(stream: &mut TcpStream, response: Response) -> std::io::Result<()> {
+    if let Some(streaming) = response.streaming {
+        return streaming.write_to(stream);
+    }
     let reason = match response.status {
         200 => "OK",
         400 => "Bad Request",

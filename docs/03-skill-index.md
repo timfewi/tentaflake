@@ -1,265 +1,89 @@
-# Tentaflake — Skill Index
+# Bundled skills
 
-Hermes skills are procedural knowledge packs that extend the agent's
-capabilities. Unlike memory (facts), skills are **how-to** — multi-step
-workflows loaded on demand.
+Skills are procedural reference files. Tentaflake bundles them under
+`.agents/skills/` for development agents and for optional seeding into Hermes
+state. They do not grant tool access, credentials, network paths, or operator
+authorization.
 
----
+## Inventory
 
-## What Are Hermes Skills?
+| Skill | Purpose |
+|---|---|
+| [handle-the-host](../.agents/skills/handle-the-host/SKILL.md) | Tailscale SSH, host inspection, maintenance and recovery |
+| [tentaflake-change-review](../.agents/skills/tentaflake-change-review/SKILL.md) | Requirement, focused verification and documentation review |
+| [tentaflake-repo-guidance](../.agents/skills/tentaflake-repo-guidance/SKILL.md) | Modules, adapters, builders, CLI, installer and checks |
+| [hermes-config-manager](../.agents/skills/hermes-config-manager/SKILL.md) | Hermes configuration, profiles and migration |
+| [hermes-provider-setup](../.agents/skills/hermes-provider-setup/SKILL.md) | Provider and model configuration |
+| [hermes-memory-personality](../.agents/skills/hermes-memory-personality/SKILL.md) | Memory, user context and personality files |
+| [hermes-tools-config](../.agents/skills/hermes-tools-config/SKILL.md) | Tools, toolsets, terminal backends and output limits |
 
-- **Skills** = procedures ("how to configure a provider", "how to debug a gateway")
-- **Memory** = facts ("user prefers Claude", "the API key is in /run/secrets/")
+The Hermes-specific references describe upstream workflows. Supported commands
+and limits depend on the actual pinned image; check its help before using an
+interactive command. A skill description is not evidence that vendor startup,
+MCP discovery, or execution routing has been verified.
 
-Skills live as `SKILL.md` files. The agent loads them automatically from
-`$HERMES_HOME/skills/` at startup. Load on demand with:
+## Seed skills deliberately
 
-```text
-/skill-name
-```
-
-Or from the CLI:
-
-```bash
-hermes skills list
-hermes skills load skill-name
-```
-
----
-
-## Bundled Skills
-
-These skills are in `.agents/skills/` at the repo root. They serve two
-purposes:
-
-1. **Development-agent skills** — instructions for AI agents working on this repo
-2. **Hermes container skills** — reference docs available inside running agent
-   containers (when `seedDir` points to them or they're installed via
-   `hermes skills install`)
-
-| Skill | Purpose | Type |
-|-------|---------|------|
-| **handle-the-host** | Tailscale SSH, NixOS rebuilds, container ops on deployed machines | tentaflake-specific |
-| **tentaflake-repo-guidance** | Full repo reference: all modules, options, lib, ISOs, build targets | tentaflake-specific |
-| **hermes-config-manager** | Config structure, profiles, env vars, `hermes config set` | Hermes generic |
-| **hermes-provider-setup** | LLM provider setup, model selection, OpenRouter/Nous/Anthropic | Hermes generic |
-| **hermes-memory-personality** | MEMORY.md, USER.md, SOUL.md — identity and persistence | Hermes generic |
-| **hermes-tools-config** | Tool/toolset enable/disable, backends, truncation | Hermes generic |
-
-**Note about Hermes-generic skills:** These describe the interactive
-`hermes config set` workflow used inside a running agent container. If you
-defined your agent with a `settings` attrset in `my-agents.nix`, the
-`config.yaml` inside the container is **read-only** — interactive changes
-are lost on restart. Use `my-agents.nix.example` for the declarative
-approach instead.
-
-### Skill details
-
-**handle-the-host**
-- Tailscale SSH connection to deployed tentaflake machines
-- NixOS rebuild and rollback commands
-- Docker container management (logs, restart, exec)
-- Passwordless sudo setup for remote operations
-- Tailscale Serve for exposing services
-
-**tentaflake-repo-guidance**
-- Full repo layout, file tree, and module structure
-- Complete `tentaflake.*` options reference with defaults
-- `mkHermesAgent` parameter reference
-- ISO build targets and commands
-- How to consume as a flake input
-
-**hermes-config-manager**
-- Config directory layout (`~/.hermes/`)
-- Profile management (`hermes profile create`, `hermes -p work chat`)
-- Terminal backend switching (local/docker/ssh/modal)
-- Config migration after update
-
-**hermes-provider-setup**
-- Provider selection guide (Nous Portal, OpenRouter, Anthropic, OpenAI, etc.)
-- API key configuration
-- Multi-provider fallback
-- Custom endpoints (Ollama, vLLM, SGLang)
-- Model selection and switching mid-session
-
-**hermes-memory-personality**
-- MEMORY.md vs USER.md — what to store where
-- Memory tool actions (add, replace, remove)
-- Capacity limits (2,200 chars memory, 1,375 chars user)
-- SOUL.md personality configuration
-- Context files (CLAUDE.md, AGENTS.md)
-
-**hermes-tools-config**
-- Tool vs Toolset distinction
-- Per-platform tool enable/disable (CLI, Telegram, Discord, Slack)
-- Browser backend configuration
-- Code execution sandboxing
-- Output truncation limits
-
----
-
-## How Skills Auto-Discover
-
-Agents scan `$HERMES_HOME/skills/` at startup. Each `SKILL.md` file in
-that directory is registered. The agent can then invoke them via:
+The Hermes builder accepts `seedDir`, copied into the agent's state without
+overwriting existing files. To seed this repository's skill collection, use a
+consumer-owned directory shaped like this:
 
 ```text
-Use the hermes-config-manager skill to set up my model provider.
+seed/
+  skills/
+    handle-the-host/
+      SKILL.md
+    hermes-config-manager/
+      SKILL.md
 ```
 
-No manual import needed. Drop a `SKILL.md` into the agent's skills dir and
-restart:
+Point `seedDir` at `seed/`, not directly at `.agents/skills/`; the contents are
+copied into the state root, which needs a `skills/` child. The path becomes a
+Nix input, so include only non-secret material. Private deployment context
+belongs in the consumer fork, never in the generic template.
 
-```bash
-sudo docker restart hermes-coding
-```
+Seeding is not automatic synchronization. Changing the seed does not overwrite
+an existing skill. Review and update existing state explicitly while preserving
+runtime changes. See [agent management](02-agent-tips.md).
 
----
+## Configuration and security limits
 
-## Available via Taps (Installable)
+Generated Hermes `config.yaml` is mounted read-only when `settings` is supplied.
+Use the declarative configuration rather than an interactive save command.
+Provider credentials and provider selection instructions in generic Hermes
+skills must respect the host profile: balanced capsules receive only a virtual
+LLM-broker key. Direct provider credentials and alternate terminal/network
+backends are dev-only compatibility instructions.
 
-These skills are **not bundled** but available from community taps.
-Install them at runtime.
+Balanced web access uses only the pinned `secure-research-tool` stdio relay.
+Do not install native web fetch tools, remote MCP servers, provider-hosted web
+tools, or alternate browser transports to work around this boundary. See
+[web research](16-research.md) and [the threat model](15-threat-model.md).
 
-| Skill | Purpose | Category |
-|-------|---------|----------|
-| **hermes-debug-diagnose** | Doctor, provider connectivity, session recovery | devops |
-| **hermes-gateway-setup** | Telegram/Discord/Slack/WhatsApp/Signal | devops |
-| **hermes-mcp-integration** | MCP server config, tool filtering, OAuth | devops |
-| **hermes-security-hardening** | Approval modes, sandboxing, SSRF protection | security |
-| **hermes-skill-author** | Create new skills, test, bundle | productivity |
-| **hermes-skill-tap-publisher** | Publish skill taps to GitHub | devops |
+Installing additional skills from a community tap requires source review and a
+permitted acquisition path. The template does not bundle or verify those taps;
+a balanced capsule has no general GitHub download route. Prepare reviewed skill
+files outside the capsule and seed them deliberately instead of assuming an
+in-container install command can access the Internet.
 
-Install via:
+## Author and maintain a skill
 
-```bash
-# Inside the agent container
-hermes skills install hermes-debug-diagnose
-hermes skills install hermes-gateway-setup
-hermes skills install hermes-mcp-integration
-hermes skills install hermes-security-hardening
-hermes skills install hermes-skill-author
-hermes skills install hermes-skill-tap-publisher
-```
-
-Or by tap URL:
-
-```bash
-hermes skills install https://github.com/username/hermes-skill-tap
-```
-
-### Skill reference
-
-**hermes-debug-diagnose**
-- `hermes doctor` — full system health check
-- Provider error diagnosis (400, 401, 429, empty responses)
-- Gateway connectivity tests
-- Session resume and recovery
-
-**hermes-gateway-setup**
-- Telegram bot token setup
-- Discord bot configuration
-- Slack app integration
-- WhatsApp business API
-- User allowlists and DM pairing
-- Cron job management
-
-**hermes-mcp-integration**
-- Add MCP servers (GitHub, filesystem, Stripe, etc.)
-- Tool allow/block filtering
-- OAuth-authenticated MCP servers
-- mTLS configuration
-
-**hermes-security-hardening**
-- Dangerous command approval mode
-- Container sandboxing (Bubblewrap)
-- SSRF protection
-- Tirith security scanning
-- MCP tool filtering
-
-**hermes-skill-author**
-- SKILL.md anatomy (frontmatter, sections)
-- Config, env vars, ref files
-- Skill testing
-- Bundle packaging
-
-**hermes-skill-tap-publisher**
-- GitHub tap repo layout
-- Trust levels (official, verified, community)
-- Update lifecycle
-- Security scanning
-
----
-
-## Finding More Skills
-
-```bash
-# Search official skill hub
-hermes skills search web-automation
-hermes skills search gateway
-hermes skills search security
-
-# List installed
-hermes skills list
-```
-
-Community sources:
-- GitHub topic: `hermes-agent-skill`
-- Nous Research Discord skill-sharing channels
-- Self-published taps (GitHub repos with skill bundles)
-
----
-
-## Creating Your Own Skills
-
-Minimal `SKILL.md`:
+A skill needs a `SKILL.md` with its name, description, and bounded instructions:
 
 ```markdown
 ---
-name: my-custom-task
-description: Do a specific thing
-version: 1.0.0
-metadata:
-  hermes:
-    tags: [custom, automation]
-    category: productivity
+name: example-workflow
+description: Inspect one declared agent and report evidence gaps.
 ---
 
-# My Custom Task
+# Example workflow
 
-## Procedure
-
-### 1. First step
-
-```bash
-some command
+1. Resolve the target from the generated inventory.
+2. Read the relevant guide and inspect the declared policy.
+3. Report what was verified and which runtime evidence is missing.
 ```
 
-### 2. Second step
-
-Check output, do thing.
-```
-
-Place it in the agent's skills dir:
-
-```bash
-sudo mkdir -p /var/lib/hermes-coding/skills/my-custom-task
-sudo vi /var/lib/hermes-coding/skills/my-custom-task/SKILL.md
-sudo docker restart hermes-coding
-```
-
-Use the `hermes-skill-author` skill for advanced authoring, testing,
-and packaging.
-
----
-
-## External References
-
-The following are **dev-machine-only** reference docs (not on the target
-machine — stored on the development workstation):
-
-- **`~/docs/qp-hermes-analyze.md`** — Quick-profile analysis workflow
-- **`~/docs/agency-inbox-operator.md`** — Multi-agent inbox orchestration
-
-These describe dev workflows, not operational procedures. They live on the
-machine where you fork this repo, not on the deployed agent host.
+Keep reusable procedures separate from deployment identities and secret values.
+When behavior changes, update the relevant skill and its authoritative guide in
+the same change. [Documentation maintenance](18-documentation.md) describes
+source ownership and the website's release boundary.

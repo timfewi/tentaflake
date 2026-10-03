@@ -142,6 +142,14 @@ git commit -s -m "feat: add capability"
 
 Do not stage, overwrite, or remove unrelated work in a dirty checkout.
 
+## Documentation and website
+
+Update product behavior and examples in this public repository. The website
+mirrors a pinned release; contributors do not need website access. Identify
+new, renamed or removed guides in the PR so the maintainer can update routes.
+See [documentation ownership](docs/18-documentation.md) for release following,
+generated content, summary review and version boundaries.
+
 ## Adding modules
 
 Core modules belong in `modules/` and must be imported by

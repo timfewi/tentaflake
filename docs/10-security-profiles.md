@@ -2,10 +2,11 @@
 
 ## Result
 
-Installed hosts default to `balanced`. All three runtime builders pass their
-final merged OCI configuration through one policy. The policy rejects an
-unsafe configuration during NixOS evaluation instead of silently weakening
-it. `strict` also fails evaluation because no tested separate-kernel boundary
+Installed hosts default to `balanced`. The common adapter builder and compatible
+Hermes/ZeroClaw wrappers apply one policy to final merged OCI configurations.
+OpenClaw remains a stopped scaffold without a container or operational support.
+The policy rejects unsafe configurations during NixOS evaluation instead of
+silently weakening them. `strict` also fails because no tested separate-kernel boundary
 is implemented yet.
 
 Phase A provides the containment baseline. A stopped balanced scaffold may

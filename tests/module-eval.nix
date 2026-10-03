@@ -454,6 +454,28 @@ let
   brokerManifest = brokerCapsule.config.environment.etc."tentaflake/security.tsv".text;
   brokerAttempt = builtins.tryEval brokerCapsule.config.system.build.toplevel.drvPath;
 
+  streamingCapsule = brokerCapsule.extendModules {
+    modules = [
+      {
+        tentaflake.broker.agents.hermes-brokered.llm.streaming = {
+          enable = true;
+          maxEventBytes = 8192;
+          firstEventTimeoutSeconds = 5;
+          idleTimeoutSeconds = 10;
+          totalTimeoutSeconds = 30;
+        };
+      }
+    ];
+  };
+  streamingAssertions =
+    limits:
+    let
+      fixture = streamingCapsule.extendModules {
+        modules = [ { tentaflake.broker.agents.hermes-brokered.llm.streaming = lib.mkForce limits; } ];
+      };
+    in
+    lib.all (item: item.assertion) fixture.config.assertions;
+
   # Exercise the generated services' budgets, including disabled agents.
   brokerHostBudgetAccepted =
     option: value:
@@ -946,6 +968,31 @@ assert lib.elem "--network=host" devContainer.extraOptions;
 assert lib.elem "--env-file=/run/tentaflake/dev.env" devContainer.extraOptions;
 assert !(lib.elem "--runtime=runsc" devContainer.extraOptions);
 assert brokerAttempt.success;
+assert !brokerCapsule.config.tentaflake.broker.agents.hermes-brokered.llm.streaming.enable;
+assert lib.all (item: item.assertion) streamingCapsule.config.assertions;
+assert streamingAssertions {
+  enable = true;
+  maxEventBytes = 8192;
+  firstEventTimeoutSeconds = 5;
+  idleTimeoutSeconds = 10;
+  totalTimeoutSeconds = 30;
+};
+assert
+  !streamingAssertions {
+    enable = true;
+    maxEventBytes = 9 * 1024 * 1024;
+    firstEventTimeoutSeconds = 5;
+    idleTimeoutSeconds = 10;
+    totalTimeoutSeconds = 30;
+  };
+assert
+  !streamingAssertions {
+    enable = true;
+    maxEventBytes = 8192;
+    firstEventTimeoutSeconds = 31;
+    idleTimeoutSeconds = 10;
+    totalTimeoutSeconds = 30;
+  };
 assert brokerHostBudgetAccepted "maxEnabledAgents" 1;
 assert brokerHostBudgetAccepted "maxTotalDailyTokenBudget" 1000000;
 assert !(brokerHostBudgetAccepted "maxTotalDailyTokenBudget" 999999);

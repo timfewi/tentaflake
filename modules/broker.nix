@@ -107,6 +107,29 @@ let
             type = lib.types.ints.positive;
             default = 4096;
           };
+          streaming = {
+            enable = lib.mkEnableOption "bounded SSE model responses for this agent";
+            maxEventBytes = lib.mkOption {
+              type = lib.types.ints.positive;
+              default = 64 * 1024;
+              description = "Maximum buffered SSE event size; must fit maxResponseBytes.";
+            };
+            firstEventTimeoutSeconds = lib.mkOption {
+              type = lib.types.ints.positive;
+              default = 30;
+              description = "Deadline for upstream headers and the first data event; heartbeats do not extend it.";
+            };
+            idleTimeoutSeconds = lib.mkOption {
+              type = lib.types.ints.positive;
+              default = 30;
+              description = "Maximum upstream read or downstream write wait.";
+            };
+            totalTimeoutSeconds = lib.mkOption {
+              type = lib.types.ints.positive;
+              default = 120;
+              description = "Whole streaming exchange deadline, including connection and client writes.";
+            };
+          };
         };
         fetch = {
           enable = lib.mkEnableOption "per-agent SSRF-safe fetch gateway";
@@ -163,6 +186,13 @@ let
           upstream_base_url = agent.llm.upstreamBaseUrl;
           provider_credential_file = "$CREDENTIALS_DIRECTORY/provider";
           max_completion_tokens = agent.llm.maxCompletionTokens;
+          streaming = {
+            inherit (agent.llm.streaming) enable;
+            max_event_bytes = agent.llm.streaming.maxEventBytes;
+            first_event_timeout_seconds = agent.llm.streaming.firstEventTimeoutSeconds;
+            idle_timeout_seconds = agent.llm.streaming.idleTimeoutSeconds;
+            total_timeout_seconds = agent.llm.streaming.totalTimeoutSeconds;
+          };
           allowed_models = map (model: {
             inherit (model) name;
             input_microusd_per_million = model.inputMicrousdPerMillion;
@@ -585,6 +615,17 @@ in
               ) agent.llm.allowedModels
             );
           message = "tentaflake LLM broker ${name} requires HTTPS with trailing slash, a runtime credential below /run, and exact priced models.";
+        }
+        {
+          assertion =
+            !agent.llm.streaming.enable
+            || (
+              agent.llm.enable
+              && agent.llm.streaming.maxEventBytes <= agent.maxResponseBytes
+              && agent.llm.streaming.firstEventTimeoutSeconds <= agent.llm.streaming.totalTimeoutSeconds
+              && agent.llm.streaming.idleTimeoutSeconds <= agent.llm.streaming.totalTimeoutSeconds
+            );
+          message = "tentaflake broker ${name} streaming requires an enabled LLM broker and event/time limits within the response/total ceilings.";
         }
         {
           assertion =

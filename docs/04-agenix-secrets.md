@@ -1,4 +1,4 @@
-# Agenix Secrets — Encrypted Agent Credentials
+# Agenix secrets and host-held credentials
 
 > **Security-profile boundary:** agenix keeps plaintext out of Git and the Nix
 > store, but passing a decrypted file into an agent still gives that agent the
@@ -48,12 +48,12 @@ This guide covers encrypting agent API keys and tokens — for either the Hermes
 
 ## Why Agenix?
 
-| Approach | Secrets in Git? | Secrets in Nix Store? | Complexity |
-|----------|:---:|:---:|:---:|
-| Plain `.env` files | ❌ (must gitignore) | ❌ (if mounted correctly) | Low |
-| **Agenix** | ✅ (encrypted `.age` files) | ❌ (decrypted at runtime) | Medium |
-| `builtins.readFile` | ❌ | ❌ **SECRETS IN STORE** | Low (dangerous) |
-| External vault (Vault, Doppler) | N/A | N/A | High |
+| Approach | Git contents | Nix-store boundary |
+|----------|-------------|--------------------|
+| Runtime `.env` files | Never commit plaintext | Keep values out of Nix inputs; use runtime paths |
+| Agenix | Encrypted `.age` files only | Ciphertext can enter the store; plaintext is decrypted at runtime |
+| `builtins.readFile` on a secret | Can expose plaintext | Values interpolated into derivations can enter the world-readable store |
+| External vault | Depends on the integration | Fetch and inject through reviewed runtime channels |
 
 Agenix gives you the best balance: secrets encrypted in Git, decrypted only at activation, never in the Nix store, and no external vault dependency.
 
@@ -100,7 +100,12 @@ Agenix gives you the best balance: secrets encrypted in Git, decrypted only at a
 └─────────────────────────────────────────────────────────────┘
 ```
 
-## Step-by-Step Setup
+## Dev compatibility setup
+
+The following environment-file examples are for explicitly selected `dev`
+hosts. Balanced deployments use the single-value host broker secret above;
+they can reuse the input and recipient setup without mounting these files into
+an agent.
 
 ### 1. Enable Agenix in `flake.nix`
 
@@ -185,12 +190,11 @@ Import it in `configuration.nix`:
 
 ### 3. Install Agenix CLI
 
-```bash
-# One-time:
-nix profile install nixpkgs#agenix
+Use the CLI from the reviewed agenix revision pinned by your consumer flake.
+For a temporary shell, replace `<reviewed-revision>` with that exact revision:
 
-# Or use ad-hoc:
-nix shell nixpkgs#agenix -c agenix --help
+```bash
+nix shell github:ryantm/agenix/<reviewed-revision> --command agenix --help
 ```
 
 ### 4. Create Encrypted `.age` Files
@@ -199,12 +203,9 @@ nix shell nixpkgs#agenix -c agenix --help
 # Create the secrets directory
 mkdir -p secrets
 
-# Create encrypted secret files
-echo "OPENROUTER_API_KEY=sk-or-..." | agenix -e secrets/hermes-coding.env.age --stdin
-echo "OPENROUTER_API_KEY=sk-or-..." | agenix -e secrets/hermes-research.env.age --stdin
-
-# Or edit interactively:
+# Enter values in the editor rather than shell command history
 agenix -e secrets/hermes-coding.env.age
+agenix -e secrets/hermes-research.env.age
 ```
 
 Each `.age` file contains the environment variables for one agent:
@@ -218,8 +219,7 @@ The same works for a **ZeroClaw** agent — see `zeroclaw.env.example` for its
 `ZEROCLAW_<section>__<sub>__<key>` env-var convention (double underscores):
 
 ```bash
-echo "ZEROCLAW_providers__models__openrouter__default__api_key=sk-or-..." \
-  | agenix -e secrets/zeroclaw-assistant.env.age --stdin
+agenix -e secrets/zeroclaw-assistant.env.age
 ```
 
 ### 5. Wire Agenix Secrets to Agents
@@ -261,9 +261,8 @@ let
       agenixFile = "/run/agenix/zeroclaw-assistant-env";
       hostPort   = 9246;
       servePort  = 9145;
-      # Trimmed for brevity — see the zeroclawAgents entry in
-      # my-agents.nix.example for the full required settings
-      # (runtime_profiles, agents.main, risk_profiles, …).
+      # This direct-secret/port example requires dev. Review the actual
+      # pinned runtime's schema before adding application settings.
       settings.schema_version = 3;
       settings.providers.models.openrouter.default.model = "anthropic/claude-haiku-4.5";
     }
@@ -375,6 +374,10 @@ rotate those too (see above).
 
 ### Recovery: Lost Host SSH Key
 
+Obtain the replacement public key through an authenticated management path and
+confirm its fingerprint independently before adding it as a recipient.
+`ssh-keyscan` collects a candidate key; it does not authenticate the host.
+
 Decryption needs **any one** listed recipient, so a reinstalled host is
 recoverable from any surviving recipient machine (e.g. your dev machine):
 
@@ -405,19 +408,20 @@ machine is decommissioned or a key is suspected compromised.
 - [ ] `secrets.nix` created from `secrets.nix.example`
 - [ ] No `builtins.readFile config.age.secrets.*.path` anywhere in Nix
 - [ ] `age.identityPaths` uses runtime strings (not Nix paths)
-- [ ] `owner`/`group`/`mode` set to restrict access per agent
+- [ ] `owner`/`group`/`mode` restrict each host credential to its intended reader
 - [ ] `.env` files excluded via `.gitignore` (`secrets/*.env`)
 - [ ] `.age` files tracked in Git
 - [ ] No private keys or decrypted secrets committed to Git
-- [ ] Agent containers read `agenixFile` not `envFile` when using agenix
+- [ ] Balanced provider values go only to the LLM broker's `providerCredentialFile`
+- [ ] Direct-agent `agenixFile` examples are used only under explicit `dev`
 
 ## Troubleshooting
 
 | Symptom | Likely Cause | Fix |
 |---------|-------------|-----|
-| `agenix: command not found` | CLI not installed | `nix shell nixpkgs#agenix` |
+| `agenix: command not found` | CLI not installed | Use the CLI from your reviewed, pinned agenix input |
 | `.age` file not decrypting | Recipient key missing or wrong | Check `secrets.nix` recipients match `~/.ssh/id_ed25519.pub` |
-| Agent can't read env file | Wrong owner/mode | Set `owner = "agent-name"` and `mode = "0600"` in `secrets.nix` |
+| Broker cannot load provider file | Missing file or wrong mode | Check the exact runtime path and root-owned, owner-only file; restart that broker after rotation |
 | `/run/agenix/` empty after rebuild | Module not imported | Verify `inputs.agenix.nixosModules.age` in host modules |
 | `error: path ... is not in the Nix store` | Private key referenced as Nix path | Use string: `age.identityPaths = [ "/etc/ssh/..." ]` |
 

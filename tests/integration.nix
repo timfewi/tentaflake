@@ -103,6 +103,7 @@
         environment = {
           etc = {
             "tentaflake/network-test-image".source = networkTestImage;
+            "tentaflake/llm-upstream.py".source = ./fixtures/llm-upstream.py;
             "tentaflake/installer-disk-library".source = ../installer/disk.sh;
           };
           systemPackages = [
@@ -728,6 +729,7 @@
             "    \"upstream_base_url\": \"http://127.0.0.1:18080/v1/\",\n"
             "    \"provider_credential_file\": \"/tmp/tentaflake-fixture-provider-token\",\n"
             "    \"allow_plain_http_for_tests\": true,\n"
+            "    \"streaming\": {\"enable\": true},\n"
             "    \"allowed_models\": [{\n"
             "      \"name\": \"fixture/model\",\n"
             "      \"input_microusd_per_million\": 1,\n"
@@ -738,12 +740,7 @@
             "EOF"
         )
         machine.succeed(
-            "python3 -c 'from http.server import BaseHTTPRequestHandler,HTTPServer; "
-            "H=type(\"H\",(BaseHTTPRequestHandler,),{\"do_POST\":lambda s:("
-            "s.rfile.read(int(s.headers.get(\"Content-Length\",0))),"
-            "s.send_response(200),s.send_header(\"Content-Type\",\"application/json\"),"
-            "s.end_headers(),s.wfile.write(b\"{\\\"id\\\":\\\"completion-fixture\\\"}\"))}); "
-            "HTTPServer((\"127.0.0.1\",18080),H).serve_forever()' "
+            "python3 /etc/tentaflake/llm-upstream.py "
             "> /tmp/tentaflake-fixture-upstream.log 2>&1 & "
             "echo $! > /tmp/tentaflake-fixture-upstream.pid"
         )
@@ -779,6 +776,23 @@
             + "http://10.203.30.1:7811/v1/chat/completions "
             + "| grep -F completion-fixture'"
         )
+        for route, terminal in [("chat/completions", "[DONE]"), ("responses", "response.completed")]:
+            token_field = "max_tokens" if route == "chat/completions" else "max_output_tokens"
+            payload = '{"model":"fixture/model","stream":true,"' + token_field + '":1}'
+            output = machine.succeed(
+                scoped_client
+                + "curl --fail --silent --no-buffer --max-time 5 "
+                + "-H 'Authorization: Bearer virtual-fixture-key' "
+                + "-H 'Content-Type: application/json' "
+                + f"-d '{payload}' http://10.203.30.1:7811/v1/{route}"
+            )
+            assert "stream-first" in output, output
+            assert terminal in output, output
+        audit = machine.succeed("cat /tmp/tentaflake-fixture-audit.jsonl")
+        assert '"streaming":true' in audit, audit
+        assert "stream-first" not in audit, audit
+        assert "virtual-fixture-key" not in audit, audit
+        assert "fixture-provider-key" not in audit, audit
         machine.succeed(
             "kill $(cat /tmp/tentaflake-fixture-broker.pid) "
             "$(cat /tmp/tentaflake-fixture-upstream.pid)"

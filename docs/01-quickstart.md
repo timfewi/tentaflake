@@ -2,8 +2,9 @@
 
 Installed hosts default to the fail-closed `balanced` profile. This guide
 verifies that baseline. An agent remains offline unless its exact container
-name has an explicit broker policy. The optional broker path grants narrow
-model/fetch APIs, never general internet access.
+name has an explicit broker policy. Model access uses the LLM broker; web
+access uses the separate [research relay](16-research.md), never general
+internet access.
 
 ## 1. Install the external management policy
 
@@ -26,9 +27,16 @@ sudo cp \
   /etc/nixos/my-agents.nix
 ```
 
-The example contains Hermes and ZeroClaw capsules with
-`autoStart = false` and a matching disposable worker for each. Remove both a
-runtime and its worker entry when you do not need it. Do not add `envFile`,
+The example contains stopped Hermes and ZeroClaw capsules, a stopped OpenClaw
+scaffold, and matching workers and Btrfs workspace quotas for Hermes/ZeroClaw.
+Remove the builder, worker, and quota entries for any runtime you do not need.
+OpenClaw creates no OCI container and refuses an explicit start; see
+[adapter support limits](agent-adapters.md).
+
+`autoStart = false` stops automatic controller startup, but activation still
+creates enabled workspace filesystems and worker services. On an existing host,
+follow [workspace migration](14-workspace-quota.md) before enabling quotas.
+Do not add `envFile`,
 `agenixFile`, `hostPort`, `servePort`, host networking, or literal secret
 values under balanced; evaluation rejects them.
 
@@ -79,18 +87,21 @@ disposable worker boundary is absent. `TFSEC-021` means its persistent
 workspace has no managed hard size ceiling.
 
 `autoStart = true` is intentionally rejected under `balanced` until the same
-container key has an enabled broker, worker, and workspace quota. Keep the
-controller stopped while those policies are incomplete or while migrating an
-existing workspace.
+container key has an enabled LLM broker, worker, workspace quota, and research
+relay. Keep the controller stopped while those policies are incomplete or while
+migrating an existing workspace.
 
 ## 6. Keep the agent stopped
 
 Do not place real OpenAI, Anthropic, OpenRouter, GitHub, Firecrawl, or
 infrastructure credentials in the capsule. Without a scoped broker
-declaration, a balanced agent cannot perform external model or web calls and
-should remain stopped. To grant narrow access, follow
-[brokered egress](12-brokered-egress.md), build, review the generated units
-and firewall rules, then approve activation separately.
+declaration, a balanced agent cannot perform external model calls. Web calls
+additionally require its research relay and the operator-configured Research
+service and VPN. To grant narrow access, follow
+[brokered egress](12-brokered-egress.md) and [web research](16-research.md),
+build, review the generated units and firewall rules, then activate deliberately.
+The [secure adapter example](../examples/adapter-secure.nix) combines the required
+declarations; actual vendor tool discovery and execution still need runtime evidence.
 
 For a trusted development-only compatibility host, the intentional escape is:
 
@@ -112,3 +123,4 @@ balanced or strict.
 - [Disposable worker and approval](13-disposable-worker.md)
 - [Persistent workspace quota](14-workspace-quota.md)
 - [Threat model](15-threat-model.md)
+- [Agent adapters and support limits](agent-adapters.md)

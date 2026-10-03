@@ -2,6 +2,7 @@ use crate::config::{Config, ModelPolicy};
 use crate::http::{Request, Response};
 use crate::policy::{ResolvedTarget, resolve_public_target};
 use crate::state::{Audit, Limits, read_secret, unix_seconds};
+use crate::streaming::StreamingResponse;
 use reqwest::blocking::{Client, Response as UpstreamResponse};
 use reqwest::header::{CONTENT_TYPE, LOCATION};
 use serde::Deserialize;
@@ -16,7 +17,7 @@ use std::time::{Duration, Instant};
 pub struct Broker {
     config: Config,
     limits: Limits,
-    audit: Audit,
+    audit: Arc<Audit>,
 }
 
 impl Broker {
@@ -29,7 +30,10 @@ impl Broker {
             config.daily_token_budget,
             config.daily_cost_microusd,
         )?;
-        let audit = Audit::new(config.audit_file.clone(), config.max_audit_bytes);
+        let audit = Arc::new(Audit::new(
+            config.audit_file.clone(),
+            config.max_audit_bytes,
+        ));
         audit.check_ready()?;
         audit.record(
             &config.agent,
@@ -95,12 +99,35 @@ impl Broker {
             .as_object_mut()
             .ok_or_else(|| Failure::new(400, "llm", "request body must be a JSON object"))?;
         require_local_tools(object)?;
-        if object
-            .get("stream")
-            .and_then(Value::as_bool)
-            .unwrap_or(false)
-        {
+        let streaming = match object.get("stream") {
+            None => false,
+            Some(Value::Bool(value)) => *value,
+            Some(_) => return Err(Failure::new(400, "llm", "stream must be a boolean")),
+        };
+        if streaming && !policy.streaming.enable {
             return Err(Failure::new(400, "llm", "streaming is disabled"));
+        }
+        if streaming
+            && object
+                .get("n")
+                .is_some_and(|value| value.as_u64() != Some(1))
+        {
+            return Err(Failure::new(
+                400,
+                "llm",
+                "streaming requires one completion choice",
+            ));
+        }
+        if streaming
+            && object
+                .get("background")
+                .is_some_and(|value| value != &Value::Bool(false))
+        {
+            return Err(Failure::new(
+                400,
+                "llm",
+                "background streaming is not allowed",
+            ));
         }
         let model_name = object
             .get("model")
@@ -114,6 +141,15 @@ impl Broker {
             .ok_or_else(|| Failure::new(403, "llm", "model is not allowed"))?;
         let token_field = if route == "/v1/responses" {
             "max_output_tokens"
+        } else if object.contains_key("max_completion_tokens") {
+            if object.contains_key("max_tokens") {
+                return Err(Failure::new(
+                    400,
+                    "llm",
+                    "use only one completion-token limit",
+                ));
+            }
+            "max_completion_tokens"
         } else {
             "max_tokens"
         };
@@ -176,6 +212,25 @@ impl Broker {
                 }),
             )
             .map_err(|_| Failure::new(503, "audit", "audit log is unavailable"))?;
+        if streaming {
+            return Ok(Response {
+                status: 200,
+                content_type: "text/event-stream".into(),
+                body: Vec::new(),
+                streaming: Some(Box::new(StreamingResponse {
+                    target: resolved,
+                    credential,
+                    body,
+                    policy: policy.streaming.clone(),
+                    connect_timeout_seconds: self.config.connect_timeout_seconds,
+                    max_response_bytes: self.config.max_response_bytes,
+                    audit: Arc::clone(&self.audit),
+                    agent: self.config.agent.clone(),
+                    route: route.to_string(),
+                    model: model_name,
+                })),
+            });
+        }
         let client = self.client_for(&resolved)?;
         let started = Instant::now();
         let response = client
@@ -223,6 +278,7 @@ impl Broker {
             status,
             content_type,
             body: response_body,
+            streaming: None,
         })
     }
 
@@ -616,6 +672,7 @@ mod tests {
                     output_microusd_per_million: 2000,
                 }],
                 max_completion_tokens: 32,
+                streaming: crate::config::StreamingPolicy::default(),
                 allow_plain_http_for_tests: true,
             }),
             fetch: None,

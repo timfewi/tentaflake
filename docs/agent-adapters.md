@@ -160,21 +160,22 @@ Primary OpenClaw sources read through the isolated Research service:
 No runtime artifact was downloaded, built or pulled. Repository/release HTML exceeded
 the bounded extraction limit; the older embedded-runner source path returned
 404. The versioned directory index identified the current source paths above.
-The inspected built-in OpenAI request builders require streaming, while the
-broker accepts only non-streaming Chat Completions/Responses and rejects
-streaming and Anthropic Messages. The scaffold therefore declares streaming
+The inspected built-in OpenAI request builders require streaming. The broker
+now offers opt-in bounded SSE for Chat Completions/Responses; Anthropic Messages
+remain rejected. See [streaming policy](12-brokered-egress.md#streaming-model-responses). The scaffold therefore declares streaming
 as required for those built-in transports and refuses activation. This is a
 source-level incompatibility finding; no actual pinned executable was exercised.
 It does not rule out a separately reviewed custom provider or an upstream change.
 Setting `stream: false` in a payload hook alone does not establish compatibility
-with an event-stream consumer. No transport is added, emulated or bypassed.
+with an event-stream consumer. Broker streaming does not establish acceptance with that pinned executable.
 
 The existing broker credential-substitution regression also sends source-derived
 streaming request shapes to both broker routes. It requires HTTP 400 with
 `streaming is disabled`, unchanged budget state, and an audit entry without
 prompts or credential values. Its upstream fixture is already closed, so an
 accidental dispatch cannot satisfy the expected result. These deterministic
-probes document the failing acceptance requirement, not vendor compatibility.
+probes preserve the default denial. Separate live loopback-provider tests cover
+the opt-in SSE transport, not vendor compatibility.
 
 ## OpenClaw acceptance and next design
 
@@ -185,9 +186,9 @@ Before enabling OpenClaw:
 2. Parse generated read-only configuration with the actual pinned executable;
    exercise startup, intentional stop, crash recovery and state after restart.
 3. Capture a real bounded request against a deterministic broker fixture. Prove
-   non-streaming compatibility, or design broker streaming separately with
-   bounded partial output, cancellation, timeout/audit failure handling and
-   conservative request/token/cost accounting.
+   transport compatibility using the opt-in broker SSE path. Repeat bounded
+   partial-output, cancellation, timeout/audit failure and conservative budget
+   checks with that executable.
 4. With only the projected stdio relay, prove actual tool discovery and one
    Research call. Verify native web tools, remote MCP, provider-hosted tools,
    channels, remote plugins and background tools cannot create another path.
@@ -199,21 +200,23 @@ Before enabling OpenClaw:
    and UID/GID. Operator-provisioned credentials and VPN readiness stay on the
    host. Repeat negative policy checks after overrides and provenance gates.
 
-The first independent prerequisite is a reviewed model-transport design:
-either separately add streaming to the broker or verify an upstream-supported
-non-streaming provider that works with the actual pinned executable. A broker
-streaming change needs a bounded SSE parser and output ceiling, first-event and
-whole-request deadlines, cancellation on client disconnect, no replay after
-dispatch, pre-dispatch audit/budget admission, and conservative settlement when
-usage is missing or the stream ends early. Keep provider credentials host-only
-and the existing model/tool allowlists. Verify partial-output failures, usage
-accounting, cancellation and audit failure before any adapter activation.
-Do not bundle that transport change into this adapter refactor.
+The broker streaming prerequisite is implemented separately from the adapter
+refactor, with bounded SSE events/output, first/idle/total deadlines, cancellation,
+no replay, pre-dispatch audit/budget admission and conservative reservation.
+Actual OpenClaw transport acceptance remains unverified. Keep provider credentials
+host-only and retain model/tool allowlists; repeat partial-output, usage,
+cancellation and audit-failure checks before any adapter activation.
 Heavy VM/image/system builds and paid-provider probes need separate workload
 authorization. Synthetic policy fixtures and package builds never establish
 vendor operational compatibility.
 
 ## Progress checkpoint
+
+2026-10-03: broker streaming implementation is in progress. Local HTTP fixtures
+cover both protocol families and failure paths. Full fast-gate verification and
+final review are pending. OpenClaw artifact, model/Research/worker, lifecycle and
+persistence acceptance remain pending. Existing unrelated documentation changes
+are preserved; the two removed temporary plan/prompt files remain absent.
 
 2026-10-02: the adapter foundation and stopped-scaffold stage are implemented
 and reviewed. Adapter files, compatible legacy wrappers, common builder,
@@ -231,6 +234,6 @@ broker routes, budget preservation and audit redaction. VM suites were not run.
 The two temporary planning/prompt files were deleted and excluded from Git at
 the operator's request. OpenClaw still has no selected OCI image or accepted
 runtime integration; the complete operational objective remains unachieved.
-The next phase is separate streaming research and design. Actual upstream
+This checkpoint predates the separate broker streaming implementation above. Actual upstream
 configuration, model/Research calls, worker routing, lifecycle and persistence
 acceptance remain pending and require the corresponding workload authorization.

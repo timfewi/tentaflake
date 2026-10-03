@@ -52,7 +52,31 @@ pub struct LlmPolicy {
     #[serde(default = "default_max_completion_tokens")]
     pub max_completion_tokens: u64,
     #[serde(default)]
+    pub streaming: StreamingPolicy,
+    #[serde(default)]
     pub allow_plain_http_for_tests: bool,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct StreamingPolicy {
+    pub enable: bool,
+    pub max_event_bytes: usize,
+    pub first_event_timeout_seconds: u64,
+    pub idle_timeout_seconds: u64,
+    pub total_timeout_seconds: u64,
+}
+
+impl Default for StreamingPolicy {
+    fn default() -> Self {
+        Self {
+            enable: false,
+            max_event_bytes: 64 * 1024,
+            first_event_timeout_seconds: 30,
+            idle_timeout_seconds: 30,
+            total_timeout_seconds: 120,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -133,6 +157,19 @@ impl Config {
         }
         if let Some(policy) = &self.llm {
             policy.validate()?;
+            let streaming = &policy.streaming;
+            if streaming.max_event_bytes == 0
+                || streaming.first_event_timeout_seconds == 0
+                || streaming.idle_timeout_seconds == 0
+                || streaming.total_timeout_seconds == 0
+                || streaming.first_event_timeout_seconds > streaming.total_timeout_seconds
+                || streaming.idle_timeout_seconds > streaming.total_timeout_seconds
+                || (streaming.enable && streaming.max_event_bytes > self.max_response_bytes)
+            {
+                return Err(
+                    "streaming limits must be positive and fit the response/time ceilings".into(),
+                );
+            }
         }
         if let Some(policy) = &self.fetch {
             policy.validate()?;
@@ -361,6 +398,7 @@ mod tests {
                     output_microusd_per_million: 20,
                 }],
                 max_completion_tokens: 100,
+                streaming: StreamingPolicy::default(),
                 allow_plain_http_for_tests: false,
             }),
             fetch: None,

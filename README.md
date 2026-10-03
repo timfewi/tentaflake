@@ -44,17 +44,16 @@ web console, or Go workspace.
 
 ## Quick start
 
-Enter the contributor shell and run the focused checks:
+Run the contributor gate, which loads the pinned development tools itself:
 
 ```bash
-nix develop
-cargo fmt --all -- --check
-cargo clippy --workspace \
-  --all-targets -- -D warnings
-cargo test --workspace
+just fast
 ```
 
-Run the full flake check when Nix daemon access is available:
+Enter `nix develop` before invoking Cargo or lint tools directly. The fast gate
+includes formatting, lint, Rust checks, policy and adapter evaluation, and the
+installer-generated flake. For changes that need runtime evidence, run the
+affected VM suite explicitly; the full flake check includes both VM suites:
 
 ```bash
 nix flake check
@@ -136,15 +135,18 @@ Installed systems default to `tentaflake.security.profile = "balanced"`.
 Balanced agents are fail-closed capsules: no host network, published ports,
 direct egress, real provider credentials, or mutable images. Without a
 per-agent broker declaration they remain at `network=none`. With one, they
-join exactly one internal network and can reach only their host LLM/fetch
-brokers. `autoStart = false` in the example keeps activation explicit.
+join exactly one internal network and can reach only their configured host
+broker endpoints. Research agents use only the LLM broker on that network;
+web access goes through the separate Unix-socket relay. `autoStart = false`
+keeps the controller stopped at boot; activating the host can still create
+declared workers and workspace filesystems.
 Setting `autoStart = true` under `balanced` is accepted only after the exact
 container also has an enabled LLM broker, disposable worker, fixed-size
 workspace quota, and research relay. Web access uses the pinned public
 [tentaflake-research](https://github.com/timfewi/tentaflake-research) service;
 native web tools and the legacy fetch broker are disabled for research agents.
-See [configuration and verification](docs/16-research.md). This prevents an incomplete 24/7 declaration from silently
-starting with missing policy boundaries.
+See [configuration and verification](docs/16-research.md). This prevents an
+incomplete 24/7 declaration from silently starting with missing policy boundaries.
 
 Existing configurations that require direct provider credentials or host
 networking must deliberately select `dev`; this is a breaking change and is
@@ -232,7 +234,8 @@ software is harmless.
 flake.nix
 ├── modules/             core NixOS modules, brokers, worker
 ├── modules/profiles/    observability, Falco
-├── lib/                 agent builders/helpers
+├── adapters/            runtime implementations and schema-v1 contracts
+├── lib/                 common builder, compatible wrappers, helpers
 ├── crates/              Rust workspace
 ├── pkgs/                Nix package wrappers
 ├── installer/           installer ISO
@@ -242,7 +245,7 @@ flake.nix
 The default module imports only:
 
 - host options, boot, hardening, locale, networking, broker/worker and image
-  provenance policy, Nix settings;
+  provenance policy, agent-instance inventory, research integration, Nix settings;
 - base packages, users, SSH, Tailscale, and operator shell.
 
 Optional profiles must be imported explicitly from the flake output.
@@ -252,6 +255,10 @@ Optional profiles must be imported explicitly from the flake output.
 Configure brokers by exact OCI container name. Provider credentials remain
 runtime-only host files and are loaded only into the LLM broker. The agent
 receives a random per-boot virtual key; it never receives the provider key.
+
+Chat Completions and Responses support bounded SSE when the exact broker's
+`llm.streaming.enable = true`. It defaults to false and preserves conservative
+budget accounting. See [streaming limits and failure behavior](docs/12-brokered-egress.md#streaming-model-responses).
 
 ```nix
 tentaflake.broker.agents.hermes-coding = {
@@ -274,14 +281,13 @@ tentaflake.broker.agents.hermes-coding = {
     ];
   };
 
-  fetch = {
-    enable = true;
-    allowedHosts = [ "platform.openai.com" ];
-  };
+  fetch.enable = false;
 };
 ```
 
-Every enabled agent needs a unique `/30`. See
+Every enabled agent needs a unique `/30`. This is the LLM boundary only; declare
+the [research relay](docs/16-research.md) separately. Legacy fetch cannot be
+enabled for a research agent. See
 [brokered egress](docs/12-brokered-egress.md) for the full trust boundary,
 failure behavior, budgets, and verification steps.
 
@@ -380,18 +386,35 @@ preserved current fixes, and the next useful archive changes.
 ## Build and test
 
 ```bash
-cargo fmt --all -- --check
-cargo clippy --workspace \
-  --all-targets -- -D warnings
-cargo test --workspace
-nix fmt -- --ci
-nix flake check
-nix build .#installer-iso
+just fast
 ```
 
-The full flake check evaluates the installed host, builds the Rust CLI, runs
-module assertions, and boots the VM integration test. Keep evaluation, build,
-activation, and live-runtime proof separate.
+See [contributor checks](CONTRIBUTING.md) for focused recipes. `just e2e`
+includes the full flake check, both VM suites, and the installer ISO. Run these
+larger gates deliberately. Keep evaluation, build, activation, and live-runtime
+proof separate.
+
+## Documentation
+
+The public repository is the source of truth. The [website](https://tentaflake.dev/)
+and [documentation site](https://docs.tentaflake.dev/) present a pinned release;
+their source lines identify the exact commit. Unreleased checkout changes can
+therefore be newer than the website.
+
+| Topic | Guide |
+|---|---|
+| Installation and first host | [Install](docs/00-install.md), [quickstart](docs/01-quickstart.md) |
+| Agent definitions and runtimes | [Declarative configuration](docs/08-agent-cli.md), [adapters](docs/agent-adapters.md) |
+| Day-to-day management | [Agent management](docs/02-agent-tips.md), [operator CLI](docs/06-shell.md), [recovery](docs/07-operations.md) |
+| Skills and secrets | [Skill index](docs/03-skill-index.md), [Agenix](docs/04-agenix-secrets.md) |
+| Forks and builds | [Fork checklist](docs/05-fork-checklist.md), [build boundaries](docs/17-builds.md) |
+| Security and management access | [Profiles](docs/10-security-profiles.md), [Tailscale](docs/11-tailscale-management.md), [threat model](docs/15-threat-model.md) |
+| Model, research and execution | [Broker](docs/12-brokered-egress.md), [research](docs/16-research.md), [worker](docs/13-disposable-worker.md) |
+| Storage and monitoring | [Workspace quota](docs/14-workspace-quota.md), [observability](docs/09-observability.md) |
+| Documentation maintenance | [Source ownership and release synchronization](docs/18-documentation.md) |
+
+[Archive comparison](docs/archive-comparison.md) records a historical review;
+use the current guides for implementation and support status.
 
 ## Consume as a flake input
 

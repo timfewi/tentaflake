@@ -52,6 +52,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   cache hash move together; the CLI release and prior security backports stay
   unchanged.
 ### Changed
+- Add opt-in bounded SSE forwarding on the existing LLM broker's Chat Completions
+  and Responses routes. Streams retain model/tool allowlists and host-only keys,
+  cancel on disconnect, enforce byte/time limits and never replay dispatched
+  calls. Conservative budget reservations remain charged when usage is missing
+  or an exchange aborts; terminal audit admission precedes successful output.
+- Refresh documentation for adapter inventory, secure startup prerequisites,
+  lifecycle management, skills and credential ownership. Link the public
+  website and document authoritative-source and release synchronization rules.
 - Link the retained project artwork from the README and an asset overview,
   making logo and wallpaper variants discoverable after removing the old
   ASCII assets.

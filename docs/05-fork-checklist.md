@@ -7,7 +7,7 @@ Change deployment-specific values in a fork, never in the generic template.
 | Host and admin defaults | `lib/constants.nix` |
 | Host modules | `flake.nix` |
 | Agent definitions | `my-agents.nix` |
-| Runtime secret paths | Agent builder arguments |
+| Runtime secret paths | Host broker, backup and optional profile declarations; direct-agent paths are dev-only |
 | SSH keys | `tentaflake.adminAuthorizedKeys` |
 | Timezone and locale | `tentaflake.*` options |
 
@@ -54,6 +54,7 @@ monitoring.
 
 Import observability or Falco only when the deployment needs them. Keep editor,
 Hive Research and speech integrations in the consumer flake. Web/research uses
-the core [secure research transport](16-research.md). Each optional integration has a separate package,
+the core [secure research transport](16-research.md). Each optional integration
+has a separate package,
 credential, network, or privilege boundary; see
 [observability and detection](09-observability.md).

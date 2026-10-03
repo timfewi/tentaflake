@@ -10,7 +10,10 @@ Nix writes two non-secret files:
 
 - `/etc/tentaflake/cli.conf` selects the backend, host, flake directory, and
   agent inventory path.
-- `/etc/tentaflake/agents.tsv` is derived from declared OCI containers.
+- `/etc/tentaflake/agents.tsv` uses explicit `tentaflake.agentInstances`
+  metadata for adapters and retains a fallback for unmanaged OCI containers.
+  Its five fields are adapter, instance name, container name, systemd unit,
+  and state directory. Stopped scaffolds can appear without an OCI container.
 
 Do not hand-edit them. Change the Nix configuration and rebuild explicitly.
 

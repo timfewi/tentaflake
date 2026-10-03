@@ -16,6 +16,11 @@ policy to the template. Those belong in forks.
 Source changes and verification do not authorize NixOS activation, deployment,
 disk operations, secret changes, or VM mutation.
 
+Product documentation lives in the public README and `docs/`; the website
+mirrors a pinned release. Keep authoritative guides, instructions and affected
+skills synchronized, identify new/removed guides for the maintainer, and do not
+claim unreleased checkout changes are published. See `docs/18-documentation.md`.
+
 ## Layout
 
 ```text
@@ -30,6 +35,7 @@ tentaflake/
 ├── crates/tentaflake-cli/
 ├── crates/tentaflake-broker/
 ├── crates/tentaflake-worker/
+├── adapters/
 ├── modules/
 │   ├── default.nix
 │   ├── options.nix
@@ -41,6 +47,9 @@ tentaflake/
 │       ├── observability.nix
 │       └── falco.nix
 ├── lib/
+│   ├── mkAgent.nix
+│   ├── adapterContract.nix
+│   ├── agentInventory.nix
 │   ├── mkHermesAgent.nix
 │   ├── mkZeroClawAgent.nix
 │   ├── agentsFromData.nix
@@ -138,8 +147,11 @@ The common builder validates schema-v1 contracts and emits explicit instance
 metadata; CLI inventory retains five columns and unmanaged OCI fallback.
 OpenClaw v2026.9.7 is a stopped refusal scaffold with no selected artifact,
 model transport acceptance, Research discovery or worker execution mediation.
-Its inspected built-in OpenAI request builders use streaming, which the current
-broker rejects; a separate reviewed transport design is required.
+Its inspected built-in OpenAI request builders use streaming. The broker now
+offers bounded Chat Completions/Responses SSE through per-agent
+`llm.streaming.enable` (default false), with cancellation, no request replay,
+first/idle/total deadlines, audit admission and conservative budgets. See
+`docs/12-brokered-egress.md`; this transport does not establish OpenClaw acceptance.
 See `docs/agent-adapters.md` and `checks.*.agent-adapters`; synthetic checks
 never establish actual upstream operational support.
 

@@ -22,6 +22,12 @@ metadata:
 > credentials; direct agent env files and provider setup below require dev.
 > Never put keys in generated settings or the Nix store.
 
+> Broker SSE is a host option: enable the exact agent's
+> `tentaflake.broker.agents.<container>.llm.streaming.enable` for a streaming
+> OpenAI-compatible client. It defaults to false and retains host-only keys,
+> bounded output/deadlines and conservative budgets. See
+> [brokered egress](../../../docs/12-brokered-egress.md#streaming-model-responses).
+
 ## When to Use
 
 - Configure LLM provider for Hermes (first-time setup)

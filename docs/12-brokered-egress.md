@@ -162,7 +162,7 @@ POST /v1/chat/completions
 POST /v1/responses
 ```
 
-It accepts strict JSON, disables streaming, requires an exact model, clamps
+It accepts strict JSON, requires an exact model, clamps
 the completion-token ceiling, reserves conservative token/cost budget before
 the upstream call, disables environment proxies and redirects, resolves the
 configured provider on the host, rejects non-public addresses, pins the
@@ -172,6 +172,70 @@ header from the host credential.
 Audit events contain agent, route, model, outcome, status, reserved token/cost
 figures, and timestamps. They never contain request bodies, prompts, virtual
 keys, provider keys, or provider response bodies.
+
+## Streaming model responses
+
+Enable SSE explicitly for each exact agent broker; existing declarations keep
+streaming disabled:
+
+```nix
+tentaflake.broker.agents.hermes-coding.llm.streaming = {
+  enable = true;
+  maxEventBytes = 64 * 1024;
+  firstEventTimeoutSeconds = 30;
+  idleTimeoutSeconds = 30;
+  totalTimeoutSeconds = 120;
+};
+```
+
+The same authenticated Chat Completions and Responses routes accept
+`"stream": true`. `stream` must be a boolean. Streaming supports one completion
+choice (`n` absent or `1`) and foreground requests; `background: true` is
+rejected. Chat requests can use `max_tokens` or `max_completion_tokens`, but
+cannot specify both. Responses use `max_output_tokens`. All retain the exact
+model and local-function-tool allowlists, host-only credential substitution,
+DNS address checks, runtime budget persistence and rate admission.
+
+The host forwards complete events as HTTP/1.1 chunked `text/event-stream`
+responses. It buffers at most one event, normalizes SSE line endings, handles
+fragmented UTF-8 and multiline data, and retains text, reasoning and function
+argument deltas. `maxEventBytes` must fit the existing `maxResponseBytes` total
+upstream-body ceiling (8 MiB by default). Heartbeats do not satisfy the first
+data-event deadline. Read/write inactivity and the whole exchange have separate
+deadlines; the latter includes connection and downstream writes. All durations
+must be positive and the first/idle limits must fit the total limit.
+
+Client disconnects cancel pending sends, reads and writes, including a silent
+provider. Clients must keep their connection open while receiving the stream;
+a closed write half or additional request data terminates the exchange. The
+parallelism slot stays occupied until forwarding finishes or aborts. Redirects,
+environment proxies and request retries are disabled. Cancellation closes the
+broker connection; it does not prove that a remote provider stopped generation
+or will waive charges.
+
+Before output, failures return bounded broker JSON errors when time remains;
+an exhausted whole-exchange deadline closes the connection. After output starts,
+a failure closes the incomplete chunked response. The broker never manufactures
+`[DONE]` or a Responses completion. Valid `response.failed` and
+`response.incomplete` events retain their actual outcomes. A terminal event is
+released only after audit persistence succeeds; later client delivery failure
+is recorded as an abort when the audit remains writable. Audit completion
+admission is not proof that the client received every byte.
+
+Budget reservation remains conservative for every request, including successful
+streams and missing usage: reported usage does not refund tokens or cost.
+Chat usage is optional; Responses usage comes from the terminal response. Only
+consistent numeric input/output/total token counts enter audit. Malformed or
+missing usage is `null`; prompts, tool arguments, output and provider error text
+never enter audit. A stream ending without its genuine terminal event fails.
+
+The implementation uses the pinned `reqwest 0.12.28` and `tokio 1.52.3`, with
+explicitly disabled HTTP retry policy. Protocol references are the official
+[Chat streaming events](https://developers.openai.com/api/reference/resources/chat/subresources/completions/streaming-events)
+and [Responses streaming events](https://developers.openai.com/api/reference/resources/responses/streaming-events).
+Local broker tests exercise forwarding, fragmentation, tools, usage, truncation,
+deadlines, disconnects, audit failure and concurrency. They do not establish
+OpenClaw runtime support or acceptance against a paid provider.
 
 ## Fetch policy
 

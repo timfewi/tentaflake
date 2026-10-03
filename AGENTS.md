@@ -59,6 +59,12 @@ still accurate before finishing — and update them in the same change:
 - this `AGENTS.md` / `CLAUDE.md` — agent instructions
 - relevant `.agents/skills/` — bundled skill docs
 
+The public repository owns the documentation; the website presents a pinned
+release. See `docs/18-documentation.md`. Contributors update authoritative
+guides here and identify route additions/removals in the PR. Website publication
+is a separate maintainer operation; never imply that unreleased checkout changes
+are already published or require access to another repository for public checks.
+
 ## Module Boundaries
 
 - Editor, Hive Research, and Piper integrations belong in consumer flakes;
@@ -102,6 +108,11 @@ still accurate before finishing — and update them in the same change:
   OCI inspection has a deadline and a combined output-byte ceiling; failures
   remain unknown and raw container environment data must not reach reports.
 - Broker host concurrency/rate admission counts each enabled LLM/fetch mode.
+  LLM SSE is opt-in through `llm.streaming.enable`; retain bounded event/response
+  sizes, first/idle/total deadlines, cancellation, no request replay and
+  conservative reservation. Audit terminal admission before forwarding success;
+  partial-output failure must close without fabricating completion. Streaming
+  fixtures do not establish OpenClaw runtime acceptance.
   Clear systemd capability sets with an empty string; an empty list omits the
   directive. Verify credential write boundaries inside the unit namespace.
 - Secure controllers and brokers share `lib/serviceRecovery.nix`: bounded
