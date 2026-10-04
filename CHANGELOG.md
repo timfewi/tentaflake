@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 ### Added
+- Record the product roadmap for general-purpose AI employees, company workflows,
+  business connectors and shared runtime configuration, with linked GitHub milestones
+  and acceptance criteria. Existing issues are reused and missing scope is tracked
+  separately. This documents planned work; website publication remains separate.
 - Add a lazy agent adapter registry and `mkAgent`, preserving Hermes/ZeroClaw
   public arguments, container/unit identities, ownership and existing state.
   Explicit metadata drives CLI inventory; versioned generic JSON is additive
