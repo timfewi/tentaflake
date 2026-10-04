@@ -148,12 +148,10 @@
         agent-adapters =
           assert import ./tests/agent-adapters.nix { inherit pkgs; };
           pkgs.runCommand "tentaflake-agent-adapters" { } "touch $out";
-        module-evaluation =
-          assert import ./tests/module-eval.nix {
-            nixpkgsPath = nixpkgs.outPath;
-            researchFlake = inputs.tentaflake-research;
-          };
-          pkgs.runCommand "tentaflake-module-evaluation" { } "touch $out";
+        module-evaluation = import ./tests/module-eval.nix {
+          nixpkgsPath = nixpkgs.outPath;
+          researchFlake = inputs.tentaflake-research;
+        };
 
         # VM integration test: boots the host and asserts the runtime path
         # (Rust CLI, status, and agent unit/user/state dir).

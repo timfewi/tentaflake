@@ -13,6 +13,11 @@ a local Tailscale flag does not prove enrollment or remote grants. Read
 [management policy](../../../docs/11-tailscale-management.md) and
 [operations](../../../docs/07-operations.md) for the relevant procedure.
 
+SSH/hostname preferences use `tailscale set`; `--advertise-tags` belongs to
+`tailscale up`. NixOS supplies `--advertise-tags=tag:agent-host` through
+`extraUpFlags` during auth-key enrollment; request it explicitly for manual
+enrollment as described in the management guide.
+
 ```sh
 tailscale ssh <admin>@<host>
 ```

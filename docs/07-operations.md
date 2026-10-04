@@ -201,3 +201,24 @@ retention policy suitable for every deployment. It does provide baseline
 Prometheus rules for disk pressure, restart flapping, broker denials, unusual
 fetch-denial bursts, and near-exhausted request/token/cost budgets. Alert
 delivery remains an explicit deployment-fork integration.
+
+
+## Continuous-runtime follow-ups (2026-10-03)
+
+The source review for a modular 24/7 host identified these remaining issue
+candidates. Restart backoff, broker health, quota-aware backups and optional
+metrics already exist; the gaps below should not be described as missing all
+supervision or backup support.
+
+| Priority / proposed issue | Current limitation | Acceptance criteria |
+| --- | --- | --- |
+| [P1: Application readiness and bounded hang recovery](https://github.com/timfewi/tentaflake/issues/112) | `on-failure` recovers crashes, but a running hung agent remains running. Broker `/healthz` is not an end-to-end agent or Research probe. | Add adapter-defined, non-billable readiness/liveness checks with bounded timeouts, cooldown and explicit restart authority. Exercise hung processes, dependency recovery and operator stop without replaying operations. |
+| [P1: Actual vendor-agent acceptance](https://github.com/timfewi/tentaflake/issues/111) | The Research integration VM uses a synthetic probe, not the pinned Hermes/ZeroClaw applications. Worker automatic routing and state survival also need real runtime evidence. | Run each reviewed image through model, Research discovery, isolated execution, restart/reboot and persistence scenarios with synthetic upstreams. Keep unsupported adapters stopped. See `16-research.md` and `agent-adapters.md`. |
+| [P1: Worker queue crash recovery and capacity](https://github.com/timfewi/tentaflake/issues/113) | The selective archive review already identifies atomic claims, abandoned-work recovery and bounded pending/inbox capacity as follow-ups. | Implement queue lifecycle and negative crash/overload tests together, define migration, and retain quota-aware backup/restore. See `archive-comparison.md`. |
+| [P2: Research/management metrics and tested alert delivery](https://github.com/timfewi/tentaflake/issues/114) | Optional observability covers host and broker metrics; notification destinations are deployment-owned. No source proof of end-to-end paging or shared Research/VPN readiness metrics was found. | Export categorical readiness/staleness/renewal/restart and usage metrics without queries, credentials or source text. Test a configured generic notification route in a deployment fixture. |
+
+Private management and Headscale issue candidates are recorded in
+[the management review](11-tailscale-management.md#modular-management-review-2026-10-03).
+The linked tracking issues record scope, acceptance criteria and dependencies.
+The reviewed Research input update is tracked in
+[issue #110](https://github.com/timfewi/tentaflake/issues/110).
