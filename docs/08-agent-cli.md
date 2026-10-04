@@ -96,6 +96,8 @@ For Podman, unit names start with `podman-`.
 
 ## Remove an agent
 
-Delete its declarative entry and rebuild deliberately. State directories and
-secret files are not deleted automatically. Decide separately whether they
-must be archived, retained, or removed.
+Remove its declarative entry and matching broker, Research, worker, quota and
+provenance declarations, then review backup paths before activation. See
+[agent removal](02-agent-tips.md#add-or-remove-an-agent). State directories,
+backing images and secret files are not deleted automatically; decide separately
+whether they must be archived, retained or removed.

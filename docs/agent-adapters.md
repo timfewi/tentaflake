@@ -210,30 +210,16 @@ Heavy VM/image/system builds and paid-provider probes need separate workload
 authorization. Synthetic policy fixtures and package builds never establish
 vendor operational compatibility.
 
-## Progress checkpoint
+## Implementation and evidence status
 
-2026-10-03: broker streaming implementation is in progress. Local HTTP fixtures
-cover both protocol families and failure paths. Full fast-gate verification and
-final review are pending. OpenClaw artifact, model/Research/worker, lifecycle and
-persistence acceptance remain pending. Existing unrelated documentation changes
-are preserved; the two removed temporary plan/prompt files remain absent.
+The adapter foundation, compatible wrappers, explicit inventory, versioned
+JSON and opt-in broker SSE are implemented. Focused policy and protocol
+fixtures cover shared admission, default streaming denial and bounded streaming
+failure paths. See [brokered egress](12-brokered-egress.md) for transport details
+and [build boundaries](17-builds.md) for the verification entrypoints.
 
-2026-10-02: the adapter foundation and stopped-scaffold stage are implemented
-and reviewed. Adapter files, compatible legacy wrappers, common builder,
-metadata, JSON, Research and inventory are synchronized with consumer examples,
-agent instructions and bundled skills. Legacy argument/default expressions
-match the original builders; runtime-body differences are limited to adapter
-hooks and effective automatic-start admission. Existing state requires no move.
-
-The final `just fast` passed in the selected Git checkout: formatting, lint,
-ShellCheck, Rust formatting/Clippy, all 75 Rust tests, CI selection/package-source
-regressions, Nix policy/adapter evaluation, flake evaluation without builds, and
-the generated installer-flake regression. Streaming rejection probes cover both
-broker routes, budget preservation and audit redaction. VM suites were not run.
-
-The two temporary planning/prompt files were deleted and excluded from Git at
-the operator's request. OpenClaw still has no selected OCI image or accepted
-runtime integration; the complete operational objective remains unachieved.
-This checkpoint predates the separate broker streaming implementation above. Actual upstream
-configuration, model/Research calls, worker routing, lifecycle and persistence
-acceptance remain pending and require the corresponding workload authorization.
+OpenClaw has no selected OCI artifact. Actual native configuration parsing,
+model/Research calls, worker mediation, lifecycle and persistence acceptance
+remain pending. Hermes/ZeroClaw retain their existing integrations; synthetic
+fixtures do not establish actual vendor workloads. No host activation is
+implied by source checks.
