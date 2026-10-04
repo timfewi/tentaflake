@@ -68,17 +68,20 @@ The [archive comparison](archive-comparison.md) and older changelog entries are
 historical records. The current [adapter guide](agent-adapters.md) defines
 runtime support; a stopped scaffold does not imply operational support.
 
-## Review checkpoint — 2026-10-02
+## Review checkpoint — 2026-10-04
 
-The README and current guides were reviewed against the source, examples and
-adapter contracts. Corrections cover secure startup, inventory, lifecycle,
-skills and host-held credentials. Local Markdown links and public/private
-references passed inspection across 41 Markdown documents. `just fast` passed,
-including 75 Rust tests, policy/adapter evaluation and the generated installer
-flake. This documentation-only change ran no VM, ISO or host activation.
+The seven bundled skills and current guides were reviewed against adapter,
+CLI, host-policy and example source. Skills now use short procedures and
+source/guide links instead of copied upstream catalogs. Corrections cover
+read-only Hermes/ZeroClaw configuration, Agenix recipient/runtime separation,
+host identities, environment-file verification and complete agent removal.
+The adapter status reflects implemented opt-in SSE while retaining the actual
+vendor acceptance gaps. Historical changelog links use their matching release.
 
-Live website samples identified release v0.4.20 and source `5acbc4796e9d`.
-The documentation corrections and adapter foundation are newer than that pin;
-their website route and release update remains a maintainer step after release.
-External provider behavior, vendor CLI commands and actual runtime acceptance
-were not newly verified by this documentation review.
+Local Markdown paths/anchors, skill YAML frontmatter and the Agenix example's
+Nix syntax/metadata/formatting checks passed. Fast-gate checks passed, including all
+94 Rust tests, lint/formatting, policy/adapter evaluation, read-only flake
+validation and the generated installer flake. No VM/ISO build or host activation
+was run. Live website, provider behavior, secret decryption and actual vendor
+workloads were not exercised; publication and deployment acceptance remain
+separate operations.

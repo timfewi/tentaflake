@@ -1,34 +1,97 @@
 # Agenix secrets and host-held credentials
 
-> **Security-profile boundary:** agenix keeps plaintext out of Git and the Nix
-> store, but passing a decrypted file into an agent still gives that agent the
-> real credential. `balanced` and `strict` reject `envFile` and `agenixFile`.
-> The direct-agent examples below are retained only for the explicit `dev`
-> compatibility profile. Secure profiles use agenix for host-side brokers,
-> Grafana credentials, Git auto-push, and backup credentials; the agent should
-> receive only a scoped, revocable virtual broker key.
+Agenix stores encrypted files in Git and decrypts them at activation/boot into
+runtime files. It does not hide a credential from an agent that receives it.
+Balanced/strict reject direct `envFile` and `agenixFile` inputs; secure model
+credentials belong only in the host LLM broker.
 
-For a balanced agent, declare the decrypted provider value as a single secret
-file and point only the LLM broker at it:
+## Enable the pinned input
+
+In the consumer fork, enable the optional `agenix` input in `flake.nix`, review
+and commit its lock revision, and import `inputs.agenix.nixosModules.age` in
+the selected host's module list. Use the CLI from that reviewed revision, not
+an unrelated moving package.
+
+Two separate Nix files are needed:
+
+| File | Reader | Purpose |
+|---|---|---|
+| `secrets/secrets.nix` | Agenix CLI, run from `secrets/` | Encryption recipients for each ciphertext |
+| Root `secrets.nix` | NixOS module system | Runtime path, owner and permissions |
+
+A NixOS `age.secrets` declaration does not supply the CLI's recipient rules.
+
+## Declare encryption recipients
+
+Create `secrets/secrets.nix` with authenticated public recipients:
 
 ```nix
-age.secrets.openai-key = {
-  file = ./secrets/openai-key.age;
-  owner = "root";
-  group = "root";
-  mode = "0400";
-};
+{
+  "llm-provider.age".publicKeys = [
+    "<host-public-recipient>"
+    "<editor-or-recovery-public-recipient>"
+  ];
+}
+```
 
+Replace both placeholders with actual age or supported SSH public keys. The
+host must hold a matching private identity; retain a protected recovery identity
+outside that host. Confirm a host key through an authenticated management path
+and independently verify its fingerprint. `ssh-keyscan` alone does not
+authenticate it. Never put private keys into these rules or the repository.
+
+Using the pinned CLI, run from the rules directory:
+
+```sh
+cd secrets
+agenix -e llm-provider.age
+```
+
+Enter the provider key in the editor as a single value, not as an
+`OPENAI_API_KEY=...` environment assignment. Do not pass secret values through
+command arguments, shell history or printed output. Commit only ciphertext
+and non-secret declarations after review.
+
+## Declare the runtime secret
+
+Copy [secrets.nix.example](../secrets.nix.example) to root `secrets.nix` and
+import it from `configuration.nix`. Its host-only declaration is:
+
+```nix
+{
+  age.identityPaths = [ "/var/lib/agenix/identity" ];
+  age.secrets.llm-provider = {
+    file = ./secrets/llm-provider.age;
+    owner = "root";
+    group = "root";
+    mode = "0400";
+  };
+}
+```
+
+Provision the matching private identity at that runtime path through the
+operator's protected credential channel. Use a string, not a Nix path literal:
+the private file must not become a store input. Confirm owner-only permissions
+and persistence across reboot. Balanced disables OpenSSH, so do not assume an
+SSH host key exists automatically.
+
+Encrypted `.age` files can enter the store. Plaintext must never enter Nix
+settings, JSON, `extraEnvironment`, seed directories or derivations; do not
+use `builtins.readFile` to load a runtime secret.
+
+## Connect only the host broker
+
+In a module with `config` available:
+
+```nix
 tentaflake.broker.agents.hermes-coding = {
   enable = true;
   subnet = "10.203.20.0/30";
   gateway = "10.203.20.1";
   llm = {
     enable = true;
-    upstreamBaseUrl =
-      "https://api.openai.com/v1/";
-    providerCredentialFile =
-      config.age.secrets.openai-key.path;
+    upstreamBaseUrl = "https://api.openai.com/v1/";
+    providerCredentialFile = config.age.secrets.llm-provider.path;
     allowedModels = [
       {
         name = "gpt-5-mini";
@@ -40,394 +103,76 @@ tentaflake.broker.agents.hermes-coding = {
 };
 ```
 
-systemd copies the value into the broker's private credential directory. The
-agent receives only its random virtual key. The longer direct-container
-environment examples below apply only to `dev`.
+Review the exact model and current prices for your deployment; these are example
+policy values. systemd loads the provider value into the broker's private
+credential directory. The agent gets a scoped virtual key. This fragment does
+not configure the worker, quota or Research required for balanced automatic
+startup; see [brokered egress](12-brokered-egress.md) and
+[the secure adapter example](../examples/adapter-secure.nix).
 
-This guide covers encrypting agent API keys and tokens — for either the Hermes or ZeroClaw runtime — with [agenix](https://github.com/ryantm/agenix) so they can be committed to Git safely and decrypted only at NixOS activation time.
+Build and review the selected host before an explicitly authorized activation.
+A successful source check does not provision identities or decrypt runtime
+secrets on the host.
 
-## Why Agenix?
+## Verify without revealing values
 
-| Approach | Git contents | Nix-store boundary |
-|----------|-------------|--------------------|
-| Runtime `.env` files | Never commit plaintext | Keep values out of Nix inputs; use runtime paths |
-| Agenix | Encrypted `.age` files only | Ciphertext can enter the store; plaintext is decrypted at runtime |
-| `builtins.readFile` on a secret | Can expose plaintext | Values interpolated into derivations can enter the world-readable store |
-| External vault | Depends on the integration | Fetch and inject through reviewed runtime channels |
+On the activated host, check the exact path and intended reader:
 
-Agenix gives you the best balance: secrets encrypted in Git, decrypted only at activation, never in the Nix store, and no external vault dependency.
-
-## Dev-only direct-container architecture
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│  Git Repo (public/private)                                  │
-│  ┌──────────────────────────────────────────────────┐      │
-│  │ secrets/hermes-coding.env.age   (encrypted)       │      │
-│  │ secrets/hermes-research.env.age (encrypted)       │      │
-│  │ secrets.nix                     (recipients)      │      │
-│  └──────────────────────────────────────────────────┘      │
-└─────────────────────────────────────────────────────────────┘
-                         │
-                         │ nixos-rebuild switch
-                         ▼
-┌─────────────────────────────────────────────────────────────┐
-│  Nix Store (world-readable)                                 │
-│  ┌──────────────────────────────────────────────────┐      │
-│  │ /nix/store/...-hermes-coding.env.age   (copied)  │      │
-│  │ /nix/store/...-hermes-research.env.age (copied)  │      │
-│  │                    ↑ STILL ENCRYPTED ↑           │      │
-│  └──────────────────────────────────────────────────┘      │
-└─────────────────────────────────────────────────────────────┘
-                         │
-                         │ agenix activation script
-                         ▼
-┌─────────────────────────────────────────────────────────────┐
-│  Runtime (root-only, tmpfs)                                 │
-│  ┌──────────────────────────────────────────────────┐      │
-│  │ /run/agenix/hermes-coding-env   (plaintext, 0600) │      │
-│  │ /run/agenix/hermes-research-env (plaintext, 0600) │      │
-│  │                    ↑ NEVER IN STORE ↑             │      │
-│  └──────────────────────────────────────────────────┘      │
-└─────────────────────────────────────────────────────────────┘
-                         │
-                         │ Docker --env-file mount
-                         ▼
-┌─────────────────────────────────────────────────────────────┐
-│  Docker Container (isolated)                                │
-│  │ OPENROUTER_API_KEY=sk-or-...                             │
-│  │ TELEGRAM_BOT_TOKEN=...                                   │
-└─────────────────────────────────────────────────────────────┘
+```sh
+sudo stat -Lc '%U %G %a %n' /run/agenix/llm-provider
+sudo systemctl status tentaflake-broker-llm-hermes-coding.service --no-pager
+tentaflake doctor --security
 ```
 
-## Dev compatibility setup
+Expect root ownership and mode `400` for this declaration. Check broker
+`/healthz` readiness and bounded logs. Local readiness does not prove a provider
+call succeeds. Never dump `/run/agenix/*`, decrypted files or OCI environment
+data for verification.
 
-The following environment-file examples are for explicitly selected `dev`
-hosts. Balanced deployments use the single-value host broker secret above;
-they can reuse the input and recipient setup without mounting these files into
-an agent.
+## Dev-only direct environment files
 
-### 1. Enable Agenix in `flake.nix`
+A trusted host may explicitly choose `tentaflake.security.profile = "dev"`
+and use `agenixFile` on Hermes/ZeroClaw. Declare a separate encrypted environment
+file containing the pinned runtime's supported variables; use the same
+recipient/module separation and restrict its host reader.
 
-Uncomment the agenix input and module import:
+The OCI runtime consumes this file at container creation; it is not a bind
+mount and will not appear in `docker inspect .Mounts`. Verify its runtime path,
+permissions and the declared environment-file input without exposing values.
+Interactive provider setup and direct credentials are not a balanced workflow.
 
-```nix
-# flake.nix
-{
-  inputs = {
-    # ...
-    agenix = {
-      url = "github:ryantm/agenix";
-      inputs.nixpkgs.follows = "nixpkgs";
-    };
-  };
+## Rotation and recovery
 
-  outputs = { self, nixpkgs, agenix, ... }@inputs:
-    # ...
-    nixosConfigurations.tentaflake = nixpkgs.lib.nixosSystem {
-      modules = [
-        inputs.agenix.nixosModules.age  # <-- add this
-        ./configuration.nix
-      ];
-    };
-}
-```
+For a provider-value rotation, edit the ciphertext through the pinned CLI,
+review/build, and activate the new secret within the authorized scope. Restart
+only the exact LLM broker to refresh systemd's loaded credential. Its virtual key
+survives broker restarts. Dev-only environment changes require recreating the
+selected controller; use the coordinated Tentaflake lifecycle operation.
 
-### 2. Create `secrets.nix` (recipients + secret declarations)
+When changing recipients, edit the CLI rules and rekey from that directory:
 
-Copy `secrets.nix.example` to `secrets.nix` and edit:
-
-```bash
-cp secrets.nix.example secrets.nix
-```
-
-Edit `secrets.nix` to set your agent names and SSH public keys:
-
-```nix
-# secrets.nix
-{ config, lib, pkgs, ... }:
-
-let
-  # Your agent names (match mkHermesAgent / mkZeroClawAgent calls)
-  agentNames = [
-    "hermes-coding"
-    "hermes-research"
-    "zeroclaw-assistant"
-  ];
-
-  # SSH public keys of machines that can decrypt.
-  # NEVER put private keys here.
-  recipients = [
-    "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAA..."  # Your dev machine
-    # Host key auto-detected on NixOS — add others as needed
-  ];
-
-  mkSecret = name: {
-    "${name}-env" = {
-      file = ./secrets/${name}.env.age;
-      owner = name;
-      group = name;
-      mode = "0600";
-    };
-  };
-in
-{
-  age.secrets = lib.mergeAttrsList (map mkSecret agentNames);
-}
-```
-
-Import it in `configuration.nix`:
-
-```nix
-# configuration.nix
-{
-  imports = [
-    ./modules/...
-    ./secrets.nix  # <-- add this
-  ];
-}
-```
-
-### 3. Install Agenix CLI
-
-Use the CLI from the reviewed agenix revision pinned by your consumer flake.
-For a temporary shell, replace `<reviewed-revision>` with that exact revision:
-
-```bash
-nix shell github:ryantm/agenix/<reviewed-revision> --command agenix --help
-```
-
-### 4. Create Encrypted `.age` Files
-
-```bash
-# Create the secrets directory
-mkdir -p secrets
-
-# Enter values in the editor rather than shell command history
-agenix -e secrets/hermes-coding.env.age
-agenix -e secrets/hermes-research.env.age
-```
-
-Each `.age` file contains the environment variables for one agent:
-
-```
-OPENROUTER_API_KEY=<replace-with-your-secret>
-TELEGRAM_BOT_TOKEN=<replace-with-your-secret>
-```
-
-The same works for a **ZeroClaw** agent — see `zeroclaw.env.example` for its
-`ZEROCLAW_<section>__<sub>__<key>` env-var convention (double underscores):
-
-```bash
-agenix -e secrets/zeroclaw-assistant.env.age
-```
-
-### 5. Wire Agenix Secrets to Agents
-
-This section applies only when the host explicitly selects:
-
-```nix
-tentaflake.security.profile = "dev";
-```
-
-In `my-agents.nix`, use `agenixFile` instead of `envFile`. Both runtimes accept
-it the same way — `mkHermesAgent` and `mkZeroClawAgent`:
-
-```nix
-# my-agents.nix
-{ mkHermesAgent, mkZeroClawAgent }:
-let
-  hermesAgents = [
-    {
-      name       = "coding";
-      agenixFile = "/run/agenix/hermes-coding-env";  # ← matches secrets.nix path
-      settings = {
-        model.default = "openrouter/anthropic/claude-sonnet-4";
-        toolsets = [ "terminal" "memory" "file" "skills" ];
-      };
-    }
-    {
-      name       = "research";
-      agenixFile = "/run/agenix/hermes-research-env";
-      settings = {
-        model.default = "openrouter/deepseek/deepseek-v4-flash";
-        toolsets = [ "terminal" "web" "memory" "file" "skills" ];
-      };
-    }
-  ];
-  zeroclawAgents = [
-    {
-      name       = "assistant";
-      agenixFile = "/run/agenix/zeroclaw-assistant-env";
-      hostPort   = 9246;
-      servePort  = 9145;
-      # This direct-secret/port example requires dev. Review the actual
-      # pinned runtime's schema before adding application settings.
-      settings.schema_version = 3;
-      settings.providers.models.openrouter.default.model = "anthropic/claude-haiku-4.5";
-    }
-  ];
-in
-map mkHermesAgent hermesAgents ++ map mkZeroClawAgent zeroclawAgents
-```
-
-The runtime path follows this convention:
-
-```
-/run/agenix/<name-from-secrets.nix>
-                      │
-                      └─ mkSecret creates "${name}-env"
-                         → path = /run/agenix/hermes-coding-env
-```
-
-### 6. Set SSH Identity for the Target Host
-
-On the target NixOS machine, ensure the host's SSH key is available:
-
-```nix
-# In your flake.nix params or configuration.nix:
-age.identityPaths = [
-  "/etc/ssh/ssh_host_ed25519_key"
-];
-```
-
-This is typically auto-detected on NixOS. If you use impermanence, point to the persistent path:
-
-```nix
-age.identityPaths = [
-  "/persist/etc/ssh/ssh_host_ed25519_key"
-];
-```
-
-### 7. Rebuild
-
-```bash
-sudo nixos-rebuild switch --flake /etc/nixos#tentaflake
-```
-
-Agenix decrypts the `.age` files during activation and places plaintext at
-`/run/agenix/`. Only the explicitly selected `dev` compatibility profile passes
-such a file to an agent as `--env-file`; balanced supplies individual files to
-host-side services through systemd credentials instead.
-
-## Verification
-
-After rebuild, verify secrets are wired without revealing contents:
-
-```bash
-# Check file exists with correct permissions
-ls -l /run/agenix/
-# Expected: -rw------- 1 hermes-coding hermes-coding ... hermes-coding-env
-
-stat -c '%U %G %a %n' /run/agenix/hermes-coding-env
-# Expected: hermes-coding hermes-coding 600 .../hermes-coding-env
-
-# Check the agent container has the env file mounted
-docker inspect hermes-coding | jq '.[0].Mounts[] | select(.Source | startswith("/run/agenix"))'
-```
-
-**Never** run `cat /run/agenix/*` or `agenix -d` to verify contents — use permissions and process checks instead.
-
-## Working with Multiple Contributors
-
-If multiple people need to edit secrets, add their SSH public keys to `secrets.nix` recipients and rekey:
-
-```bash
-# After adding new recipients to secrets.nix:
+```sh
 cd secrets
 agenix --rekey
 ```
 
-The `.age` format supports multiple recipients — each can decrypt independently.
-
-## Key Rotation & Recovery
-
-### Rotating a Secret Value
-
-When an API key or token changes (provider rotation, suspected leak, expiry),
-edit the `.age` file, rebuild, and restart the agent — the container only reads
-its `--env-file` at start:
-
-```bash
-agenix -e secrets/hermes-coding.env.age           # replace the old key
-sudo nixos-rebuild switch --flake /etc/nixos#tentaflake
-tentaflake restart coding                          # pick up the new env file
-```
-
-Don't forget to revoke the old key at the provider (OpenRouter, Telegram, …).
-
-### Rotating or Removing a Compromised Recipient Key
-
-If a recipient's SSH private key is compromised (lost laptop, leaked key):
-
-```bash
-# 1. Remove or replace the key in secrets.nix `recipients`
-# 2. Re-encrypt every .age file for the new recipient set
-agenix --rekey
-# 3. Commit, rebuild, and revoke the old key everywhere else it grants
-#    access (GitHub, authorized_keys on servers, ...)
-```
-
-Rekeying does **not** rewrite Git history — old ciphertext remains decryptable
-by the compromised key. Treat every secret *value* it could read as exposed and
-rotate those too (see above).
-
-### Recovery: Lost Host SSH Key
-
-Obtain the replacement public key through an authenticated management path and
-confirm its fingerprint independently before adding it as a recipient.
-`ssh-keyscan` collects a candidate key; it does not authenticate the host.
-
-Decryption needs **any one** listed recipient, so a reinstalled host is
-recoverable from any surviving recipient machine (e.g. your dev machine):
-
-```bash
-# On the surviving recipient machine:
-# Get the reinstalled host's public key (awk strips the leading hostname —
-# recipients need the bare "ssh-ed25519 AAAA..." form):
-ssh-keyscan -t ed25519 <new-host> | awk '{print $2, $3}'
-# Add it to secrets.nix `recipients`, then:
-agenix --rekey
-# Commit, then deploy to the new host as usual
-```
-
-If the **only** recipient key is lost, the secrets are unrecoverable — there is
-no passphrase fallback. Always keep at least one offline recovery recipient
-(e.g. an admin `age` key stored off-machine) in `recipients`.
-
-### Rotation Cadence
-
-This template sets no policy — pick one in your fork. A common example: rotate
-agent API keys every 90 days, and rekey immediately whenever a recipient
-machine is decommissioned or a key is suspected compromised.
-
-## Security Checklist
-
-- [ ] `agenix` input uncommented in `flake.nix`
-- [ ] `inputs.agenix.nixosModules.age` imported in host modules
-- [ ] `secrets.nix` created from `secrets.nix.example`
-- [ ] No `builtins.readFile config.age.secrets.*.path` anywhere in Nix
-- [ ] `age.identityPaths` uses runtime strings (not Nix paths)
-- [ ] `owner`/`group`/`mode` restrict each host credential to its intended reader
-- [ ] `.env` files excluded via `.gitignore` (`secrets/*.env`)
-- [ ] `.age` files tracked in Git
-- [ ] No private keys or decrypted secrets committed to Git
-- [ ] Balanced provider values go only to the LLM broker's `providerCredentialFile`
-- [ ] Direct-agent `agenixFile` examples are used only under explicit `dev`
+Rekeying does not revoke credentials or rewrite Git history. Old ciphertext
+remains decryptable with an old recipient key; if that key was compromised,
+rotate every exposed secret value separately. Authenticate replacement public
+keys before adding them. With no surviving recipient identity, encrypted values
+cannot be recovered.
 
 ## Troubleshooting
 
-| Symptom | Likely Cause | Fix |
-|---------|-------------|-----|
-| `agenix: command not found` | CLI not installed | Use the CLI from your reviewed, pinned agenix input |
-| `.age` file not decrypting | Recipient key missing or wrong | Check `secrets.nix` recipients match `~/.ssh/id_ed25519.pub` |
-| Broker cannot load provider file | Missing file or wrong mode | Check the exact runtime path and root-owned, owner-only file; restart that broker after rotation |
-| `/run/agenix/` empty after rebuild | Module not imported | Verify `inputs.agenix.nixosModules.age` in host modules |
-| `error: path ... is not in the Nix store` | Private key referenced as Nix path | Use string: `age.identityPaths = [ "/etc/ssh/..." ]` |
+| Symptom | Check |
+|---|---|
+| CLI finds no recipient rule | Run in `secrets/`; its `secrets.nix` must map the exact ciphertext filename |
+| Decryption fails | Matching runtime identity, authenticated recipients and persistent identity path |
+| Runtime secret is absent | Agenix module import, selected host and activation result |
+| Broker refuses a credential | Exact runtime path, ownership/mode, single-value format and refreshed unit credentials |
+| Secret enters the store | Remove Nix value interpolation/path literals; use runtime file paths |
 
-## References
-
-- [Agenix GitHub](https://github.com/ryantm/agenix)
-- [NixOS Wiki — Agenix](https://wiki.nixos.org/wiki/Agenix)
-- `secrets.nix.example` — template in this repo
-- `docs/01-quickstart.md` — getting started with agent deployment
+For backup, Git and Grafana, use each host service's documented credential
+format and permissions. See [operations](07-operations.md),
+[observability](09-observability.md) and the reviewed
+[Agenix source](https://github.com/ryantm/agenix).
