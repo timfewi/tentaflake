@@ -1,306 +1,48 @@
 ---
 name: hermes-config-manager
-description: Manage Hermes Agent configuration — config.yaml, .env, profiles, terminal backends, models, tools, env substitution, migration
-version: 1.0.0
-platforms: [linux, macos, windows]
+description: Change or diagnose declarative Hermes settings while preserving Tentaflake's read-only configuration and broker boundaries.
+version: 1.1.0
+platforms: [linux]
 metadata:
   hermes:
-    tags: [config, setup, profile, terminal]
+    tags: [config, setup, migration]
     category: devops
     requires_toolsets: [terminal]
 ---
 
-# Hermes Config Manager
+# Hermes configuration
 
-> **Tentaflake context:** In this repo, agents are defined declaratively in
-> `my-agents.nix` via `settings` on `mkHermesAgent` or `mkAgent` with
-> `adapter = "hermes"`. The implementation is `adapters/hermes.nix`. When
-> `settings` is set, the resulting `config.yaml` is mounted read-only inside
-> the container — interactive `hermes config set` changes won't persist
-> across restarts. Use `my-agents.nix.example` as your reference for the
-> declarative approach. Under balanced policy, real provider keys belong only
-> in host broker runtime credentials; direct agent env files require dev.
-> This skill is still useful as an in-container reference for Hermes' native
-> config options and for troubleshooting inside a running agent.
+1. Resolve the instance, image digest and state path from inventory and its
+   declaration. `adapters/hermes.nix` owns the builder; image defaults live in
+   `lib/constants.nix`.
+2. Hermes uses `$HERMES_HOME`, normally `/var/lib/hermes-<name>` inside and
+   outside the container, rather than the operator's `~/.hermes`.
+3. Non-empty effective `settings` generates a read-only `config.yaml`.
+   Research creates effective settings even without caller settings.
+   Interactive edits fail; they are not a persistence workflow.
+4. Change `settings` in the consumer's `my-agents.nix` with `mkHermesAgent` or
+   `mkAgent { adapter = "hermes"; ... }`. Read
+   [agent configuration](../../../docs/08-agent-cli.md) and the adapter arguments.
+5. Validate native option names against the pinned image's help or matching
+   source. Current upstream defaults may differ. The host's deprecated
+   `hermes` command is a Tentaflake shim; inspect the native CLI inside the
+   selected container instead:
 
-## When to Use
-
-- Set up or modify Hermes agent configuration
-- Switch terminal backends (local/docker/ssh/modal/daytona/singularity)
-- Configure model provider and API keys
-- Manage profiles
-- Migrate config after update
-- Debug config issues
-- Enable/disable toolsets globally
-
-## Procedure
-
-### 1. Directory Structure
-
-```
-~/.hermes/
-├── config.yaml     # Settings — model, terminal, TTS, compression
-├── .env            # API keys and secrets (chmod 600)
-├── auth.json       # OAuth provider credentials
-├── SOUL.md         # Agent identity (slot #1 in system prompt)
-├── memories/       # MEMORY.md, USER.md
-├── skills/         # Agent skills
-├── cron/           # Scheduled jobs
-├── sessions/       # Gateway sessions
-└── logs/           # errors.log, gateway.log
+```sh
+tentaflake exec hermes-<name> -- hermes --help
 ```
 
-### 2. Key Commands
+Keep settings and `extraEnvironment` secret-free: generated values enter the
+Nix store. Balanced keys belong in host broker runtime files. Profiles,
+alternate terminal backends, OAuth and auxiliary models need separately
+reviewed paths and authority; they cannot bypass declared host policy.
 
-```bash
-hermes config              # View current config
-hermes config edit         # Open in $EDITOR
-hermes config set KEY VAL  # Set value (API keys → .env, rest → config.yaml)
-hermes config check        # Find missing options after update
-hermes config migrate      # Interactively add missing options
-hermes config show         # Display full config
-```
+Research settings apply after caller settings and disable native web/browser
+tools. See [tools](../hermes-tools-config/SKILL.md) and
+[providers](../hermes-provider-setup/SKILL.md).
 
-`hermes config set` auto-routes: API keys → `.env`, everything else → `config.yaml`.
-
-### 3. Config Precedence
-
-Settings resolved in order (highest first):
-
-1. CLI args (`hermes chat --model X`)
-2. `~/.hermes/config.yaml`
-3. `~/.hermes/.env` (fallback for env vars)
-4. Built-in hardcoded defaults
-
-**Rule**: Secrets go in `.env`. Everything else in `config.yaml`. When both set, `config.yaml` wins for non-secrets.
-
-### 4. Profile Management
-
-```bash
-hermes -p work chat                    # Start session with work profile
-hermes profile create research         # Create new profile
-hermes profile create research --no-skills  # Profile without bundled skills
-hermes profile list                    # List all profiles
-hermes profile switch work             # Set default profile
-```
-
-Profiles get isolated `HERMES_HOME`, config, memory, sessions, and gateway PID. Run concurrently.
-
-### 5. Terminal Backend Configuration
-
-```yaml
-terminal:
-  backend: local # local | docker | ssh | modal | daytona | singularity
-  cwd: "." # Gateway working dir (CLI uses launch dir)
-  timeout: 180 # Per-command timeout (seconds)
-  env_passthrough: [] # Env vars to forward to sandboxes
-  persistent_shell: true # Single bash session across commands (SSH default: true)
-```
-
-**Set from CLI:**
-
-```bash
-hermes config set terminal.backend docker
-hermes config set terminal.docker_image nikolaik/python-nodejs:python3.11-nodejs20
-```
-
-**Docker-specific:**
-
-```yaml
-terminal:
-  docker_image: "nikolaik/python-nodejs:python3.11-nodejs20"
-  docker_mount_cwd_to_workspace: false
-  docker_run_as_host_user: false
-  docker_forward_env:
-    - "GITHUB_TOKEN"
-  docker_env:
-    DEBUG: "1"
-  docker_volumes:
-    - "/home/user/projects:/workspace/projects"
-  docker_extra_args:
-    - "--gpus=all"
-```
-
-Env var overrides: `TERMINAL_DOCKER_IMAGE`, `TERMINAL_DOCKER_VOLUMES` (JSON array), etc.
-
-**SSH:**
-
-```bash
-export TERMINAL_SSH_HOST=my-server.example.com
-export TERMINAL_SSH_USER=ubuntu
-# Optional:
-export TERMINAL_SSH_PORT=22
-export TERMINAL_SSH_KEY=~/.ssh/id_ed25519
-```
-
-**Modal:**
-
-```yaml
-terminal:
-  backend: modal
-  container_cpu: 1
-  container_memory: 5120
-  container_disk: 51200
-  container_persistent: true
-```
-
-Requires `MODAL_TOKEN_ID` + `MODAL_TOKEN_SECRET` or `~/.modal.toml`.
-
-### 6. Model/Provider Configuration
-
-```yaml
-model:
-  provider: nous # nous | openrouter | anthropic | openai | custom
-  default: anthropic/claude-sonnet-4.6
-  base_url: https://inference-api.nousresearch.com/v1
-```
-
-Switch at CLI:
-
-```bash
-hermes config set model anthropic/claude-sonnet-4.6
-hermes config set model.provider openrouter
-```
-
-Multi-provider fallback:
-
-```yaml
-model:
-  provider: openrouter
-  fallbacks:
-    - provider: nous
-    - provider: anthropic
-```
-
-### 7. Tool Configuration Per Platform
-
-```bash
-hermes tools    # Interactive tool config per platform
-```
-
-Write tool config to specific platforms (CLI, telegram, discord, etc.). Creates platform-specific toolset presets.
-
-Global toolset disable in config:
-
-```yaml
-agent:
-  disabled_toolsets:
-    - memory
-    - web
-```
-
-### 8. Skill Settings in Config
-
-```yaml
-skills:
-  config:
-    myplugin:
-      path: ~/myplugin-data
-  guard_agent_created: false # Set true to scan skill writes for dangerous patterns
-  external_dirs:
-    - ~/.agents/skills
-```
-
-### 9. Env Var Substitution in config.yaml
-
-Use `${VAR_NAME}` syntax:
-
-```yaml
-auxiliary:
-  vision:
-    api_key: ${GOOGLE_API_KEY}
-    base_url: ${CUSTOM_VISION_URL}
-```
-
-Multiple refs in one value work: `url: "${HOST}:${PORT}"`. Unset vars keep placeholder verbatim. Only `${VAR}` supported — bare `$VAR` not expanded.
-
-### 10. Config Migration
-
-```bash
-hermes config check       # Find missing options after update
-hermes config migrate     # Walk through new options interactively
-```
-
-After Hermes update always run `hermes config check` to find new required or optional config keys.
-
-### 11. Provider Timeouts
-
-```yaml
-providers:
-  openrouter:
-    request_timeout_seconds: 1800
-    stale_timeout_seconds: 300
-    models:
-      claude-sonnet-4:
-        timeout_seconds: 3600
-```
-
-### 12. Compression Settings
-
-```yaml
-compression:
-  enabled: true
-  threshold: 0.50 # Compress at 50% of context limit
-  target_ratio: 0.20
-  protect_last_n: 20
-  protect_first_n: 3
-  hygiene_hard_message_limit: 400
-
-auxiliary:
-  compression:
-    model: "" # Empty = use main chat model
-    provider: auto
-    base_url: null
-```
-
-### 13. Memory Config
-
-```yaml
-memory:
-  memory_enabled: true
-  user_profile_enabled: true
-  memory_char_limit: 2200
-  user_char_limit: 1375
-  write_approval: false # false=write freely, true=require approval
-```
-
-### 14. File Read & Tool Output Limits
-
-```yaml
-file_read_max_chars: 100000 # Max chars per read_file call
-
-tool_output:
-  max_bytes: 50000 # Terminal output truncation
-  max_lines: 2000 # read_file pagination cap
-  max_line_length: 2000 # Per-line cap
-```
-
-### 15. Credential Pool Strategies
-
-```yaml
-credential_pool_strategies:
-  openrouter: round_robin # fill_first | round_robin | least_used | random
-  anthropic: least_used
-```
-
-## Pitfalls
-
-- **YAML duplicate keys**: Silent override. Merge new mounts into same `docker_volumes:` list
-- **Secrets in config.yaml**: Never put API keys in `config.yaml` — use `.env` with `chmod 600`
-- **Context length wrong**: Set `model.context_length` if auto-detection fails
-- **Local model timeouts**: Hermes auto-detects local endpoints and relaxes timeouts. Set `HERMES_STREAM_READ_TIMEOUT=1800` if still hitting limits
-- **Switching profiles loses `--continue`**: Each profile has own session db. Use `hermes -p <name> -c`
-- **`hermes config set` routes .env**: API key names (`OPENROUTER_API_KEY`) auto-detect as secrets
-- **`hermes config migrate` only checks enabled skills**: Disabled skills' config settings skipped
-- **Gateway hot-reload**: Editing `model.context_length` or `compression.*` takes effect on next message. API keys and tool/skill config need `/reload-mcp` or restart
-- **SSH with persistent shell**: Don't enable `TERMINAL_LOCAL_PERSISTENT` unless needed for stateful commands
-
-## Verification
-
-```bash
-hermes config show | head -30                        # View current config
-hermes config check                                    # Check for missing options
-hermes doctor                                          # Full diagnostics
-hermes gateway status                                  # Gateway state
-cat ~/.hermes/.env                                     # Verify secrets file
-```
+Evaluate/check the consumer configuration and review the generated diff before
+an authorized activation. Afterwards check the exact unit, bounded logs and
+application behavior. Recheck native options after image changes. Never dump
+`.env`, `auth.json` or complete runtime configuration for diagnosis.
+See [agent management](../../../docs/02-agent-tips.md) for seeds and ownership.

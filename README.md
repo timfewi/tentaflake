@@ -403,6 +403,7 @@ therefore be newer than the website.
 
 | Topic | Guide |
 |---|---|
+| Product direction and planned milestones | [Roadmap](docs/roadmap.md) (planned work, not current support) |
 | Installation and first host | [Install](docs/00-install.md), [quickstart](docs/01-quickstart.md) |
 | Agent definitions and runtimes | [Declarative configuration](docs/08-agent-cli.md), [adapters](docs/agent-adapters.md) |
 | Day-to-day management | [Agent management](docs/02-agent-tips.md), [operator CLI](docs/06-shell.md), [recovery](docs/07-operations.md) |

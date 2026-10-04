@@ -59,6 +59,11 @@ still accurate before finishing — and update them in the same change:
 - this `AGENTS.md` / `CLAUDE.md` — agent instructions
 - relevant `.agents/skills/` — bundled skill docs
 
+Keep skills short: actionable steps, essential boundaries and verification.
+Link detailed option tables/examples to their owning guides; verify native
+Hermes commands against the pinned image rather than copying upstream catalogs.
+Never print credentials as a diagnostic check.
+
 The public repository owns the documentation; the website presents a pinned
 release. See `docs/18-documentation.md`. Contributors update authoritative
 guides here and identify route additions/removals in the PR. Website publication
