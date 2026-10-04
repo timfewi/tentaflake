@@ -21,6 +21,11 @@ mirrors a pinned release. Keep authoritative guides, instructions and affected
 skills synchronized, identify new/removed guides for the maintainer, and do not
 claim unreleased checkout changes are published. See `docs/18-documentation.md`.
 
+Product direction and milestone candidates live in `docs/roadmap.md`. They are
+planned work, not current options or runtime support. GitHub milestones and
+website publication are separate tasks; keep actual support claims grounded in
+the implementation and operational guides.
+
 ## Layout
 
 ```text
