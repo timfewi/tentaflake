@@ -33,10 +33,12 @@ TOML configuration lives at `/zeroclaw-data/.zeroclaw/config.toml`. State paths
 and permitted ownership overrides come from the selected builder. Confirm them
 before copying data; do not infer a path from an instance name alone.
 
-When `settings` is supplied, the builder generates and mounts configuration
-read-only. Edit the declarative input and rebuild deliberately. Interactive
-configuration writes can fail against that mount; they are not a persistent
-configuration workflow. Seed files are copied without overwriting existing
+Hermes generates read-only configuration when effective `settings` is non-empty;
+Research adds settings even when callers supply none. ZeroClaw always generates
+and mounts its configuration read-only. Edit the declarative input and rebuild
+deliberately. Interactive configuration writes can fail against that mount;
+they are not a persistent configuration workflow. Seed files are copied without
+overwriting existing
 state, so changing `seedDir` is not an automatic update of existing skills or
 personality files.
 

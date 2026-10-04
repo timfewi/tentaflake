@@ -1,192 +1,64 @@
 ---
 name: handle-the-host
-description: Connect to and operate a tentaflake-built machine via Tailscale SSH. Use when remoting into a deployed tentaflake for maintenance, debugging, rebuilds, or inspection.
-version: 1.0.0
+description: Inspect or maintain a deployed Tentaflake host through its authorized Tailscale SSH management path.
+version: 1.1.0
 ---
 
-# Handle the Host — Remote Operations Guide
+# Handle the host
 
-## Overview
+## Resolve and inspect
 
-Tentaflake deploys NixOS with Tailscale pre-configured. Every target machine must join your tailnet. You connect, inspect, rebuild, and debug entirely through Tailscale SSH — no open ports, no public IP required.
+Use the operator-supplied host and account. Confirm the target before mutations;
+a local Tailscale flag does not prove enrollment or remote grants. Read
+[management policy](../../../docs/11-tailscale-management.md) and
+[operations](../../../docs/07-operations.md) for the relevant procedure.
 
-Local SSH/hostname preferences use the NixOS `tailscaled-set` unit, including
-manual enrollment without `authKeyFile`. Tags are accepted only by `tailscale up`:
-manual enrollment must request `--advertise-tags=tag:agent-host`; NixOS supplies
-it through `extraUpFlags` during auth-key enrollment. Local settings do not enroll
-the node or prove remote grants. The balanced baseline still requires Tailscale;
-Headscale and alternative management adapters need the acceptance described in
-`docs/11-tailscale-management.md`. Management membership alone is not Research
-VPN exit readiness.
+SSH/hostname preferences use `tailscale set`; `--advertise-tags` belongs to
+`tailscale up`. NixOS supplies `--advertise-tags=tag:agent-host` through
+`extraUpFlags` during auth-key enrollment; request it explicitly for manual
+enrollment as described in the management guide.
 
-## How to Connect
-
-```bash
-tailscale ssh <user>@<hostname>
+```sh
+tailscale ssh <admin>@<host>
 ```
 
-Replace `<user>` with the admin username set during installation (default: `user`). Replace `<hostname>` with the hostname chosen during installation.
+For interactive sudo use `ssh -t <admin>@<host>` through the authorized tailnet
+path. Preserve existing authentication and recovery access. On the target:
 
-> **Note:** `tailscale ssh` does **not** support the `-t` flag. For commands requiring a pseudo-TTY (e.g., `sudo` prompts), use raw SSH through Tailscale instead:
-> ```bash
-> ssh -t <user>@<hostname> "sudo <command>"
-> ```
-
-## First Connection Checklist
-
-1. **Verify Tailscale status** on the target:
-   ```bash
-   tailscale ssh <user>@<hostname>
-   tailscale status
-   ```
-
-2. **Check that agent containers are running** (covers every agent runtime — Hermes and ZeroClaw):
-   ```bash
-   tentaflake status
-   # or, raw:
-   docker ps
-   ```
-
-3. **Inspect NixOS config** (always in `/etc/nixos/`):
-   ```bash
-   ls /etc/nixos/
-   ```
-
-## Common Operations
-
-### Rebuild the System
-
-```bash
-cd /etc/nixos
-sudo nixos-rebuild switch --flake .#<hostname>
+```sh
+hostname
+tailscale status
+tentaflake status
+tentaflake health
+tentaflake doctor --security
 ```
 
-Or use the `rebuild` alias if configured:
-```bash
-rebuild
+Resolve container, unit and state path from `/etc/tentaflake/agents.tsv`;
+backend and flake target come from `/etc/tentaflake/cli.conf`. Do not assume
+Docker, `/etc/nixos` or a runtime prefix for a consumer deployment. Bound logs:
+
+```sh
+sudo journalctl -u <exact-unit> --since '1 hour ago' -n 100 --no-pager
 ```
 
-### Rollback
+`tentaflake logs <agent>` follows until interrupted. Never dump OCI environment
+data or credentials. Diagnostic `--hide` redacts host/agent names; other logs
+still need review before sharing.
 
-```bash
-sudo nixos-rebuild switch --rollback
-```
+## Perform the authorized operation
 
-### Inspect System State
+Prefer `tentaflake start|stop|restart <exact-container>`. `stop` also stops the
+controller's loaded LLM/fetch brokers. Stopped scaffolds are valid inventory
+entries; OpenClaw refuses a start.
 
-```bash
-# Nix store usage
-sudo nix store gc --print-dead
+For updates, review input/image changes, run checks and build the exact candidate
+before activation. `tentaflake rebuild` activates the configured host;
+`tentaflake update` changes its lockfile and offers activation. Rollback,
+credential rotation, disk work and publishing services need authorization
+covering that action and target. Reuse existing authorization without asking
+again. Do not add passwordless sudo, Serve/Funnel or firewall openings as a
+routine connection fix.
 
-# Running services
-systemctl list-units --type=service --state=running
-
-# Journal logs for a specific agent (any runtime)
-tentaflake logs <agent-name>
-```
-
-### Container Operations
-
-Prefer the `tentaflake` host CLI — it drives every declared agent regardless
-of runtime, so you never have to hardcode a container or unit name:
-
-```bash
-tentaflake status                # all agents, every runtime, with state
-tentaflake restart <agent-name>
-tentaflake logs <agent-name>     # -f-style follow via journalctl
-tentaflake shell <agent-name>    # interactive shell inside the container
-tentaflake ps                    # raw docker/podman ps for agent containers
-```
-
-A deprecated `hermes` shim still works (prints a deprecation note to stderr,
-then execs `tentaflake`).
-
-Raw container commands still work if you need them directly. Containers are
-named `hermes-<agent-name>` (Hermes runtime) or `zeroclaw-<agent-name>`
-(ZeroClaw runtime), with state at `/var/lib/hermes-<agent-name>` or
-`/var/lib/zeroclaw-<agent-name>` respectively:
-
-```bash
-docker ps
-docker logs hermes-<agent-name>       # or zeroclaw-<agent-name>
-sudo systemctl restart docker-hermes-<agent-name>   # or docker-zeroclaw-<agent-name>
-```
-
-## Passwordless Sudo for Tailscale & NixOS
-
-By default, the tentaflake-hardening module enables `sudo.wheelNeedsPassword = true`. For smooth remote operations you may want passwordless sudo for Tailscale and NixOS rebuild commands.
-
-### Option A: NixOS Module (if using host-monitor or custom module)
-
-In your host configuration:
-
-```nix
-security.sudo.extraRules = [
-  {
-    groups = [ "wheel" ];
-    commands = [
-      {
-        command = "${pkgs.tailscale}/bin/tailscale";
-        options = [ "NOPASSWD" ];
-      }
-      {
-        command = "${pkgs.nixos-rebuild}/bin/nixos-rebuild";
-        options = [ "NOPASSWD" ];
-      }
-      {
-        command = "/run/current-system/sw/bin/nixos-rebuild";
-        options = [ "NOPASSWD" ];
-      }
-      {
-        command = "${pkgs.nix}/bin/nix";
-        options = [ "NOPASSWD" ];
-      }
-    ];
-  }
-];
-```
-
-Add this to a dedicated `modules/sudo.nix` or inline in `configuration.nix`.
-
-### Option B: Manual (for existing deployments)
-
-SSH in and edit sudoers:
-
-```bash
-ssh -t <user>@<hostname> "echo '%wheel ALL=(ALL) NOPASSWD: /run/current-system/sw/bin/tailscale, /run/current-system/sw/bin/nixos-rebuild' | sudo EDITOR='tee' visudo -f /etc/sudoers.d/tailscale-nixos"
-```
-
-## Tailscale Serve (Exposing Services)
-
-Use `tailscale serve` to expose local services to your tailnet:
-
-```bash
-# Serve a local port
-sudo tailscale serve --bg 8080
-
-# Serve HTTPS
-sudo tailscale serve --bg --https=443 localhost:8080
-
-# List active serves
-tailscale serve status
-```
-
-## Verification
-
-After connecting, confirm the machine is healthy:
-
-```bash
-tailscale ssh <user>@<hostname>
-hostname               # Should match the installed hostname
-tailscale status        # Should show the machine joined to tailnet
-systemctl status        # Should show running state
-tentaflake status        # Should list agent containers across every runtime
-```
-
-## Pitfalls
-
-- **`tailscale ssh` fails silently:** Ensure the target machine is online and has Tailscale running. Check `tailscale status` from your admin machine.
-- **`nixos-rebuild` needs sudo:** All NixOS operations require root. Use the NOPASSWD rules above or authenticate via `ssh -t`.
-- **Config at `/etc/nixos/`:** Always work from `/etc/nixos/`. The installed system uses its own flake there — NOT the installer ISO's repo.
-- **`tailscale ssh` limits:** Pseudo-TTY (-t) is not supported. Use raw SSH with `-t` for interactive sudo prompts.
-- **Firewall:** Tentaflake enables nftables with a restrictive default-deny posture. Tailscale's WireGuard interface is allowed by default. For extra services, open ports in your host config.
+After a mutation, repeat health/posture and affected application checks.
+Report results and unknown evidence. Management connectivity is separate from
+Research VPN readiness and provider/vendor acceptance.
