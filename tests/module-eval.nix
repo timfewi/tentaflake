@@ -85,6 +85,12 @@ let
   capsuleManifest = capsule.config.environment.etc."tentaflake/security.tsv".text;
   capsuleAttempt = builtins.tryEval capsule.config.system.build.toplevel.drvPath;
 
+  authKeyHost = eval [
+    ../modules/default.nix
+    (hostModule "balanced")
+    { services.tailscale.authKeyFile = "/run/agenix/tailscale-auth"; }
+  ];
+
   provenanceCapsule = eval [
     ../modules/default.nix
     (hostModule "balanced")
@@ -1190,18 +1196,40 @@ assert
     "AF_UNIX"
     "AF_NETLINK"
   ];
-# Manual enrollment has no authKeyFile: security settings must still be
-# applied by tailscaled-set, not hidden behind the autoconnect-only up flags.
+# Manual enrollment still applies SSH/hostname preferences. Tags belong to up,
+# including automatic key enrollment; they are not accepted by tailscale set.
 assert capsule.config.services.tailscale.authKeyFile == null;
 assert
   capsule.config.services.tailscale.extraSetFlags == [
+    "--hostname=eval-host"
+    "--ssh"
+  ];
+assert
+  capsule.config.services.tailscale.extraUpFlags == [
     "--advertise-tags=tag:agent-host"
     "--hostname=eval-host"
     "--ssh"
   ];
 assert builtins.hasAttr "tailscaled-set" capsule.config.systemd.services;
 assert lib.hasInfix " set " capsule.config.systemd.services.tailscaled-set.script;
+assert !(builtins.hasAttr "tailscaled-autoconnect" capsule.config.systemd.services);
+assert
+  authKeyHost.config.services.tailscale.extraSetFlags
+  == capsule.config.services.tailscale.extraSetFlags;
+assert
+  authKeyHost.config.services.tailscale.extraUpFlags
+  == capsule.config.services.tailscale.extraUpFlags;
+assert lib.hasInfix "tailscale up --auth-key"
+  authKeyHost.config.systemd.services.tailscaled-autoconnect.script;
+assert lib.hasInfix "--advertise-tags=tag:agent-host"
+  authKeyHost.config.systemd.services.tailscaled-autoconnect.script;
 assert builtins.length tailscalePolicy.grants == 1;
 assert builtins.length tailscalePolicy.ssh == 1;
 assert (builtins.head tailscalePolicy.ssh).action == "check";
-true
+# Parse the configured flags with the pinned CLI. --help avoids contacting a
+# daemon, while an unsupported flag before it still fails during parsing.
+pkgs.runCommand "tentaflake-module-evaluation" { } ''
+  ${lib.getExe capsule.config.services.tailscale.package} set ${lib.escapeShellArgs capsule.config.services.tailscale.extraSetFlags} --help >/dev/null
+  ${lib.getExe capsule.config.services.tailscale.package} up ${lib.escapeShellArgs capsule.config.services.tailscale.extraUpFlags} --help >/dev/null
+  touch $out
+''

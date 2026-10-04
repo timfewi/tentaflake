@@ -5,17 +5,18 @@
 }:
 let
   cfg = config.tentaflake;
+  preferences = [
+    "--hostname=${cfg.hostName}"
+    "--ssh"
+  ];
 in
 lib.mkIf cfg.tailscale.enable {
   services.tailscale = {
     enable = true;
     openFirewall = true;
-    # Apply preferences independently of authKeyFile. extraUpFlags only run
-    # during NixOS autoconnect and silently skip manually enrolled hosts.
-    extraSetFlags = [
-      "--advertise-tags=tag:agent-host"
-      "--hostname=${cfg.hostName}"
-      "--ssh"
-    ];
+    # Apply supported preferences even without authKeyFile. Tags are up-only;
+    # manual enrollment must supply them explicitly (see the management guide).
+    extraSetFlags = preferences;
+    extraUpFlags = [ "--advertise-tags=tag:agent-host" ] ++ preferences;
   };
 }

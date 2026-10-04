@@ -10,9 +10,11 @@ version: 1.0.0
 
 Tentaflake deploys NixOS with Tailscale pre-configured. Every target machine must join your tailnet. You connect, inspect, rebuild, and debug entirely through Tailscale SSH — no open ports, no public IP required.
 
-Local SSH/tag/hostname preferences use the NixOS `tailscaled-set` unit, including
-manual enrollment without `authKeyFile`. This does not enroll the node or prove
-the remote grants. The current balanced baseline still requires Tailscale;
+Local SSH/hostname preferences use the NixOS `tailscaled-set` unit, including
+manual enrollment without `authKeyFile`. Tags are accepted only by `tailscale up`:
+manual enrollment must request `--advertise-tags=tag:agent-host`; NixOS supplies
+it through `extraUpFlags` during auth-key enrollment. Local settings do not enroll
+the node or prove remote grants. The balanced baseline still requires Tailscale;
 Headscale and alternative management adapters need the acceptance described in
 `docs/11-tailscale-management.md`. Management membership alone is not Research
 VPN exit readiness.

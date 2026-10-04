@@ -30,12 +30,23 @@ neither restrictive grants nor SSH rules are inferred from
 
 ## Enrollment and local preferences
 
-The template applies `--ssh`, the host name and `tag:agent-host` through
+The template applies `--ssh` and the host name through
 `services.tailscale.extraSetFlags`. NixOS creates `tailscaled-set` even without
-`authKeyFile`; `extraUpFlags` only runs during automatic key enrollment and must
-not be used for these persistent preferences. This does not enroll a node or
-validate the remote policy. An operator must still complete enrollment and
-verify the live preferences and access from a separate authorized session.
+`authKeyFile`. `--advertise-tags` is accepted only by `tailscale up`, so
+`extraUpFlags` retains the tag and these preferences for automatic auth-key
+enrollment. NixOS does not apply `extraUpFlags` without `authKeyFile`.
+
+For a new manually enrolled node, supply the tag explicitly using the configured
+host name:
+
+```sh
+sudo tailscale up --advertise-tags=tag:agent-host --ssh --hostname='<host-name>'
+```
+
+On an already configured node, preserve all existing non-default preferences;
+follow the CLI's required flag list rather than resetting them. Local settings
+do not enroll a node or validate the remote policy. Verify the assigned tag,
+live preferences and access from a separate authorized session.
 
 ## Modular management review (2026-10-03)
 
@@ -59,19 +70,20 @@ provide an Internet exit node.
 | [P1: Provider-independent Research VPN adapter acceptance](https://github.com/timfewi/tentaflake-research/issues/4) | Research already accepts an external observation adapter. Its optional reference observer checks interface-up, an IPv4 route across routing tables and a root-owned firewall marker; the marker is not verification of live rules or tunnel identity. | Document a reusable adapter contract and test selected tunnel/exit-node configurations for IPv4, IPv6, DNS, policy routing, tunnel loss and stale observations. Keep the independent UID firewall fail-closed. The observer's `region` is an operator assertion. |
 
 The manual-enrollment preference bug above is addressed in
-[PR #105](https://github.com/timfewi/tentaflake/pull/105), with a regression assertion
-in `tests/module-eval.nix`. The adapter items remain follow-up work.
+[PR #105](https://github.com/timfewi/tentaflake/pull/105). Its regression covers
+manual and auth-key configurations and parses the actual flags with the pinned
+Tailscale CLI. The adapter items remain follow-up work.
 No enrollment, ACL publication, VPN switching or host activation is performed
 by this review.
 
 
-Verification checkpoint: the new manual-enrollment assertion failed before the
-fix because `extraSetFlags` was empty. After the change, `just fmt` and `just fast`
-passed, including Nix lint/formatting, Rust checks, module assertions, policy and
-adapter checks, read-only flake evaluation and generated-installer-flake checks.
-The regression verifies the declared `tailscaled-set` wiring; live enrollment,
-SSH access and unit behavior on an installed host were not exercised. No VM suite
-or host activation was run. Both Research input and lockfiles remain unchanged.
+Verification checkpoint (2026-10-04): the pinned Tailscale 1.98.8 parser rejects
+the former `set --advertise-tags` invocation before contacting a daemon. The
+module-evaluation regression reproduces that failure with the generated flags;
+`--help` validates parsing without enrollment. All fast-gate checks pass with
+the corrected flags. Live enrollment, SSH access and
+installed unit behavior require separate acceptance. No VM suite or host
+activation was run; Research and lockfile pins remain unchanged.
 
 The reviewed Research pin update is tracked separately in
 [issue #110](https://github.com/timfewi/tentaflake/issues/110); it requires upstream review and

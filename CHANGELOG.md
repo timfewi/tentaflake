@@ -87,6 +87,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   policy checks and a real gVisor stdio-MCP integration fixture. Secure auto-start
   now requires a research relay alongside the broker, worker and workspace quota.
 ### Fixed
+- Keep Tailscale's up-only `--advertise-tags` out of `extraSetFlags`, allowing
+  hostname/SSH preferences to apply after manual enrollment. Auth-key enrollment
+  retains all three flags through `extraUpFlags`; manual enrollment requests the
+  tag explicitly. Regression checks parse the generated flags with the pinned CLI.
 - Pin the Dev Containers CLI's transitive `basic-ftp` dependency to 6.2.1
   for `GHSA-c475-qrg2-pj4r`, with the patched Yarn resolution and offline-cache
   hash updated together. The CLI release stays at 0.88.0.
