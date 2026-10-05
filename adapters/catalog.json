@@ -1,0 +1,234 @@
+{
+  "schemaVersion": 1,
+  "presets": {
+    "hermes": {
+      "schemaVersion": 1,
+      "identity": {
+        "id": "hermes",
+        "version": "image-snapshot-2026-07-18",
+        "status": "compatibility"
+      },
+      "artifact": {
+        "kind": "oci",
+        "reference": "docker.io/nousresearch/hermes-agent@sha256:4a2f23bd3ffaa6ee7b3be8a302a38be43ab0321a2988cd3fb16b7dd472dde812",
+        "reviewed": true
+      },
+      "command": [
+        "gateway",
+        "run",
+        "--replace"
+      ],
+      "configuration": {
+        "format": "yaml",
+        "readOnly": true
+      },
+      "ownership": {
+        "uid": 10000,
+        "gid": 10000
+      },
+      "layout": {
+        "state": "/var/lib/hermes-<name>",
+        "workspace": "workspace",
+        "writable": [
+          "state",
+          "workspace"
+        ]
+      },
+      "lifecycle": "service",
+      "model": {
+        "protocols": [
+          "openai-chat-completions"
+        ],
+        "streaming": "unknown"
+      },
+      "research": {
+        "supported": true
+      },
+      "execution": {
+        "interface": "worker-queue-v1",
+        "automatic": false
+      },
+      "capabilities": [
+        "files",
+        "shell",
+        "terminal",
+        "worker",
+        "model",
+        "research"
+      ],
+      "evidence": {
+        "fixture": "source-regression",
+        "vendorAcceptance": "pending"
+      }
+    },
+    "zeroclaw": {
+      "schemaVersion": 1,
+      "identity": {
+        "id": "zeroclaw",
+        "version": "0.8.2",
+        "status": "compatibility"
+      },
+      "artifact": {
+        "kind": "oci",
+        "reference": "ghcr.io/zeroclaw-labs/zeroclaw@sha256:eae321dac2d314bc282bdfb28b5378c9d527998f7e2fe0dee8315bfdcdf13a0c",
+        "reviewed": true
+      },
+      "command": [
+        "daemon"
+      ],
+      "configuration": {
+        "format": "toml",
+        "readOnly": true
+      },
+      "ownership": {
+        "uid": 65534,
+        "gid": 65534
+      },
+      "layout": {
+        "state": "/var/lib/zeroclaw-<name>",
+        "workspace": "data",
+        "writable": [
+          "state",
+          "workspace"
+        ]
+      },
+      "lifecycle": "service",
+      "model": {
+        "protocols": [
+          "openai-chat-completions"
+        ],
+        "streaming": "unknown"
+      },
+      "research": {
+        "supported": true
+      },
+      "execution": {
+        "interface": "worker-queue-v1",
+        "automatic": false
+      },
+      "capabilities": [
+        "files",
+        "shell",
+        "terminal",
+        "worker",
+        "model",
+        "research"
+      ],
+      "evidence": {
+        "fixture": "source-regression",
+        "vendorAcceptance": "pending"
+      }
+    },
+    "openclaw": {
+      "schemaVersion": 1,
+      "identity": {
+        "id": "openclaw",
+        "version": "2026.9.7",
+        "status": "scaffold"
+      },
+      "artifact": {
+        "kind": "unselected",
+        "reference": null,
+        "reviewed": false
+      },
+      "command": [
+        "node",
+        "openclaw.mjs",
+        "gateway"
+      ],
+      "configuration": {
+        "format": "json",
+        "readOnly": true
+      },
+      "ownership": {
+        "uid": 1000,
+        "gid": 1000
+      },
+      "layout": {
+        "state": "/var/lib/openclaw-<name>",
+        "workspace": "workspace",
+        "writable": [
+          "state",
+          "workspace"
+        ]
+      },
+      "lifecycle": "stopped-scaffold",
+      "model": {
+        "protocols": [
+          "openai-chat-completions",
+          "openai-responses"
+        ],
+        "streaming": "required"
+      },
+      "research": {
+        "supported": false
+      },
+      "execution": {
+        "interface": "unverified",
+        "automatic": false
+      },
+      "capabilities": [
+        "files",
+        "shell",
+        "terminal",
+        "worker"
+      ],
+      "evidence": {
+        "fixture": "refusal-regression",
+        "vendorAcceptance": "pending"
+      }
+    },
+    "generic": {
+      "schemaVersion": 1,
+      "identity": {
+        "id": "generic",
+        "version": "1",
+        "status": "definition"
+      },
+      "artifact": {
+        "kind": "instance",
+        "reference": null,
+        "reviewed": false
+      },
+      "command": [],
+      "configuration": {
+        "format": "none",
+        "readOnly": true
+      },
+      "ownership": {
+        "uid": 10000,
+        "gid": 10000
+      },
+      "layout": {
+        "state": "/var/lib/generic-<name>",
+        "workspace": "workspace",
+        "writable": [
+          "state",
+          "workspace"
+        ]
+      },
+      "lifecycle": "service",
+      "model": {
+        "protocols": [],
+        "streaming": "unknown"
+      },
+      "research": {
+        "supported": false
+      },
+      "execution": {
+        "interface": "worker-queue-v1",
+        "automatic": false
+      },
+      "capabilities": [
+        "files",
+        "shell",
+        "terminal",
+        "worker"
+      ],
+      "evidence": {
+        "fixture": "source-regression",
+        "vendorAcceptance": "operator-owned"
+      }
+    }
+  }
+}

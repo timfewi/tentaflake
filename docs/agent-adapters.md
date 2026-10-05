@@ -1,7 +1,8 @@
 # Agent adapters
 
-Status: foundation verified; OpenClaw remains a stopped scaffold with pending
-runtime acceptance. This is partial delivery in the container template only.
+Status: common schema-v1 OCI definitions and preset discovery are available.
+Generic workloads remain stopped pending capability-specific admission. OpenClaw
+remains a stopped scaffold; vendor runtime acceptance is separate.
 
 The requirement is one discoverable adapter per integrated runtime, a common
 consumer builder, unchanged Hermes/ZeroClaw state and public arguments, and
@@ -44,9 +45,81 @@ VPN interface and readiness configuration. There is no operational OpenClaw
 example yet: copying those host declarations would not solve tool routing or
 model compatibility.
 
+## Generic isolated workload
+
+A local definition needs no new Rust adapter or upstream security module:
+
+```nix
+{ mkAgent }:
+[
+  (mkAgent {
+    adapter = "generic";
+    name = "coding";
+    definition = {
+      schemaVersion = 1;
+      # Replace with an independently reviewed artifact, never a mutable tag.
+      image = "registry.example.invalid/agent@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+      command = [ "agent" "--interactive" ];
+      ownership = { uid = 10000; gid = 10000; };
+      workspace = "/workspace";
+      resources = { memory = "2g"; memorySwap = "2g"; cpus = "2.0"; pidsLimit = 512; };
+      lifecycle = "stopped";
+      capabilities = [ "files" "shell" "terminal" ];
+    };
+  })
+]
+```
+
+The same `definition` object is accepted in a schema-v1 JSON `agents` entry.
+The argument vector follows OCI semantics and preserves the image entrypoint.
+Image review/provenance remains operator-owned; a digest alone is not proof of
+trust. Evaluation neither downloads the image nor activates the host.
+
+The instance root `/var/lib/generic-NAME` belongs to root and is not mounted
+into the capsule. Its separate `state` and `workspace` children belong to the
+container UID/GID; `state` mounts at `/state` with `HOME=/state`. The agent cannot
+replace its mount sources through a writable parent. Startup refuses symlink
+sources or a parent without root ownership and mode 0700. The private `workspace`
+child is mounted at the requested workspace path and becomes the working
+directory. That destination must be `/workspace` or a
+normalized child. Non-root ownership defaults to 10000:10000. Resource fields
+inherit host security limits; allowed overrides are `memory`, `memorySwap`,
+`cpus`, `nofile`, `pidsLimit`, `tmpfsSize` and `runTmpfsSize`. Values must be
+positive. Host administrators remain responsible for appropriate aggregate bounds.
+
+Unknown versions/fields, root ownership, unpinned images, extra mounts,
+environment/credential inputs, malformed commands and unsupported capabilities
+fail before a module is produced. Definitions are non-secret, including command
+arguments. Native shell/files run inside the ordinary gVisor capsule; this
+contract does not redirect native execution to the worker. `worker` is an
+additional declaration requiring matching host workspace/identity policy; no
+automatic vendor routing is claimed.
+
+The workload uses the existing host-selected Docker/Podman backend, gVisor,
+read-only root, no-new-privileges, dropped capabilities, bounded resources and
+`network=none`. It exposes no host/other-agent socket or model credentials.
+Generic model and Research hooks are not yet accepted. `lifecycle = "service"`
+or forcing `autoStart` still fails current broker/worker/quota/Research gates;
+capability-specific admission is tracked in #116. `dev` is unavailable for the
+new generic contract. After an explicitly authorized host update, an operator
+may manually start an intentionally stopped offline workload and attach with
+`tentaflake shell generic-NAME` or `tentaflake exec generic-NAME -- ...`.
+These source fixtures do not establish vendor support or live isolation evidence.
+
+### OpenShell reuse decision
+
+Keep the existing OCI/gVisor backend for this contract. The investigated NVIDIA
+OpenShell 0.1.x architecture supports separating agent commands from trusted
+policy and credentials, which this design adopts. There is no verified NixOS,
+gVisor, exact broker or isolated Research compatibility, so OpenShell is not a
+required dependency. A future backend needs its own bounded compatibility and
+isolation acceptance; selecting another agent must not select weaker containment.
+See [the comparison and evidence limits](roadmap.md#inspiration-and-evidence-limits).
+
 ## Schema version 1
 
-`adapters/default.nix` explicitly imports only Hermes, ZeroClaw and OpenClaw.
+`adapters/default.nix` explicitly imports the generic workload and the Hermes,
+ZeroClaw and OpenClaw presets.
 Imports are lazy; discovering names requires no packages, image downloads or
 services. `mkAgent` validates only the selected adapter. Unsupported options,
 invalid settings shapes and unknown adapters fail during evaluation.
@@ -54,10 +127,10 @@ invalid settings shapes and unknown adapters fail during evaluation.
 | Field | Contract |
 | --- | --- |
 | `schemaVersion` | `1` |
-| `identity` | Runtime ID, investigated version and `compatibility`, `scaffold` or `operational` status |
-| `artifact` | Reviewed digest-pinned OCI reference, or explicitly unselected scaffold artifact |
+| `identity` | Runtime ID, investigated version and `compatibility`, `scaffold`, `definition` or `operational` status |
+| `artifact` | Reviewed digest-pinned OCI reference, unselected scaffold, or operator-supplied generic instance artifact |
 | `command` | Upstream default argument vector |
-| `configuration` | Configuration format, read-only generation and `generate name settings` hook |
+| `configuration` | Configuration format (`none` for generic), read-only generation and `generate name settings` hook |
 | `ownership` | Default positive numeric UID/GID |
 | `layout` | Default state pattern, workspace suffix and required writable areas |
 | `lifecycle` | Managed service or stopped scaffold |
@@ -66,12 +139,14 @@ invalid settings shapes and unknown adapters fail during evaluation.
 | `execution` | Worker queue interface and whether automatic routing is verified |
 | `build` | Runtime module generator with its precise supported argument set |
 | `metadata` | Effective instance, container, unit, state/workspace and numeric ownership |
+| `capabilities` | Declared available hooks; declarations do not prove vendor acceptance |
+| `evidence` | Source/refusal regression level and separately recorded vendor acceptance |
 
 Adapter facts do not grant host authority. Shared `containerSecurity`, Research
 socket projection, broker, worker, quota, image provenance and recovery modules
-retain policy ownership. The existing runtime bodies move into their adapter
-files; they keep their different optional operational features instead of
-flattening them into a second configuration API.
+retain policy ownership. The shared `containerSecurity.apply` builder validates
+the final image and owns containment for generic, Hermes and ZeroClaw workloads. Legacy native features
+remain in their existing builders.
 
 `tentaflake.agentInstances` is a read-only map derived from adapter declarations.
 Inventory consumes explicit adapter/name/container/unit/state fields, keeps the
@@ -85,6 +160,7 @@ identities in CLI commands to select one unambiguously.
 
 | Runtime | Container / unit | State / workspace | Container owner |
 | --- | --- | --- | --- |
+| Generic workload | `generic-NAME` / `BACKEND-generic-NAME.service` | `/var/lib/generic-NAME` / `workspace` | 10000:10000, with definition ownership |
 | Hermes | `hermes-NAME` / `BACKEND-hermes-NAME.service` | `/var/lib/hermes-NAME` / `workspace` | 10000:10000, retaining overrides |
 | ZeroClaw | `zeroclaw-NAME` / `BACKEND-zeroclaw-NAME.service` | `/var/lib/zeroclaw-NAME` / `data` | 65534:65534 |
 | OpenClaw scaffold | Reserved `openclaw-NAME` identity / refusal unit | `/var/lib/openclaw-NAME` / `workspace` | 1000:1000 |
@@ -135,11 +211,23 @@ of built-in shell, build, plugin or foreign-code tools. The threat model and
 
 ## Support and upstream evidence
 
-| Adapter | Artifact/version | Support level |
-| --- | --- | --- |
-| Hermes | Existing reviewed digest in `lib/constants.nix`, image snapshot 2026-07-18 | Preserved integration; exact release version and vendor workload acceptance are not newly verified |
-| ZeroClaw | Existing reviewed digest, v0.8.2 | Preserved integration; vendor workload acceptance is not newly verified |
-| OpenClaw | Investigated v2026.9.7; no reviewed runtime artifact selected | Stopped scaffold only |
+`adapters/catalog.json` is the versioned source of preset, capability and support
+facts. Nix imports it, `tentaflake runtimes [--json]` embeds it in the CLI, and
+`python3 scripts/runtime-catalog-docs.py` renders this table. Its `--check` mode
+runs in `checks.*.agent-adapters`. A declaration or source regression is not
+actual vendor runtime acceptance. The generic definition's artifact is chosen
+and reviewed by the operator; its catalog entry selects no image.
+
+<!-- runtime-catalog:start -->
+
+| Preset | Version | Declaration | Fixture | Vendor acceptance |
+| --- | --- | --- | --- | --- |
+| generic | 1 | definition | source-regression | operator-owned |
+| hermes | image-snapshot-2026-07-18 | compatibility | source-regression | pending |
+| openclaw | 2026.9.7 | scaffold | refusal-regression | pending |
+| zeroclaw | 0.8.2 | compatibility | source-regression | pending |
+
+<!-- runtime-catalog:end -->
 
 OpenCode and Goose are the next investigations. Codex, Claude Code, Aider, Pi
 and OpenHands remain candidates. No adapter files or support claims are added

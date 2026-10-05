@@ -1,7 +1,7 @@
 ---
 name: tentaflake-repo-guidance
 description: Locate the owning source, guide and checks before changing Tentaflake modules, adapters, CLI or installer.
-version: 2.3.0
+version: 2.4.0
 ---
 
 # Tentaflake repository guidance
@@ -12,7 +12,7 @@ relevant source and guide. Avoid loading unrelated references.
 | Task | Owning source | Guide |
 |---|---|---|
 | Host options and exports | `modules/options.nix`, `modules/default.nix`, `flake.nix` | [Quickstart](../../../docs/01-quickstart.md) |
-| Builders and contracts | `adapters/`, `lib/mkAgent.nix`, `lib/adapterContract.nix` | [Adapters](../../../docs/agent-adapters.md) |
+| Builders and contracts | `adapters/catalog.json`, `adapters/`, `lib/mkAgent.nix`, `lib/runtimeContract.nix` | [Adapters](../../../docs/agent-adapters.md) |
 | Declarative input and inventory | `configuration.nix`, `lib/agentsFromData.nix`, `lib/agentInventory.nix` | [Configuration](../../../docs/08-agent-cli.md) |
 | CLI and diagnostics | `crates/tentaflake-cli/`, `modules/shell.nix`, `modules/security.nix` | [CLI](../../../docs/06-shell.md) |
 | LLM broker and streaming | `modules/broker.nix`, `crates/tentaflake-broker/` | [Broker](../../../docs/12-brokered-egress.md) |
@@ -29,6 +29,9 @@ relevant source and guide. Avoid loading unrelated references.
 
 - Keep the template generic. Deployment identities, private context and secrets
   belong in forks. Settings, JSON and seed paths are Nix-store inputs.
+- Generate support facts with `python3 scripts/runtime-catalog-docs.py`;
+  catalog declarations and source fixtures never prove vendor acceptance.
+  Generic definitions reject extra authority and preserve current startup gates.
 - Preserve Hermes/ZeroClaw APIs and state. OpenClaw is a stopped refusal scaffold
   without an OCI artifact or operational acceptance. The
   [roadmap](../../../docs/roadmap.md) describes plans, not current support.
@@ -47,6 +50,8 @@ relevant source and guide. Avoid loading unrelated references.
   Never convert ext4 automatically. Installer cleanup stays inside the selected
   disk stack and refuses cross-disk VGs.
 - Keep exact runtime resource/mount/network expectations and unknown evidence.
+  Reject bind sources below writable mounts; generic source parents remain
+  unmounted, root-owned and private, with startup checks for symlinks.
   Read the [threat model](../../../docs/15-threat-model.md) for authority changes.
 - Editor, Hive Research and Piper integrations belong in consumer flakes.
 

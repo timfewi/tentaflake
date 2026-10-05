@@ -13,6 +13,24 @@ This document owns product direction and proposed acceptance criteria. The
 remain authoritative for what actually works today. Proposed option names,
 commands and interfaces below are not installed APIs.
 
+## Delivery checkpoint
+
+Active work: #115, common OCI runtime contract and versioned preset catalog.
+Next: #135 installed-host validation/import, then #116 capability admission and
+#136 actual coding-agent acceptance. M03-M10 and remaining P1/P2 issues retain
+all their acceptance requirements. No issue is complete from planning alone.
+
+The #115 implementation keeps legacy state/APIs, shares final image containment,
+adds generic non-secret definitions and configuration-free catalog discovery.
+Owning files: `adapters/catalog.json`, `adapters/generic.nix`,
+`lib/runtimeContract.nix` and the operator CLI. Verified: 44 CLI tests, runtime
+contract/legacy fixtures, module/image checks, CI routing, lint and the generated
+installed flake. Review reproduced a nested writable bind-source substitution;
+the generic layout now uses separate sources beneath an unmounted root-owned
+parent, and the shared secure policy rejects nested sources, including read-only
+children. PR #139 CI/merge remains the delivery gate. Live vendor acceptance,
+local VM workloads and host activation were not performed.
+
 ## Product direction
 
 The immediate priority is an agent-agnostic isolated runtime. An operator should

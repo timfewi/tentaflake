@@ -11,6 +11,7 @@ separate without making contributors maintain two copies of every guide.
 |---|---|---|
 | Scope and entry points | `README.md` | Update with behavior and support changes |
 | Product direction and planned milestones | `docs/roadmap.md` | Keep plans separate from implemented and released support |
+| Preset, capability and acceptance facts | `adapters/catalog.json` | Generate the adapter table; embed the same catalog in CLI discovery |
 | Configuration and operational detail | `docs/` | Keep examples consistent with modules and builders |
 | Development workflow | `CONTRIBUTING.md`, `AGENTS.md` / `CLAUDE.md` | Keep commands and verification boundaries accurate |
 | Bundled operational skills | `.agents/skills/` | Update the skill and its related guide together |

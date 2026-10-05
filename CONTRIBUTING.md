@@ -25,6 +25,8 @@ the selected crate's complete source. Editing CLI source does not rebuild the
 broker or worker. Package versions come from `[workspace.package]` in
 `Cargo.toml`; descriptions come from each crate manifest. The worker image tag
 uses that same version, and its default reference follows the image metadata.
+The CLI also embeds `adapters/catalog.json`; broker and worker sources exclude
+that catalog so preset edits preserve their package caches.
 Keep additional build-time files inside their crate, or explicitly add them
 to the shared fileset when a build requires a root-level input.
 

@@ -129,15 +129,17 @@ again at boot by the deployment's secret mechanism.
 
 ## Update images
 
-Default controller image digests live in `lib/constants.nix`, independently of
-`flake.lock`:
+Default controller image digests live in `adapters/catalog.json`;
+`lib/constants.nix` retains the existing exported aliases. They are independent
+of `flake.lock`:
 
 ```bash
 ./scripts/update-agent-images.sh
 ```
 
 The script reports upstream digests; it does not rewrite pins. Review the image
-source and provenance, update the exact digest, run the appropriate checks, and
+source and provenance, update the exact digest and regenerate catalog docs with
+`python3 scripts/runtime-catalog-docs.py`, run the appropriate checks, and
 build before activation. Use `registry/repository@sha256:<digest>`; references
 combining a tag and digest are rejected for backend compatibility. The
 `allowMutableImage` escape hatch is dev-only.

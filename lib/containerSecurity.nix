@@ -1,5 +1,6 @@
 { lib }:
 let
+  pinnedImage = import ./pinnedImage.nix { inherit lib; };
   isSecure = profile: profile != "dev";
 
   pathWithin = root: path: path == root || lib.hasPrefix "${root}/" path;
@@ -188,6 +189,7 @@ in
       owner,
       baseConfig,
       overrides ? { },
+      allowMutableImage ? false,
       allowedWritableSources,
       allowedWritableDestinations,
       pidsLimit,
@@ -209,6 +211,17 @@ in
       extraOptions = merged.extraOptions or [ ];
       preRunExtraOptions = merged.preRunExtraOptions or [ ];
       volumes = merged.volumes or [ ];
+      writableBindSources = map volumeSource (lib.filter (volume: !(volumeIsReadOnly volume)) volumes);
+      independentBindSources = lib.all (
+        root:
+        lib.all (
+          volume:
+          let
+            source = volumeSource volume;
+          in
+          source == root || !(pathWithin root source)
+        ) volumes
+      ) writableBindSources;
       capabilities = merged.capabilities or { };
       labels = merged.labels or { };
       expectedNetworks = lib.optional (brokerNetwork != null) brokerNetwork;
@@ -319,6 +332,10 @@ in
           message = "tentaflake: secure agent ${name} has a writable, relative, or sensitive bind mount outside its declared state/workspace boundary.";
         }
         {
+          assertion = independentBindSources;
+          message = "tentaflake: secure agent ${name} bind sources must not lie below another writable bind source; an agent could replace the nested source before restart.";
+        }
+        {
           assertion = pidsLimit != null && pidsLimit > 0;
           message = "tentaflake: secure agent ${name} requires a positive PID limit.";
         }
@@ -328,6 +345,7 @@ in
         if !secure then
           merged
           // {
+            image = pinnedImage name allowMutableImage merged.image;
             labels = labels // {
               "io.tentaflake.agent" = "true";
               "io.tentaflake.security-profile" = profile;
@@ -336,6 +354,7 @@ in
         else
           merged
           // {
+            image = pinnedImage name false merged.image;
             user = owner;
             privileged = false;
             capabilities = capabilities // {

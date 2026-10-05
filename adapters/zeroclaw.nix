@@ -1,8 +1,8 @@
 { pkgs, lib }:
 
 let
+  preset = (import ../lib/runtimeCatalog.nix).presets.zeroclaw;
   constants = import ../lib/constants.nix;
-  pinnedImage = import ../lib/pinnedImage.nix { inherit lib; };
   containerSecurity = import ../lib/containerSecurity.nix { inherit lib; };
   generateConfiguration =
     name: settings: (pkgs.formats.toml { }).generate "${name}-config.toml" settings;
@@ -74,8 +74,8 @@ let
       baseContainer = {
         inherit autoStart;
         networks = lib.optional brokerEnabled brokerCfg.networkName;
-        image = pinnedImage name allowMutableImage image;
-        cmd = [ "daemon" ];
+        inherit image;
+        cmd = preset.command;
         volumes = [
           "${stateDir}:/zeroclaw-data:rw"
           "${configFile}:/zeroclaw-data/.zeroclaw/config.toml:ro"
@@ -101,7 +101,7 @@ let
 
       securityResult = containerSecurity.apply {
         profile = securityProfile;
-        inherit backend pidsLimit;
+        inherit backend pidsLimit allowMutableImage;
         name = containerName;
         inherit owner;
         baseConfig = baseContainer;
@@ -226,52 +226,27 @@ let
             };
         };
 
-      virtualisation.oci-containers.containers.${containerName} = securityResult.container // {
-        image = pinnedImage name allowMutableImage securityResult.container.image;
-      };
+      virtualisation.oci-containers.containers.${containerName} = securityResult.container;
     };
 in
 {
-  schemaVersion = 1;
-  identity = {
-    id = "zeroclaw";
-    version = "0.8.2";
-    status = "compatibility";
-  };
-  artifact = {
-    kind = "oci";
-    reference = constants.zeroclawImage;
-    reviewed = true;
-  };
-  command = [ "daemon" ];
-  configuration = {
-    format = "toml";
-    readOnly = true;
+  inherit (preset)
+    schemaVersion
+    identity
+    artifact
+    command
+    ownership
+    layout
+    lifecycle
+    model
+    execution
+    capabilities
+    evidence
+    ;
+  configuration = preset.configuration // {
     generate = generateConfiguration;
   };
-  ownership = {
-    uid = constants.nobodyUid;
-    gid = constants.nobodyGid;
-  };
-  layout = {
-    state = "/var/lib/zeroclaw-<name>";
-    workspace = "data";
-    writable = [
-      "state"
-      "workspace"
-    ];
-  };
-  lifecycle = "service";
-  model = {
-    protocols = [ "openai-chat-completions" ];
-    streaming = "unknown";
-  };
-  execution = {
-    interface = "worker-queue-v1";
-    automatic = false;
-  };
-  research = {
-    supported = true;
+  research = preset.research // {
     configure = { original, server }: {
       settings = {
         browser.enabled = false;

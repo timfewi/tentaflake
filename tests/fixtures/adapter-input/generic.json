@@ -1,0 +1,13 @@
+{
+  "schemaVersion": 1,
+  "agents": [{
+    "adapter": "generic",
+    "name": "from-json",
+    "definition": {
+      "schemaVersion": 1,
+      "image": "registry.example.invalid/fixture@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "command": ["fixture", "--workspace", "/workspace"],
+      "lifecycle": "stopped"
+    }
+  }]
+}

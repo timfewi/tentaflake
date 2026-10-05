@@ -26,6 +26,10 @@ The [roadmap](docs/roadmap.md) prioritizes a common isolated runtime and simple
 agent onboarding on installed hosts, before employee-profile and company
 features. This is planned work; the current support matrix below still applies.
 
+Discover presets with `tentaflake runtimes --json`. A digest-pinned image and
+command can use the [common isolated workload definition](docs/agent-adapters.md#generic-isolated-workload)
+without a new adapter; generic startup remains gated pending capability admission.
+
 ## Current scope
 
 | Component | Status |

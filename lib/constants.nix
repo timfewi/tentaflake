@@ -5,6 +5,9 @@
 # Override these via tentaflake.* options in your host configuration.
 # ────────────────────────────────────────────────────────────
 
+let
+  inherit (import ./runtimeCatalog.nix) presets;
+in
 {
   # NixOS state version for stateful data compatibility. Set once at first install
   # and normally left unchanged across upgrades.
@@ -47,19 +50,19 @@
   # repository name the way the docker CLI does.
   #
   # docker.io/nousresearch/hermes-agent:latest as of 2026-07-18
-  hermesImage = "docker.io/nousresearch/hermes-agent@sha256:4a2f23bd3ffaa6ee7b3be8a302a38be43ab0321a2988cd3fb16b7dd472dde812";
+  hermesImage = presets.hermes.artifact.reference;
   # ghcr.io/zeroclaw-labs/zeroclaw:v0.8.2
   # (the tag is NOT part of the reference — podman/skopeo reject `repo:tag@digest`)
-  zeroclawImage = "ghcr.io/zeroclaw-labs/zeroclaw@sha256:eae321dac2d314bc282bdfb28b5378c9d527998f7e2fe0dee8315bfdcdf13a0c";
+  zeroclawImage = presets.zeroclaw.artifact.reference;
   # UID/GID the official hermes-agent image runs its `hermes` user as. The host
   # state dir + any mounted data must be owned by this so the container (which
   # runs as this uid) can write them. Owning host dirs to a *different* uid (e.g.
   # an auto-allocated NixOS system user) is the classic cause of PermissionError
   # on $HERMES_HOME. Override via mkHermesAgent's `containerUid`/`containerGid`.
-  containerUid = 10000;
-  containerGid = 10000;
+  containerUid = presets.hermes.ownership.uid;
+  containerGid = presets.hermes.ownership.gid;
 
   # ZeroClaw uses the standard nobody/nogroup identity in its pinned image.
-  nobodyUid = 65534;
-  nobodyGid = 65534;
+  nobodyUid = presets.zeroclaw.ownership.uid;
+  nobodyGid = presets.zeroclaw.ownership.gid;
 }

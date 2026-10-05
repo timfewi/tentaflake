@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
-# Re-resolve the agent image digests pinned in lib/constants.nix.
+# Re-resolve the agent image digests pinned in adapters/catalog.json.
 #
 # Prints the current multi-arch index digest for each upstream tag. Pinning is
 # only useful if bumping it is easy — but the bump stays MANUAL on purpose: a
 # script that rewrites the pin automatically is just a mutable tag with extra
-# steps. Review the new digest, then edit lib/constants.nix by hand.
+# steps. Review the new digest, then edit adapters/catalog.json by hand.
 set -euo pipefail
 
-# tag references to track; keep in sync with lib/constants.nix
+# tag references to track; keep in sync with adapters/catalog.json
 IMAGES=(
   "docker://docker.io/nousresearch/hermes-agent:latest"
   "docker://ghcr.io/zeroclaw-labs/zeroclaw:v0.8.2"
@@ -31,4 +31,4 @@ for ref in "${IMAGES[@]}"; do
   printf '%s\n  %s@%s\n\n' "$ref" "$repo" "$digest"
 done
 
-echo "Compare against lib/constants.nix and update by hand if these differ."
+echo "Compare against adapters/catalog.json and update by hand if these differ."

@@ -89,6 +89,11 @@ are already published or require access to another repository for public checks.
   image-provenance gates, disposable workers, workspace quotas, encrypted
   backup, and generic options
 - `lib/` — helpers (`mkHermesAgent`, `mkZeroClawAgent`, `agentsFromData`, `pinnedImage`, `constants`, `devshell`)
+- `adapters/catalog.json` owns versioned preset/capability/evidence facts for Nix,
+  configuration-free `tentaflake runtimes`, and generated adapter docs. Run
+  `python3 scripts/runtime-catalog-docs.py` after catalog changes. Generic
+  definitions use `lib/runtimeContract.nix` and the shared `containerSecurity`
+  builder; no model/Research acceptance or startup-gate relaxation is implied.
 - `adapters/` — lazy runtime registry and schema-v1 contracts; `lib/mkAgent.nix`
   selects one adapter. Legacy wrappers preserve their APIs and state. OpenClaw
   is a stopped scaffold without an OCI artifact; never advertise operational
@@ -121,6 +126,9 @@ are already published or require access to another repository for public checks.
   after explicit close; every new session repeats negotiation and UID checks.
 - Security manifests carry exact live mount, tmpfs, network, and resource
   expectations. Incomplete/legacy runtime evidence must remain unknown.
+  Secure bind sources must not be nested below another writable source. Generic
+  state/workspace sources use an unmounted root-owned parent; refuse symlinks
+  or unsafe parent ownership/permissions before container startup.
   OCI inspection has a deadline and a combined output-byte ceiling; failures
   remain unknown and raw container environment data must not reach reports.
 - Broker host concurrency/rate admission counts each enabled LLM/fetch mode.

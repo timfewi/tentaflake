@@ -61,7 +61,7 @@
       constants = import ./lib/constants.nix;
 
       # ── Shared agent builders ──
-      inherit ((import ./lib { inherit pkgs lib; })) mkAgent adapters;
+      inherit ((import ./lib { inherit pkgs lib; })) mkAgent adapters runtimeCatalog;
       inherit ((import ./lib { inherit pkgs lib; })) mkHermesAgent;
       inherit ((import ./lib { inherit pkgs lib; })) mkZeroClawAgent;
       inherit ((import ./lib { inherit pkgs lib; })) agentsFromData;
@@ -123,6 +123,7 @@
           agentsFromData
           mkAgent
           adapters
+          runtimeCatalog
           constants
           ;
       };
@@ -147,7 +148,22 @@
         image-pinning = import ./lib/pinnedImage-test.nix { inherit pkgs; };
         agent-adapters =
           assert import ./tests/agent-adapters.nix { inherit pkgs; };
-          pkgs.runCommand "tentaflake-agent-adapters" { } "touch $out";
+          pkgs.runCommand "tentaflake-agent-adapters"
+            {
+              nativeBuildInputs = [ pkgs.python3 ];
+              src = lib.fileset.toSource {
+                root = ./.;
+                fileset = lib.fileset.unions [
+                  ./adapters/catalog.json
+                  ./docs/agent-adapters.md
+                  ./scripts/runtime-catalog-docs.py
+                ];
+              };
+            }
+            ''
+              python3 "$src/scripts/runtime-catalog-docs.py" --check --root "$src"
+              touch "$out"
+            '';
         module-evaluation = import ./tests/module-eval.nix {
           nixpkgsPath = nixpkgs.outPath;
           researchFlake = inputs.tentaflake-research;
