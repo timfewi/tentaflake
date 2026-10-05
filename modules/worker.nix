@@ -66,6 +66,26 @@ let
           type = lib.types.ints.positive;
           default = 64 * 1024;
         };
+        maxInboxEntries = lib.mkOption {
+          type = lib.types.ints.positive;
+          default = 256;
+          description = "Maximum top-level inbox entries, including invalid names and staging files.";
+        };
+        maxInboxBytes = lib.mkOption {
+          type = lib.types.ints.positive;
+          default = 8 * 1024 * 1024;
+          description = "Maximum summed inbox entry sizes; directory trees remain bounded by the workspace quota.";
+        };
+        maxQueueEntries = lib.mkOption {
+          type = lib.types.ints.positive;
+          default = 256;
+          description = "Combined private pending and running request entry ceiling.";
+        };
+        maxQueueBytes = lib.mkOption {
+          type = lib.types.ints.positive;
+          default = 8 * 1024 * 1024;
+          description = "Combined private pending and running request byte ceiling.";
+        };
         maxSnapshotBytes = lib.mkOption {
           type = lib.types.ints.positive;
           default = 1024 * 1024 * 1024;
@@ -122,6 +142,10 @@ let
       container_uid = agent.containerUid;
       container_gid = agent.containerGid;
       max_request_bytes = agent.maxRequestBytes;
+      max_inbox_entries = agent.maxInboxEntries;
+      max_inbox_bytes = agent.maxInboxBytes;
+      max_queue_entries = agent.maxQueueEntries;
+      max_queue_bytes = agent.maxQueueBytes;
       max_snapshot_bytes = agent.maxSnapshotBytes;
       max_snapshot_entries = agent.maxSnapshotEntries;
       max_log_bytes = agent.maxLogBytes;

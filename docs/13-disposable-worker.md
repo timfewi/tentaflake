@@ -168,6 +168,54 @@ workspace, and the capsule receives no writable host bind for this handoff.
 Result directories expire after 14 days; the prompt-free JSONL audit rotates
 daily with 14 generations.
 
+## Queue ownership, capacity and recovery
+
+Worker drains and operator approval/denial commands hold one per-agent private
+file lock. A competing command fails visibly with a busy diagnostic; it does
+not modify approvals or start a second execution. Requests and approvals are
+written to private staging files, synced, then published atomically without
+replacing an existing record. The inbox can live on a separate quota filesystem;
+capture therefore copies into private state before removing the inbox entry.
+
+| Durable state | Transition and restart behavior |
+|---|---|
+| `pending/<id>.json` | Validated immutable request; approval remains outside the agent. |
+| `running/<id>.json` | Atomically claimed and synced before any OCI dispatch. |
+| `results/<id>/result.json` | Terminal result and artifacts synced before publication. |
+
+After a crash, a running claim is never dispatched again. Recovery checks the
+exact container name and ownership label before removing its disposable
+container and private staging. If no terminal result exists, it publishes
+`interrupted`: the execution outcome is unknown. Review it before submitting a
+new ID. A completed result with a stale private request is retained and the
+request retired without replay. Runtime listing/ownership errors preserve the
+claim and fail closed. This is conservative crash recovery, not a promise of
+exactly-once effects across operator rollback or deleted state.
+
+`maxInboxEntries` and `maxInboxBytes` default to 256 entries and 8 MiB;
+`maxQueueEntries` and `maxQueueBytes` apply the same defaults jointly to private
+pending and running requests. Inbox scans count ignored names and staging files
+before allocating an unbounded list. Summed entry sizes include links and
+directories, but do not traverse directory trees; the workspace quota bounds
+those trees. Admission rejects overflow visibly, records `queue-overload`, and
+preserves the unaccepted inbox request. Existing ready jobs drain before new
+admission, so an overflowing inbox cannot prevent completed work from retiring.
+These ceilings cover requests, not retained results, snapshots or audit archives;
+their existing separate limits and retention still apply.
+
+Existing configurations without the new JSON fields use these defaults.
+Upgrade with the worker and watcher stopped and preserve a quota-aware backup.
+Complete legacy pending records and exact approvals remain valid. A legacy
+`jobs/<id>` snapshot with pending state is treated as abandoned execution and
+retired as `interrupted`, without replay. Unpublished private `.new` files are
+discarded during recovery. Malformed legacy pending records fail closed and
+preserve a complete inbox copy; inspect the exact job and restore or quarantine
+its private record offline before restarting. If restored queues exceed the new
+ceilings, explicitly adjust the ceilings or review and reduce the queue offline.
+Review pending/running requests before activating a restored backup: a rollback
+can predate work that already executed. No existing image is reformatted and
+quota-aware backup sources are unchanged.
+
 The path-activated queue service has a ten-second failure-restart delay but no
 aggregate systemd start counter. systemd counts successful oneshot activations
 against that counter as well, which would otherwise disable a healthy queue

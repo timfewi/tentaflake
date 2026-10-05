@@ -6,7 +6,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+### Added
+- Durable worker pending/running claims, conservative interrupted-job recovery,
+  per-agent operator/worker exclusion and aggregate inbox/private queue ceilings.
+
 ### Fixed
+- Preserve completed worker results without redispatching stale requests, and
+  retain complete inbox copies when legacy private pending state is damaged.
 - Preserve optional bounded `x-opencode-session` conversation-affinity metadata
   on both LLM broker routes for JSON and SSE. Reject malformed values before
   budget reservation or upstream dispatch, omit session IDs from audit logs,

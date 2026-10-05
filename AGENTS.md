@@ -150,6 +150,11 @@ are already published or require access to another repository for public checks.
   restart backoff without permanent start-limit exhaustion. Explicit stops
   must still prevent automatic retries.
 - `tests/` — NixOS VM test backing `checks.<system>.vm-integration`
+- Worker queue mutations share the private per-agent lock. Sync atomic request
+  publication and pending-to-running claims before OCI dispatch; never replay
+  abandoned running state. Recovery requires exact container ownership and
+  retains unknown outcomes. Bound aggregate inbox and pending/running capacity;
+  keep approval and existing-state migration semantics in `docs/13-disposable-worker.md`.
 - Restic backups retain filesystem boundaries; selected managed quota mounts
   are separate sources and required mounts. Verify workspace restore as well
   as ordinary state when changing backup or quota behavior.

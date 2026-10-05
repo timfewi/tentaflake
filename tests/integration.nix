@@ -164,7 +164,7 @@
               workspace = "/var/lib/hermes-test/workspace";
               maxSnapshotBytes = 16 * 1024 * 1024;
               maxSnapshotEntries = 1000;
-              maxTimeoutSeconds = 10;
+              maxTimeoutSeconds = 60;
               cpus = "0.5";
               workspaceTmpfsSize = "8m";
               tmpTmpfsSize = "4m";
@@ -1225,6 +1225,46 @@
         audit = machine.succeed("cat /var/lib/tentaflake-worker-hermes-test/audit.jsonl")
         assert "approval-required" in audit, audit
         assert '"event":"approved"' in audit, audit
+
+    with subtest("worker crash recovery never replays claimed or completed jobs"):
+        state = "/var/lib/tentaflake-worker-hermes-test"
+        inbox = "/var/lib/hermes-test/workspace/.tentaflake-worker/inbox"
+        worker = "tentaflake-worker-hermes-test.service"
+        watcher = "tentaflake-worker-hermes-test.path"
+        command = "tentaflake-worker --config /etc/tentaflake/workers/hermes-test.json drain"
+        machine.succeed("systemctl stop " + watcher + " " + worker)
+        original = machine.succeed("sha256sum " + state + "/results/local_1/result.json")
+        machine.succeed(
+            "cat > " + state + "/pending/local_1.json <<'EOF'\n"
+            '{"version":1,"id":"local_1","action_class":"local-reversible",'
+            '"argv":["sh","-c","exit 99"],"timeout_seconds":5}\nEOF'
+        )
+        machine.succeed(command)
+        assert machine.succeed("sha256sum " + state + "/results/local_1/result.json") == original
+        machine.fail("test -e " + state + "/pending/local_1.json")
+        machine.succeed("systemctl start " + watcher)
+        machine.succeed(
+            "cat > " + inbox + "/crash_1.json <<'EOF'\n"
+            '{"version":1,"id":"crash_1","action_class":"local-reversible",'
+            '"argv":["sh","-c","sleep 120"],"timeout_seconds":60}\nEOF'
+        )
+        machine.wait_until_succeeds(
+            "test -f " + state + "/running/crash_1.json && "
+            "test $(docker inspect --format='{{.State.Running}}' tfw-hermes-test-crash_1) = true",
+            timeout=45,
+        )
+        machine.succeed("systemctl stop " + watcher)
+        machine.succeed("systemctl kill --kill-who=main --signal=SIGKILL " + worker)
+        machine.succeed("systemctl stop " + worker)
+        machine.succeed("test -f " + state + "/running/crash_1.json")
+        machine.succeed(command)
+        machine.succeed("jq -e '.status == \"interrupted\" and .artifacts_available == false' " + state + "/results/crash_1/result.json")
+        machine.fail("docker inspect tfw-hermes-test-crash_1")
+        machine.fail("test -e " + state + "/running/crash_1.json")
+        machine.fail("test -e " + state + "/jobs/crash_1")
+        machine.succeed(command)
+        machine.succeed("systemctl reset-failed " + worker)
+        machine.succeed("systemctl start " + watcher)
 
     with subtest("encrypted backup restores state and the mounted quota workspace"):
         machine.succeed(

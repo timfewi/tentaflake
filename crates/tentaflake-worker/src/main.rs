@@ -12,6 +12,8 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 type Result<T> = std::result::Result<T, String>;
 
+mod queue;
+
 const RESOLVE_NO_MAGICLINKS: u64 = 0x02;
 const RESOLVE_NO_SYMLINKS: u64 = 0x04;
 const COMPLETION_MARKER: &str = "/workspace/.tentaflake-worker-complete";
@@ -51,6 +53,14 @@ struct Config {
     container_uid: u32,
     container_gid: u32,
     max_request_bytes: u64,
+    #[serde(default = "default_queue_entries")]
+    max_inbox_entries: usize,
+    #[serde(default = "default_queue_bytes")]
+    max_inbox_bytes: u64,
+    #[serde(default = "default_queue_entries")]
+    max_queue_entries: usize,
+    #[serde(default = "default_queue_bytes")]
+    max_queue_bytes: u64,
     max_snapshot_bytes: u64,
     max_snapshot_entries: u64,
     max_log_bytes: usize,
@@ -93,7 +103,8 @@ struct JobRequest {
     timeout_seconds: u64,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 struct JobResult {
     version: u8,
     id: String,
@@ -138,6 +149,13 @@ fn default_timeout() -> u64 {
     300
 }
 
+fn default_queue_entries() -> usize {
+    256
+}
+fn default_queue_bytes() -> u64 {
+    8 * 1024 * 1024
+}
+
 fn main() {
     if let Err(error) = run() {
         eprintln!("tentaflake-worker: {error}");
@@ -163,6 +181,7 @@ fn run() -> Result<()> {
     validate_config(&config)?;
     enter_worker_group(&config)?;
     ensure_state_layout(&config)?;
+    let _queue_lock = queue::lock(&config)?;
 
     match command.as_str() {
         "drain" => {
@@ -250,6 +269,10 @@ fn validate_config(config: &Config) -> Result<()> {
         return Err("image must be one non-empty OCI reference".into());
     }
     if config.max_request_bytes == 0
+        || config.max_inbox_entries == 0
+        || config.max_inbox_bytes == 0
+        || config.max_queue_entries == 0
+        || config.max_queue_bytes == 0
         || config.max_snapshot_bytes == 0
         || config.max_snapshot_entries == 0
         || config.max_log_bytes == 0
@@ -303,9 +326,10 @@ fn validate_request(config: &Config, request: &JobRequest) -> Result<()> {
 }
 
 fn ensure_state_layout(config: &Config) -> Result<()> {
-    for name in ["pending", "approvals", "jobs"] {
+    for name in ["pending", "running", "approvals", "jobs"] {
         let path = config.state_dir.join(name);
         fs::create_dir_all(&path).map_err(|error| format!("create {}: {error}", path.display()))?;
+        open_path_no_symlinks(&path)?;
         fs::set_permissions(&path, fs::Permissions::from_mode(0o700))
             .map_err(|error| format!("chmod {}: {error}", path.display()))?;
     }
@@ -339,7 +363,9 @@ fn hardened_shared_directory_mode(current: u32) -> u32 {
 }
 
 fn drain(config: &Config) -> Result<()> {
+    queue::recover(config)?;
     let workspace = open_path_no_symlinks(&config.workspace)?;
+    process_ready(config, workspace.as_raw_fd())?;
     let control = match open_dir_at(workspace.as_raw_fd(), OsStr::new(".tentaflake-worker")) {
         Ok(fd) => fd,
         Err(error) if error.raw_os_error() == Some(libc::ENOENT) => return Ok(()),
@@ -356,7 +382,17 @@ fn drain(config: &Config) -> Result<()> {
 }
 
 fn ingest(config: &Config, inbox_fd: RawFd) -> Result<()> {
-    let mut names = list_fd_dir(inbox_fd)?;
+    let (mut names, _) = queue::scan(inbox_fd, config.max_inbox_entries, config.max_inbox_bytes)
+        .inspect_err(|_| {
+            let _ = audit(
+                config,
+                "unknown",
+                "queue-overload",
+                None,
+                "inbox exceeds entry or byte ceiling",
+            );
+        })?;
+    let mut usage = queue::usage(config)?;
     names.sort();
     for name in names {
         let bytes = name.as_bytes();
@@ -378,6 +414,9 @@ fn ingest(config: &Config, inbox_fd: RawFd) -> Result<()> {
             Err(error) => return Err(format!("open inbox entry {:?}: {error}", name)),
         };
         let mut file = unsafe { File::from_raw_fd(file.into_raw_fd()) };
+        if !file.metadata().map_err(|e| e.to_string())?.is_file() {
+            return Err("inbox request must be a regular file".into());
+        }
         let content = read_bounded(&mut file, config.max_request_bytes as usize)
             .map_err(|error| format!("read inbox entry {:?}: {error}", name))?;
         let parsed: Result<JobRequest> = serde_json::from_slice(&content)
@@ -399,6 +438,14 @@ fn ingest(config: &Config, inbox_fd: RawFd) -> Result<()> {
         };
 
         if job_exists(config, &request.id) {
+            // A damaged legacy private copy requires operator recovery. Keep
+            // the inbox copy instead of discarding the only complete request.
+            if pending_path(config, &request.id)
+                .try_exists()
+                .map_err(|e| e.to_string())?
+            {
+                read_pending(config, &request.id)?;
+            }
             audit(
                 config,
                 &request.id,
@@ -411,7 +458,21 @@ fn ingest(config: &Config, inbox_fd: RawFd) -> Result<()> {
         }
 
         let pending = pending_path(config, &request.id);
-        write_new_private(&pending, &content)?;
+        if usage.0 >= config.max_queue_entries
+            || (content.len() as u64) > config.max_queue_bytes.saturating_sub(usage.1)
+        {
+            audit(
+                config,
+                &request.id,
+                "queue-overload",
+                Some(request.action_class),
+                "private queue exceeds entry or byte ceiling",
+            )?;
+            return Err("private worker queue is full; request remains in the inbox".into());
+        }
+        queue::write_private(&pending, &content)?;
+        usage.0 += 1;
+        usage.1 += content.len() as u64;
         unlink_at(inbox_fd, &name)?;
         audit(
             config,
@@ -429,23 +490,28 @@ fn ingest(config: &Config, inbox_fd: RawFd) -> Result<()> {
 }
 
 fn process_ready(config: &Config, workspace_fd: RawFd) -> Result<()> {
-    let mut pending = fs::read_dir(config.state_dir.join("pending"))
-        .map_err(|error| format!("read pending queue: {error}"))?
-        .collect::<std::result::Result<Vec<_>, _>>()
-        .map_err(|error| format!("read pending entry: {error}"))?;
-    pending.sort_by_key(|entry| entry.file_name());
-    for entry in pending {
-        let path = entry.path();
-        if path.extension() != Some(OsStr::new("json"))
-            || entry.file_type().map_err(|e| e.to_string())?.is_symlink()
-        {
+    let parent = config.state_dir.join("pending");
+    let fd = open_path_no_symlinks(&parent)?;
+    let (mut pending, _) = queue::scan(
+        fd.as_raw_fd(),
+        config.max_queue_entries,
+        config.max_queue_bytes,
+    )?;
+    pending.sort();
+    for name in pending {
+        let path = parent.join(name);
+        if path.extension() != Some(OsStr::new("json")) {
             continue;
         }
-        let request: JobRequest = serde_json::from_reader(
-            File::open(&path).map_err(|error| format!("open {}: {error}", path.display()))?,
-        )
-        .map_err(|error| format!("parse {}: {error}", path.display()))?;
-        validate_request(config, &request)?;
+        let job = path
+            .file_stem()
+            .and_then(OsStr::to_str)
+            .ok_or_else(|| "invalid pending job filename".to_string())?;
+        let request = read_pending(config, job)?;
+        if queue::terminal(config, &request)? {
+            queue::retire(config, "pending", &request)?;
+            continue;
+        }
         if request.action_class == ActionClass::Forbidden {
             finish_without_run(
                 config,
@@ -453,23 +519,27 @@ fn process_ready(config: &Config, workspace_fd: RawFd) -> Result<()> {
                 "rejected",
                 "action class is always forbidden",
             )?;
-            fs::remove_file(path).map_err(|error| format!("remove rejected request: {error}"))?;
+            queue::retire(config, "pending", &request)?;
             continue;
         }
-        let approved = config
-            .state_dir
-            .join("approvals")
-            .join(&request.id)
-            .is_file();
+        let approved = queue::approved(config, &request.id)?;
         if request.action_class.needs_approval() && !approved {
             continue;
         }
-        execute(config, workspace_fd, &request)?;
-        fs::remove_file(pending_path(config, &request.id))
-            .map_err(|error| format!("remove completed request: {error}"))?;
-        if approved {
-            fs::remove_file(config.state_dir.join("approvals").join(&request.id))
-                .map_err(|error| format!("consume approval: {error}"))?;
+        queue::claim(config, &request)?;
+        if config
+            .state_dir
+            .join("jobs")
+            .join(&request.id)
+            .try_exists()
+            .map_err(|e| e.to_string())?
+        {
+            // Legacy workers used the snapshot directory as their only claim.
+            // Its presence is ambiguous; never retry that execution silently.
+            queue::recover(config)?;
+        } else {
+            execute(config, workspace_fd, &request)?;
+            queue::retire(config, "running", &request)?;
         }
     }
     Ok(())
@@ -477,11 +547,14 @@ fn process_ready(config: &Config, workspace_fd: RawFd) -> Result<()> {
 
 fn approve(config: &Config, job: &str) -> Result<()> {
     let request = read_pending(config, job)?;
+    if queue::terminal(config, &request)? {
+        return Err("job is already terminal; drain the queue to retire its stale request".into());
+    }
     if !request.action_class.needs_approval() || request.action_class == ActionClass::Forbidden {
         return Err("this action class cannot be approved".into());
     }
     let approval = config.state_dir.join("approvals").join(job);
-    write_new_private(&approval, b"approved\n")?;
+    queue::write_private(&approval, b"approved\n")?;
     audit(
         config,
         job,
@@ -495,18 +568,16 @@ fn approve(config: &Config, job: &str) -> Result<()> {
 
 fn deny(config: &Config, job: &str) -> Result<()> {
     let request = read_pending(config, job)?;
+    if queue::terminal(config, &request)? {
+        return Err("job is already terminal; drain the queue to retire its stale request".into());
+    }
     finish_without_run(
         config,
         &request,
         "denied",
         "host operator denied the request",
     )?;
-    fs::remove_file(pending_path(config, job))
-        .map_err(|error| format!("remove denied request: {error}"))?;
-    let approval = config.state_dir.join("approvals").join(job);
-    if approval.exists() {
-        fs::remove_file(approval).map_err(|error| format!("remove stale approval: {error}"))?;
-    }
+    queue::retire(config, "pending", &request)?;
     audit(
         config,
         job,
@@ -517,14 +588,7 @@ fn deny(config: &Config, job: &str) -> Result<()> {
 }
 
 fn read_pending(config: &Config, job: &str) -> Result<JobRequest> {
-    let path = pending_path(config, job);
-    let metadata =
-        fs::symlink_metadata(&path).map_err(|_| format!("pending job {job} does not exist"))?;
-    if !metadata.file_type().is_file() {
-        return Err("pending request is not a regular file".into());
-    }
-    serde_json::from_reader(File::open(&path).map_err(|error| error.to_string())?)
-        .map_err(|error| format!("parse pending job: {error}"))
+    queue::read_request(config, "pending", job)
 }
 
 fn pending_path(config: &Config, job: &str) -> PathBuf {
@@ -533,6 +597,11 @@ fn pending_path(config: &Config, job: &str) -> PathBuf {
 
 fn job_exists(config: &Config, job: &str) -> bool {
     pending_path(config, job).exists()
+        || config
+            .state_dir
+            .join("running")
+            .join(format!("{job}.json"))
+            .exists()
         || config.state_dir.join("approvals").join(job).exists()
         || config.state_dir.join("results").join(job).exists()
         || config.state_dir.join("jobs").join(job).exists()
@@ -682,7 +751,7 @@ fn execute(config: &Config, workspace_fd: RawFd, request: &JobRequest) -> Result
         message: "executed in a disposable no-network gVisor capsule; artifacts are read-only to the controller".into(),
     };
     write_json(staging.join("result.json"), &result)?;
-    fs::rename(&staging, &final_result).map_err(|error| format!("publish result: {error}"))?;
+    queue::publish_result(&staging, &final_result)?;
     container_guard.cleanup()?;
     job_guard.cleanup()?;
     audit(
@@ -956,6 +1025,24 @@ fn append_runtime_log_policy(command: &mut Command, backend: &str) {
 }
 
 fn cleanup_existing_worker_container(config: &Config, container: &str) -> Result<()> {
+    let listing = runtime_output(
+        config,
+        [
+            "ps",
+            "--all",
+            &format!("--filter=name={container}"),
+            "--format={{.Names}}",
+        ],
+    )?;
+    if !listing.status.success() {
+        return Err("cannot determine whether the owned worker container still exists".into());
+    }
+    if !String::from_utf8_lossy(&listing.stdout)
+        .lines()
+        .any(|name| name.trim() == container)
+    {
+        return Ok(());
+    }
     let output = runtime(config)
         .args([
             "inspect",
@@ -965,7 +1052,9 @@ fn cleanup_existing_worker_container(config: &Config, container: &str) -> Result
         .output()
         .map_err(|error| format!("inspect stale worker container: {error}"))?;
     if !output.status.success() {
-        return Ok(());
+        return Err(format!(
+            "cannot inspect ownership of worker container {container}"
+        ));
     }
     if String::from_utf8_lossy(&output.stdout).trim() != config.agent {
         return Err(format!("refusing to remove unowned container {container}"));
@@ -1071,7 +1160,7 @@ fn finish_without_run(
         message: message.into(),
     };
     write_json(staging.join("result.json"), &result)?;
-    fs::rename(staging, final_result).map_err(|error| format!("publish result: {error}"))
+    queue::publish_result(&staging, &final_result)
 }
 
 fn write_json(path: PathBuf, value: &impl Serialize) -> Result<()> {
@@ -1082,18 +1171,7 @@ fn write_json(path: PathBuf, value: &impl Serialize) -> Result<()> {
         .open(&path)
         .map_err(|error| format!("create {}: {error}", path.display()))?;
     serde_json::to_writer_pretty(&mut file, value).map_err(|error| error.to_string())?;
-    file.write_all(b"\n").map_err(|error| error.to_string())
-}
-
-fn write_new_private(path: &Path, content: &[u8]) -> Result<()> {
-    let mut file = OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .mode(0o600)
-        .open(path)
-        .map_err(|error| format!("create {}: {error}", path.display()))?;
-    file.write_all(content)
-        .map_err(|error| format!("write {}: {error}", path.display()))?;
+    file.write_all(b"\n").map_err(|error| error.to_string())?;
     file.sync_all()
         .map_err(|error| format!("sync {}: {error}", path.display()))
 }
@@ -1375,7 +1453,7 @@ fn open_file_at(parent: RawFd, name: &OsStr) -> io::Result<OwnedFd> {
     open_at(
         parent,
         name,
-        libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+        libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_NONBLOCK,
     )
 }
 

@@ -327,7 +327,9 @@ communicative, irreversible, or privileged classes remain pending until a
 host operator approves the exact privately captured job; `forbidden` never
 runs. Approval never grants network, secrets, host mounts, capabilities, or a
 runtime socket. Results appear read-only below
-`/run/tentaflake-worker/results/<id>/` in the controller. See
+`/run/tentaflake-worker/results/<id>/` in the controller. The queue shares one
+operator/worker lock, bounds aggregate entries and bytes, and retires interrupted
+claims without automatic dispatch replay. See
 [the disposable-worker guide](docs/13-disposable-worker.md).
 Tentaflake creates the matching host group automatically; deployments that
 already own a custom container GID can select its existing group with
