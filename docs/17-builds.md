@@ -30,23 +30,41 @@ All three focused-source packages built successfully. This establishes cache
 isolation, not a fixed wall-clock speedup. `checks.*.rust-package-sources`
 guards manifest availability, source isolation and the worker image version.
 
-## GitHub VM selection
+## GitHub check selection
 
-The imported policy is `.github/vm-paths.json`; its consumer is
-`scripts/ci_vm_changes.py`. GitHub selects runtime/research independently.
+The imported policy is `.github/ci-paths.json`; its consumer is
+`scripts/ci_changes.py`. One ordered policy selects non-VM checks and the two
+VM suites independently. Component paths take precedence over Markdown suffixes.
 
-| Change | VM suite |
-| --- | --- |
-| Explicitly listed docs/contributor-only paths | None |
-| Runtime Rust, package, installer or host VM fixture | Runtime |
-| Research module/client/fixture or research-only input pin | Research |
-| Adapters, shared modules/helpers, other lock updates, unknown paths | Both |
-| Selection-policy changes or unavailable comparison history | Both |
+| Change | Non-VM checks | VM suite |
+| --- | --- | --- |
+| Docs and listed presentation metadata | Routing regression and whitespace; no Nix setup/cache | None |
+| CI routing/workflow/test definition | Routing regression, focused selection package and static checks | None |
+| One Rust crate/package | Rust workspace checks, that package and source-boundary check; worker includes its image | Runtime |
+| Shared Cargo inputs | Rust workspace and all three packages/image; no Research/configuration preparation | Runtime |
+| Installer scripts or host VM fixture | Static checks and generated installed flake | Runtime |
+| Installer Nix | Configuration evaluation, static checks and generated installed flake | Runtime |
+| Research module/client/fixture or research-only input pin | Research/configuration preparation and evaluation, static checks and generated installed flake | Research |
+| Dev Container inputs | Dev Container package and static checks | None |
+| Generated-flake script or module-evaluation fixture | Its generated-flake or configuration gate and static checks | None |
+| Adapters, shared modules/helpers, other lock updates, unknown paths/history | Full gate | Both |
 
 The selector reads NUL-delimited Git paths and includes deleted/old rename
-paths. Runtime paths take priority over a documentation suffix. Invalid lock
-data requires both suites. The real-Git regression check runs on every CI
-change, alongside normal static, package, policy and evaluation gates.
+paths. Invalid lock data requires the full gate. The real-Git regression check
+runs on every event directly on the runner; `checks.*.ci-vm-selection` also
+packages it for the contributor gate. CI metadata changes are covered by these
+regressions rather than building unchanged guest systems.
+
+Documentation does not start Nix installation, cache upload, Research closure
+materialization, full flake evaluation or Rust/system builds. A Rust-only change
+does not build the separate Research service. Non-VM package builds run in
+groups of at most four. Configuration evaluation still prepares the exact
+Research closures because the full flake/module fixtures need them; shared
+configuration changes retain their applicable runtime and Research evidence.
+The standalone host build runs only for configuration changes affecting the
+runtime, not for a Research-only or documentation change. Full VM/ISO/system
+workloads remain separate from local fast checks and require their own scope.
+New pushes cancel superseded runs for the same PR or branch.
 
 ## Nix and Bazel
 

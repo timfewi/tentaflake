@@ -8,13 +8,13 @@ pkgs.runCommand "tentaflake-ci-vm-selection"
     src = pkgs.lib.fileset.toSource {
       root = ../.;
       fileset = pkgs.lib.fileset.unions [
-        ../.github/vm-paths.json
-        ../scripts/ci_vm_changes.py
-        ../scripts/test_ci_vm_changes.py
+        ../.github/ci-paths.json
+        ../scripts/ci_changes.py
+        ../scripts/test_ci_changes.py
       ];
     };
   }
   ''
-    python3 "$src/scripts/test_ci_vm_changes.py"
+    python3 "$src/scripts/test_ci_changes.py"
     touch "$out"
   ''

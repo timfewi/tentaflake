@@ -100,7 +100,7 @@ just e2e-run-vm          # boot that installed VM again
 
 The installer VM never receives a host block device. Its persistent test disk
 and UEFI variables live below `/var/tmp/tentaflake-e2e-<user>/`.
-See [build boundaries](docs/17-builds.md) for fast checks, GitHub VM selection
+See [build boundaries](docs/17-builds.md) for fast checks, GitHub check selection
 and the Nix/Bazel assessment.
 
 ## Define agents
