@@ -11,6 +11,12 @@ let
       container = field column;
       unit = field column;
       stateDir = field column;
+      stateStorage = field column;
+      stateDirectories = lib.mkOption {
+        type = lib.types.listOf column;
+        default = [ ];
+        description = "Adapter-owned relative state directories initialized inside a managed state filesystem.";
+      };
       workspace = field column;
       uid = field lib.types.ints.unsigned;
       gid = field lib.types.ints.unsigned;

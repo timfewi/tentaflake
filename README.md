@@ -40,9 +40,9 @@ without a new adapter; generic startup remains gated pending capability admissio
 | Rust LLM/fetch policy broker | Core, opt-in per agent |
 | `secure-research-tool` web research | Pinned public service; required for balanced auto-start |
 | Disposable no-egress tool worker | Core; required for balanced auto-start |
-| Fixed-size persistent workspace | Core; required for balanced auto-start |
+| Fixed-size persistent workspace and optional private state | Core; workspace required for balanced auto-start |
 | Cosign image start gate | Core, opt-in per agent |
-| Encrypted Restic backup including selected quota workspaces | Core, opt-in |
+| Encrypted Restic backup including selected state/workspace quota mounts | Core, opt-in |
 | Installer ISO | Core |
 | Prometheus, Grafana, Loki, Alloy | Optional profile |
 | Falco runtime detection | Optional profile |
@@ -233,8 +233,9 @@ without that explicit declaration stay at `network=none`. Phase C adds an
 opt-in disposable worker with bounded FD-safe snapshots, gVisor, no network or
 secrets, runtime/resource/tmpfs limits, host-side action approval, cleanup, and
 a read-only result path. An opt-in fixed-size Btrfs volume places a hard ceiling
-on each persistent controller workspace; mutable state outside that workspace
-still needs capacity monitoring. The broker marks web material as untrusted;
+on each persistent controller workspace and, when configured, its private state.
+Other host state and aggregate sparse-image allocation still need capacity
+monitoring. The broker marks web material as untrusted;
 it does not claim that prompt injection is solved. Digest pinning is mandatory
 in secure profiles. Optional per-agent Cosign policies add a fail-closed
 publisher-signature gate before controller start; they do not prove that signed
@@ -338,6 +339,9 @@ controller. First activation creates and formats a sparse fixed-size Btrfs image
 for an empty workspace. Existing data is never hidden or migrated implicitly.
 Read [the workspace quota guide](docs/14-workspace-quota.md) before enabling it
 on an existing host.
+The same declaration accepts `state = { path = "/var/lib/hermes-coding"; sizeMiB = 1024; };`
+to bound private state separately. Its path/owner must match adapter metadata;
+existing state requires an explicit offline migration.
 
 ## Optional observability
 

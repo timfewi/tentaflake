@@ -82,6 +82,11 @@
         # verify its credential, network, and health restoration independently.
         systemd = {
           services = {
+            quota-controller-probe = {
+              requires = [ "tentaflake-workspace-quota-hermes-test.service" ];
+              after = [ "tentaflake-workspace-quota-hermes-test.service" ];
+              serviceConfig.ExecStart = "${pkgs.coreutils}/bin/sleep infinity";
+            };
             "tentaflake-broker-fetch-zeroclaw-assistant".wantedBy = [ "multi-user.target" ];
             # Exercise the actual credential unit's mount namespace.
             "tentaflake-broker-credentials-zeroclaw-assistant".serviceConfig.ExecStartPost =
@@ -187,6 +192,10 @@
               enable = true;
               workspace = "/var/lib/hermes-test/workspace";
               sizeMiB = 128;
+              state = {
+                path = "/var/lib/hermes-test";
+                sizeMiB = 128;
+              };
             };
             zeroclaw-assistant = {
               enable = true;
@@ -194,6 +203,10 @@
               sizeMiB = 128;
               ownerUid = 65534;
               ownerGid = 65534;
+              state = {
+                path = "/var/lib/zeroclaw-assistant";
+                sizeMiB = 128;
+              };
             };
           };
         };
@@ -579,21 +592,56 @@
         machine.succeed("cryptsetup close unrelated-crypt")
         machine.succeed("swapoff /dev/vdc1; vgchange -an unrelated-vg")
 
-    with subtest("persistent workspaces have fixed-size mounted filesystems"):
-        for name, path in [
-            ("hermes-test", "/var/lib/hermes-test/workspace"),
-            ("zeroclaw-assistant", "/var/lib/zeroclaw-assistant/data"),
+    with subtest("persistent state and workspaces have independent fixed-size filesystems"):
+        for name, state, workspace, uid in [
+            ("hermes-test", "/var/lib/hermes-test", "/var/lib/hermes-test/workspace", 10000),
+            ("zeroclaw-assistant", "/var/lib/zeroclaw-assistant", "/var/lib/zeroclaw-assistant/data", 65534),
         ]:
-            machine.wait_for_unit(f"tentaflake-workspace-quota-{name}.service")
-            machine.succeed(f"findmnt --mountpoint {path} -n -o FSTYPE | grep -Fx btrfs")
-            size = int(machine.succeed(f"stat -c %s /var/lib/tentaflake-workspace-volumes/{name}.img").strip())
-            assert size == 128 * 1024 * 1024, (name, size)
-        machine.fail(
-            "fallocate -l 160M "
-            "/var/lib/hermes-test/workspace/over-quota"
-        )
+            for kind, path, image in [
+                ("state", state, f"state/{name}.img"),
+                ("workspace", workspace, f"{name}.img"),
+            ]:
+                machine.wait_for_unit(f"tentaflake-{kind}-quota-{name}.service")
+                machine.succeed(f"findmnt --mountpoint {path} -n -o FSTYPE | grep -Fx btrfs")
+                size = int(machine.succeed(f"stat -c %s /var/lib/tentaflake-workspace-volumes/{image}").strip())
+                assert size == 128 * 1024 * 1024, (name, kind, size)
+                machine.succeed(f"test $(stat -c %u:%g {path}) = {uid}:{uid}")
+                machine.fail(f"fallocate -l 160M {path}/over-quota")
+                machine.succeed(f"rm -f {path}/over-quota")
+        machine.succeed("test -d /var/lib/hermes-test/skills; test -d /var/lib/hermes-test/cron")
+        machine.succeed("test -d /var/lib/zeroclaw-assistant/.zeroclaw/data")
+
+    with subtest("stopping private state ownership stops its dependent controller"):
+        machine.succeed("systemctl start quota-controller-probe.service")
+        machine.wait_for_unit("quota-controller-probe.service")
+        machine.succeed("systemctl stop tentaflake-state-quota-hermes-test.service")
+        machine.fail("systemctl is-active --quiet quota-controller-probe.service")
+        machine.fail("systemctl is-active --quiet tentaflake-workspace-quota-hermes-test.service")
+        machine.succeed("systemctl start tentaflake-workspace-quota-hermes-test.service")
+        machine.fail("systemctl is-active --quiet quota-controller-probe.service")
+        machine.succeed("systemctl start tentaflake-worker-hermes-test.path")
+
+    with subtest("state initialization refuses an agent-owned directory symlink"):
         machine.succeed(
-            "rm -f /var/lib/hermes-test/workspace/over-quota"
+            "install -d -m 0755 /var/lib/quota-unrelated; "
+            "printf '%s' preserve > /var/lib/quota-unrelated/marker; "
+            "mv /var/lib/hermes-test/skills /var/lib/hermes-test/skills-saved; "
+            "ln -s /var/lib/quota-unrelated /var/lib/hermes-test/skills"
+        )
+        machine.fail("systemctl restart tentaflake-state-quota-hermes-test.service")
+        machine.succeed(
+            "test $(stat -c %a /var/lib/quota-unrelated) = 755; "
+            "test $(cat /var/lib/quota-unrelated/marker) = preserve; "
+            "journalctl -u tentaflake-state-quota-hermes-test.service --no-pager "
+            "| grep -F 'refusing symlink or non-directory quota source'"
+        )
+        machine.fail("systemctl is-active --quiet tentaflake-workspace-quota-hermes-test.service")
+        machine.succeed(
+            "rm /var/lib/hermes-test/skills; "
+            "mv /var/lib/hermes-test/skills-saved /var/lib/hermes-test/skills; "
+            "systemctl reset-failed tentaflake-state-quota-hermes-test.service; "
+            "systemctl start tentaflake-workspace-quota-hermes-test.service; "
+            "systemctl start tentaflake-worker-hermes-test.path"
         )
 
     with subtest("git remote policy rejects a repository remote changed by the agent"):
@@ -1385,6 +1433,9 @@
         machine.wait_for_unit(
             "tentaflake-workspace-quota-hermes-test.service"
         )
+        machine.wait_for_unit("tentaflake-state-quota-hermes-test.service")
+        assert machine.succeed("cat /var/lib/hermes-test/restore-fixture").strip() == "restore-fixture"
+        assert machine.succeed("cat /var/lib/hermes-test/workspace/restore-fixture").strip() == "workspace-restore-fixture"
         machine.wait_for_unit(
             "tentaflake-worker-hermes-test.path"
         )
@@ -1410,29 +1461,70 @@
             "jq -e '.[0].Internal == true'"
         )
 
-    with subtest("legacy ext4 workspace images fail without being reformatted"):
-        image = "/var/lib/tentaflake-workspace-volumes/hermes-test.img"
+    with subtest("legacy ext4 state and workspace images fail without being reformatted"):
+        for kind, image in [
+            ("workspace", "/var/lib/tentaflake-workspace-volumes/hermes-test.img"),
+            ("state", "/var/lib/tentaflake-workspace-volumes/state/hermes-test.img"),
+        ]:
+            machine.succeed(
+                "mount_unit=$(systemd-escape --path --suffix=mount /var/lib/hermes-test/workspace); "
+                "systemctl stop \"$mount_unit\""
+            )
+            if kind == "state":
+                machine.succeed(
+                    "mount_unit=$(systemd-escape --path --suffix=mount /var/lib/hermes-test); "
+                    "systemctl stop \"$mount_unit\""
+                )
+            machine.succeed(
+                f"mv {image} {image}.btrfs-saved; "
+                f"truncate -s 128M {image}; mkfs.ext4 -F -q {image}"
+            )
+            before = machine.succeed(f"sha256sum {image}").split()[0]
+            prepare = f"tentaflake-{kind}-quota-prepare-hermes-test.service"
+            machine.fail(f"systemctl start {prepare}")
+            assert machine.succeed(f"sha256sum {image}").split()[0] == before
+            machine.succeed(f"blkid -p -s TYPE -o value {image} | grep -Fx ext4")
+            machine.succeed(
+                f"journalctl -u {prepare} --no-pager "
+                f"| grep -F '{kind} image is not Btrfs'"
+            )
+            machine.succeed(
+                f"rm {image}; mv {image}.btrfs-saved {image}; "
+                f"systemctl reset-failed {prepare}; "
+                "systemctl start tentaflake-workspace-quota-hermes-test.service"
+            )
+            machine.succeed("findmnt --mountpoint /var/lib/hermes-test -n -o FSTYPE | grep -Fx btrfs")
+            machine.succeed("findmnt --mountpoint /var/lib/hermes-test/workspace -n -o FSTYPE | grep -Fx btrfs")
+            assert machine.succeed("cat /var/lib/hermes-test/restore-fixture").strip() == "restore-fixture"
+            assert machine.succeed("cat /var/lib/hermes-test/workspace/restore-fixture").strip() == "workspace-restore-fixture"
+
+    with subtest("quota preparation refuses a source symlink without changing its target"):
         machine.succeed(
-            "mount_unit=$(systemd-escape --path --suffix=mount /var/lib/hermes-test/workspace); "
-            "systemctl stop \"$mount_unit\"; "
-            f"mv {image} {image}.btrfs-saved; "
-            f"truncate -s 128M {image}; mkfs.ext4 -F -q {image}"
+            "systemctl stop $(systemd-escape --path --suffix=mount /var/lib/hermes-test/workspace); "
+            "systemctl stop $(systemd-escape --path --suffix=mount /var/lib/hermes-test); "
+            "mv /var/lib/hermes-test /var/lib/hermes-test-offline; "
+            "ln -s /var/lib/quota-unrelated /var/lib/hermes-test"
         )
-        before = machine.succeed(f"sha256sum {image}").split()[0]
-        machine.fail("systemctl start tentaflake-workspace-quota-prepare-hermes-test.service")
-        assert machine.succeed(f"sha256sum {image}").split()[0] == before
-        machine.succeed(f"blkid -p -s TYPE -o value {image} | grep -Fx ext4")
+        machine.fail("systemctl start tentaflake-state-quota-prepare-hermes-test.service")
         machine.succeed(
-            "journalctl -u tentaflake-workspace-quota-prepare-hermes-test.service --no-pager "
-            "| grep -F 'workspace image is not Btrfs'"
+            "test $(stat -c %a /var/lib/quota-unrelated) = 755; "
+            "test $(cat /var/lib/quota-unrelated/marker) = preserve; "
+            "journalctl -u tentaflake-state-quota-prepare-hermes-test.service --no-pager "
+            "| grep -F 'refusing symlink or non-directory quota source'"
         )
         machine.succeed(
-            f"rm {image}; mv {image}.btrfs-saved {image}; "
-            "systemctl reset-failed tentaflake-workspace-quota-prepare-hermes-test.service; "
+            "rm /var/lib/hermes-test; mv /var/lib/hermes-test-offline /var/lib/hermes-test; "
+            "printf '%s' preserve-unmounted > /var/lib/hermes-test/unmounted-state-note; "
+            "systemctl reset-failed tentaflake-state-quota-prepare-hermes-test.service"
+        )
+        machine.fail("systemctl start tentaflake-state-quota-prepare-hermes-test.service")
+        machine.succeed(
+            "test $(cat /var/lib/hermes-test/unmounted-state-note) = preserve-unmounted; "
+            "rm /var/lib/hermes-test/unmounted-state-note; "
+            "systemctl reset-failed tentaflake-state-quota-prepare-hermes-test.service; "
             "systemctl start tentaflake-workspace-quota-hermes-test.service"
         )
-        machine.succeed("findmnt --mountpoint /var/lib/hermes-test/workspace -n -o FSTYPE | grep -Fx btrfs")
-        assert machine.succeed("cat /var/lib/hermes-test/workspace/restore-fixture").strip() == "workspace-restore-fixture"
+        assert machine.succeed("cat /var/lib/hermes-test/restore-fixture").strip() == "restore-fixture"
 
   '';
 }

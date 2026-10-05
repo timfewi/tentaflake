@@ -1,7 +1,7 @@
 ---
 name: tentaflake-repo-guidance
 description: Locate the owning source, guide and checks before changing Tentaflake modules, adapters, CLI or installer.
-version: 2.5.0
+version: 2.6.1
 ---
 
 # Tentaflake repository guidance
@@ -18,7 +18,7 @@ relevant source and guide. Avoid loading unrelated references.
 | LLM broker and streaming | `modules/broker.nix`, `crates/tentaflake-broker/` | [Broker](../../../docs/12-brokered-egress.md) |
 | Research projection | `modules/research.nix`, `lib/researchClient.nix`, adapter hooks | [Research](../../../docs/16-research.md) |
 | Offline execution | `modules/worker.nix`, `crates/tentaflake-worker/` | [Worker](../../../docs/13-disposable-worker.md) |
-| Workspace limits | `modules/workspace-quota.nix` | [Quota](../../../docs/14-workspace-quota.md) |
+| Workspace/state limits | `modules/workspace-quota.nix`, adapter metadata, `modules/backup.nix` | [Quota](../../../docs/14-workspace-quota.md) |
 | Containment and provenance | `lib/containerSecurity.nix`, `lib/pinnedImage.nix`, `modules/image-provenance.nix` | [Security](../../../docs/10-security-profiles.md) |
 | Recovery and backups | `lib/serviceRecovery.nix`, `modules/backup.nix` | [Operations](../../../docs/07-operations.md) |
 | Metrics and detection | `modules/profiles/` | [Observability](../../../docs/09-observability.md) |
@@ -51,6 +51,12 @@ relevant source and guide. Avoid loading unrelated references.
 - New installs/quota images use Btrfs; quota images require at least 128 MiB.
   Never convert ext4 automatically. Installer cleanup stays inside the selected
   disk stack and refuses cross-disk VGs.
+  Optional state quotas match adapter `stateStorage`/ownership; initialize
+  directories after mounting and keep seeds/healing behind ownership units.
+  Check source/parent symlinks before privileged permission changes. Include
+  selected state/workspace mounts separately in Restic and verify both restores.
+  `ReadWritePaths` creates bind mounts: identify the exact loop backing image,
+  never infer quota readiness from a mount point or filesystem type alone.
 - Keep exact runtime resource/mount/network expectations and unknown evidence.
   Reject bind sources below writable mounts; generic source parents remain
   unmounted, root-owned and private, with startup checks for symlinks.

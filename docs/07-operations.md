@@ -144,12 +144,12 @@ tentaflake.backup = {
 };
 ```
 
-Enabled managed quota workspaces below a selected path are automatically
+Enabled managed quota state/workspace mounts below a selected path are automatically
 added as separate Restic sources. This preserves `--one-file-system` without
-silently skipping the mounted workspace. Only explicitly selected trees are
+silently skipping a mounted state or workspace filesystem. Only explicitly selected trees are
 covered; unrelated agents and disabled quotas are excluded. The backup unit
 requires the selected filesystems and asserts that each included quota
-workspace is mounted before it runs. A failed mount prevents a new backup and
+filesystem is mounted before it runs. A failed mount prevents a new backup and
 success timestamp. Other nested filesystems require their own explicit entry
 in `paths`.
 
@@ -162,7 +162,7 @@ randomized delay. Alert on failed/stale `restic-backups-tentaflake.service`
 runs.
 For a restore drill: install a fresh test host, keep the agent stopped, restore
 its state, verify ownership and file permissions, start the exact unit, and run
-application-level checks. The VM test restores ordinary state and a mounted
+application-level checks. The VM test restores mounted state and a mounted
 quota workspace into a fresh directory, rejects an unavailable mount, and
 verifies recovery afterward. Production backend credentials, retention,
 capacity, and a real fresh-host drill remain operator evidence. Backup freshness and restore
@@ -192,9 +192,10 @@ access to the worker.
 ## Disk and logs
 
 The secure capsule limits RAM, swap, CPU, PIDs, ulimits, and tmpfs size. The
-optional fixed-size workspace filesystem provides a hard per-controller code
-workspace ceiling; see [workspace quota](14-workspace-quota.md). State outside
-that mount and sparse backing images still require host free-space monitoring.
+fixed-size workspace filesystem provides a hard per-controller code workspace
+ceiling; optional private state uses a separate bound. See
+[workspace/state quotas](14-workspace-quota.md). Other host state and aggregate
+sparse backing images still require host free-space monitoring.
 journald rotation follows the host configuration; the
 optional Alloy/Loki profile is loopback-only and does not itself define a
 retention policy suitable for every deployment. It does provide baseline
