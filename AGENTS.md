@@ -43,6 +43,8 @@ VGs before mutation and preserve unrelated swap, VGs and encrypted mappings.
 - Rust: `cargo fmt`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace`
 - Commits: Conventional Commits (`feat:`, `fix:`, `docs:`)
 - DCO: every non-merge PR commit needs `Signed-off-by:`; use `git commit -s`
+  with the human user's configured Git author and committer identity. Never
+  replace that identity with an agent identity.
 
 ## Template Rule
 
@@ -122,6 +124,9 @@ are already published or require access to another repository for public checks.
   conservative reservation. Audit terminal admission before forwarding success;
   partial-output failure must close without fabricating completion. Streaming
   fixtures do not establish OpenClaw runtime acceptance.
+  Preserve only optional bounded `x-opencode-session` affinity metadata on both
+  LLM routes and transports; never treat it as authority, log it, or forward
+  arbitrary client headers. The client owns session propagation.
   Clear systemd capability sets with an empty string; an empty list omits the
   directive. Verify credential write boundaries inside the unit namespace.
 - Secure controllers and brokers share `lib/serviceRecovery.nix`: bounded

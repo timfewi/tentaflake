@@ -771,6 +771,8 @@
             + "sh -c 'curl --fail --silent "
             + "-H \"Authorization: Bearer virtual-fixture-key\" "
             + "-H \"Content-Type: application/json\" "
+            + "-H \"X-OpenCode-Session: conversation-vm\" "
+            + "-H \"X-Forged: not-forwarded\" "
             + "-d \"{\\\"model\\\":\\\"fixture/model\\\","
             + "\\\"messages\\\":[],\\\"max_tokens\\\":1}\" "
             + "http://10.203.30.1:7811/v1/chat/completions "
@@ -784,6 +786,8 @@
                 + "curl --fail --silent --no-buffer --max-time 5 "
                 + "-H 'Authorization: Bearer virtual-fixture-key' "
                 + "-H 'Content-Type: application/json' "
+                + "-H 'X-OpenCode-Session: conversation-vm' "
+                + "-H 'X-Forged: not-forwarded' "
                 + f"-d '{payload}' http://10.203.30.1:7811/v1/{route}"
             )
             assert "stream-first" in output, output
@@ -793,6 +797,7 @@
         assert "stream-first" not in audit, audit
         assert "virtual-fixture-key" not in audit, audit
         assert "fixture-provider-key" not in audit, audit
+        assert "conversation-vm" not in audit, audit
         machine.succeed(
             "kill $(cat /tmp/tentaflake-fixture-broker.pid) "
             "$(cat /tmp/tentaflake-fixture-upstream.pid)"

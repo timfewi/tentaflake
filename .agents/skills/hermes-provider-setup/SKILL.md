@@ -1,7 +1,7 @@
 ---
 name: hermes-provider-setup
 description: Configure or diagnose Hermes model access through Tentaflake's host-held LLM broker credentials and exact model policy.
-version: 1.1.0
+version: 1.2.0
 platforms: [linux]
 metadata:
   hermes:
@@ -35,6 +35,12 @@ metadata:
 Check the exact broker unit, bounded logs, `/healthz`, model spelling, endpoint,
 budgets and streaming policy. `/healthz` checks local credential/policy/audit
 readiness, not upstream TLS, model access or billing.
+
+For endpoints requiring conversation affinity, verify that the pinned client
+emits `x-opencode-session` on main and auxiliary requests to the local broker.
+The broker preserves only this optional bounded field on JSON/SSE LLM routes;
+it does not create IDs, prove session ownership or record values in audit.
+See the header contract in [brokered egress](../../../docs/12-brokered-egress.md).
 
 Rotate values through the host secret mechanism and restart only the exact LLM
 broker when authorized. Virtual keys survive broker restarts. Never put keys

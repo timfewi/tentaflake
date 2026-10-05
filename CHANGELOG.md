@@ -6,6 +6,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+### Fixed
+- Preserve optional bounded `x-opencode-session` conversation-affinity metadata
+  on both LLM broker routes for JSON and SSE. Reject malformed values before
+  budget reservation or upstream dispatch, omit session IDs from audit logs,
+  and keep arbitrary client headers excluded. Clients still own ID propagation.
 ### Added
 - Record the product roadmap for general-purpose AI employees, company workflows,
   business connectors and shared runtime configuration, with linked GitHub milestones

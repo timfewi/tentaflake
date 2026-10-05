@@ -14,6 +14,10 @@ class Handler(BaseHTTPRequestHandler):
         if self.headers.get("Authorization") != "Bearer fixture-provider-key":
             self.send_error(401)
             return
+        if (self.headers.get("X-OpenCode-Session") != "conversation-vm"
+                or self.headers.get("X-Forged") is not None):
+            self.send_error(400)
+            return
         if not body.get("stream"):
             payload = b'{"id":"completion-fixture"}'
             self.send_response(200)

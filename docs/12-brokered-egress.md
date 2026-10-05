@@ -77,6 +77,21 @@ models. Local function/custom tool definitions are forwarded; provider-hosted
 tools such as web search, file search and remote MCP, plus `web_search_options`,
 `plugins`, `extensions` and `data_sources`, are rejected before budget reservation.
 
+Both `/v1/chat/completions` and `/v1/responses` preserve the optional
+`x-opencode-session` header for JSON and enabled SSE requests. Its value must be
+1–128 ASCII characters from `A–Z`, `a–z`, `0–9`, `_`, `.`, `:`, and `-`;
+malformed values return HTTP 400 before budget reservation or upstream dispatch.
+Only this client header is forwarded alongside broker-owned transport headers;
+arbitrary client headers are dropped and the virtual key is replaced by the
+host-held provider credential. Session values are not written to audit logs.
+
+The client owns this opaque conversation-affinity value. The broker neither
+generates it nor verifies conversation ownership; it grants no authorization
+and must not contain secrets or personal data. Older Hermes images or clients
+configured against the local broker may need a client-side integration to emit
+it, including on auxiliary calls. Broker forwarding alone does not establish
+Hermes session propagation or provider acceptance.
+
 Use a unique `/30` per agent. The network address must end on a four-address
 boundary and `gateway` must be its first usable address. Evaluation rejects
 duplicate networks/subnets, unrelated gateways, missing modes, plain HTTP

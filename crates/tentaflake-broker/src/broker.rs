@@ -92,6 +92,7 @@ impl Broker {
         if !matches!(route, "/v1/chat/completions" | "/v1/responses") {
             return Err(Failure::new(404, "llm", "route is not allowed"));
         }
+        let session_id = provider_session(&request)?;
         let policy = self.config.llm.as_ref().expect("mode checked");
         let mut payload: Value = serde_json::from_slice(&request.body)
             .map_err(|_| Failure::new(400, "llm", "request body is not valid JSON"))?;
@@ -220,6 +221,7 @@ impl Broker {
                 streaming: Some(Box::new(StreamingResponse {
                     target: resolved,
                     credential,
+                    session_id,
                     body,
                     policy: policy.streaming.clone(),
                     connect_timeout_seconds: self.config.connect_timeout_seconds,
@@ -233,11 +235,15 @@ impl Broker {
         }
         let client = self.client_for(&resolved)?;
         let started = Instant::now();
-        let response = client
+        let mut upstream = client
             .post(resolved.url.clone())
             .bearer_auth(credential)
             .header(CONTENT_TYPE, "application/json")
-            .body(body)
+            .body(body);
+        if let Some(session) = session_id {
+            upstream = upstream.header("x-opencode-session", session);
+        }
+        let response = upstream
             .send()
             .map_err(|_| Failure::new(502, "llm", "provider request failed"))?;
         let status = response.status().as_u16();
@@ -581,6 +587,23 @@ impl Failure {
 
 pub type SharedBroker = Arc<Broker>;
 
+// Optional client-supplied affinity metadata, never an authorization identity.
+// Forward only this bounded field, not arbitrary client headers.
+fn provider_session(request: &Request) -> Result<Option<String>, Failure> {
+    let Some(session) = request.headers.get("x-opencode-session") else {
+        return Ok(None);
+    };
+    if session.is_empty()
+        || session.len() > 128
+        || !session
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || b"_.:-".contains(&byte))
+    {
+        return Err(Failure::new(400, "llm", "invalid provider session header"));
+    }
+    Ok(Some(session.clone()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -619,21 +642,37 @@ mod tests {
     fn substitutes_provider_credential_without_logging_prompt() {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let address = listener.local_addr().unwrap();
+        let routes = ["/v1/chat/completions", "/v1/responses"];
+        let sessions = [Some("conversation-json"), Some("conversation-next"), None];
         let upstream = thread::spawn(move || {
-            let (mut stream, _) = listener.accept().unwrap();
-            let request = read_request(&mut stream, 32 * 1024, 1024 * 1024).unwrap();
-            let authorization = request.headers.get("authorization").cloned();
-            let payload: Value = serde_json::from_slice(&request.body).unwrap();
-            assert_eq!(payload["tools"][0]["type"], "function");
-            let response = b"{\"id\":\"completion-fixture\"}";
-            write!(
-                stream,
-                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-                response.len()
-            )
-            .unwrap();
-            stream.write_all(response).unwrap();
-            authorization
+            for route in routes {
+                for session in sessions {
+                    let (mut stream, _) = listener.accept().unwrap();
+                    stream
+                        .set_read_timeout(Some(Duration::from_secs(5)))
+                        .unwrap();
+                    let request = read_request(&mut stream, 32 * 1024, 1024 * 1024).unwrap();
+                    assert_eq!(request.path, route);
+                    assert_eq!(request.headers["authorization"], "Bearer real-provider-key");
+                    assert_eq!(
+                        request
+                            .headers
+                            .get("x-opencode-session")
+                            .map(String::as_str),
+                        session
+                    );
+                    assert!(!request.headers.contains_key("x-forged"));
+                    let payload: Value = serde_json::from_slice(&request.body).unwrap();
+                    assert_eq!(payload["tools"][0]["type"], "function");
+                    let response = b"{\"id\":\"completion-fixture\"}";
+                    write!(
+                        stream,
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                        response.len()
+                    ).unwrap();
+                    stream.write_all(response).unwrap();
+                }
+            }
         });
 
         let directory =
@@ -680,20 +719,39 @@ mod tests {
         config.validate().unwrap();
         let broker = Broker::new(config).unwrap();
         let body = br#"{"model":"example/model","messages":[{"role":"user","content":"SENSITIVE_PROMPT_FIXTURE"}],"max_tokens":8,"tools":[{"type":"function","function":{"name":"research_fetch","parameters":{"type":"object","properties":{}}}}],"tool_choice":{"type":"function","function":{"name":"research_fetch"}}}"#.to_vec();
-        let response = broker.handle(Request {
-            method: "POST".into(),
-            path: "/v1/chat/completions".into(),
-            headers: HashMap::from([
-                ("authorization".into(), "Bearer virtual-agent-key".into()),
-                ("content-type".into(), "application/json".into()),
-            ]),
-            body,
-        });
-        assert_eq!(response.status, 200);
-        assert_eq!(
-            upstream.join().unwrap().as_deref(),
-            Some("Bearer real-provider-key")
-        );
+        for route in routes {
+            let mut payload: Value = serde_json::from_slice(&body).unwrap();
+            if route == "/v1/responses" {
+                let object = payload.as_object_mut().unwrap();
+                let messages = object.remove("messages").unwrap();
+                object.insert("input".into(), messages);
+                let tokens = object.remove("max_tokens").unwrap();
+                object.insert("max_output_tokens".into(), tokens);
+                object.insert("tools".into(), json!([{"type":"function","name":"research_fetch","parameters":{"type":"object"}}]));
+                object.insert(
+                    "tool_choice".into(),
+                    json!({"type":"function","name":"research_fetch"}),
+                );
+            }
+            for session in sessions {
+                let mut headers = HashMap::from([
+                    ("authorization".into(), "Bearer virtual-agent-key".into()),
+                    ("content-type".into(), "application/json".into()),
+                    ("x-forged".into(), "not-forwarded".into()),
+                ]);
+                if let Some(session) = session {
+                    headers.insert("x-opencode-session".into(), session.into());
+                }
+                let response = broker.handle(Request {
+                    method: "POST".into(),
+                    path: route.into(),
+                    headers,
+                    body: serde_json::to_vec(&payload).unwrap(),
+                });
+                assert_eq!(response.status, 200);
+            }
+        }
+        upstream.join().unwrap();
         let audit = fs::read_to_string(&audit_file).unwrap();
         assert!(audit.contains("example/model"));
         assert!(!audit.contains("SENSITIVE_PROMPT_FIXTURE"));
@@ -709,10 +767,25 @@ mod tests {
         });
         assert_eq!(denied.status, 403);
 
+        let budget_before = fs::read(&broker.config.budget_state_file).unwrap();
+        let unauthenticated = broker.handle(Request {
+            method: "POST".into(),
+            path: routes[0].into(),
+            headers: HashMap::from([
+                ("authorization".into(), "Bearer wrong-key".into()),
+                ("content-type".into(), "application/json".into()),
+                ("x-opencode-session".into(), "conversation-json".into()),
+            ]),
+            body: body.clone(),
+        });
+        assert_eq!(unauthenticated.status, 401);
+        assert_eq!(
+            fs::read(&broker.config.budget_state_file).unwrap(),
+            budget_before
+        );
         // OpenClaw v2026.9.7's built-in OpenAI request builders set stream=true.
         // These source-derived probes document the broker incompatibility;
         // they do not establish actual OpenClaw runtime acceptance.
-        let budget_before = fs::read(&broker.config.budget_state_file).unwrap();
         let streaming_requests = [
             (
                 "/v1/chat/completions",
@@ -763,6 +836,8 @@ mod tests {
             "OPENCLAW_MODEL_PROMPT_FIXTURE",
             "virtual-agent-key",
             "real-provider-key",
+            "conversation-json",
+            "conversation-next",
         ] {
             assert!(!audit.contains(excluded));
         }
@@ -814,5 +889,18 @@ mod tests {
     fn input_budget_uses_a_conservative_byte_bound() {
         assert_eq!(conservative_input_tokens(1), 1);
         assert_eq!(conservative_input_tokens(4096), 4096);
+    }
+
+    #[test]
+    fn provider_session_accepts_the_full_bounded_ascii_alphabet() {
+        for session in ["aA0_.:-".into(), "x".repeat(128)] {
+            let request = Request {
+                method: "POST".into(),
+                path: "/v1/chat/completions".into(),
+                headers: HashMap::from([("x-opencode-session".into(), session.clone())]),
+                body: Vec::new(),
+            };
+            assert!(matches!(provider_session(&request), Ok(Some(value)) if value == session));
+        }
     }
 }
