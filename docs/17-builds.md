@@ -36,6 +36,7 @@ guards manifest availability, source isolation and the worker image version.
 The imported policy is `.github/ci-paths.json`; its consumer is
 `scripts/ci_changes.py`. One ordered policy selects non-VM checks and the two
 VM suites independently. Component paths take precedence over Markdown suffixes.
+The table describes affected suites; execution follows the temporary pause below.
 
 | Change | Non-VM checks | VM suite |
 | --- | --- | --- |
@@ -68,13 +69,34 @@ Mixing these changes with shared security paths retains the full gate.
 Non-VM package builds run in
 groups of at most four. Configuration evaluation still prepares the exact
 Research closures because the full flake/module fixtures need them; shared
-configuration changes retain their applicable runtime and Research evidence.
+configuration changes still select the applicable runtime and Research suites.
 Onboarding validation uses the installed fixture rather than full flake checks;
 its CLI binary is a small selected package or an explicitly supplied local binary.
 The standalone host build runs only for configuration changes affecting the
 runtime, not for a Research-only or documentation change. Full VM/ISO/system
 workloads remain separate from local fast checks and require their own scope.
-New pushes cancel superseded runs for the same PR or branch.
+New pushes cancel superseded runs for the same PR or branch and event type;
+manual runs do not cancel automatic runs.
+
+### Temporary VM pause
+
+Automatic runtime and Research VM jobs are paused by default on PRs and `main`.
+Non-VM selection, evaluation, builds, lint and unit checks remain active. The
+`changes` job summary states when affected VM suites were skipped. Green non-VM
+CI does not establish runtime/security acceptance for an untested change.
+
+To run both suites once, select **Actions → Check → Run workflow**, choose the
+branch or ref and enable `run_vm_tests`. Manual dispatch has no comparison base,
+so it conservatively selects the complete gate, including both VM suites when
+enabled. Without the opt-in, the VM job remains skipped unless automatic runs
+have been restored.
+
+To restore automatic affected-suite execution, set the repository Actions
+variable `RUN_VM_TESTS` to the exact string `true` under **Settings → Secrets and
+variables → Actions → Variables**. Removing it or setting it to `false` pauses
+automatic VM execution again; no workflow edit is needed. Before a release or
+host activation, obtain the applicable runtime/Research acceptance on the
+candidate commit. Keep skipped evidence explicit in PRs and issue delivery.
 
 ## Nix and Bazel
 

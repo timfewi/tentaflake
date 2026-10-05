@@ -101,6 +101,12 @@ run on every event; other checks run when their owning inputs change.
 See [build boundaries](docs/17-builds.md) for cache guarantees and the
 Nix/Bazel assessment.
 
+Automatic GitHub VM execution is temporarily paused to conserve runner minutes.
+Other selected checks remain active. Maintainers can manually run `Check` with
+`run_vm_tests` enabled, or restore automatic affected-suite execution by setting
+the repository Actions variable `RUN_VM_TESTS=true`. A skipped VM is an evidence
+gap, not runtime acceptance; run affected suites before release or activation.
+
 `just security` first checks `Cargo.lock` and the patched Dev Containers CLI
 `yarn.lock` against OSV's current advisory database, then runs the pinned
 Semgrep CLI and rule snapshot against tracked source. Semgrep does not contact

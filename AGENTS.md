@@ -12,8 +12,13 @@ lists them. Enter `nix develop` before running Cargo or lint tools directly.
 Start with `just fast`; use affected VM suites for runtime/security changes.
 GitHub check selection imports `.github/ci-paths.json`; docs skip Nix/Research
 builds, and CI metadata uses routing regressions rather than VMs. Runtime and
-Research changes select affected suites; unknown paths/history require the full
-gate. Keep the real-Git regression check passing.
+Research changes select affected suites; unknown paths/history select the full
+gate. Automatic GitHub VM execution is temporarily paused: manual `Check` runs
+opt in with `run_vm_tests`, or maintainers restore automatic runs with the
+repository Actions variable `RUN_VM_TESTS=true`. Other selected checks remain
+active. Skipped VMs do not establish runtime acceptance; report the evidence gap
+and run the relevant suites before release or host activation. See
+`docs/17-builds.md`. Keep the real-Git regression check passing.
 
 ```bash
 nix flake check

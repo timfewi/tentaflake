@@ -40,6 +40,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   broker SSE transport still needs acceptance with that runtime. Default
   rejection probes retain the existing budget and credential boundaries.
 ### Changed
+- Temporarily pause automatic GitHub runtime/Research VM jobs while retaining
+  selected non-VM checks, explicit skipped-coverage summaries, manual VM opt-in
+  and restoration through the `RUN_VM_TESTS` repository Actions variable.
 - Pin the published `tentaflake-research` revision 91ce540 (replacing e31fce2):
   independent client/service split, neutral provider defaults, streamed-HTML and
   crawl fixes, typed failure details, constrained package sources, formatted HTML
