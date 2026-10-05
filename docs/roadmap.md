@@ -48,7 +48,8 @@ remaining capability-admission requirements.
 
 Next: finish capability-specific admission, shared bounded policy decisions/replay
 and fail-closed readiness for #116; then accept actual coding agents in #136.
-Research pin/client work (#110) precedes independent VPN readiness (#141).
+Research pin/client work (#110) merged in PR #144 and is closed. Independent
+VPN readiness (#141) retains its separate acceptance requirements.
 Mutable upstream OpenCode/Pi documentation is only a candidate lead: no reviewed
 artifact, provider call or vendor acceptance follows from it. M03-M10 and the
 remaining issues retain all their acceptance requirements.
