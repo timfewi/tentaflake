@@ -48,6 +48,11 @@ relevant source and guide. Avoid loading unrelated references.
   or provider-hosted tools, and no dispatched-operation replay.
 - A worker declaration does not prove vendor execution mediation. Synthetic
   fixtures do not establish vendor startup or tool discovery.
+- Worker queue changes preserve one operator/drain lock and durable running
+  claims before OCI dispatch. Never retry abandoned claims; verify real binary
+  crash/write-failure and overload cases. Sync directories through readable
+  descriptors; guarded `O_PATH` handles cannot themselves be fsynced.
+  Migration and limits belong in the [worker guide](../../../docs/13-disposable-worker.md).
 - New installs/quota images use Btrfs; quota images require at least 128 MiB.
   Never convert ext4 automatically. Installer cleanup stays inside the selected
   disk stack and refuses cross-disk VGs.
