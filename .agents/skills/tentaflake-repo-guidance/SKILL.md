@@ -1,7 +1,7 @@
 ---
 name: tentaflake-repo-guidance
 description: Locate the owning source, guide and checks before changing Tentaflake modules, adapters, CLI or installer.
-version: 2.1.0
+version: 2.2.0
 ---
 
 # Tentaflake repository guidance
@@ -32,6 +32,9 @@ relevant source and guide. Avoid loading unrelated references.
 - Preserve Hermes/ZeroClaw APIs and state. OpenClaw is a stopped refusal scaffold
   without an OCI artifact or operational acceptance. The
   [roadmap](../../../docs/roadmap.md) describes plans, not current support.
+- Prioritize the planned common isolated runtime and installed-host onboarding
+  before employee/company features. Keep native agent hooks separate from common
+  containment; adding a preset must not create another security implementation.
 - Balanced effective `autoStart = true` requires the exact LLM broker, worker,
   quota and Research relay. Incomplete stopped capsules may remain offline.
   `strict` fails closed; `dev` is a compatibility profile.

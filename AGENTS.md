@@ -1,6 +1,9 @@
 # Agent Instructions — tentaflake
 
-NixOS flake template for running isolated AI agents (Hermes and ZeroClaw) in Docker containers on a single machine.
+NixOS flake template for running isolated AI agents on a single machine.
+See `docs/agent-adapters.md` for current support. The planned common runtime and
+simple installed-host onboarding in `docs/roadmap.md` precede employee/company
+features; planned capability admission does not relax current startup gates.
 
 ## Build & Test
 
