@@ -1,5 +1,5 @@
 # Agent-independent OCI workload. Host policy owns the isolation backend.
-{ lib, ... }:
+{ pkgs, lib }:
 let
   preset = (import ../lib/runtimeCatalog.nix).presets.generic;
   validate = import ../lib/runtimeContract.nix { inherit lib; };
@@ -63,6 +63,7 @@ in
           gid
           ;
         owner = "${toString uid}:${toString gid}";
+        stateStorage = "${stateDir}/state";
         worker = lib.attrByPath [ container ] null config.tentaflake.worker.agents;
         workerEnabled = worker != null && worker.enable;
         workerResults = "/var/lib/tentaflake-worker-${container}/results";
@@ -77,7 +78,7 @@ in
           resources =
             config.tentaflake.security.resources // builtins.removeAttrs d.resources [ "pidsLimit" ];
           allowedWritableSources = [
-            stateDir
+            stateStorage
             workspace
           ];
           allowedWritableDestinations = [
@@ -93,7 +94,7 @@ in
             user = owner;
             environment.HOME = "/state";
             volumes = [
-              "${stateDir}:/state:rw"
+              "${stateStorage}:/state:rw"
               "${workspace}:${d.workspace}:rw"
             ]
             ++ lib.optional workerEnabled "${workerResults}:/run/tentaflake-worker/results:ro";
@@ -130,15 +131,32 @@ in
           }
         ];
         systemd.tmpfiles.rules = [
-          "d ${stateDir} 0700 ${toString uid} ${toString gid} -"
+          "d ${stateDir} 0700 root root -"
+          "d ${stateStorage} 0700 ${toString uid} ${toString gid} -"
           "d ${workspace} 0700 ${toString uid} ${toString gid} -"
         ];
-        systemd.services."${backend}-${container}" =
-          (import ../lib/serviceRecovery.nix)
-          // lib.optionalAttrs (dependencies != [ ]) {
-            requires = dependencies;
-            after = dependencies;
-          };
+        systemd.services."${backend}-${container}" = (import ../lib/serviceRecovery.nix) // {
+          requires = [ "systemd-tmpfiles-setup.service" ] ++ dependencies;
+          after = [ "systemd-tmpfiles-setup.service" ] ++ dependencies;
+          preStart = lib.mkBefore ''
+            for directory in ${
+              lib.escapeShellArgs [
+                stateDir
+                stateStorage
+                workspace
+              ]
+            }; do
+              if [ ! -d "$directory" ] || [ -L "$directory" ]; then
+                echo "Generic runtime requires real state and workspace directories, not symlinks." >&2
+                exit 1
+              fi
+            done
+            if [ "$(${pkgs.coreutils}/bin/stat -c %u:%a ${lib.escapeShellArg stateDir})" != 0:700 ]; then
+              echo "Generic runtime requires a root-owned, mode-0700 instance parent." >&2
+              exit 1
+            fi
+          '';
+        };
         virtualisation.oci-containers.containers.${container} = result.container;
       }
     );

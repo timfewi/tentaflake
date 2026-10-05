@@ -75,9 +75,13 @@ The argument vector follows OCI semantics and preserves the image entrypoint.
 Image review/provenance remains operator-owned; a digest alone is not proof of
 trust. Evaluation neither downloads the image nor activates the host.
 
-State lives at `/var/lib/generic-NAME`, mounted at `/state` with `HOME=/state`.
-Its private `workspace` subdirectory is mounted at the requested workspace path
-and becomes the working directory. That destination must be `/workspace` or a
+The instance root `/var/lib/generic-NAME` belongs to root and is not mounted
+into the capsule. Its separate `state` and `workspace` children belong to the
+container UID/GID; `state` mounts at `/state` with `HOME=/state`. The agent cannot
+replace its mount sources through a writable parent. Startup refuses symlink
+sources or a parent without root ownership and mode 0700. The private `workspace`
+child is mounted at the requested workspace path and becomes the working
+directory. That destination must be `/workspace` or a
 normalized child. Non-root ownership defaults to 10000:10000. Resource fields
 inherit host security limits; allowed overrides are `memory`, `memorySwap`,
 `cpus`, `nofile`, `pidsLimit`, `tmpfsSize` and `runTmpfsSize`. Values must be

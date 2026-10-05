@@ -50,6 +50,8 @@ relevant source and guide. Avoid loading unrelated references.
   Never convert ext4 automatically. Installer cleanup stays inside the selected
   disk stack and refuses cross-disk VGs.
 - Keep exact runtime resource/mount/network expectations and unknown evidence.
+  Reject bind sources below writable mounts; generic source parents remain
+  unmounted, root-owned and private, with startup checks for symlinks.
   Read the [threat model](../../../docs/15-threat-model.md) for authority changes.
 - Editor, Hive Research and Piper integrations belong in consumer flakes.
 

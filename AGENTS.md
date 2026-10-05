@@ -126,6 +126,9 @@ are already published or require access to another repository for public checks.
   after explicit close; every new session repeats negotiation and UID checks.
 - Security manifests carry exact live mount, tmpfs, network, and resource
   expectations. Incomplete/legacy runtime evidence must remain unknown.
+  Secure bind sources must not be nested below another writable source. Generic
+  state/workspace sources use an unmounted root-owned parent; refuse symlinks
+  or unsafe parent ownership/permissions before container startup.
   OCI inspection has a deadline and a combined output-byte ceiling; failures
   remain unknown and raw container environment data must not reach reports.
 - Broker host concurrency/rate admission counts each enabled LLM/fetch mode.

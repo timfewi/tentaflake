@@ -139,6 +139,34 @@ let
     })
   ];
   genericContainer = generic.virtualisation.oci-containers.containers.generic-coding;
+  nestedSources =
+    access:
+    (import ../lib/containerSecurity.nix { inherit lib; }).apply {
+      profile = "balanced";
+      backend = "docker";
+      name = "nested-source-fixture";
+      owner = "10000:10000";
+      pidsLimit = 64;
+      resources = generic.tentaflake.security.resources;
+      baseConfig = {
+        inherit (definition) image;
+        autoStart = false;
+        volumes = [
+          "/var/lib/fixture:/state:rw"
+          "/var/lib/fixture/workspace:/workspace:${access}"
+        ];
+      };
+      allowedWritableSources = [
+        "/var/lib/fixture"
+        "/var/lib/fixture/workspace"
+      ];
+      allowedWritableDestinations = [
+        "/state"
+        "/workspace"
+      ];
+      approvedReadOnlySources = [ "/var/lib/fixture/workspace" ];
+      approvedReadOnlyDestinations = [ "/workspace" ];
+    };
   genericStarted = eval [
     (builders.mkAgent {
       adapter = "generic";
@@ -172,6 +200,17 @@ let
     { tentaflake.security.profile = lib.mkForce "dev"; }
   ];
 in
+assert lib.all
+  (
+    access:
+    lib.any (
+      item: !item.assertion && lib.hasInfix "writable bind source" item.message
+    ) (nestedSources access).assertions
+  )
+  [
+    "rw"
+    "ro"
+  ];
 assert failures genericJson == [ ];
 assert genericJson.tentaflake.agentInstances.generic-from-json.adapter == "generic";
 assert
@@ -190,9 +229,11 @@ assert lib.elem "--memory=512m" genericContainer.extraOptions;
 assert lib.elem "--pids-limit=64" genericContainer.extraOptions;
 assert
   genericContainer.volumes == [
-    "/var/lib/generic-coding:/state:rw"
+    "/var/lib/generic-coding/state:/state:rw"
     "/var/lib/generic-coding/workspace:/workspace:rw"
   ];
+assert lib.elem "d /var/lib/generic-coding 0700 root root -" generic.systemd.tmpfiles.rules;
+assert lib.elem "d /var/lib/generic-coding/state 0700 10000 10000 -" generic.systemd.tmpfiles.rules;
 assert
   generic.tentaflake.agentInstances.generic-coding.workspace == "/var/lib/generic-coding/workspace";
 assert

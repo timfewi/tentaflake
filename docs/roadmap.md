@@ -25,7 +25,10 @@ adds generic non-secret definitions and configuration-free catalog discovery.
 Owning files: `adapters/catalog.json`, `adapters/generic.nix`,
 `lib/runtimeContract.nix` and the operator CLI. Verified: 44 CLI tests, runtime
 contract/legacy fixtures, module/image checks, CI routing, lint and the generated
-installed flake. PR CI/merge remains the delivery gate. Live vendor acceptance,
+installed flake. Review reproduced a nested writable bind-source substitution;
+the generic layout now uses separate sources beneath an unmounted root-owned
+parent, and the shared secure policy rejects nested sources, including read-only
+children. PR #139 CI/merge remains the delivery gate. Live vendor acceptance,
 local VM workloads and host activation were not performed.
 
 ## Product direction
