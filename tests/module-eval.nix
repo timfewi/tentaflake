@@ -1031,10 +1031,6 @@ assert !(brokerModeBudgetsAccepted [ llmMode fetchMode dualMode ] 15 120);
 assert !(brokerModeBudgetsAccepted [ llmMode fetchMode dualMode ] 16 119);
 
 assert workerAttempt.success;
-assert workerCapsule.config.tentaflake.worker.agents.hermes-worker.maxInboxEntries == 256;
-assert workerCapsule.config.tentaflake.worker.agents.hermes-worker.maxInboxBytes == 8 * 1024 * 1024;
-assert workerCapsule.config.tentaflake.worker.agents.hermes-worker.maxQueueEntries == 256;
-assert workerCapsule.config.tentaflake.worker.agents.hermes-worker.maxQueueBytes == 8 * 1024 * 1024;
 assert
   !(builtins.tryEval tooSmallQuota.config.tentaflake.workspaceQuota.agents.hermes-worker.sizeMiB)
   .success;

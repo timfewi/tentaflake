@@ -162,6 +162,9 @@
             agents.hermes-test = {
               enable = true;
               workspace = "/var/lib/hermes-test/workspace";
+              maxInboxEntries = 4;
+              maxQueueEntries = 2;
+              maxQueueBytes = 1024 * 1024;
               maxSnapshotBytes = 16 * 1024 * 1024;
               maxSnapshotEntries = 1000;
               maxTimeoutSeconds = 60;
@@ -1264,6 +1267,27 @@
         machine.fail("test -e " + state + "/jobs/crash_1")
         machine.succeed(command)
         machine.succeed("systemctl reset-failed " + worker)
+        machine.succeed(
+            "jq -e '.max_inbox_entries == 4 and .max_queue_entries == 2 and "
+            ".max_queue_bytes == 1048576' /etc/tentaflake/workers/hermes-test.json"
+        )
+        for number in (1, 2, 3):
+            machine.succeed(
+                "cat > " + inbox + f"/capacity_{number}.json <<'EOF'\n"
+                f'{{"version":1,"id":"capacity_{number}","action_class":"communicative",'
+                '"argv":["sh","-c","exit 0"],"timeout_seconds":5}\nEOF'
+            )
+        machine.fail(command)
+        machine.succeed("test -f " + state + "/pending/capacity_1.json")
+        machine.succeed("test -f " + state + "/pending/capacity_2.json")
+        machine.succeed("test -f " + inbox + "/capacity_3.json")
+        machine.fail("test -e " + state + "/pending/capacity_3.json")
+        operator = "tentaflake-worker --config /etc/tentaflake/workers/hermes-test.json "
+        machine.succeed(operator + "deny capacity_1")
+        machine.succeed(operator + "deny capacity_2")
+        machine.succeed(command)
+        machine.succeed(operator + "deny capacity_3")
+        machine.succeed("grep -F '\"event\":\"queue-overload\"' " + state + "/audit.jsonl")
         machine.succeed("systemctl start " + watcher)
 
     with subtest("encrypted backup restores state and the mounted quota workspace"):

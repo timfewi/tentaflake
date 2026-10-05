@@ -123,6 +123,15 @@ class CiSelection(unittest.TestCase):
         self.assertEqual(select(self.base, self.commit(), self.repository),
                          {"runtime", "cli", "broker", "worker", "rust", "static"})
 
+    def test_worker_module_uses_runtime_and_worker_gates_without_research(self):
+        self.write("modules/worker.nix", "changed\n")
+        head = self.commit()
+        self.assertEqual(select(self.base, head, self.repository),
+                         {"runtime", "worker", "rust", "static"})
+        self.write("modules/security.nix", "changed\n")
+        self.assertEqual(select(head, self.commit(), self.repository), CHECKS)
+        self.assertEqual(select(self.base, self.git("rev-parse", "HEAD"), self.repository), CHECKS)
+
     def test_ci_control_changes_use_regressions_without_vms_or_research(self):
         for name in (".github/ci-paths.json", ".github/vm-paths.json", ".github/workflows/check.yml",
                      "scripts/ci_changes.py", "scripts/ci_vm_changes.py",
