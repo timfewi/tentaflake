@@ -141,6 +141,15 @@ class CiSelection(unittest.TestCase):
                 self.write(name)
                 self.assertEqual(select(base, self.commit(), self.repository), {"generated", "static"})
 
+    def test_operator_onboarding_uses_real_cli_fixture_without_booting_vms(self):
+        self.write("crates/tentaflake-cli/src/onboarding.rs")
+        self.assertEqual(select(self.base, self.commit(), self.repository), {"cli", "rust", "generated", "static"})
+        base = self.git("rev-parse", "HEAD")
+        self.write("crates/tentaflake-cli/src/main.rs")
+        head = self.commit()
+        self.assertEqual(select(base, head, self.repository), {"runtime", "cli", "rust", "static"})
+        self.assertEqual(select(self.base, head, self.repository), {"runtime", "cli", "rust", "generated", "static"})
+
     def test_shared_agent_parser_retains_runtime_coverage_without_research(self):
         self.write("lib/agentsFromData.nix")
         self.assertEqual(select(self.base, self.commit(), self.repository), {"runtime", "generated", "static"})
