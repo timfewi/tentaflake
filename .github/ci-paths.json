@@ -55,6 +55,7 @@
   },
   "worker": {
     "paths": [
+      "modules/worker.nix",
       "crates/tentaflake-worker/**",
       "pkgs/tentaflake-worker/**"
     ],

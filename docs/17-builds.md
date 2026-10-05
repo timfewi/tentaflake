@@ -42,6 +42,7 @@ VM suites independently. Component paths take precedence over Markdown suffixes.
 | Docs and listed presentation metadata | Routing regression and whitespace; no Nix setup/cache | None |
 | CI routing/workflow/test definition | Routing regression, focused selection package and static checks | None |
 | One Rust crate/package | Rust workspace checks, that package and source-boundary check; worker includes its image | Runtime |
+| Worker module | Rust workspace/worker package and image; actual worker configuration and policy in the runtime fixture | Runtime |
 | Shared Cargo inputs | Rust workspace and all three packages/image; no Research/configuration preparation | Runtime |
 | Installer scripts or host VM fixture | Static checks and generated installed flake | Runtime |
 | Installer Nix | Configuration evaluation, static checks and generated installed flake | Runtime |
@@ -61,7 +62,10 @@ regressions rather than building unchanged guest systems.
 
 Documentation does not start Nix installation, cache upload, Research closure
 materialization, full flake evaluation or Rust/system builds. A Rust-only change
-does not build the separate Research service. Non-VM package builds run in
+does not build the separate Research service. Worker-module changes use the
+same focused package/runtime gates: the Research fixture enables no workers.
+Mixing these changes with shared security paths retains the full gate.
+Non-VM package builds run in
 groups of at most four. Configuration evaluation still prepares the exact
 Research closures because the full flake/module fixtures need them; shared
 configuration changes retain their applicable runtime and Research evidence.

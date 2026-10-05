@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 ### Fixed
+- Preserve completed worker results without redispatching stale requests, and
+  retain complete inbox copies when legacy private pending state is damaged.
 - Identify the exact quota loop backing image inside systemd namespaces;
   `ReadWritePaths` bind mounts must not bypass underlying-data checks or prove
   quota ownership readiness.
@@ -17,6 +19,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   budget reservation or upstream dispatch, omit session IDs from audit logs,
   and keep arbitrary client headers excluded. Clients still own ID propagation.
 ### Added
+- Durable worker pending/running claims, conservative interrupted-job recovery,
+  per-agent operator/worker exclusion and aggregate inbox/private queue ceilings.
 - Optional fixed-size private agent state through the existing Btrfs quota
   module, with exact adapter path/ownership, mount ordering, startup dependencies
   and selected Restic state/workspace sources. Existing data needs explicit
