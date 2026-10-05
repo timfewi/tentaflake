@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 ### Fixed
+- Identify the exact quota loop backing image inside systemd namespaces;
+  `ReadWritePaths` bind mounts must not bypass underlying-data checks or prove
+  quota ownership readiness.
 - Reject quota mount-source and parent symlinks before privileged permission
   changes; generated-helper regressions preserve unrelated data and permissions.
 - Preserve optional bounded `x-opencode-session` conversation-affinity metadata

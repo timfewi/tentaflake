@@ -147,10 +147,17 @@ controller and worker stopped and the old image preserved until verification.
 The module never grows or shrinks a live image automatically.
 
 At boot, the prepare service checks the filesystem type and runs
-`btrfs check --readonly` only while the workspace is not mounted. A failed check
-prevents the mount and therefore prevents controller startup. It performs no
+`btrfs check --readonly` only while the expected image is not mounted at its
+target. A failed check prevents the mount and therefore prevents controller startup. It performs no
 automatic repair; preserve the image and restore from a verified backup rather
 than running `btrfs check --repair` as an automatic recovery step.
+
+`ReadWritePaths` creates a private bind mount in the service namespace even
+when the quota is absent. Both preparation and ownership identify the exact
+loop backing image; a mount-point or filesystem-type check alone is insufficient.
+Ownership refuses an absent or mismatched image and verifies its configured
+byte size before modifying directories. Changing a size also changes the
+ownership unit, so an active mount cannot retain stale size admission.
 
 ## Verification boundary
 

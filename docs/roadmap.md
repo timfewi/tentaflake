@@ -34,11 +34,14 @@ separate Restic sources. Review reproduced privileged permission changes through
 quota source symlinks; generated-helper refusal regressions now exercise that
 boundary without a VM. The runtime VM fixture covers physical limits, dependency
 stops, symlink refusal, persistence, restoration and non-conversion of ext4.
-Local validation: 13 generated-helper refusal checks, adapter/legacy and module
+Local validation: 15 generated-helper refusal checks, adapter/legacy and module
 assertions, image policy, 47 CLI tests, CLI Clippy/formatting, installed-flake
 plan/import interactions, Nix lint/formatting and ShellCheck passed. The VM
 configuration evaluates; physical runtime acceptance remains a CI gate. No
 local VM, ISO or system build, production activation or paid model probe ran.
+Initial PR #143 CI exposed namespace bind mounts masquerading as quota evidence;
+the helpers now identify the exact loop backing image, and the existing-data
+refusal test remains intact. Replacement CI is required for this correction.
 
 Next: finish capability-specific admission, shared bounded policy decisions/replay
 and fail-closed readiness for #116; then accept actual coding agents in #136.

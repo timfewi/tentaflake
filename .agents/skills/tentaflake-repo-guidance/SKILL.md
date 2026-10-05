@@ -1,7 +1,7 @@
 ---
 name: tentaflake-repo-guidance
 description: Locate the owning source, guide and checks before changing Tentaflake modules, adapters, CLI or installer.
-version: 2.6.0
+version: 2.6.1
 ---
 
 # Tentaflake repository guidance
@@ -55,6 +55,8 @@ relevant source and guide. Avoid loading unrelated references.
   directories after mounting and keep seeds/healing behind ownership units.
   Check source/parent symlinks before privileged permission changes. Include
   selected state/workspace mounts separately in Restic and verify both restores.
+  `ReadWritePaths` creates bind mounts: identify the exact loop backing image,
+  never infer quota readiness from a mount point or filesystem type alone.
 - Keep exact runtime resource/mount/network expectations and unknown evidence.
   Reject bind sources below writable mounts; generic source parents remain
   unmounted, root-owned and private, with startup checks for symlinks.

@@ -24,7 +24,29 @@ let
       done
     }
   '';
+  imageMountGuard = ''
+    image_mounted_here() {
+      # ReadWritePaths creates a bind mount even when the host quota is absent.
+      # Check the actual loop backing file, not merely a mount point or fs type.
+      mounted_source=$(${pkgs.util-linux}/bin/findmnt --noheadings --raw \
+        --mountpoint "$workspace" --output SOURCE) || return 1
+      source_device="''${mounted_source%%\[*}"
+      case "$source_device" in
+        /dev/loop[0-9]*)
+          backing=$(${pkgs.util-linux}/bin/losetup --noheadings --list --raw \
+            --output BACK-FILE "$source_device") || {
+            echo "tentaflake: cannot identify quota mount backing" >&2
+            exit 1
+          }
+          [ "$backing" = "$image" ]
+          ;;
+        *) return 1 ;;
+      esac
+    }
+  '';
   imagePath = name: kind: "${imageRoot kind}/${name}.img";
+  imageBytes =
+    agent: kind: (if kind == "state" then agent.state.sizeMiB else agent.sizeMiB) * 1024 * 1024;
   prepareUnit = name: kind: "tentaflake-${kind}-quota-prepare-${name}.service";
   ownerUnit = name: kind: "tentaflake-${kind}-quota-${name}.service";
   mountPath = agent: kind: if kind == "state" then agent.state.path else agent.workspace;
@@ -97,7 +119,6 @@ let
       stateParent = lib.optional (
         kind == "workspace" && agent.state != null && pathWithin agent.state.path agent.workspace
       ) (ownerUnit name "state");
-      sizeMiB = if kind == "state" then agent.state.sizeMiB else agent.sizeMiB;
     in
     {
       description = "Prepare fixed-size ${kind} filesystem for ${name}";
@@ -123,68 +144,71 @@ let
         pkgs.findutils
         pkgs.util-linux
       ];
-      script = directoryGuard + ''
-        image=${lib.escapeShellArg (imagePath name kind)}
-        image_tmp=${lib.escapeShellArg "${imagePath name kind}.new"}
-        workspace=${lib.escapeShellArg target}
-        expected=$(( ${toString sizeMiB} * 1024 * 1024 ))
+      script =
+        directoryGuard
+        + imageMountGuard
+        + ''
+          image=${lib.escapeShellArg (imagePath name kind)}
+          image_tmp=${lib.escapeShellArg "${imagePath name kind}.new"}
+          workspace=${lib.escapeShellArg target}
+          expected=${toString (imageBytes agent kind)}
 
-        # Check before install/chmod/mount: following a persisted agent symlink
-        # could change or mount another instance's directory as root.
-        check_directory "$workspace"
+          # Check before install/chmod/mount: following a persisted agent symlink
+          # could change or mount another instance's directory as root.
+          check_directory "$workspace"
 
-        install -d -m 0700 ${lib.escapeShellArg (imageRoot kind)}
-        install -d -m 0700 "$workspace"
+          install -d -m 0700 ${lib.escapeShellArg (imageRoot kind)}
+          install -d -m 0700 "$workspace"
 
-        if [ -L "$image" ] || { [ -e "$image" ] && [ ! -f "$image" ]; }; then
-          echo "tentaflake: ${kind} image is not a regular file: $image" >&2
-          exit 1
-        fi
-
-        # An existing image must not hide files written below a stopped mount.
-        if ! findmnt --noheadings --mountpoint "$workspace" >/dev/null; then
-          if find "$workspace" -mindepth 1 \
-            ${
-              lib.optionalString (
-                kind == "workspace"
-              ) ''! -path "$workspace/.tentaflake-worker" ! -path "$workspace/.tentaflake-worker/inbox"''
-            } \
-            -print -quit | grep -q .; then
-            echo "tentaflake: refusing to hide non-empty ${kind} $workspace" >&2
-            echo "migrate it explicitly before enabling the fixed-size volume" >&2
+          if [ -L "$image" ] || { [ -e "$image" ] && [ ! -f "$image" ]; }; then
+            echo "tentaflake: ${kind} image is not a regular file: $image" >&2
             exit 1
           fi
-        fi
 
-        if [ ! -e "$image" ]; then
-          if [ -e "$image_tmp" ] || [ -L "$image_tmp" ]; then
-            echo "tentaflake: incomplete image exists: $image_tmp" >&2
-            echo "inspect and remove that exact file before retrying" >&2
+          # An existing image must not hide files written below a stopped mount.
+          if ! image_mounted_here; then
+            if find "$workspace" -mindepth 1 \
+              ${
+                lib.optionalString (
+                  kind == "workspace"
+                ) ''! -path "$workspace/.tentaflake-worker" ! -path "$workspace/.tentaflake-worker/inbox"''
+              } \
+              -print -quit | grep -q .; then
+              echo "tentaflake: refusing to hide non-empty ${kind} $workspace" >&2
+              echo "migrate it explicitly before enabling the fixed-size volume" >&2
+              exit 1
+            fi
+          fi
+
+          if [ ! -e "$image" ]; then
+            if [ -e "$image_tmp" ] || [ -L "$image_tmp" ]; then
+              echo "tentaflake: incomplete image exists: $image_tmp" >&2
+              echo "inspect and remove that exact file before retrying" >&2
+              exit 1
+            fi
+            truncate --size "$expected" "$image_tmp"
+            mkfs.btrfs -q "$image_tmp"
+            chmod 0600 "$image_tmp"
+            mv -T "$image_tmp" "$image"
+          fi
+
+          actual=$(stat -c %s "$image")
+          if [ "$actual" -ne "$expected" ]; then
+            echo "tentaflake: ${kind} image size drift for ${name}" >&2
+            echo "configured=$expected actual=$actual; use an explicit offline resize migration" >&2
             exit 1
           fi
-          truncate --size "$expected" "$image_tmp"
-          mkfs.btrfs -q "$image_tmp"
-          chmod 0600 "$image_tmp"
-          mv -T "$image_tmp" "$image"
-        fi
 
-        actual=$(stat -c %s "$image")
-        if [ "$actual" -ne "$expected" ]; then
-          echo "tentaflake: ${kind} image size drift for ${name}" >&2
-          echo "configured=$expected actual=$actual; use an explicit offline resize migration" >&2
-          exit 1
-        fi
+          if [ "$(blkid -p -s TYPE -o value "$image")" != btrfs ]; then
+            echo "tentaflake: ${kind} image is not Btrfs: $image" >&2
+            echo "back up and migrate existing ext4 images explicitly; no automatic reformat" >&2
+            exit 1
+          fi
 
-        if [ "$(blkid -p -s TYPE -o value "$image")" != btrfs ]; then
-          echo "tentaflake: ${kind} image is not Btrfs: $image" >&2
-          echo "back up and migrate existing ext4 images explicitly; no automatic reformat" >&2
-          exit 1
-        fi
-
-        if ! findmnt --noheadings --mountpoint "$workspace" >/dev/null; then
-          btrfs check --readonly "$image"
-        fi
-      '';
+          if ! image_mounted_here; then
+            btrfs check --readonly "$image"
+          fi
+        '';
     };
 
   ownerService =
@@ -205,12 +229,24 @@ let
       wantedBy = [ "multi-user.target" ];
       script =
         directoryGuard
+        + imageMountGuard
         + ''
           workspace=${lib.escapeShellArg target}
+          image=${lib.escapeShellArg (imagePath name kind)}
+          expected=${toString (imageBytes agent kind)}
           check_directory "$workspace"
           for path in ${lib.escapeShellArgs stateDirectories}; do
             check_directory "$path"
           done
+          if ! image_mounted_here; then
+            echo "tentaflake: expected quota image is not mounted" >&2
+            exit 1
+          fi
+          actual=$(${pkgs.coreutils}/bin/stat -c %s "$image")
+          if [ "$actual" -ne "$expected" ]; then
+            echo "tentaflake: ${kind} image size drift for ${name}; use an explicit offline resize migration" >&2
+            exit 1
+          fi
         ''
         + lib.optionalString (kind == "workspace") ''
           control="$workspace/.tentaflake-worker"
