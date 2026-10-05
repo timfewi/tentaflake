@@ -43,6 +43,7 @@ let
       "state"
       "workspace"
       "writable"
+      "directories"
     ];
     model = [
       "protocols"
@@ -123,6 +124,13 @@ let
     && builtins.isString adapter.layout.workspace
     && builtins.isList adapter.layout.writable
     && lib.all builtins.isString adapter.layout.writable
+    && builtins.isList adapter.layout.directories
+    && lib.all (
+      directory:
+      builtins.isString directory
+      && lib.match "[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*" directory != null
+      && lib.all (part: part != "." && part != "..") (lib.splitString "/" directory)
+    ) adapter.layout.directories
     && lib.elem adapter.lifecycle [
       "service"
       "stopped-scaffold"

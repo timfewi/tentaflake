@@ -16,22 +16,30 @@ let
   safeRuntimePath = safePath "/run/";
   # Restic's filesystem boundary skips nested quota mounts unless each is
   # an explicit source. Include only mounts inside the operator's selection.
-  workspaces = lib.unique (
-    lib.mapAttrsToList (_: agent: agent.workspace) (
-      lib.filterAttrs (
-        _: agent:
-        agent.enable
-        && lib.any (
+  managedMounts = lib.unique (
+    lib.filter
+      (
+        mount:
+        lib.any (
           path:
           let
             root = lib.removeSuffix "/" path;
           in
-          agent.workspace == root || lib.hasPrefix "${root}/" agent.workspace
+          mount == root || lib.hasPrefix "${root}/" mount
         ) cfg.paths
-      ) config.tentaflake.workspaceQuota.agents
-    )
+      )
+      (
+        lib.concatLists (
+          lib.mapAttrsToList (
+            _: agent:
+            lib.optionals agent.enable (
+              [ agent.workspace ] ++ lib.optional (agent.state != null) agent.state.path
+            )
+          ) config.tentaflake.workspaceQuota.agents
+        )
+      )
   );
-  backupPaths = lib.unique (cfg.paths ++ workspaces);
+  backupPaths = lib.unique (cfg.paths ++ managedMounts);
 in
 {
   options.tentaflake.backup = {
@@ -43,7 +51,7 @@ in
         "/var/lib/hermes-coding"
         "/var/lib/tentaflake-broker-llm-hermes-coding"
       ];
-      description = "Explicit agent state, workspace, broker audit, and budget paths to back up. Enabled managed workspace mounts inside these paths are included as separate sources.";
+      description = "Explicit agent state, workspace, broker audit, and budget paths to back up. Enabled managed state and workspace mounts inside these paths are included as separate sources.";
     };
     repositoryFile = lib.mkOption {
       type = lib.types.str;
@@ -131,7 +139,7 @@ in
 
     systemd.services.restic-backups-tentaflake.unitConfig = {
       RequiresMountsFor = backupPaths;
-      AssertPathIsMountPoint = workspaces;
+      AssertPathIsMountPoint = managedMounts;
       OnSuccess = [ "tentaflake-backup-success.service" ];
     };
 

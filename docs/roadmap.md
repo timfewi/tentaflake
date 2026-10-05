@@ -15,33 +15,37 @@ commands and interfaces below are not installed APIs.
 
 ## Delivery checkpoint
 
-Active work: #115 is submitted as [PR #139](https://github.com/timfewi/tentaflake/pull/139),
-commit `2567d81407828f7692ee9e837ad30a4ac3b26051`. Its CI is pending; DCO and
-source scan passed. #135 is being implemented on `feat/installed-agent-onboarding`.
-Delivery order: #135 installed-host validation/import, then #116 capability admission and
-#136 actual coding-agent acceptance. M03-M10 and remaining P1/P2 issues retain
-all their acceptance requirements. No issue is complete from planning alone.
+Completed: #115 common runtime/catalog in [PR #139](https://github.com/timfewi/tentaflake/pull/139)
+and #135 installed-host onboarding in [PR #140](https://github.com/timfewi/tentaflake/pull/140),
+merged after green CI. Both issues are closed. Generic definitions remain stopped;
+OpenClaw and coding-agent vendor acceptance remain outstanding. No host activation
+or publication of these unreleased changes was performed.
 
-The #115 implementation keeps legacy state/APIs, shares final image containment,
-adds generic non-secret definitions and configuration-free catalog discovery.
-Owning files: `adapters/catalog.json`, `adapters/generic.nix`,
-`lib/runtimeContract.nix` and the operator CLI. Verified: 44 CLI tests, runtime
-contract/legacy fixtures, module/image checks, CI routing, lint and the generated
-installed flake. Review reproduced a nested writable bind-source substitution;
-the generic layout now uses separate sources beneath an unmounted root-owned
-parent, and the shared secure policy rejects nested sources, including read-only
-children. PR #139 CI/merge remains the delivery gate. Live vendor acceptance,
-local VM workloads and host activation were not performed.
+[PR #142](https://github.com/timfewi/tentaflake/pull/142) additionally narrows CI for
+operator onboarding. Its CI completed in 2m51s, skipping both VM suites and Research
+preparation. Docs, CI metadata and focused onboarding changes retain proportionate
+checks; shared runtime/security changes retain their relevant acceptance gates.
 
-#135 work in progress: `lib/agentsFromData.nix` accepts an in-memory object
-through the same parser as file input; `lib/agentPlan.nix` validates additions
-through the actual builders; `lib/agentPlanEntry.nix` accepts structured CLI
-arguments. CLI template/validate/plan/import now use bounded offline validation,
-an import lock and atomic publication with observed conflict checks. Actual
-installed preset/generic CLI interactions passed, including redaction, refusals,
-lock admission and concurrent-edit preservation. Authoritative guides and
-targeted CI routing are updated. Next: final lint/Rust/installed checks, review
-and a DCO-signed PR. No #135 CLI is released or activated yet.
+Current #116 prerequisite: extend the existing Btrfs quota module to optional
+private state, preserving workspace paths and explicit migration. Adapter metadata
+owns actual state sources/initialization directories; state ownership precedes
+workspace ownership, seeds and healing. Selected state/workspace mounts are
+separate Restic sources. Review reproduced privileged permission changes through
+quota source symlinks; generated-helper refusal regressions now exercise that
+boundary without a VM. The runtime VM fixture covers physical limits, dependency
+stops, symlink refusal, persistence, restoration and non-conversion of ext4.
+Local validation: 13 generated-helper refusal checks, adapter/legacy and module
+assertions, image policy, 47 CLI tests, CLI Clippy/formatting, installed-flake
+plan/import interactions, Nix lint/formatting and ShellCheck passed. The VM
+configuration evaluates; physical runtime acceptance remains a CI gate. No
+local VM, ISO or system build, production activation or paid model probe ran.
+
+Next: finish capability-specific admission, shared bounded policy decisions/replay
+and fail-closed readiness for #116; then accept actual coding agents in #136.
+Research pin/client work (#110) precedes independent VPN readiness (#141).
+Mutable upstream OpenCode/Pi documentation is only a candidate lead: no reviewed
+artifact, provider call or vendor acceptance follows from it. M03-M10 and the
+remaining issues retain all their acceptance requirements.
 
 ## Product direction
 
@@ -643,7 +647,7 @@ invented due dates or version promises.
 | Milestone | Work items |
 |---|---|
 | [M01](https://github.com/timfewi/tentaflake/milestone/1) | [#115](https://github.com/timfewi/tentaflake/issues/115), [#135](https://github.com/timfewi/tentaflake/issues/135) |
-| [M02](https://github.com/timfewi/tentaflake/milestone/2) | [#106](https://github.com/timfewi/tentaflake/issues/106), [#108](https://github.com/timfewi/tentaflake/issues/108), [#110](https://github.com/timfewi/tentaflake/issues/110), [#111](https://github.com/timfewi/tentaflake/issues/111), [#113](https://github.com/timfewi/tentaflake/issues/113), [#116](https://github.com/timfewi/tentaflake/issues/116), [#136](https://github.com/timfewi/tentaflake/issues/136) |
+| [M02](https://github.com/timfewi/tentaflake/milestone/2) | [#106](https://github.com/timfewi/tentaflake/issues/106), [#108](https://github.com/timfewi/tentaflake/issues/108), [#110](https://github.com/timfewi/tentaflake/issues/110), [#111](https://github.com/timfewi/tentaflake/issues/111), [#113](https://github.com/timfewi/tentaflake/issues/113), [#116](https://github.com/timfewi/tentaflake/issues/116), [#136](https://github.com/timfewi/tentaflake/issues/136), [#141](https://github.com/timfewi/tentaflake/issues/141) |
 | [M03](https://github.com/timfewi/tentaflake/milestone/3) | [#117](https://github.com/timfewi/tentaflake/issues/117) |
 | [M04](https://github.com/timfewi/tentaflake/milestone/4) | [#118](https://github.com/timfewi/tentaflake/issues/118), [#119](https://github.com/timfewi/tentaflake/issues/119) |
 | [M05](https://github.com/timfewi/tentaflake/milestone/5) | [#120](https://github.com/timfewi/tentaflake/issues/120), [#121](https://github.com/timfewi/tentaflake/issues/121) |

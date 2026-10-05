@@ -7,11 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 ### Fixed
+- Reject quota mount-source and parent symlinks before privileged permission
+  changes; generated-helper regressions preserve unrelated data and permissions.
 - Preserve optional bounded `x-opencode-session` conversation-affinity metadata
   on both LLM broker routes for JSON and SSE. Reject malformed values before
   budget reservation or upstream dispatch, omit session IDs from audit logs,
   and keep arbitrary client headers excluded. Clients still own ID propagation.
 ### Added
+- Optional fixed-size private agent state through the existing Btrfs quota
+  module, with exact adapter path/ownership, mount ordering, startup dependencies
+  and selected Restic state/workspace sources. Existing data needs explicit
+  offline migration; no automatic conversion or activation is performed.
 - Record the product roadmap for general-purpose AI employees, company workflows,
   business connectors and shared runtime configuration, with linked GitHub milestones
   and acceptance criteria. Existing issues are reused and missing scope is tracked

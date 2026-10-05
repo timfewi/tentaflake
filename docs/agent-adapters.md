@@ -89,6 +89,13 @@ inherit host security limits; allowed overrides are `memory`, `memorySwap`,
 `cpus`, `nofile`, `pidsLimit`, `tmpfsSize` and `runTmpfsSize`. Values must be
 positive. Host administrators remain responsible for appropriate aggregate bounds.
 
+An optional [private state quota](14-workspace-quota.md) uses the same managed
+Btrfs mechanism as the workspace, with `state.path` matching the adapter's
+`stateStorage`. For this generic instance the path is
+`/var/lib/generic-coding/state`; legacy runtimes retain their existing state
+roots. Quota activation and existing-data migration remain explicit operator
+operations. A quota does not make a stopped workload operational.
+
 Unknown versions/fields, root ownership, unpinned images, extra mounts,
 environment/credential inputs, malformed commands and unsupported capabilities
 fail before a module is produced. Definitions are non-secret, including command
@@ -134,13 +141,13 @@ invalid settings shapes and unknown adapters fail during evaluation.
 | `command` | Upstream default argument vector |
 | `configuration` | Configuration format (`none` for generic), read-only generation and `generate name settings` hook |
 | `ownership` | Default positive numeric UID/GID |
-| `layout` | Default state pattern, workspace suffix and required writable areas |
+| `layout` | Default state pattern, workspace suffix, writable areas and relative initialization directories |
 | `lifecycle` | Managed service or stopped scaffold |
 | `model` | Protocol families and `required`, `optional` or `unknown` streaming requirement |
 | `research` | Accepted capability and upstream settings hook; tool discovery needs separate runtime evidence |
 | `execution` | Worker queue interface and whether automatic routing is verified |
 | `build` | Runtime module generator with its precise supported argument set |
-| `metadata` | Effective instance, container, unit, state/workspace and numeric ownership |
+| `metadata` | Effective instance, container, unit, logical state root, actual `stateStorage` source, initialization directories, workspace and numeric ownership |
 | `capabilities` | Declared available hooks; declarations do not prove vendor acceptance |
 | `evidence` | Source/refusal regression level and separately recorded vendor acceptance |
 

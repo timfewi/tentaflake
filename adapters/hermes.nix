@@ -181,6 +181,7 @@ let
       workerResultsMount = "/run/tentaflake-worker/results";
       quotaCfg = lib.attrByPath [ containerName ] null config.tentaflake.workspaceQuota.agents;
       quotaEnabled = quotaCfg != null && quotaCfg.enable;
+      stateQuotaEnabled = quotaEnabled && quotaCfg.state != null;
       quotaUnit = "tentaflake-workspace-quota-${containerName}.service";
       brokerEnvironmentFile = "/run/tentaflake-broker/${containerName}/agent.env";
       brokerUnits =
@@ -239,11 +240,12 @@ let
       seedSvc = lib.optionalAttrs (seedDir != null) {
         "seed-hermes-${name}" = {
           description = "Seed base files for Hermes agent ${name}";
-          requires = [ "local-fs.target" ];
+          requires = [ "local-fs.target" ] ++ lib.optional quotaEnabled quotaUnit;
           after = [
-            "tmpfiles-setup.service"
+            "systemd-tmpfiles-setup.service"
             "hermes-${name}-heal-uid.service"
-          ];
+          ]
+          ++ lib.optional quotaEnabled quotaUnit;
           before = [ ctrService ];
           wantedBy = [ ctrService ];
           serviceConfig = {
@@ -267,7 +269,8 @@ let
       healSvc = {
         "hermes-${name}-heal-uid" = {
           description = "Align Hermes ${name} state + data dirs to the container uid (${ownUid})";
-          after = [ "tmpfiles-setup.service" ];
+          requires = lib.optional quotaEnabled quotaUnit;
+          after = [ "systemd-tmpfiles-setup.service" ] ++ lib.optional quotaEnabled quotaUnit;
           before = [ ctrService ];
           wantedBy = [ ctrService ];
           path = [ pkgs.coreutils ];
@@ -643,10 +646,10 @@ let
       systemd = {
         tmpfiles.rules = [
           "d ${stateDir} 0700 ${ownUid} ${ownGid} -"
-          "d ${stateDir}/workspace 0700 ${ownUid} ${ownGid} -"
-          "d ${stateDir}/skills 0700 ${ownUid} ${ownGid} -"
-          "d ${stateDir}/cron 0700 ${ownUid} ${ownGid} -"
-        ];
+        ]
+        ++ lib.optionals (!stateQuotaEnabled) (
+          map (directory: "d ${stateDir}/${directory} 0700 ${ownUid} ${ownGid} -") preset.layout.directories
+        );
 
         # ── systemd services ──
         services = lib.mkMerge [
@@ -734,6 +737,8 @@ in
       adapter = "hermes";
       inherit (args) name;
       inherit container stateDir;
+      stateStorage = stateDir;
+      stateDirectories = preset.layout.directories;
       unit = "${backend}-${container}.service";
       workspace = "${stateDir}/workspace";
       uid = args.containerUid or constants.containerUid;
