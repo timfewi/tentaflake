@@ -17,7 +17,10 @@ commands and interfaces below are not installed APIs.
 
 Active work: #115 is submitted as [PR #139](https://github.com/timfewi/tentaflake/pull/139),
 commit `2567d81407828f7692ee9e837ad30a4ac3b26051`. Its CI is pending; DCO and
-source scan passed. #135 is being implemented on `feat/installed-agent-onboarding`.
+source scan passed. #135 is submitted as
+[PR #140](https://github.com/timfewi/tentaflake/pull/140), commit
+`6cd4ab71486c7ccd4aa5c625aa489f2c27f55365`, initially stacked on #139.
+Its DCO/source scan and selected non-VM CI passed; runtime CI remains pending.
 Delivery order: #135 installed-host validation/import, then #116 capability admission and
 #136 actual coding-agent acceptance. M03-M10 and remaining P1/P2 issues retain
 all their acceptance requirements. No issue is complete from planning alone.
@@ -33,15 +36,35 @@ parent, and the shared secure policy rejects nested sources, including read-only
 children. PR #139 CI/merge remains the delivery gate. Live vendor acceptance,
 local VM workloads and host activation were not performed.
 
-#135 work in progress: `lib/agentsFromData.nix` accepts an in-memory object
+#135 implementation: `lib/agentsFromData.nix` accepts an in-memory object
 through the same parser as file input; `lib/agentPlan.nix` validates additions
 through the actual builders; `lib/agentPlanEntry.nix` accepts structured CLI
 arguments. CLI template/validate/plan/import now use bounded offline validation,
 an import lock and atomic publication with observed conflict checks. Actual
 installed preset/generic CLI interactions passed, including redaction, refusals,
-lock admission and concurrent-edit preservation. Authoritative guides and
-targeted CI routing are updated. Next: final lint/Rust/installed checks, review
-and a DCO-signed PR. No #135 CLI is released or activated yet.
+lock admission and concurrent-edit preservation. Final local lint, 47 CLI tests,
+19 selection regressions and installed/Nix fixtures passed. CI skipped Research
+preparation, full flake evaluation and host builds. Authoritative guides and
+targeted CI routing are updated. Merge #139 only after its exact head is green;
+retarget #140 to main and merge after its applicable CI is green. No #135 CLI
+is released or activated yet.
+
+Next working branch: `feat/runtime-capability-admission`, based on #140.
+#116 owns mandatory containment/quota/resources, conditional model/Research/worker
+admission, trustworthy readiness and bounded dispatch decisions/replay. Inspect
+`lib/containerSecurity.nix`, native/generic adapter hooks, `modules/security.nix`
+and broker/Research/worker boundaries before changing startup gates. Existing
+startup policy is still enforced; no admission implementation is claimed yet.
+
+Candidate review on 2026-10-05 read the mutable
+[OpenCode provider guide](https://opencode.ai/docs/providers/) and
+[Pi upstream README](https://github.com/earendil-works/pi). OpenCode documents
+`@ai-sdk/openai-compatible` for chat completions versus `@ai-sdk/openai` for
+Responses, plus an explicit base URL. Pi describes pinned Nix/source builds and
+runtime model-catalog updates. These identify offline packaging/network review
+requirements, not qualified artifacts. The bounded fetch did not cover the
+OpenCode CLI page; release/image digests, native hooks and session/tool behavior
+remain to be verified for #136. No artifacts or credentials were installed/read.
 
 ## Product direction
 
