@@ -20,8 +20,10 @@ at `11db4f3c48ea7720a2b0d6484a61ea05ce874c11`; #135 merged through
 [PR #140](https://github.com/timfewi/tentaflake/pull/140) at
 `3c310181b7463a4952b0510fad3afcfbe5204245`. Their exact tested heads passed
 all applicable CI before merge; both issues are closed. CI-only follow-up
-[PR #142](https://github.com/timfewi/tentaflake/pull/142) removes VM selection for
-isolated operator-onboarding edits; general CLI/parser/runtime coverage remains.
+[PR #142](https://github.com/timfewi/tentaflake/pull/142) merged at
+`8469a929a224e644e448ec576d0309e8bfaa532d` after a green 2m51s workflow, with
+VM and Research skipped. It removes VM selection for isolated operator-onboarding
+edits; general CLI/parser/runtime coverage remains.
 Next: #116 capability admission and
 #136 actual coding-agent acceptance. M03-M10 and remaining P1/P2 issues retain
 all their acceptance requirements. No issue is complete from planning alone.
@@ -55,6 +57,9 @@ admission, trustworthy readiness and bounded dispatch decisions/replay. Inspect
 `lib/containerSecurity.nix`, native/generic adapter hooks, `modules/security.nix`
 and broker/Research/worker boundaries before changing startup gates. Existing
 startup policy is still enforced; no admission implementation is claimed yet.
+The existing quota module bounds workspaces, not the generic `/state` mount.
+Include bounded persistent state before claiming #136's runtime acceptance;
+reuse managed-filesystem logic while preserving legacy paths and explicit migration.
 
 Candidate review on 2026-10-05 read the mutable
 [OpenCode provider guide](https://opencode.ai/docs/providers/) and
