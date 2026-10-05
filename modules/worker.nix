@@ -350,6 +350,12 @@ in
           name: agent:
           let
             group = workerGroup agent;
+            quota = lib.attrByPath [ name ] null config.tentaflake.workspaceQuota.agents;
+            stateParent =
+              quota != null
+              && quota.enable
+              && quota.state != null
+              && (agent.workspace == quota.state.path || lib.hasPrefix "${quota.state.path}/" agent.workspace);
           in
           [
             "d ${stateDir name} 0750 root ${group} -"
@@ -357,6 +363,8 @@ in
             "d ${stateDir name}/approvals 0700 root root -"
             "d ${stateDir name}/jobs 0700 root root -"
             "d ${resultDir name} 2750 root ${group} 14d"
+          ]
+          ++ lib.optionals (!stateParent) [
             "d ${agent.workspace}/.tentaflake-worker 0700 ${toString agent.containerUid} ${group} -"
             "d ${agent.workspace}/.tentaflake-worker/inbox 0770 ${toString agent.containerUid} ${group} -"
           ]

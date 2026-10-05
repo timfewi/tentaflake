@@ -15,6 +15,7 @@ let
       adapter = "generic";
       inherit (args) name;
       inherit container stateDir;
+      stateStorage = "${stateDir}/state";
       unit = "${backend}-${container}.service";
       workspace = "${stateDir}/workspace";
       inherit (definition.ownership) uid gid;
@@ -58,12 +59,12 @@ in
         inherit (instance)
           container
           stateDir
+          stateStorage
           workspace
           uid
           gid
           ;
         owner = "${toString uid}:${toString gid}";
-        stateStorage = "${stateDir}/state";
         worker = lib.attrByPath [ container ] null config.tentaflake.worker.agents;
         workerEnabled = worker != null && worker.enable;
         workerResults = "/var/lib/tentaflake-worker-${container}/results";

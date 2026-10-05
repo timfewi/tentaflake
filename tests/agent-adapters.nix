@@ -311,6 +311,27 @@ assert
   ];
 assert rejects (contract "broken" { });
 assert rejects (contract "hermes" (builders.adapters.hermes // { schemaVersion = 2; }));
+assert lib.all
+  (
+    directory:
+    rejects (
+      contract "hermes" (
+        builders.adapters.hermes
+        // {
+          layout = builders.adapters.hermes.layout // {
+            directories = [ directory ];
+          };
+        }
+      )
+    )
+  )
+  [
+    "../outside"
+    "/var/lib/other"
+    "."
+    "state//cache"
+    1
+  ];
 assert
   builtins.attrNames records == [
     "hermes-legacy"
@@ -409,4 +430,4 @@ assert rejects
       image = "example.invalid/runtime:latest";
     })
   ]).virtualisation.oci-containers.containers.hermes-mutable.image;
-true
+import ./agent-state-quota.nix { inherit pkgs eval builders; }

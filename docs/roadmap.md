@@ -26,7 +26,7 @@ operator onboarding. Its CI completed in 2m51s, skipping both VM suites and Rese
 preparation. Docs, CI metadata and focused onboarding changes retain proportionate
 checks; shared runtime/security changes retain their relevant acceptance gates.
 
-Current #116 prerequisite: extend the existing Btrfs quota module to optional
+Delivered #116 prerequisite in [PR #143](https://github.com/timfewi/tentaflake/pull/143): extend the existing Btrfs quota module to optional
 private state, preserving workspace paths and explicit migration. Adapter metadata
 owns actual state sources/initialization directories; state ownership precedes
 workspace ownership, seeds and healing. Selected state/workspace mounts are
@@ -37,13 +37,14 @@ stops, symlink refusal, persistence, restoration and non-conversion of ext4.
 Local validation: 15 generated-helper refusal checks, adapter/legacy and module
 assertions, image policy, 47 CLI tests, CLI Clippy/formatting, installed-flake
 plan/import interactions, Nix lint/formatting and ShellCheck passed. The VM
-configuration evaluates; physical runtime acceptance remains a CI gate. No
+configuration evaluates; both runtime and Research VM suites passed in CI. No
 local VM, ISO or system build, production activation or paid model probe ran.
 Initial PR #143 CI exposed namespace bind mounts masquerading as quota evidence;
 the helpers now identify the exact loop backing image, and the existing-data
-refusal test remains intact. Replacement CI passed runtime and Research VM suites at commit
-`eecb2025c0d2a2f29dd6500c075500c8175d93bd`; the remaining Check job is
-still required before merge.
+refusal test remains intact. All replacement CI gates passed at commit
+`eecb2025c0d2a2f29dd6500c075500c8175d93bd`; PR #143 merged as
+`a03fdb02e94d4444438ff8779d0ac02ef8191158`. #116 remains open for its
+remaining capability-admission requirements.
 
 Next: finish capability-specific admission, shared bounded policy decisions/replay
 and fail-closed readiness for #116; then accept actual coding agents in #136.
@@ -51,7 +52,6 @@ Research pin/client work (#110) precedes independent VPN readiness (#141).
 Mutable upstream OpenCode/Pi documentation is only a candidate lead: no reviewed
 artifact, provider call or vendor acceptance follows from it. M03-M10 and the
 remaining issues retain all their acceptance requirements.
-
 
 #113 implementation is prepared on `feat/worker-durable-claims`. Owning files:
 `crates/tentaflake-worker/src/queue.rs`, worker dispatch, `modules/worker.nix`
@@ -68,8 +68,11 @@ commands, partial-write failure and SIGKILL/restart), worker Clippy, Rust
 formatting, focused module/image/CI-selection/package-source checks and Nix
 lint/formatting/ShellCheck. VM derivation/Python syntax passed; the added physical
 worker crash/cleanup fixture awaits CI. No local VM, ISO, full system or Research
-tool build ran. Next: include merged #143 before publishing this worker PR,
-then merge only its exact head after green CI. #113 remains open until delivery.
+tool build ran. The verified #143 state-quota change is integrated. Worker-only
+module changes select package/image and runtime evidence, skipping separate
+Research preparation/suite and full flake/host gates; 21 real-Git routing
+regressions preserve shared/unknown coverage. Next: publish this worker PR and
+merge only its exact head after green CI. #113 remains open until delivery.
 
 ## Product direction
 

@@ -45,6 +45,7 @@ let
       workerResultsMount = "/run/tentaflake-worker/results";
       quotaCfg = lib.attrByPath [ containerName ] null config.tentaflake.workspaceQuota.agents;
       quotaEnabled = quotaCfg != null && quotaCfg.enable;
+      stateQuotaEnabled = quotaEnabled && quotaCfg.state != null;
       quotaUnit = "tentaflake-workspace-quota-${containerName}.service";
       brokerEnvironmentFile = "/run/tentaflake-broker/${containerName}/agent.env";
       brokerUnits =
@@ -171,10 +172,12 @@ let
 
       systemd.tmpfiles.rules = [
         "d ${stateDir} 0700 ${toString nobodyUid} ${toString nobodyGid} -"
-        "d ${stateDir}/.zeroclaw 0700 ${toString nobodyUid} ${toString nobodyGid} -"
-        "d ${stateDir}/.zeroclaw/data 0700 ${toString nobodyUid} ${toString nobodyGid} -"
-        "d ${stateDir}/data 0700 ${toString nobodyUid} ${toString nobodyGid} -"
-      ];
+      ]
+      ++ lib.optionals (!stateQuotaEnabled) (
+        map (
+          directory: "d ${stateDir}/${directory} 0700 ${toString nobodyUid} ${toString nobodyGid} -"
+        ) preset.layout.directories
+      );
 
       systemd.services =
         lib.optionalAttrs (seedDir != null) {
@@ -182,7 +185,8 @@ let
             description = "Seed workspace for ZeroClaw agent ${name}";
             wantedBy = [ serviceName ];
             before = [ serviceName ];
-            after = [ "systemd-tmpfiles-setup.service" ];
+            requires = lib.optional quotaEnabled quotaUnit;
+            after = [ "systemd-tmpfiles-setup.service" ] ++ lib.optional quotaEnabled quotaUnit;
             serviceConfig = {
               Type = "oneshot";
               RemainAfterExit = true;
@@ -286,6 +290,8 @@ in
       adapter = "zeroclaw";
       inherit (args) name;
       inherit container stateDir;
+      stateStorage = stateDir;
+      stateDirectories = preset.layout.directories;
       unit = "${backend}-${container}.service";
       workspace = "${stateDir}/data";
       uid = constants.nobodyUid;

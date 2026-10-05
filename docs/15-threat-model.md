@@ -101,8 +101,10 @@ capability metadata; the security doctor treats the absent profile as critical.
 Host AppArmor enablement alone is not proof of that capsule's confinement.
 
 The controller workspace is persistent and writable. An optional exact-size
-filesystem bounds that workspace, but the controller may still corrupt or
-delete its own data. State outside that mount needs separate capacity policy.
+filesystem bounds that workspace, and an optional separate filesystem bounds
+private runtime state. The controller may still corrupt or delete its own
+data. Other state and aggregate sparse-image allocation need host capacity
+policy; individual quotas do not reserve free space for every agent.
 
 ### Controller to external services
 

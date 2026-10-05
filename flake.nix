@@ -147,21 +147,34 @@
         rust-package-sources = import ./tests/rust-package-sources.nix { inherit self pkgs; };
         image-pinning = import ./lib/pinnedImage-test.nix { inherit pkgs; };
         agent-adapters =
-          assert import ./tests/agent-adapters.nix { inherit pkgs; };
+          let
+            tests = import ./tests/agent-adapters.nix { inherit pkgs; };
+          in
           pkgs.runCommand "tentaflake-agent-adapters"
             {
-              nativeBuildInputs = [ pkgs.python3 ];
+              nativeBuildInputs = [
+                pkgs.python3
+                pkgs.bash
+                pkgs.coreutils
+                pkgs.findutils
+                pkgs.gnugrep
+                pkgs.util-linux
+              ];
+              quotaPrepare = pkgs.writeText "state-quota-prepare" tests.prepareScript;
+              quotaOwner = pkgs.writeText "state-quota-owner" tests.ownerScript;
               src = lib.fileset.toSource {
                 root = ./.;
                 fileset = lib.fileset.unions [
                   ./adapters/catalog.json
                   ./docs/agent-adapters.md
                   ./scripts/runtime-catalog-docs.py
+                  ./scripts/state-quota-test.py
                 ];
               };
             }
             ''
               python3 "$src/scripts/runtime-catalog-docs.py" --check --root "$src"
+              python3 "$src/scripts/state-quota-test.py" "$quotaPrepare" "$quotaOwner"
               touch "$out"
             '';
         module-evaluation = import ./tests/module-eval.nix {

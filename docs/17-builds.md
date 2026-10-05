@@ -4,7 +4,8 @@ Start with `just fast`. It runs formatting, Nix lint, ShellCheck, Rust checks,
 the CI-selection/source-boundary regressions, read-only flake evaluation and
 the generated installed flake, including focused adapter evaluation.
 `checks.*.agent-adapters` covers compatible mappings, JSON, inventory, lazy
-selection, stopped OpenClaw and negative host policy. Required research closure preparation uses
+selection, stopped OpenClaw, quota declarations and generated quota-helper refusal
+regressions without mounts. Required research closure preparation uses
 non-VM builds. `just e2e` still runs the complete gate, both VM suites and the
 installer ISO. Run an affected VM suite when changing runtime or security
 behavior; use the ISO gate when changing installation.

@@ -6,18 +6,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
-### Added
-- Durable worker pending/running claims, conservative interrupted-job recovery,
-  per-agent operator/worker exclusion and aggregate inbox/private queue ceilings.
-
 ### Fixed
 - Preserve completed worker results without redispatching stale requests, and
   retain complete inbox copies when legacy private pending state is damaged.
+- Identify the exact quota loop backing image inside systemd namespaces;
+  `ReadWritePaths` bind mounts must not bypass underlying-data checks or prove
+  quota ownership readiness.
+- Reject quota mount-source and parent symlinks before privileged permission
+  changes; generated-helper regressions preserve unrelated data and permissions.
 - Preserve optional bounded `x-opencode-session` conversation-affinity metadata
   on both LLM broker routes for JSON and SSE. Reject malformed values before
   budget reservation or upstream dispatch, omit session IDs from audit logs,
   and keep arbitrary client headers excluded. Clients still own ID propagation.
 ### Added
+- Durable worker pending/running claims, conservative interrupted-job recovery,
+  per-agent operator/worker exclusion and aggregate inbox/private queue ceilings.
+- Optional fixed-size private agent state through the existing Btrfs quota
+  module, with exact adapter path/ownership, mount ordering, startup dependencies
+  and selected Restic state/workspace sources. Existing data needs explicit
+  offline migration; no automatic conversion or activation is performed.
 - Record the product roadmap for general-purpose AI employees, company workflows,
   business connectors and shared runtime configuration, with linked GitHub milestones
   and acceptance criteria. Existing issues are reused and missing scope is tracked
@@ -32,6 +39,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Versioned source confirms built-in OpenAI streaming requests; the opt-in
   broker SSE transport still needs acceptance with that runtime. Default
   rejection probes retain the existing budget and credential boundaries.
+### Changed
+- Pin the published `tentaflake-research` revision 91ce540 (replacing e31fce2):
+  independent client/service split, neutral provider defaults, streamed-HTML and
+  crawl fixes, typed failure details, constrained package sources, formatted HTML
+  text and selectable VPN readiness evidence (WireGuard handshake and peer pins,
+  egress-path evidence, planned draining; default off). No fixture or example
+  relied on an implicit search provider. The Research policy, module-evaluation and
+  adapter checks, the Research integration VM, the flake check, the CI-selection
+  checks and the generated installed flake passed; no host was activated and the
+  rest of the lockfile is unchanged. Tracked as #110.
 ### Security
 - Automatic-start admission checks the effective OCI setting, closing an
   override path that could start a stopped capsule without its required

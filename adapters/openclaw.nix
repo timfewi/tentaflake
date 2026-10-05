@@ -71,6 +71,7 @@ in
       adapter = "openclaw";
       inherit (args) name;
       inherit container stateDir;
+      stateStorage = stateDir;
       unit = "${backend}-${container}.service";
       workspace = "${stateDir}/workspace";
       uid = 1000;

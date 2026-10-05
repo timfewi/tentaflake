@@ -32,6 +32,11 @@
         "writable": [
           "state",
           "workspace"
+        ],
+        "directories": [
+          "workspace",
+          "skills",
+          "cron"
         ]
       },
       "lifecycle": "service",
@@ -90,6 +95,11 @@
         "writable": [
           "state",
           "workspace"
+        ],
+        "directories": [
+          ".zeroclaw",
+          ".zeroclaw/data",
+          "data"
         ]
       },
       "lifecycle": "service",
@@ -150,6 +160,9 @@
         "writable": [
           "state",
           "workspace"
+        ],
+        "directories": [
+          "workspace"
         ]
       },
       "lifecycle": "stopped-scaffold",
@@ -205,7 +218,8 @@
         "writable": [
           "state",
           "workspace"
-        ]
+        ],
+        "directories": []
       },
       "lifecycle": "service",
       "model": {
