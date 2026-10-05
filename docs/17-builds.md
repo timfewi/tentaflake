@@ -48,6 +48,7 @@ VM suites independently. Component paths take precedence over Markdown suffixes.
 | Dev Container inputs | Dev Container package and static checks | None |
 | Generated-flake script or module-evaluation fixture | Its generated-flake or configuration gate and static checks | None |
 | Onboarding validator/fixture | Installed preset/generic CLI fixture and static checks; no Research preparation | None |
+| Operator onboarding CLI module | Rust/CLI package, source-boundary and installed fixture checks; no Research preparation | None |
 | Shared JSON agent parser | Installed fixture and static checks; no Research preparation | Runtime |
 | Adapters, shared modules/helpers, other lock updates, unknown paths/history | Full gate | Both |
 

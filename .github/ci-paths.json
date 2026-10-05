@@ -12,6 +12,10 @@
       "static"
     ]
   },
+  "operator-onboarding": {
+    "paths": ["crates/tentaflake-cli/src/onboarding.rs"],
+    "checks": ["cli", "rust", "generated", "static"]
+  },
   "cli": {
     "paths": [
       "crates/tentaflake-cli/**",
