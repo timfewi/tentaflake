@@ -18,6 +18,7 @@ use tokio::time::{Instant, timeout_at};
 pub struct StreamingResponse {
     pub target: ResolvedTarget,
     pub credential: String,
+    pub session_id: Option<String>,
     pub body: Vec<u8>,
     pub policy: StreamingPolicy,
     pub connect_timeout_seconds: u64,
@@ -151,18 +152,19 @@ impl StreamingResponse {
             reason: "audit log is unavailable",
         })?;
         let mut response = guarded(reader, first, async {
-            client
+            let mut upstream = client
                 .post(self.target.url.clone())
                 .bearer_auth(&self.credential)
                 .header(CONTENT_TYPE, "application/json")
                 .header(ACCEPT, "text/event-stream")
-                .body(self.body.clone())
-                .send()
-                .await
-                .map_err(|error| Failure {
-                    status: if error.is_timeout() { 504 } else { 502 },
-                    reason: "provider streaming request failed",
-                })
+                .body(self.body.clone());
+            if let Some(session) = &self.session_id {
+                upstream = upstream.header("x-opencode-session", session);
+            }
+            upstream.send().await.map_err(|error| Failure {
+                status: if error.is_timeout() { 504 } else { 502 },
+                reason: "provider streaming request failed",
+            })
         })
         .await?;
         if !response.status().is_success() {

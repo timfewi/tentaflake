@@ -40,6 +40,8 @@ impl Directory {
             "virtual-agent-key",
             "SENSITIVE_PROMPT_FIXTURE",
             "PRIVATE_OUTPUT_FIXTURE",
+            "conversation-stream",
+            "conversation-other",
         ] {
             assert!(!audit.contains(secret), "audit leaked fixture content");
         }
@@ -104,12 +106,25 @@ impl Exchange {
         adjust: impl FnOnce(&mut Config),
         provider: impl FnOnce(TcpStream) + Send + 'static,
     ) -> Self {
+        Self::start_with_session(responses, adjust, Some("conversation-stream"), provider)
+    }
+
+    fn start_with_session(
+        responses: bool,
+        adjust: impl FnOnce(&mut Config),
+        session_id: Option<&str>,
+        provider: impl FnOnce(TcpStream) + Send + 'static,
+    ) -> Self {
         let directory = Directory::new();
         let upstream = TcpListener::bind("127.0.0.1:0").unwrap();
         let mut cfg = config(&directory, upstream.local_addr().unwrap());
         adjust(&mut cfg);
         cfg.validate().unwrap();
         let broker = Arc::new(Broker::new(cfg).unwrap());
+        let session_header = session_id
+            .map(|session| format!("X-OpenCode-Session: {session}\r\n"))
+            .unwrap_or_default();
+        let expected_session = session_id.map(str::to_owned);
         let provider = thread::spawn(move || {
             let (mut socket, _) = upstream.accept().unwrap();
             socket
@@ -120,6 +135,11 @@ impl Exchange {
                 .unwrap();
             let request = read_request(&mut socket, 32768, 1048576).unwrap();
             assert_eq!(request.headers["authorization"], "Bearer real-provider-key");
+            assert_eq!(
+                request.headers.get("x-opencode-session"),
+                expected_session.as_ref()
+            );
+            assert!(!request.headers.contains_key("x-forged"));
             let body: Value = serde_json::from_slice(&request.body).unwrap();
             assert_eq!(body["stream"], true);
             assert_eq!(
@@ -151,7 +171,7 @@ impl Exchange {
         } else {
             "chat/completions"
         };
-        write!(client, "POST /v1/{route} HTTP/1.1\r\nContent-Type: application/json\r\nAuthorization: Bearer virtual-agent-key\r\nContent-Length: {}\r\n\r\n", body.len()).unwrap();
+        write!(client, "POST /v1/{route} HTTP/1.1\r\nContent-Type: application/json\r\nAuthorization: Bearer virtual-agent-key\r\n{session_header}X-Forged: not-forwarded\r\nContent-Length: {}\r\n\r\n", body.len()).unwrap();
         client.write_all(&body).unwrap();
         Self {
             client,
@@ -189,6 +209,84 @@ impl Exchange {
 
 fn headers(socket: &mut TcpStream) {
     socket.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream; charset=utf-8\r\nConnection: close\r\n\r\n").unwrap();
+}
+
+#[test]
+fn preserves_optional_session_metadata_on_both_streaming_routes() {
+    for responses in [false, true] {
+        for session in [None, Some("conversation-other")] {
+            let exchange = Exchange::start_with_session(
+                responses,
+                |_| {},
+                session,
+                move |mut socket| {
+                    headers(&mut socket);
+                    if responses {
+                        socket.write_all(b"event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\"}}\n\n").unwrap();
+                    } else {
+                        socket.write_all(&chat(json!({}), json!("stop"))).unwrap();
+                        socket.write_all(b"data: [DONE]\n\n").unwrap();
+                    }
+                },
+            );
+            let (raw, audit, budget) = exchange.finish(Vec::new());
+            assert!(raw.starts_with(b"HTTP/1.1 200 OK"));
+            assert!(raw.ends_with(b"0\r\n\r\n"));
+            assert!(audit.contains("\"outcome\":\"completed\""));
+            assert_eq!(budget["requests"], 1);
+        }
+    }
+}
+
+#[test]
+fn rejects_invalid_session_metadata_before_budget_or_upstream_dispatch() {
+    use crate::http::Request;
+    use std::collections::HashMap;
+    let directory = Directory::new();
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let broker = Broker::new(config(&directory, listener.local_addr().unwrap())).unwrap();
+    for responses in [false, true] {
+        for streaming in [false, true] {
+            for invalid in [
+                String::new(),
+                "x".repeat(129),
+                "bad\r\nheader".into(),
+                "bad session".into(),
+                "😀".into(),
+            ] {
+                let mut payload = request(responses);
+                payload["stream"] = json!(streaming);
+                let response = broker.handle(Request {
+                    method: "POST".into(),
+                    path: if responses {
+                        "/v1/responses"
+                    } else {
+                        "/v1/chat/completions"
+                    }
+                    .into(),
+                    headers: HashMap::from([
+                        ("authorization".into(), "Bearer virtual-agent-key".into()),
+                        ("content-type".into(), "application/json".into()),
+                        ("x-opencode-session".into(), invalid),
+                    ]),
+                    body: serde_json::to_vec(&payload).unwrap(),
+                });
+                assert_eq!(response.status, 400);
+                assert!(response.streaming.is_none());
+                assert_eq!(
+                    serde_json::from_slice::<Value>(&response.body).unwrap(),
+                    json!({"error":"invalid provider session header"})
+                );
+                assert!(!directory.0.join("budget").exists());
+            }
+        }
+    }
+    listener.set_nonblocking(true).unwrap();
+    assert!(listener.accept().is_err());
+    let audit = directory.audit();
+    for value in ["bad session", "bad\\r\\nheader", "😀"] {
+        assert!(!audit.contains(value));
+    }
 }
 
 #[test]

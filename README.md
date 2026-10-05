@@ -259,6 +259,9 @@ receives a random per-boot virtual key; it never receives the provider key.
 Chat Completions and Responses support bounded SSE when the exact broker's
 `llm.streaming.enable = true`. It defaults to false and preserves conservative
 budget accounting. See [streaming limits and failure behavior](docs/12-brokered-egress.md#streaming-model-responses).
+Both routes preserve optional, bounded `x-opencode-session` conversation metadata
+for JSON and SSE. The client supplies the value; see the
+[header contract](docs/12-brokered-egress.md#declaration).
 
 ```nix
 tentaflake.broker.agents.hermes-coding = {
