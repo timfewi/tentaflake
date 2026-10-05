@@ -15,13 +15,14 @@ commands and interfaces below are not installed APIs.
 
 ## Delivery checkpoint
 
-Active work: #115 is submitted as [PR #139](https://github.com/timfewi/tentaflake/pull/139),
-commit `2567d81407828f7692ee9e837ad30a4ac3b26051`. Its CI is pending; DCO and
-source scan passed. #135 is submitted as
-[PR #140](https://github.com/timfewi/tentaflake/pull/140), commit
-`6cd4ab71486c7ccd4aa5c625aa489f2c27f55365`, initially stacked on #139.
-Its DCO/source scan and selected non-VM CI passed; runtime CI remains pending.
-Delivery order: #135 installed-host validation/import, then #116 capability admission and
+M01 delivered: #115 merged through [PR #139](https://github.com/timfewi/tentaflake/pull/139)
+at `11db4f3c48ea7720a2b0d6484a61ea05ce874c11`; #135 merged through
+[PR #140](https://github.com/timfewi/tentaflake/pull/140) at
+`3c310181b7463a4952b0510fad3afcfbe5204245`. Their exact tested heads passed
+all applicable CI before merge; both issues are closed. CI-only follow-up
+[PR #142](https://github.com/timfewi/tentaflake/pull/142) removes VM selection for
+isolated operator-onboarding edits; general CLI/parser/runtime coverage remains.
+Next: #116 capability admission and
 #136 actual coding-agent acceptance. M03-M10 and remaining P1/P2 issues retain
 all their acceptance requirements. No issue is complete from planning alone.
 
@@ -33,7 +34,7 @@ contract/legacy fixtures, module/image checks, CI routing, lint and the generate
 installed flake. Review reproduced a nested writable bind-source substitution;
 the generic layout now uses separate sources beneath an unmounted root-owned
 parent, and the shared secure policy rejects nested sources, including read-only
-children. PR #139 CI/merge remains the delivery gate. Live vendor acceptance,
+children. #139 passed both applicable CI VM suites. Live vendor acceptance,
 local VM workloads and host activation were not performed.
 
 #135 implementation: `lib/agentsFromData.nix` accepts an in-memory object
@@ -45,11 +46,10 @@ installed preset/generic CLI interactions passed, including redaction, refusals,
 lock admission and concurrent-edit preservation. Final local lint, 47 CLI tests,
 19 selection regressions and installed/Nix fixtures passed. CI skipped Research
 preparation, full flake evaluation and host builds. Authoritative guides and
-targeted CI routing are updated. Merge #139 only after its exact head is green;
-retarget #140 to main and merge after its applicable CI is green. No #135 CLI
-is released or activated yet.
+targeted CI routing are updated. #140 passed runtime CI; its Research VM was
+skipped. These changes are merged source, not a release or host activation.
 
-Next working branch: `feat/runtime-capability-admission`, based on #140.
+Next working branch: `feat/runtime-capability-admission`, based on merged main.
 #116 owns mandatory containment/quota/resources, conditional model/Research/worker
 admission, trustworthy readiness and bounded dispatch decisions/replay. Inspect
 `lib/containerSecurity.nix`, native/generic adapter hooks, `modules/security.nix`

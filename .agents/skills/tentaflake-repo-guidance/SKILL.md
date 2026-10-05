@@ -34,6 +34,9 @@ relevant source and guide. Avoid loading unrelated references.
   Generic definitions reject extra authority and preserve current startup gates.
   Onboarding imports stopped additions, preserves existing data on failure and
   uses ordinary flake source filtering. Never publish or activate from an import.
+  For developer evaluation of `lib/agentPlanEntry.nix`, select its `result`
+  attribute before passing `--argstr` arguments. Root function evaluation cannot
+  serialize to JSON; the installed Nix/CLI fixture exercises the working call.
 - Preserve Hermes/ZeroClaw APIs and state. OpenClaw is a stopped refusal scaffold
   without an OCI artifact or operational acceptance. The
   [roadmap](../../../docs/roadmap.md) describes plans, not current support.
