@@ -74,6 +74,8 @@ Start with `just fast`; `just list` lists recipes. Recipes load pinned tools;
 direct Cargo/lint commands need `nix develop`. Use focused checks from
 `tests/` and the build guide. Identify affected checks via `.github/ci-paths.json`;
 docs and CI metadata skip VM/Research builds; unknown paths retain the full gate.
+Automatic GitHub VM runs are temporarily paused; see the build guide for manual
+opt-in and restoration. Report skipped runtime evidence explicitly.
 Heavy VM, system and ISO builds require explicit workload authorization.
 Source checks never authorize activation.
 

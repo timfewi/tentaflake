@@ -54,26 +54,24 @@ Mutable upstream OpenCode/Pi documentation is only a candidate lead: no reviewed
 artifact, provider call or vendor acceptance follows from it. M03-M10 and the
 remaining issues retain all their acceptance requirements.
 
-#113 implementation is prepared on `feat/worker-durable-claims`. Owning files:
-`crates/tentaflake-worker/src/queue.rs`, worker dispatch, `modules/worker.nix`
-and the worker guide. Captured requests/approvals publish atomically; one
-operator/drain lock protects durable pending-to-running claims before dispatch.
-Abandoned claims retire as `interrupted` without replay, and terminal results
-preserve completed work. Aggregate inbox/private queue entry and byte ceilings
-reject overload without consuming unaccepted requests. Legacy migration and
-backup rollback review are documented. No worker authority or backup sources
-change.
+#113 is delivered in [PR #145](https://github.com/timfewi/tentaflake/pull/145)
+and closed. Worker requests/approvals publish atomically; one per-agent lock
+protects durable pending-to-running claims before dispatch. Abandoned claims
+retire as `interrupted` without replay, and completed results remain intact.
+Aggregate inbox/private queue ceilings preserve unaccepted requests on overload.
+Existing-state migration and backup rollback review are documented.
 
-Verified locally: 27 worker unit tests, three actual-binary tests (competing
-commands, partial-write failure and SIGKILL/restart), worker Clippy, Rust
-formatting, focused module/image/CI-selection/package-source checks and Nix
-lint/formatting/ShellCheck. VM derivation/Python syntax passed; the added physical
-worker crash/cleanup fixture awaits CI. No local VM, ISO, full system or Research
-tool build ran. The verified #143 state-quota change is integrated. Worker-only
-module changes select package/image and runtime evidence, skipping separate
-Research preparation/suite and full flake/host gates; 21 real-Git routing
-regressions preserve shared/unknown coverage. Next: publish this worker PR and
-merge only its exact head after green CI. #113 remains open until delivery.
+Validation: 27 worker unit tests, three actual-binary failure/recovery tests,
+worker Clippy, formatting, focused Nix checks and the runtime VM passed. Exact
+head `9dd3b810e95cd1e6b93273b512c52bb29ce969ac` merged after green CI; the Check
+workflow took 7m30s, without Research preparation or its VM suite. No local VM,
+ISO, system build or host activation ran.
+
+Automatic GitHub VM execution is now temporarily paused to conserve runner
+minutes. Selected non-VM checks remain active; manual VM opt-in and restoration
+use the [build guide](17-builds.md#temporary-vm-pause). Keep skipped acceptance
+explicit; runtime/security issues still require their actual acceptance evidence.
+The next implementation priority remains #116, followed by #136.
 
 ## Product direction
 

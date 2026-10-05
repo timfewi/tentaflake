@@ -7,9 +7,15 @@ on:
   pull_request:
   push:
     branches: [main]
+  workflow_dispatch:
+    inputs:
+      run_vm_tests:
+        description: Run runtime and Research VM suites (expensive)
+        type: boolean
+        default: false
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -45,6 +51,20 @@ jobs:
           HEAD_SHA: ${{ github.sha }}
         run: |
           python3 scripts/ci_changes.py "$BASE_SHA" "$HEAD_SHA" >> "$GITHUB_OUTPUT"
+
+      - name: Report VM coverage
+        env:
+          VM_SELECTED: ${{ steps.filter.outputs.runtime == 'true' || steps.filter.outputs.research == 'true' }}
+          VM_ENABLED: ${{ vars.RUN_VM_TESTS == 'true' || (github.event_name == 'workflow_dispatch' && inputs.run_vm_tests) }}
+        run: |
+          if [ "$VM_SELECTED" != true ]; then
+            echo 'VM suites: no affected runtime or Research paths.' >> "$GITHUB_STEP_SUMMARY"
+          elif [ "$VM_ENABLED" = true ]; then
+            echo 'VM suites enabled; see the vm-test job for actual results.' >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo 'VM suites skipped: automatic runs are paused. Runtime acceptance remains unverified for this change.' >> "$GITHUB_STEP_SUMMARY"
+            echo 'Start Check manually with run_vm_tests enabled, or set the repository Actions variable RUN_VM_TESTS=true to restore automatic runs.' >> "$GITHUB_STEP_SUMMARY"
+          fi
 
   check:
     needs: changes
@@ -162,11 +182,14 @@ jobs:
         if: needs.changes.outputs.static == 'true'
         run: nix develop --command shellcheck installer/*.sh scripts/*.sh
 
+  # Automatic VM runs are paused unless RUN_VM_TESTS=true; manual runs can opt in.
   # Own job: the VM test derivation carries requiredSystemFeatures = kvm, so a
   # KVM-less or slow runner degrades this one job instead of the whole check.
   vm-test:
     needs: changes
-    if: needs.changes.outputs.runtime == 'true' || needs.changes.outputs.research == 'true'
+    if: >-
+      (vars.RUN_VM_TESTS == 'true' || (github.event_name == 'workflow_dispatch' && inputs.run_vm_tests)) &&
+      (needs.changes.outputs.runtime == 'true' || needs.changes.outputs.research == 'true')
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
