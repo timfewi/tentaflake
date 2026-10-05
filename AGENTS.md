@@ -105,6 +105,10 @@ are already published or require access to another repository for public checks.
 - `crates/` and `pkgs/` — Rust CLI/broker/worker workspace and Nix packages
 - CLI help is configuration-free; management commands require generated
   host configuration and inventory.
+  `agent template` is also configuration-free. Onboarding validates through
+  `lib/agentPlan.nix` and the shared JSON parser; imports add stopped entries
+  atomically without activation. Preserve ordinary flake source filtering and
+  never print raw Nix diagnostics containing operator source excerpts.
 - Host diagnostics share checked systemd/disk evidence; failed or unknown
   agent states are problems, while stopped agents remain valid. `--hide`
   must redact host and agent names in both text and JSON.

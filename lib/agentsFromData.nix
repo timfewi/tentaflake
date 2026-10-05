@@ -17,14 +17,21 @@
   ...
 }:
 {
-  file,
+  file ? null,
+  data ? null,
   mkHermesAgent,
   mkZeroClawAgent,
   mkAgent ? null,
 }:
 let
-  rawData = builtins.fromJSON (builtins.readFile file);
-  data =
+  rawData =
+    if (file == null) == (data == null) then
+      fail "provide exactly one file or data object."
+    else if data != null then
+      data
+    else
+      builtins.fromJSON (builtins.readFile file);
+  checkedData =
     if builtins.isAttrs rawData then
       checkFields "root" [ "schemaVersion" "agents" "hermes" "zeroclaw" "_securityNote" ] rawData
     else
@@ -105,7 +112,7 @@ let
   entries =
     kind:
     let
-      value = data.${kind} or [ ];
+      value = checkedData.${kind} or [ ];
     in
     if !builtins.isList value then
       fail "${kind} must be an array."
@@ -119,9 +126,9 @@ let
     ++ map (e: "zeroclaw-${e.name}") zeroclaw
     ++ map (e: "${e.adapter}-${e.name}") agents;
   validate =
-    if (data.schemaVersion or 1) != 1 then
+    if (checkedData.schemaVersion or 1) != 1 then
       fail "unsupported schemaVersion; expected 1."
-    else if data ? agents && !(data ? schemaVersion) then
+    else if checkedData ? agents && !(checkedData ? schemaVersion) then
       fail "generic agents requires schemaVersion = 1."
     else if agents != [ ] && mkAgent == null then
       fail "generic agents requires the mkAgent helper."

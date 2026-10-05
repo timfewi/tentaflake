@@ -24,6 +24,19 @@
       "static"
     ]
   },
+  "agent-onboarding": {
+    "paths": [
+      "lib/agentPlan.nix",
+      "lib/agentPlanEntry.nix",
+      "tests/agent-onboarding.nix",
+      "scripts/agent-onboarding-test.py"
+    ],
+    "checks": ["generated", "static"]
+  },
+  "agent-data": {
+    "paths": ["lib/agentsFromData.nix"],
+    "checks": ["runtime", "generated", "static"]
+  },
   "broker": {
     "paths": [
       "crates/tentaflake-broker/**",

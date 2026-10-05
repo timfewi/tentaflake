@@ -67,3 +67,26 @@ fn runtime_discovery_is_configuration_free_and_reports_scaffolds() {
     assert_eq!(invalid.status.code(), Some(2));
     assert!(String::from_utf8_lossy(&invalid.stderr).contains("runtimes accepts only"));
 }
+
+#[test]
+fn templates_are_configuration_free_and_preserve_vendor_arguments_after_separator() {
+    let image = format!("example.invalid/agent@sha256:{}", "a".repeat(64));
+    let output = Command::new(env!("CARGO_BIN_EXE_tentaflake"))
+        .args([
+            "agent", "template", "generic", "coding", "--image", &image, "--", "fixture", "--json",
+            "--hide",
+        ])
+        .env("TENTAFLAKE_CONFIG", "/dev/null")
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let definition: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(
+        definition["agents"][0]["definition"]["command"],
+        serde_json::json!(["fixture", "--json", "--hide"])
+    );
+    assert_eq!(
+        definition["agents"][0]["definition"]["lifecycle"],
+        "stopped"
+    );
+}

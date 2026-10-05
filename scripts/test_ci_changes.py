@@ -133,6 +133,18 @@ class CiSelection(unittest.TestCase):
                 self.write(name)
                 self.assertEqual(select(base, self.commit(), self.repository), {"selection", "static"})
 
+    def test_onboarding_validation_uses_installed_fixtures_without_research(self):
+        for name in ("lib/agentPlan.nix", "lib/agentPlanEntry.nix", "tests/agent-onboarding.nix",
+                     "scripts/agent-onboarding-test.py"):
+            with self.subTest(name=name):
+                base = self.git("rev-parse", "HEAD")
+                self.write(name)
+                self.assertEqual(select(base, self.commit(), self.repository), {"generated", "static"})
+
+    def test_shared_agent_parser_retains_runtime_coverage_without_research(self):
+        self.write("lib/agentsFromData.nix")
+        self.assertEqual(select(self.base, self.commit(), self.repository), {"runtime", "generated", "static"})
+
     def test_devcontainer_changes_do_not_build_agents_or_research(self):
         self.write(".devcontainer/devcontainer.json")
         self.assertEqual(select(self.base, self.commit(), self.repository), {"devcontainer", "static"})

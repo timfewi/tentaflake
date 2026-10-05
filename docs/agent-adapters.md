@@ -71,6 +71,8 @@ A local definition needs no new Rust adapter or upstream security module:
 ```
 
 The same `definition` object is accepted in a schema-v1 JSON `agents` entry.
+On installed hosts, [CLI onboarding](08-agent-cli.md#add-an-agent-on-an-installed-host)
+creates templates, validates plans and imports stopped additions without activation.
 The argument vector follows OCI semantics and preserves the image entrypoint.
 Image review/provenance remains operator-owned; a digest alone is not proof of
 trust. Evaluation neither downloads the image nor activates the host.

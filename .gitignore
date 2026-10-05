@@ -2,6 +2,8 @@ result
 result-*
 *.tmp
 *.bak
+.agents.json.lock
+agents.json.pending
 
 # Local overrides — user secrets and home-manager config.
 # Note: my-agents.nix is intentionally NOT ignored — the flake must evaluate it,
