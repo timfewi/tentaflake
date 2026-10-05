@@ -22,6 +22,10 @@ The core is intentionally small. It contains the host modules, agent builders,
 an installer ISO, and a Rust operator CLI. Observability and runtime detection
 are separate opt-in profiles.
 
+The [roadmap](docs/roadmap.md) prioritizes a common isolated runtime and simple
+agent onboarding on installed hosts, before employee-profile and company
+features. This is planned work; the current support matrix below still applies.
+
 ## Current scope
 
 | Component | Status |

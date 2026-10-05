@@ -1,12 +1,12 @@
 # Tentaflake product roadmap
 
-Planning baseline: 2026-10-04. Status: planned, not an implementation or release
+Planning baseline: 2026-10-05. Status: planned, not an implementation or release
 announcement. Stable M01-M10 IDs map to the GitHub milestones below.
 Issue tracking does not establish implemented, verified or released support.
 
-Requirement: consolidate the agreed direction for a secure, extensible platform
-for general-purpose AI employees, company workflows, business integrations and
-runtime-independent configuration into one reviewable roadmap.
+Requirement: deliver a common isolated environment for interchangeable agents,
+with simple agent onboarding on installed hosts. General-purpose AI employees,
+company workflows and business integrations build on that runtime foundation.
 
 This document owns product direction and proposed acceptance criteria. The
 [README](../README.md), [adapter guide](agent-adapters.md) and operational guides
@@ -14,6 +14,12 @@ remain authoritative for what actually works today. Proposed option names,
 commands and interfaces below are not installed APIs.
 
 ## Product direction
+
+The immediate priority is an agent-agnostic isolated runtime. An operator should
+be able to add an agent through a small validated definition, without modifying
+Tentaflake's security code or implementing an employee-profile compiler. Hermes,
+ZeroClaw, OpenCode, Codex and Pi are possible workloads, not separate security
+architectures. Naming an agent here does not establish current support.
 
 Tentaflake should let individuals and companies operate AI employees that can
 take any freely described professional role: legal work, marketing, research,
@@ -28,9 +34,9 @@ without becoming a separate user-facing employee for every activity. Human
 employees and AI employees can participate in the same organizational workflows.
 
 Tentaflake remains a secure core with optional organization, integration and
-management modules. Priority is security, then dependable operation, then the
-complete coordination and user experience. Foundational reliability and the
-small management screens needed to configure security are delivered earlier.
+management modules. First deliver the common runtime, installed-host onboarding
+and actual coding-agent acceptance. Employee-profile compilation, organization
+and the company UI follow; they are not prerequisites for running an agent.
 
 ### Agreed operating model
 
@@ -61,12 +67,19 @@ organization and coordination. Its repository fetch did not succeed during the
 comparison, so this roadmap makes no verified feature-parity claims. Its product
 requirements come from the decisions recorded here.
 
+[NVIDIA OpenShell](https://docs.nvidia.com/openshell/about/architecture) informs
+the separation between an ordinary agent workload and externally enforced
+isolation, policy and credentials. The comparison covered current 0.1.x docs
+and selected source, not runtime testing or a complete security audit. Reusing
+OpenShell is optional and requires a bounded compatibility decision; NixOS and
+Tentaflake's gVisor, broker and Research boundaries are not assumed compatible.
+
 ## Starting point
 
 | Existing foundation | Remaining product work |
 |---|---|
 | NixOS host, systemd supervision, gVisor capsules and runtime inventory | Organization and employee lifecycle above individual runtime instances |
-| Hermes/ZeroClaw adapters and native configuration generation | Common semantic profile, capability negotiation and profile editor |
+| Hermes/ZeroClaw adapters and native configuration generation | Shared runtime definition, small agent presets and installed-host onboarding; later employee-profile compilation |
 | OpenClaw stopped scaffold | Reviewed artifact and actual model, Research, execution and lifecycle acceptance |
 | Broker-held provider credentials, route/model controls and budgets | Common data/action policy across all capabilities |
 | Isolated Research service and disposable offline workers | Verified mediation of actual vendor tools and controlled business connectors |
@@ -83,21 +96,71 @@ See [agent management](02-agent-tips.md) and [adapters](agent-adapters.md).
 
 ## Architecture decisions
 
-### Three independent adapter families
+### Common isolated runtime and small agent presets
+
+One versioned runtime definition describes a reviewed digest-pinned image,
+argument vector, non-root identity, workspace/state, resource bounds, lifecycle
+mode and explicitly requested capabilities. Secrets use runtime credential
+channels, never the definition or Nix store. The common runtime owns isolation,
+inventory, supervision and diagnostics independently of the agent's name.
+
+An installed host supports selecting a supplied preset or importing a small
+local definition, validating it, inspecting the planned changes and applying it
+through the existing operator-controlled configuration workflow. An arbitrary
+supported image and start command must not require a new upstream adapter.
+Validation precedes activation; failed validation preserves the active revision.
+Do not promise activation without a host configuration update or install tools
+and download unreviewed images as a side effect of importing a definition.
+
+Agent presets add only verified native settings, paths, model/Research hooks and
+terminal requirements. The simplest workload needs an image and command plus
+the common runtime defaults. Configuration, authentication and session semantics
+may still differ; unsupported integrations remain visibly unavailable. Profiles
+cannot add arbitrary host mounts, sockets, network routes or capabilities.
+
+Native shell, file, Git, compiler and test tools run inside the isolated
+workspace, within standing grants. Disposable workers are a separate capability
+for tasks requiring another bounded execution environment. They are not the
+universal transport for every in-sandbox shell command. This is a proposed mode,
+not a relaxation of today's secure startup assertions or vendor support claims.
+
+Keep a mandatory common containment/resource/workspace baseline. Admission
+checks each requested capability against its exact controls: model access needs
+the LLM broker; Research needs its isolated relay; separate worker execution
+needs its worker policy. Absent or policy-denied capabilities expose no matching
+tools, credentials or mounts. Unsupported or ambiguous requests fail closed.
+Retain the single Research transport and prohibit direct/provider-hosted web
+tools. Check real boundary readiness before launch and distinguish configured,
+ready, stopped, failed and unknown evidence.
+
+Agent selection is independent of the isolation backend. Reuse the existing
+OCI/gVisor foundation first; qualify any alternative backend separately. Do not
+build several backends or replace enforcement merely to add an agent. `strict`
+remains unavailable until its separate kernel boundary is accepted.
+
+One versioned catalog owns preset identity, artifact, capabilities, constraints
+and evidence status. CLI discovery, documentation tables and website summaries
+derive these facts from that catalog. Authoritative guides remain in this public
+repository; publication follows the separate release-pin workflow. Unverified
+presets and stopped scaffolds cannot appear as operational support.
+
+### Independent integration boundaries
 
 | Family | Responsibility |
 |---|---|
-| Runtime adapter | Start and inspect an agent; map profiles, tool discovery, sessions and lifecycle to a pinned runtime |
+| Isolation backend | Enforce the common process, filesystem, network and resource boundary; independent of agent selection |
+| Agent preset / native adapter | Image and command, with optional native configuration, tool discovery and session hooks; no separate security implementation |
 | Model-provider adapter | Map supported model protocols behind the existing broker while preserving credentials, budgets and streaming limits |
 | Application connector | Expose resource-scoped business operations and events independently of the chosen agent runtime |
 
 Adding a CRM connector must not require implementing it again for every runtime.
 An agent's access to a program is separate from its conversational persona.
 
-### One configuration model, runtime-specific compilation
+### Optional employee configuration compiler
 
-The user edits the same concepts through UI or CLI: identity, persona/SOUL,
-roles, instructions, skills, model preferences, memory, knowledge and tools.
+After the common runtime is accepted, the user edits employee concepts through
+UI or CLI: identity, persona/SOUL, roles, instructions, skills, model preferences,
+memory, knowledge and tools.
 The flow is:
 
 ```text
@@ -264,8 +327,8 @@ reliability belong to the security work, not a distant polishing phase.
 
 | ID | Milestone | Depends on | User-visible outcome |
 |---|---|---|---|
-| M01 | Common profiles and configuration compiler | Existing adapter foundation | Consistent inputs with honest runtime capability reporting |
-| M02 | Policy enforcement and reliable execution | M01 contracts | Autonomous permitted work with enforceable boundaries |
+| M01 | Common isolated runtime and simple onboarding | Existing adapter foundation | Add an agent on an installed host without changing security code |
+| M02 | Coding-agent acceptance and policy enforcement | M01 contracts and onboarding | Two different agents perform repository work inside the same enforced boundary |
 | M03 | Company identity and employee editor | M01, M02 | Manage people, teams, personas and permissions |
 | M04 | Employee contexts, memory and runtime acceptance | M02, M03 | One employee can safely perform many roles |
 | M05 | Connections, actions and event foundation | M02, M03, M04 | Controlled business access and external effects |
@@ -275,35 +338,49 @@ reliability belong to the security work, not a distant polishing phase.
 | M09 | Complete company console | M03, M05, M07, M08; released M06 connectors | One place to manage employees and business work |
 | M10 | Release, migration and operational acceptance | M01-M09 for the selected release scope | Clearly documented, tested support and upgrades |
 
-### M01 — Common profiles and configuration compiler
+### M01 — Common isolated runtime and simple onboarding
 
-Deliver a versioned canonical profile, capability descriptions, compiler,
-import/diff/export, advanced native settings and activation plans. Define Hermes,
-ZeroClaw and OpenClaw mappings from the start; enable only mappings with evidence
-against the pinned runtime. The initial parser/compiler does not require the
-full company UI.
+Deliver the common runtime definition, one shared builder, capability catalog
+and installed-host select/import/validate/preview workflow. Keep native adapters
+small; migrate known consumers in the same change rather than retaining a second
+security implementation. Preserve identified legacy builder/state consumers.
+Choose one coding-agent reference and record whether OpenShell reuse is useful;
+using OpenShell is not a delivery dependency.
 
 Acceptance:
 
-- The same common input is compiled appropriately for each supported runtime.
-- Native parsing and meaningful behavior are tested, not only file snapshots.
-- Unsupported fields block activation with actionable reasons; imports lose no
-  unrecognized data silently. Secrets never enter generated store paths.
-- Existing consumers and state paths remain compatible; mixed-version and
-  conflicting edits are detected. OpenClaw remains stopped until M04 acceptance.
+- An installed-host fixture adds a generic image/command workload and a supplied
+  preset without editing upstream modules or implementing a new Rust adapter.
+- Unknown versions/options, unpinned artifacts, forbidden mounts and unsupported
+  capabilities fail with actionable reasons before changing active state.
+- CLI discovery and generated support facts agree with the versioned catalog;
+  declaration, fixture evidence and actual vendor acceptance remain distinct.
+- Existing consumers and state ownership remain compatible; mixed-version and
+  conflicting edits are detected. Credentials never enter generated store paths.
+- No company service, OIDC, employee persona or new backend is required. Real
+  isolation and vendor behavior are accepted separately in M02.
 
-### M02 — Policy enforcement and reliable execution
+### M02 — Coding-agent acceptance and policy enforcement
 
-Implement the common policy library, decision records and offline replay. Bind
-policy to actual LLM, Research and worker boundaries. Add local Worker MCP access
-and verify actual vendor tool mediation, starting with Hermes and then ZeroClaw.
-Unsupported built-in execution paths must be disabled in the new mode; runtime
-instructions alone are not enforcement.
+Implement capability-specific admission for the proposed runtime mode without
+weakening existing containment, broker, credential, quota or Research controls.
+Accept one pinned coding agent end to end, then a second independently configured
+agent through the same runtime. OpenCode is the first candidate; choose the
+second from Codex or Pi after verifying artifact, model and session compatibility.
+Unsupported candidates remain unaccepted instead of weakening the boundary.
 
-Adapt secure startup admission to distinguish an explicitly policy-denied
-Research capability from missing configuration. A denied context receives no
-Research tool or relay mount; an allowed context still requires its exact relay.
-Keep the broker, worker and workspace requirements and reject ambiguous policy.
+Exercise interactive attach, native file/shell/Git/test tools, bounded writable
+state, model calls, cancellation, restart and explicit stop. Deny host and
+cross-agent files/sockets and undeclared network destinations. Research, when
+requested, uses only the exact relay; a denied capability has no exposed tool or
+mount. Additional worker access is separately accepted and unavailable without
+its exact policy. Instructions alone are never enforcement.
+
+Implement the common policy library, decision records and offline replay at the
+LLM, Research and optional worker boundaries. Retain actual Hermes/ZeroClaw
+acceptance work alongside the coding references. Verify native execution inside
+the capsule separately from any advertised automatic routing to workers; neither
+an enabled worker nor a synthetic probe proves vendor tool behavior.
 
 Add atomic worker claims, one active drain/worker execution per configured queue,
 bounded inbox/pending state and crash recovery. Distinguish not dispatched,
@@ -319,8 +396,19 @@ Acceptance:
   boundedness and do not cause unreviewed replay.
 - Existing broker streaming, cancellation, credential and Research boundaries
   remain intact. Policy/audit failure prevents new external dispatch.
+- Both coding references edit a repository and run its focused checks through
+  their native tools. Adding the second changes only its definition/native hooks,
+  not common security code. Record real application and boundary evidence.
+- Management-provider and optional worker work remains tracked here but does not
+  delay the first coding scenario unless that scenario requests those capabilities.
 
 ### M03 — Company identity and employee editor
+
+Deliver the versioned employee-profile compiler, capability validation,
+import/diff/export and advanced native settings described above. Native parsing
+and meaningful behavior need pinned-runtime evidence; unsupported fields block
+activation rather than silently dropping or approximating them. Preserve
+unmapped imported data and existing persona/memory until explicitly adopted.
 
 Add the private organization service, PostgreSQL state, OIDC and delegated
 administration. Provide the initial employee/profile editor described above,
@@ -343,10 +431,10 @@ knowledge access under one employee identity. A structured store with search is
 the initial memory implementation; a vector database is not a prerequisite.
 Transfer frozen results through policy, with provenance and protected labels.
 
-Complete runtime-specific acceptance for actual Hermes and ZeroClaw artifacts.
+Extend the M02 runtime evidence with employee context/persona/memory behavior.
 For OpenClaw, select a reviewed image and verify native configuration, persona,
-model streaming, Research discovery, worker mediation, lifecycle and persistence
-before changing its support status. Do not omit OpenClaw from the work merely
+model streaming, Research discovery, any advertised worker mediation, lifecycle
+and persistence before changing its support status. Do not omit OpenClaw merely
 because its current adapter is a scaffold.
 
 Acceptance:
@@ -479,6 +567,7 @@ These names express intended interface boundaries, not existing options:
 
 | Proposed surface | Responsibility |
 |---|---|
+| Common runtime definition / preset catalog | Image, command, workspace, resources, capability requests and small native hooks; final API chosen in M01 |
 | `tentaflake.policy` | Host ceilings, classification and allowed capability boundaries |
 | `tentaflake.organization` | Organization service, storage and identity provider |
 | `tentaflake.connectors` | Approved implementations, runtime credentials and network boundaries |
@@ -515,15 +604,18 @@ from generated configuration snapshots.
 All nine open issues (#106-#114) were reviewed on 2026-10-04 before creating
 these milestones. Existing management, Research, runtime acceptance, queue,
 health and alert-delivery work is retained; new issues cover the missing scope.
+The 2026-10-05 priority revision moves the shared runtime and simple installed-host
+onboarding into M01, coding-agent acceptance into M02, and employee-profile
+compilation into M03. Hermes/ZeroClaw runtime acceptance moves from M04 to M02.
 M06-A through M06-E remain catalog workstreams inside M06. Milestones have no
 invented due dates or version promises.
 
 | Milestone | Work items |
 |---|---|
-| [M01](https://github.com/timfewi/tentaflake/milestone/1) | [#115](https://github.com/timfewi/tentaflake/issues/115) |
-| [M02](https://github.com/timfewi/tentaflake/milestone/2) | [#106](https://github.com/timfewi/tentaflake/issues/106), [#108](https://github.com/timfewi/tentaflake/issues/108), [#110](https://github.com/timfewi/tentaflake/issues/110), [#113](https://github.com/timfewi/tentaflake/issues/113), [#116](https://github.com/timfewi/tentaflake/issues/116) |
+| [M01](https://github.com/timfewi/tentaflake/milestone/1) | [#115](https://github.com/timfewi/tentaflake/issues/115), [#135](https://github.com/timfewi/tentaflake/issues/135) |
+| [M02](https://github.com/timfewi/tentaflake/milestone/2) | [#106](https://github.com/timfewi/tentaflake/issues/106), [#108](https://github.com/timfewi/tentaflake/issues/108), [#110](https://github.com/timfewi/tentaflake/issues/110), [#111](https://github.com/timfewi/tentaflake/issues/111), [#113](https://github.com/timfewi/tentaflake/issues/113), [#116](https://github.com/timfewi/tentaflake/issues/116), [#136](https://github.com/timfewi/tentaflake/issues/136) |
 | [M03](https://github.com/timfewi/tentaflake/milestone/3) | [#117](https://github.com/timfewi/tentaflake/issues/117) |
-| [M04](https://github.com/timfewi/tentaflake/milestone/4) | [#111](https://github.com/timfewi/tentaflake/issues/111), [#118](https://github.com/timfewi/tentaflake/issues/118), [#119](https://github.com/timfewi/tentaflake/issues/119) |
+| [M04](https://github.com/timfewi/tentaflake/milestone/4) | [#118](https://github.com/timfewi/tentaflake/issues/118), [#119](https://github.com/timfewi/tentaflake/issues/119) |
 | [M05](https://github.com/timfewi/tentaflake/milestone/5) | [#120](https://github.com/timfewi/tentaflake/issues/120), [#121](https://github.com/timfewi/tentaflake/issues/121) |
 | [M06](https://github.com/timfewi/tentaflake/milestone/6) | [#122](https://github.com/timfewi/tentaflake/issues/122), [#123](https://github.com/timfewi/tentaflake/issues/123), [#124](https://github.com/timfewi/tentaflake/issues/124), [#125](https://github.com/timfewi/tentaflake/issues/125), [#126](https://github.com/timfewi/tentaflake/issues/126) |
 | [M07](https://github.com/timfewi/tentaflake/milestone/7) | [#127](https://github.com/timfewi/tentaflake/issues/127) |
@@ -543,7 +635,29 @@ show the exact source revision and snapshot date. Issue closure alone does not
 establish actual vendor acceptance or released support. Website publication
 remains a separate maintainer action.
 
-Later evaluations include additional runtimes, finer-grained information-flow
+## Sequential delivery and autonomous work
+
+Deliver M01's runtime contract (#115) before its installed-host onboarding (#135).
+Next implement capability admission (#116) and accept M02's first coding
+reference and then its second (#136), sharing the same containment.
+Only then begin M03's employee compiler and organization layer. Additional
+runtime presets can follow this path independently of the company feature set.
+
+Each issue is a bounded change with requirement, artifact, proportionate checks,
+updated docs and a DCO-signed PR. Review dependencies and current source before
+starting the next issue; milestone order is not numerical issue order. Save a
+short checkpoint in the issue/PR with evidence, remaining work and the next
+dependency so another session can resume. Do not close blocked or partially
+accepted work just because the implementation compiles.
+
+An autonomous development assignment names the milestones/issues and whether
+green-CI merges are authorized. Heavy VM/ISO/system builds, provider test-account
+access, deployment, host activation and destructive state migration require
+authorization covering those operations. Prepare the concrete change first.
+Keep checks foregrounded and within the host resource budget. A chat session
+does not by itself provide a durable multi-day executor.
+
+Later evaluations include finer-grained information-flow
 tracking, cross-runtime conversation migration, multi-host operation, shared
 multi-company hosting, arbitrary desktop GUI automation and a separately tested
 kernel boundary for `strict`. They are not initial delivery commitments. Generic
