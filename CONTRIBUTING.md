@@ -86,14 +86,16 @@ the exact closure boundary; it does not mount the entire Nix store into agents.
 The non-VM CI build includes the pinned Dev Containers CLI package so source,
 lockfile, and offline-cache hash drift fail before a change lands.
 
-GitHub selects the runtime and research VM suites independently through
-`.github/vm-paths.json` and `scripts/ci_vm_changes.py`. Documentation, contributor
-tooling and other explicitly listed paths avoid VM builds. Runtime Rust,
-packages and installer changes select the host VM; research-specific changes
-and a research-only lock pin select the research VM. Shared Nix modules, other
-lock changes, selection-policy changes, unknown paths and missing comparison
-history require both. Renames include the old path. Formatting, lint, package,
-policy and evaluation checks still run on every change.
+GitHub selects builds, evaluation, static checks and runtime/research VM suites
+through `.github/ci-paths.json` and `scripts/ci_changes.py`. Documentation skips
+Nix setup, Research preparation, package/system builds and VMs. CI routing changes
+run real-Git regressions and static checks without configuration or VM builds.
+Rust changes run the workspace checks and affected package/image builds without
+Research preparation; applicable runtime changes still select the host VM.
+Research-specific changes and a research-only lock pin select its own suite.
+Shared Nix modules, other lock changes, unknown paths and missing comparison
+history retain the full gate. Renames include the old path. Routing regressions
+run on every event; other checks run when their owning inputs change.
 See [build boundaries](docs/17-builds.md) for cache guarantees and the
 Nix/Bazel assessment.
 

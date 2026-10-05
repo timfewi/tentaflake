@@ -1,7 +1,7 @@
 ---
 name: tentaflake-repo-guidance
 description: Locate the owning source, guide and checks before changing Tentaflake modules, adapters, CLI or installer.
-version: 2.2.0
+version: 2.3.0
 ---
 
 # Tentaflake repository guidance
@@ -54,8 +54,9 @@ relevant source and guide. Avoid loading unrelated references.
 
 Start with `just fast`; `just list` lists recipes. Recipes load pinned tools;
 direct Cargo/lint commands need `nix develop`. Use focused checks from
-`tests/` and the build guide. Identify affected VMs via `.github/vm-paths.json`;
-heavy VM, system and ISO builds require explicit workload authorization.
+`tests/` and the build guide. Identify affected checks via `.github/ci-paths.json`;
+docs and CI metadata skip VM/Research builds; unknown paths retain the full gate.
+Heavy VM, system and ISO builds require explicit workload authorization.
 Source checks never authorize activation.
 
 Review the final diff, synchronize affected guides/examples/instructions/skills,

@@ -8,39 +8,63 @@ on:
   push:
     branches: [main]
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   changes:
     runs-on: ubuntu-latest
     outputs:
       runtime: ${{ steps.filter.outputs.runtime }}
       research: ${{ steps.filter.outputs.research }}
+      nix: ${{ steps.filter.outputs.nix }}
+      evaluate: ${{ steps.filter.outputs.evaluate }}
+      generated: ${{ steps.filter.outputs.generated }}
+      rust: ${{ steps.filter.outputs.rust }}
+      cli: ${{ steps.filter.outputs.cli }}
+      broker: ${{ steps.filter.outputs.broker }}
+      worker: ${{ steps.filter.outputs.worker }}
+      devcontainer: ${{ steps.filter.outputs.devcontainer }}
+      selection: ${{ steps.filter.outputs.selection }}
+      static: ${{ steps.filter.outputs.static }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
 
-      # Shared rules classify runtime/research independently; unknown changes
-      # and missing comparison history require both suites.
-      - name: Detect VM-relevant changes
+      - name: Check CI selection with real Git histories
+        run: python3 scripts/test_ci_changes.py
+
+      # One policy selects builds, evaluation, static checks and VM suites.
+      # Unknown changes and missing history retain the complete gate.
+      - name: Detect affected checks
         id: filter
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
           HEAD_SHA: ${{ github.sha }}
         run: |
-          python3 scripts/ci_vm_changes.py "$BASE_SHA" "$HEAD_SHA" >> "$GITHUB_OUTPUT"
+          python3 scripts/ci_changes.py "$BASE_SHA" "$HEAD_SHA" >> "$GITHUB_OUTPUT"
 
   check:
+    needs: changes
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
+      - name: Check whitespace
+        # PR checkouts are merge commits; inspect their first-parent diff.
+        run: git show --format= --check --first-parent HEAD
+
       - uses: DeterminateSystems/nix-installer-action@3138316df39ed29be04236d7ffc686fa525866aa # v23
+        if: needs.changes.outputs.nix == 'true'
         with:
           extra-conf: |
             accept-flake-config = true
 
       - uses: DeterminateSystems/magic-nix-cache-action@84c0677f58dcedf3b91f8223ce36a9ea5b3c84b7 # v15
+        if: needs.changes.outputs.nix == 'true'
         with:
           # No FlakeHub account; skip the doomed OIDC login and use the GH cache.
           use-flakehub: false
@@ -52,51 +76,82 @@ jobs:
       # derivation. Build the non-VM policy gates first; they materialize the
       # exact research closures without widening any sandbox mount.
       - name: prepare research evaluation closures
+        if: needs.changes.outputs.evaluate == 'true'
         run: |
           nix build --no-link \
             .#checks.x86_64-linux.research-policy \
             .#checks.x86_64-linux.module-evaluation
 
       - name: nix flake check (eval)
+        if: needs.changes.outputs.evaluate == 'true'
         run: nix flake check --no-build
 
-      # `nix flake check` above is eval-only, so the non-VM checks still need an
-      # explicit build. The Rust package check proves the workspace also builds
-      # through the pinned Nix toolchain, not only the runner toolchain below.
+      # Build only selected packages/checks. A Rust edit does not require the
+      # Research closures or host evaluation; worker edits include its image.
       - name: nix build (non-VM checks)
+        if: needs.changes.outputs.nix == 'true'
+        env:
+          CHECK_EVALUATE: ${{ needs.changes.outputs.evaluate }}
+          CHECK_SELECTION: ${{ needs.changes.outputs.selection }}
+          CHECK_DEVCONTAINER: ${{ needs.changes.outputs.devcontainer }}
+          CHECK_CLI: ${{ needs.changes.outputs.cli }}
+          CHECK_BROKER: ${{ needs.changes.outputs.broker }}
+          CHECK_WORKER: ${{ needs.changes.outputs.worker }}
         run: |
-          nix build --no-link \
-            .#checks.x86_64-linux.devcontainer-cli \
-            .#checks.x86_64-linux.ci-vm-selection \
-            .#checks.x86_64-linux.rust-package-sources \
-            .#checks.x86_64-linux.image-pinning \
-            .#checks.x86_64-linux.agent-adapters \
-            .#checks.x86_64-linux.tentaflake-broker \
-            .#checks.x86_64-linux.tentaflake-cli \
-            .#checks.x86_64-linux.tentaflake-worker \
-            .#checks.x86_64-linux.tentaflake-worker-image
+          selected_checks=()
+          if [[ "$CHECK_SELECTION" == true ]]; then
+            selected_checks+=(.#checks.x86_64-linux.ci-vm-selection)
+          fi
+          if [[ "$CHECK_DEVCONTAINER" == true ]]; then
+            selected_checks+=(.#checks.x86_64-linux.devcontainer-cli)
+          fi
+          if [[ "$CHECK_EVALUATE" == true ]]; then
+            selected_checks+=(.#checks.x86_64-linux.image-pinning .#checks.x86_64-linux.agent-adapters)
+          fi
+          if [[ "$CHECK_CLI" == true ]]; then
+            selected_checks+=(.#checks.x86_64-linux.tentaflake-cli)
+          fi
+          if [[ "$CHECK_BROKER" == true ]]; then
+            selected_checks+=(.#checks.x86_64-linux.tentaflake-broker)
+          fi
+          if [[ "$CHECK_WORKER" == true ]]; then
+            selected_checks+=(.#checks.x86_64-linux.tentaflake-worker .#checks.x86_64-linux.tentaflake-worker-image)
+          fi
+          if [[ "$CHECK_CLI" == true || "$CHECK_BROKER" == true || "$CHECK_WORKER" == true ]]; then
+            selected_checks+=(.#checks.x86_64-linux.rust-package-sources)
+          fi
+          for ((offset=0; offset<${#selected_checks[@]}; offset+=4)); do
+            nix build --no-link "${selected_checks[@]:offset:4}"
+          done
 
       - name: nix build (tentaflake toplevel)
+        if: needs.changes.outputs.evaluate == 'true' && needs.changes.outputs.runtime == 'true'
         run: nix build .#nixosConfigurations.tentaflake.config.system.build.toplevel --no-link
 
       - name: generated installed flake
+        if: needs.changes.outputs.generated == 'true'
         run: nix develop --command ./scripts/generated-flake-test.sh
 
       - name: nix fmt check
+        if: needs.changes.outputs.static == 'true'
         run: nix fmt -- --ci
 
       - name: Nix lint
+        if: needs.changes.outputs.static == 'true'
         run: |
           nix develop --command statix check .
           nix develop --command deadnix --fail .
 
       - name: cargo fmt
+        if: needs.changes.outputs.rust == 'true'
         run: nix develop --command cargo fmt --all -- --check
 
       - name: cargo clippy
+        if: needs.changes.outputs.rust == 'true'
         run: nix develop --command cargo clippy --workspace --all-targets -- -D warnings
 
       - name: cargo test
+        if: needs.changes.outputs.rust == 'true'
         run: nix develop --command cargo test --workspace
 
       # Via the devShell, not the runner's apt shellcheck: the two versions
@@ -104,6 +159,7 @@ jobs:
       # binary means "clean locally" and "clean in CI" are different claims.
       # flake.lock pins this one, and it is the same one `nix develop` gives.
       - name: shellcheck
+        if: needs.changes.outputs.static == 'true'
         run: nix develop --command shellcheck installer/*.sh scripts/*.sh
 
   # Own job: the VM test derivation carries requiredSystemFeatures = kvm, so a

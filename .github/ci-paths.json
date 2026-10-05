@@ -1,0 +1,179 @@
+{
+  "research": {
+    "paths": [
+      "modules/research.nix",
+      "lib/researchClient.nix",
+      "tests/research-*.nix"
+    ],
+    "checks": [
+      "research",
+      "evaluate",
+      "generated",
+      "static"
+    ]
+  },
+  "cli": {
+    "paths": [
+      "crates/tentaflake-cli/**",
+      "pkgs/tentaflake-cli/**"
+    ],
+    "checks": [
+      "runtime",
+      "cli",
+      "rust",
+      "static"
+    ]
+  },
+  "broker": {
+    "paths": [
+      "crates/tentaflake-broker/**",
+      "pkgs/tentaflake-broker/**"
+    ],
+    "checks": [
+      "runtime",
+      "broker",
+      "rust",
+      "static"
+    ]
+  },
+  "worker": {
+    "paths": [
+      "crates/tentaflake-worker/**",
+      "pkgs/tentaflake-worker/**"
+    ],
+    "checks": [
+      "runtime",
+      "worker",
+      "rust",
+      "static"
+    ]
+  },
+  "rust-workspace": {
+    "paths": [
+      "Cargo.toml",
+      "Cargo.lock",
+      "crates/**"
+    ],
+    "checks": [
+      "runtime",
+      "cli",
+      "broker",
+      "worker",
+      "rust",
+      "static"
+    ]
+  },
+  "installer-nix": {
+    "paths": [
+      "installer/*.nix"
+    ],
+    "checks": [
+      "runtime",
+      "evaluate",
+      "generated",
+      "static"
+    ]
+  },
+  "runtime": {
+    "paths": [
+      "installer/**",
+      "tests/integration.nix"
+    ],
+    "checks": [
+      "runtime",
+      "generated",
+      "static"
+    ]
+  },
+  "ci": {
+    "paths": [
+      ".github/ci-paths.json",
+      ".github/vm-paths.json",
+      ".github/workflows/check.yml",
+      "scripts/ci_changes.py",
+      "scripts/ci_vm_changes.py",
+      "scripts/test_ci_changes.py",
+      "scripts/test_ci_vm_changes.py",
+      "tests/ci-vm-selection.nix"
+    ],
+    "checks": [
+      "selection",
+      "static"
+    ]
+  },
+  "devcontainer": {
+    "paths": [
+      ".devcontainer/**",
+      "pkgs/devcontainer-cli/**"
+    ],
+    "checks": [
+      "devcontainer",
+      "static"
+    ]
+  },
+  "shared": {
+    "paths": [
+      "adapters/**",
+      "lib/**",
+      "modules/**",
+      "flake.nix"
+    ],
+    "checks": [
+      "runtime",
+      "research",
+      "evaluate",
+      "generated",
+      "cli",
+      "broker",
+      "worker",
+      "rust",
+      "devcontainer",
+      "selection",
+      "static"
+    ]
+  },
+  "generated": {
+    "paths": [
+      "scripts/generated-flake-test.sh"
+    ],
+    "checks": [
+      "generated",
+      "static"
+    ]
+  },
+  "module-fixtures": {
+    "paths": [
+      "tests/module-eval.nix"
+    ],
+    "checks": [
+      "evaluate",
+      "static"
+    ]
+  },
+  "tooling": {
+    "paths": [
+      "justfile"
+    ],
+    "checks": [
+      "static"
+    ]
+  },
+  "docs": {
+    "paths": [
+      "*.md",
+      ".github/ISSUE_TEMPLATE/**",
+      ".github/CODEOWNERS",
+      ".github/dependabot.yml",
+      ".github/workflows/bump.yml",
+      ".github/workflows/dco.yml",
+      ".github/workflows/gitleaks.yml",
+      ".github/workflows/update-flake-lock.yml",
+      ".gitignore",
+      ".editorconfig",
+      "LICENSE",
+      "DCO.txt",
+      "public/**"
+    ],
+    "checks": []
+  }
+}

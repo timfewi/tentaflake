@@ -10,8 +10,10 @@ features; planned capability admission does not relax current startup gates.
 `just` recipes load the pinned contributor tools automatically; `just list`
 lists them. Enter `nix develop` before running Cargo or lint tools directly.
 Start with `just fast`; use affected VM suites for runtime/security changes.
-GitHub VM selection imports `.github/vm-paths.json`; unknown paths require both
-runtime and research suites. Keep its real-Git regression check passing.
+GitHub check selection imports `.github/ci-paths.json`; docs skip Nix/Research
+builds, and CI metadata uses routing regressions rather than VMs. Runtime and
+Research changes select affected suites; unknown paths/history require the full
+gate. Keep the real-Git regression check passing.
 
 ```bash
 nix flake check
