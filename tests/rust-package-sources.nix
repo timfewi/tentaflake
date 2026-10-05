@@ -14,5 +14,8 @@ let
   inherit (pkgs) lib;
 in
 assert lib.all isolated names;
+assert builtins.pathExists (packages.tentaflake-cli.src + "/adapters/catalog.json");
+assert !(builtins.pathExists (packages.tentaflake-broker.src + "/adapters/catalog.json"));
+assert !(builtins.pathExists (packages.tentaflake-worker.src + "/adapters/catalog.json"));
 assert packages.tentaflake-worker-image.imageTag == packages.tentaflake-worker.version;
 pkgs.runCommand "tentaflake-rust-package-sources" { } "touch $out"

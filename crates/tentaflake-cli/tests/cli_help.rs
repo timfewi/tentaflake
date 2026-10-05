@@ -32,3 +32,38 @@ fn help_works_without_a_valid_host_configuration() {
         assert_eq!(status.status.code(), Some(2));
     }
 }
+
+#[test]
+fn runtime_discovery_is_configuration_free_and_reports_scaffolds() {
+    let output = Command::new(env!("CARGO_BIN_EXE_tentaflake"))
+        .args(["runtimes", "--json"])
+        .env("TENTAFLAKE_CONFIG", "/dev/null")
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let catalog: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(catalog["schemaVersion"], 1);
+    assert_eq!(
+        catalog["presets"]["openclaw"]["identity"]["status"],
+        "scaffold"
+    );
+    assert_eq!(
+        catalog["presets"]["openclaw"]["artifact"]["reference"],
+        serde_json::Value::Null
+    );
+    assert_eq!(
+        catalog["presets"]["hermes"]["evidence"]["vendorAcceptance"],
+        "pending"
+    );
+    assert_eq!(
+        catalog["presets"]["generic"]["identity"]["status"],
+        "definition"
+    );
+    let invalid = Command::new(env!("CARGO_BIN_EXE_tentaflake"))
+        .args(["runtimes", "unexpected"])
+        .env("TENTAFLAKE_CONFIG", "/dev/null")
+        .output()
+        .unwrap();
+    assert_eq!(invalid.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&invalid.stderr).contains("runtimes accepts only"));
+}

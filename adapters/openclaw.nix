@@ -3,61 +3,31 @@
 # See docs/agent-adapters.md before adding an OCI image or enabling startup.
 { lib, ... }:
 let
+  preset = (import ../lib/runtimeCatalog.nix).presets.openclaw;
   reason = "OpenClaw is a stopped scaffold. The LLM broker supports opt-in streaming, but acceptance with the pinned OpenClaw executable is unverified. A reviewed image digest, accepted model transport, actual Research discovery, and disposable-worker tool routing require acceptance evidence. See docs/agent-adapters.md.";
 in
 {
-  schemaVersion = 1;
-  identity = {
-    id = "openclaw";
-    version = "2026.9.7";
-    status = "scaffold";
-  };
-  artifact = {
-    kind = "unselected";
-    reference = null;
-    reviewed = false;
-  };
-  command = [
-    "node"
-    "openclaw.mjs"
-    "gateway"
-  ];
-  configuration = {
-    format = "json";
-    readOnly = true;
+  inherit (preset)
+    schemaVersion
+    identity
+    artifact
+    command
+    ownership
+    layout
+    lifecycle
+    model
+    execution
+    capabilities
+    evidence
+    ;
+  configuration = preset.configuration // {
     generate = _: _: throw "tentaflake: ${reason}";
   };
-  ownership = {
-    uid = 1000;
-    gid = 1000;
-  };
-  layout = {
-    state = "/var/lib/openclaw-<name>";
-    workspace = "workspace";
-    writable = [
-      "state"
-      "workspace"
-    ];
-  };
-  lifecycle = "stopped-scaffold";
-  model = {
-    protocols = [
-      "openai-chat-completions"
-      "openai-responses"
-    ];
-    # The investigated v2026.9.7 built-in OpenAI request builders set stream = true.
-    streaming = "required";
-  };
-  research = {
-    supported = false;
+  research = preset.research // {
     configure = _: {
       settings = { };
       valid = false;
     };
-  };
-  execution = {
-    interface = "unverified";
-    automatic = false;
   };
   build =
     {

@@ -11,6 +11,8 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode, Output, Stdio};
 use std::time::{Duration, Instant, SystemTime};
 
+const RUNTIME_CATALOG: &str = include_str!("../../../adapters/catalog.json");
+
 const DEFAULT_CONFIG: &str = "/etc/tentaflake/cli.conf";
 const DEFAULT_AGENTS: &str = "/etc/tentaflake/agents.tsv";
 
@@ -166,6 +168,7 @@ fn run(mut args: Vec<String>) -> Result<u8, String> {
     let command = args.first().map(String::as_str).unwrap_or("status");
     match command {
         "remote-check" => return remote_check(&args[1..]),
+        "runtimes" => return runtimes(&args[1..], mode),
         "help" | "--help" | "-h" => {
             print_help();
             return Ok(0);
@@ -199,6 +202,38 @@ fn run(mut args: Vec<String>) -> Result<u8, String> {
         )),
         other => Err(format!("unknown command `{other}`; run `tentaflake help`")),
     }
+}
+
+fn runtimes(args: &[String], mode: OutputMode) -> Result<u8, String> {
+    if !args.is_empty() {
+        return Err("runtimes accepts only --json and --hide".into());
+    }
+    let catalog: serde_json::Value =
+        serde_json::from_str(RUNTIME_CATALOG).map_err(|error| error.to_string())?;
+    if mode.json {
+        println!("{catalog}");
+    } else {
+        let presets = catalog["presets"]
+            .as_object()
+            .ok_or("invalid runtime catalog")?;
+        println!("RUNTIME\tSTATUS\tVERSION\tVENDOR ACCEPTANCE");
+        for (name, preset) in presets {
+            println!(
+                "{}\t{}\t{}\t{}",
+                name,
+                preset["identity"]["status"]
+                    .as_str()
+                    .ok_or("missing runtime status")?,
+                preset["identity"]["version"]
+                    .as_str()
+                    .ok_or("missing runtime version")?,
+                preset["evidence"]["vendorAcceptance"]
+                    .as_str()
+                    .ok_or("missing acceptance evidence")?,
+            );
+        }
+    }
+    Ok(0)
 }
 
 fn remote_check(args: &[String]) -> Result<u8, String> {
@@ -2521,6 +2556,7 @@ fn print_help() {
         "Tentaflake — manage declarative agent containers with Docker or Podman\n\n\
          USAGE\n\
            tentaflake help|--help|-h\n\
+           tentaflake runtimes [--json]\n\
            tentaflake [status] [--hide] [--json]\n\
            tentaflake logs <name> [journalctl args]\n\
            tentaflake restart|start|stop <name>\n\

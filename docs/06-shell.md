@@ -21,6 +21,7 @@ Do not hand-edit them. Change the Nix configuration and rebuild explicitly.
 
 ```text
 tentaflake help
+tentaflake runtimes [--json]
 tentaflake status [--json] [--hide]
 tentaflake health [--json] [--hide]
 tentaflake doctor [--json] [--hide]
@@ -41,6 +42,10 @@ tentaflake update
 `status` is the default command. `--json` provides machine-readable status;
 `--hide` redacts the host and agent names. `tentaflake-status` invokes the same
 status renderer and is used by the login banner.
+
+`runtimes` lists the pinned preset catalog and its support/evidence levels;
+`--json` emits the complete schema-v1 catalog. It performs no host reads or
+image downloads. See [generic workloads](agent-adapters.md#generic-isolated-workload).
 
 `help`, `--help`, and `-h` display usage even when the generated host
 configuration or inventory is missing or invalid. Management commands still

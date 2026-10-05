@@ -14,7 +14,7 @@ metadata:
 
 1. Resolve the instance, image digest and state path from inventory and its
    declaration. `adapters/hermes.nix` owns the builder; image defaults live in
-   `lib/constants.nix`.
+   `adapters/catalog.json`, exported through `lib/constants.nix`.
 2. Hermes uses `$HERMES_HOME`, normally `/var/lib/hermes-<name>` inside and
    outside the container, rather than the operator's `~/.hermes`.
 3. Non-empty effective `settings` generates a read-only `config.yaml`.

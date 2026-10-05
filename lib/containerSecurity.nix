@@ -1,5 +1,6 @@
 { lib }:
 let
+  pinnedImage = import ./pinnedImage.nix { inherit lib; };
   isSecure = profile: profile != "dev";
 
   pathWithin = root: path: path == root || lib.hasPrefix "${root}/" path;
@@ -188,6 +189,7 @@ in
       owner,
       baseConfig,
       overrides ? { },
+      allowMutableImage ? false,
       allowedWritableSources,
       allowedWritableDestinations,
       pidsLimit,
@@ -328,6 +330,7 @@ in
         if !secure then
           merged
           // {
+            image = pinnedImage name allowMutableImage merged.image;
             labels = labels // {
               "io.tentaflake.agent" = "true";
               "io.tentaflake.security-profile" = profile;
@@ -336,6 +339,7 @@ in
         else
           merged
           // {
+            image = pinnedImage name false merged.image;
             user = owner;
             privileged = false;
             capabilities = capabilities // {

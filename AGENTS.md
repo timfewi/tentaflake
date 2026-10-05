@@ -89,6 +89,11 @@ are already published or require access to another repository for public checks.
   image-provenance gates, disposable workers, workspace quotas, encrypted
   backup, and generic options
 - `lib/` — helpers (`mkHermesAgent`, `mkZeroClawAgent`, `agentsFromData`, `pinnedImage`, `constants`, `devshell`)
+- `adapters/catalog.json` owns versioned preset/capability/evidence facts for Nix,
+  configuration-free `tentaflake runtimes`, and generated adapter docs. Run
+  `python3 scripts/runtime-catalog-docs.py` after catalog changes. Generic
+  definitions use `lib/runtimeContract.nix` and the shared `containerSecurity`
+  builder; no model/Research acceptance or startup-gate relaxation is implied.
 - `adapters/` — lazy runtime registry and schema-v1 contracts; `lib/mkAgent.nix`
   selects one adapter. Legacy wrappers preserve their APIs and state. OpenClaw
   is a stopped scaffold without an OCI artifact; never advertise operational

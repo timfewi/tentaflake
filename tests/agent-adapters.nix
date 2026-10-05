@@ -103,6 +103,7 @@ let
       inherit file;
       inherit (builders) mkAgent mkHermesAgent mkZeroClawAgent;
     };
+  genericJson = eval (json ./fixtures/adapter-input/generic.json);
   dataConfig = eval (
     (json ./fixtures/adapter-input/mixed.json)
     ++ [ { tentaflake.security.profile = lib.mkForce "dev"; } ]
@@ -114,6 +115,46 @@ let
     }
   );
   contract = import ../lib/adapterContract.nix { inherit lib; };
+  runtimeContract = import ../lib/runtimeContract.nix { inherit lib; };
+  definition = {
+    schemaVersion = 1;
+    image = builders.constants.hermesImage;
+    command = [
+      "/bin/sh"
+      "-c"
+      "printf 'hello workspace' > result.txt"
+    ];
+    resources = {
+      memory = "512m";
+      memorySwap = "512m";
+      cpus = "0.5";
+      pidsLimit = 64;
+    };
+  };
+  generic = eval [
+    (builders.mkAgent {
+      adapter = "generic";
+      name = "coding";
+      inherit definition;
+    })
+  ];
+  genericContainer = generic.virtualisation.oci-containers.containers.generic-coding;
+  genericStarted = eval [
+    (builders.mkAgent {
+      adapter = "generic";
+      name = "coding";
+      inherit definition;
+    })
+    { virtualisation.oci-containers.containers.generic-coding.autoStart = lib.mkForce true; }
+  ];
+  genericPodman = eval [
+    (builders.mkAgent {
+      adapter = "generic";
+      name = "coding";
+      inherit definition;
+    })
+    { virtualisation.oci-containers.backend = lib.mkForce "podman"; }
+  ];
   single = eval [ (instance "hermes" "only") ];
   forcedStart = eval [
     (instance "hermes" "forced")
@@ -131,6 +172,78 @@ let
     { tentaflake.security.profile = lib.mkForce "dev"; }
   ];
 in
+assert failures genericJson == [ ];
+assert genericJson.tentaflake.agentInstances.generic-from-json.adapter == "generic";
+assert
+  genericJson.virtualisation.oci-containers.containers.generic-from-json.cmd == [
+    "fixture"
+    "--workspace"
+    "/workspace"
+  ];
+assert failures generic == [ ];
+assert !genericContainer.autoStart;
+assert genericContainer.cmd == definition.command;
+assert genericContainer.user == "10000:10000";
+assert lib.elem "--network=none" genericContainer.extraOptions;
+assert lib.elem "--runtime=runsc" genericContainer.extraOptions;
+assert lib.elem "--memory=512m" genericContainer.extraOptions;
+assert lib.elem "--pids-limit=64" genericContainer.extraOptions;
+assert
+  genericContainer.volumes == [
+    "/var/lib/generic-coding:/state:rw"
+    "/var/lib/generic-coding/workspace:/workspace:rw"
+  ];
+assert
+  generic.tentaflake.agentInstances.generic-coding.workspace == "/var/lib/generic-coding/workspace";
+assert
+  genericPodman.tentaflake.agentInstances.generic-coding.unit == "podman-generic-coding.service";
+assert
+  genericPodman.virtualisation.oci-containers.containers.generic-coding.preRunExtraOptions == [
+    "--runtime"
+    "runsc"
+  ];
+assert lib.any (lib.hasInfix "requires an enabled broker") (failures genericStarted);
+assert lib.any (lib.hasInfix "requires its isolated Research relay") (failures genericStarted);
+assert lib.all (bad: rejects (runtimeContract (definition // bad))) [
+  { schemaVersion = 2; }
+  { image = "example.invalid/agent:latest"; }
+  { image = "image;echo unsafe@sha256:${lib.concatStrings (lib.replicate 64 "a")}"; }
+  { command = "sh -c echo unsafe"; }
+  { command = [ ]; }
+  {
+    ownership = {
+      uid = 0;
+      gid = 10000;
+    };
+  }
+  {
+    ownership = {
+      uid = 10000;
+      gid = 10000;
+      privileged = true;
+    };
+  }
+  { workspace = "/workspace/../etc"; }
+  { volumes = [ "/home:/host:rw" ]; }
+  {
+    environment = {
+      API_KEY = "fixture";
+    };
+  }
+  { resources.memory = "0"; }
+  { resources.cpus = "0.0"; }
+  { resources.pidsLimit = null; }
+  { resources.devices = [ "/dev/kvm" ]; }
+  { lifecycle = "unmanaged"; }
+  { capabilities = [ "research" ]; }
+  {
+    capabilities = [
+      "shell"
+      "shell"
+    ];
+  }
+];
+assert lib.all (name: (contract name builders.adapters.${name}).identity.id == name) registryNames;
 assert devRoot.tentaflake.agentInstances.hermes-dev-root.uid == 0;
 assert devRoot.virtualisation.oci-containers.containers.hermes-dev-root.user == "0:0";
 assert failures devRoot == [ ];
@@ -150,6 +263,7 @@ assert rejects (json ./fixtures/adapter-input/invalid-auto-start.json);
 assert rejects (json ./fixtures/adapter-input/secret-setting.json);
 assert
   registryNames == [
+    "generic"
     "hermes"
     "openclaw"
     "zeroclaw"

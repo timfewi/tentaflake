@@ -27,8 +27,8 @@
 # ────────────────────────────────────────────────────────────
 
 let
+  preset = (import ../lib/runtimeCatalog.nix).presets.hermes;
   constants = import ../lib/constants.nix;
-  pinnedImage = import ../lib/pinnedImage.nix { inherit lib; };
   containerSecurity = import ../lib/containerSecurity.nix { inherit lib; };
   generateConfiguration =
     name: settings: (pkgs.formats.yaml { }).generate "${name}-config.yaml" settings;
@@ -229,15 +229,7 @@ let
       # Resolve the container command. When `dashboard` is set and the caller didn't
       # override `cmd`, the dashboard is launched as a separate post-start unit (see
       # below) rather than mangling the entrypoint, so the default command stands.
-      resolvedCmd =
-        if cmd != null then
-          cmd
-        else
-          [
-            "gateway"
-            "run"
-            "--replace"
-          ];
+      resolvedCmd = if cmd != null then cmd else preset.command;
 
       # Directories whose ownership we keep aligned to the container uid each boot.
       healDirs = [ stateDir ] ++ healDataDirs;
@@ -482,7 +474,7 @@ let
       baseContainer = {
         inherit autoStart;
         networks = lib.optional brokerEnabled brokerCfg.networkName;
-        image = pinnedImage name allowMutableImage image;
+        inherit image;
         cmd = resolvedCmd;
         volumes = [
           "${stateDir}:${stateDir}:rw"
@@ -507,7 +499,7 @@ let
 
       securityResult = containerSecurity.apply {
         profile = securityProfile;
-        inherit backend pidsLimit;
+        inherit backend pidsLimit allowMutableImage;
         name = "hermes-${name}";
         owner = "${ownUid}:${ownGid}";
         baseConfig = baseContainer;
@@ -692,56 +684,27 @@ let
         ];
       };
 
-      virtualisation.oci-containers.containers."hermes-${name}" = securityResult.container // {
-        image = pinnedImage name allowMutableImage securityResult.container.image;
-      };
+      virtualisation.oci-containers.containers."hermes-${name}" = securityResult.container;
     };
 in
 {
-  schemaVersion = 1;
-  identity = {
-    id = "hermes";
-    version = "image-snapshot-2026-07-18";
-    status = "compatibility";
-  };
-  artifact = {
-    kind = "oci";
-    reference = constants.hermesImage;
-    reviewed = true;
-  };
-  command = [
-    "gateway"
-    "run"
-    "--replace"
-  ];
-  configuration = {
-    format = "yaml";
-    readOnly = true;
+  inherit (preset)
+    schemaVersion
+    identity
+    artifact
+    command
+    ownership
+    layout
+    lifecycle
+    model
+    execution
+    capabilities
+    evidence
+    ;
+  configuration = preset.configuration // {
     generate = generateConfiguration;
   };
-  ownership = {
-    uid = constants.containerUid;
-    gid = constants.containerGid;
-  };
-  layout = {
-    state = "/var/lib/hermes-<name>";
-    workspace = "workspace";
-    writable = [
-      "state"
-      "workspace"
-    ];
-  };
-  lifecycle = "service";
-  model = {
-    protocols = [ "openai-chat-completions" ];
-    streaming = "unknown";
-  };
-  execution = {
-    interface = "worker-queue-v1";
-    automatic = false;
-  };
-  research = {
-    supported = true;
+  research = preset.research // {
     configure = { original, server }: {
       settings = {
         agent.disabled_toolsets = lib.unique (

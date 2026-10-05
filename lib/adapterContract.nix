@@ -15,6 +15,8 @@ let
     "execution"
     "build"
     "metadata"
+    "capabilities"
+    "evidence"
   ];
   missing = lib.filter (field: !(builtins.hasAttr field adapter)) required;
   fields = {
@@ -50,6 +52,10 @@ let
       "supported"
       "configure"
     ];
+    evidence = [
+      "fixture"
+      "vendorAcceptance"
+    ];
     execution = [
       "interface"
       "automatic"
@@ -72,7 +78,10 @@ let
         (import ./pinnedImage.nix { inherit lib; }) name false adapter.artifact.reference
         == adapter.artifact.reference
     else
-      adapter.identity.status == "scaffold"
+      (
+        (adapter.artifact.kind == "unselected" && adapter.identity.status == "scaffold")
+        || (adapter.artifact.kind == "instance" && adapter.identity.status == "definition")
+      )
       && !adapter.artifact.reviewed
       && adapter.artifact.reference == null;
   valid =
@@ -83,10 +92,12 @@ let
       "compatibility"
       "scaffold"
       "operational"
+      "definition"
     ]
     && lib.elem adapter.artifact.kind [
       "oci"
       "unselected"
+      "instance"
     ]
     && builtins.isBool adapter.artifact.reviewed
     && (adapter.artifact.reference == null || builtins.isString adapter.artifact.reference)
@@ -97,6 +108,7 @@ let
       "yaml"
       "toml"
       "json"
+      "none"
     ]
     && builtins.isBool adapter.configuration.readOnly
     && adapter.configuration.readOnly
@@ -126,6 +138,27 @@ let
     && builtins.isFunction adapter.research.configure
     && builtins.isString adapter.execution.interface
     && builtins.isBool adapter.execution.automatic
+    && builtins.isList adapter.capabilities
+    && lib.all (
+      cap:
+      lib.elem cap [
+        "files"
+        "shell"
+        "terminal"
+        "worker"
+        "model"
+        "research"
+      ]
+    ) adapter.capabilities
+    && lib.elem adapter.evidence.fixture [
+      "source-regression"
+      "refusal-regression"
+    ]
+    && lib.elem adapter.evidence.vendorAcceptance [
+      "pending"
+      "operator-owned"
+      "accepted"
+    ]
     && builtins.isFunction adapter.build
     && builtins.isFunction adapter.metadata;
 in
