@@ -60,6 +60,9 @@ startup policy is still enforced; no admission implementation is claimed yet.
 The existing quota module bounds workspaces, not the generic `/state` mount.
 Include bounded persistent state before claiming #136's runtime acceptance;
 reuse managed-filesystem logic while preserving legacy paths and explicit migration.
+The refreshed backlog includes #141: selectable WireGuard/exit-node readiness
+for Research after #110. Keep management membership distinct from Internet-exit
+evidence; real-tunnel acceptance and production activation remain separate.
 
 Candidate review on 2026-10-05 read the mutable
 [OpenCode provider guide](https://opencode.ai/docs/providers/) and
@@ -671,7 +674,7 @@ invented due dates or version promises.
 | Milestone | Work items |
 |---|---|
 | [M01](https://github.com/timfewi/tentaflake/milestone/1) | [#115](https://github.com/timfewi/tentaflake/issues/115), [#135](https://github.com/timfewi/tentaflake/issues/135) |
-| [M02](https://github.com/timfewi/tentaflake/milestone/2) | [#106](https://github.com/timfewi/tentaflake/issues/106), [#108](https://github.com/timfewi/tentaflake/issues/108), [#110](https://github.com/timfewi/tentaflake/issues/110), [#111](https://github.com/timfewi/tentaflake/issues/111), [#113](https://github.com/timfewi/tentaflake/issues/113), [#116](https://github.com/timfewi/tentaflake/issues/116), [#136](https://github.com/timfewi/tentaflake/issues/136) |
+| [M02](https://github.com/timfewi/tentaflake/milestone/2) | [#106](https://github.com/timfewi/tentaflake/issues/106), [#108](https://github.com/timfewi/tentaflake/issues/108), [#110](https://github.com/timfewi/tentaflake/issues/110), [#111](https://github.com/timfewi/tentaflake/issues/111), [#113](https://github.com/timfewi/tentaflake/issues/113), [#116](https://github.com/timfewi/tentaflake/issues/116), [#136](https://github.com/timfewi/tentaflake/issues/136), [#141](https://github.com/timfewi/tentaflake/issues/141) |
 | [M03](https://github.com/timfewi/tentaflake/milestone/3) | [#117](https://github.com/timfewi/tentaflake/issues/117) |
 | [M04](https://github.com/timfewi/tentaflake/milestone/4) | [#118](https://github.com/timfewi/tentaflake/issues/118), [#119](https://github.com/timfewi/tentaflake/issues/119) |
 | [M05](https://github.com/timfewi/tentaflake/milestone/5) | [#120](https://github.com/timfewi/tentaflake/issues/120), [#121](https://github.com/timfewi/tentaflake/issues/121) |
