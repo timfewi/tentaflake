@@ -120,3 +120,19 @@ else
   tail -30 "$WORK/err" >&2
   exit 1
 fi
+
+# Exercise the real operator CLI against an installed, balanced source fixture.
+# No VM, host activation, OCI image or Research closure is involved.
+sed -i 's/security.profile = "dev"/security.profile = "balanced"/' "$TARGET_NIXOS/my-agents.nix"
+printf '%s\n' '{"schemaVersion":1,"agents":[],"hermes":[],"zeroclaw":[]}' >"$TARGET_NIXOS/agents.json"
+nix eval --impure --json --no-write-lock-file --expr \
+  '{ root }: let f = builtins.getFlake root; in { result = import (root + "/tests/agent-onboarding.nix") { pkgs = f.inputs.nixpkgs.legacyPackages.x86_64-linux; }; }' result \
+  --argstr root "$REPO_DIR" \
+  >"$WORK/onboarding-fixtures.json"
+if [[ -n "${TENTAFLAKE_CLI_TEST_BIN:-}" ]]; then
+  CLI_TEST_BIN="$TENTAFLAKE_CLI_TEST_BIN"
+else
+  CLI_PACKAGE=$(nix build --no-link --print-out-paths --no-write-lock-file "$REPO_DIR#packages.x86_64-linux.tentaflake-cli")
+  CLI_TEST_BIN="$CLI_PACKAGE/bin/tentaflake"
+fi
+python3 "$REPO_DIR/scripts/agent-onboarding-test.py" "$CLI_TEST_BIN" "$TARGET_NIXOS" "$HOSTNAME_T"

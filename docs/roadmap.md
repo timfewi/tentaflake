@@ -15,8 +15,10 @@ commands and interfaces below are not installed APIs.
 
 ## Delivery checkpoint
 
-Active work: #115, common OCI runtime contract and versioned preset catalog.
-Next: #135 installed-host validation/import, then #116 capability admission and
+Active work: #115 is submitted as [PR #139](https://github.com/timfewi/tentaflake/pull/139),
+commit `2567d81407828f7692ee9e837ad30a4ac3b26051`. Its CI is pending; DCO and
+source scan passed. #135 is being implemented on `feat/installed-agent-onboarding`.
+Delivery order: #135 installed-host validation/import, then #116 capability admission and
 #136 actual coding-agent acceptance. M03-M10 and remaining P1/P2 issues retain
 all their acceptance requirements. No issue is complete from planning alone.
 
@@ -30,6 +32,16 @@ the generic layout now uses separate sources beneath an unmounted root-owned
 parent, and the shared secure policy rejects nested sources, including read-only
 children. PR #139 CI/merge remains the delivery gate. Live vendor acceptance,
 local VM workloads and host activation were not performed.
+
+#135 work in progress: `lib/agentsFromData.nix` accepts an in-memory object
+through the same parser as file input; `lib/agentPlan.nix` validates additions
+through the actual builders; `lib/agentPlanEntry.nix` accepts structured CLI
+arguments. CLI template/validate/plan/import now use bounded offline validation,
+an import lock and atomic publication with observed conflict checks. Actual
+installed preset/generic CLI interactions passed, including redaction, refusals,
+lock admission and concurrent-edit preservation. Authoritative guides and
+targeted CI routing are updated. Next: final lint/Rust/installed checks, review
+and a DCO-signed PR. No #135 CLI is released or activated yet.
 
 ## Product direction
 

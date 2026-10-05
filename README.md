@@ -188,6 +188,10 @@ retained as a compatibility shim. `tentaflake top`, `console`, and the agent
 wizard were removed with the old audit stack.
 
 `help`, `--help`, and `-h` work before the host configuration is installed.
+Create stopped definitions with `tentaflake agent template <preset> <name>`.
+On installed hosts, `agent validate|plan|import <file>` uses the shared Nix
+parser and adds entries without activation. See
+[onboarding](docs/08-agent-cli.md#add-an-agent-on-an-installed-host).
 
 `health` and `doctor` return non-zero for failed units, unknown agent states,
 or root-disk usage of at least 90%; unavailable host queries are errors.

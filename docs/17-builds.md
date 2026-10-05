@@ -47,6 +47,8 @@ VM suites independently. Component paths take precedence over Markdown suffixes.
 | Research module/client/fixture or research-only input pin | Research/configuration preparation and evaluation, static checks and generated installed flake | Research |
 | Dev Container inputs | Dev Container package and static checks | None |
 | Generated-flake script or module-evaluation fixture | Its generated-flake or configuration gate and static checks | None |
+| Onboarding validator/fixture | Installed preset/generic CLI fixture and static checks; no Research preparation | None |
+| Shared JSON agent parser | Installed fixture and static checks; no Research preparation | Runtime |
 | Adapters, shared modules/helpers, other lock updates, unknown paths/history | Full gate | Both |
 
 The selector reads NUL-delimited Git paths and includes deleted/old rename
@@ -61,6 +63,8 @@ does not build the separate Research service. Non-VM package builds run in
 groups of at most four. Configuration evaluation still prepares the exact
 Research closures because the full flake/module fixtures need them; shared
 configuration changes retain their applicable runtime and Research evidence.
+Onboarding validation uses the installed fixture rather than full flake checks;
+its CLI binary is a small selected package or an explicitly supplied local binary.
 The standalone host build runs only for configuration changes affecting the
 runtime, not for a Research-only or documentation change. Full VM/ISO/system
 workloads remain separate from local fast checks and require their own scope.

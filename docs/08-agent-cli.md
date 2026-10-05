@@ -4,6 +4,67 @@ The interactive `tentaflake agent` wizard was removed. Agent definitions are
 reviewable inputs: use `my-agents.nix` for the full builder API or
 `agents.json` for versioned adapter arguments or the legacy data schema.
 
+## Add an agent on an installed host
+
+Discover presets with `tentaflake runtimes --json`, then create a stopped
+definition, review it, and use the same Nix parser/builders as the installer:
+
+```bash
+tentaflake agent template hermes assistant > incoming.json
+tentaflake agent validate incoming.json
+tentaflake agent plan incoming.json --json
+tentaflake agent import incoming.json
+```
+
+For an operator-reviewed OCI image, use the `generic` preset. Supply a real
+digest reference and argument vector; this example deliberately needs your image:
+
+```bash
+tentaflake agent template generic coding \
+  --image "$REVIEWED_AGENT_IMAGE" -- agent-command --workspace /workspace \
+  > incoming.json
+tentaflake agent plan incoming.json
+tentaflake agent import incoming.json
+```
+
+Templates work without host configuration. Validation, plans and imports require
+the generated CLI configuration/inventory and installed pinned Nix inputs.
+Evaluation runs offline with a 60-second deadline and bounded output; it neither
+downloads OCI images nor installs software. Definitions must be non-secret.
+Incoming files are limited to 1 MiB and 128 additions. Import accepts only a
+schema-v1 `agents` envelope and ordinary stopped workload fields; alternate host
+mounts, operational services and credential paths remain administrator-owned.
+Generic onboarding requires a balanced host profile.
+
+Import adds entries to `agents.json`, preserves legacy arrays and operator notes,
+and refuses duplicate identities in JSON, active inventory or the flake's current
+declared OCI/adapter inventory. Inputs and destination must be regular files.
+Validation failure leaves existing bytes intact. CLI imports share a file lock;
+atomic publication checks that `agents.json` did not change during validation.
+This detects observed manual edits; it cannot lock administrators out of changes
+after the final check. A leftover `agents.json.pending` is refused rather than
+overwritten: review it before removing it. The running host remains unchanged.
+
+`plan`, `validate` and `import` accept `--json` and `--hide`. Hidden plans redact
+names, paths, image references and failure details. Nix source diagnostics are
+not printed because source excerpts may contain private operator data. Plans
+report source validation and pending vendor evidence, not live readiness or
+vendor acceptance. OpenClaw remains a non-runnable scaffold. Unsupported generic
+model/Research capabilities are refused; current secure startup gates still apply.
+
+Review and track `agents.json` before an explicit host update. Git-backed flakes
+only evaluate tracked files, including source-only `my-agents.nix` instances:
+
+```bash
+git add agents.json
+tentaflake rebuild
+```
+
+The import does not git-add, rebuild, activate or start services. A host update
+still validates the complete configuration and its dependencies; a failed update
+does not replace the last active system revision. Review any concurrent Nix
+configuration edits before activation.
+
 ## Nix definitions
 
 Start from `my-agents.nix.example`:

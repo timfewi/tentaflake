@@ -12,6 +12,7 @@ use std::process::{Command, ExitCode, Output, Stdio};
 use std::time::{Duration, Instant, SystemTime};
 
 const RUNTIME_CATALOG: &str = include_str!("../../../adapters/catalog.json");
+mod onboarding;
 
 const DEFAULT_CONFIG: &str = "/etc/tentaflake/cli.conf";
 const DEFAULT_AGENTS: &str = "/etc/tentaflake/agents.tsv";
@@ -169,6 +170,9 @@ fn run(mut args: Vec<String>) -> Result<u8, String> {
     match command {
         "remote-check" => return remote_check(&args[1..]),
         "runtimes" => return runtimes(&args[1..], mode),
+        "agent" if args.get(1).map(String::as_str) == Some("template") => {
+            return onboarding::template(&args[2..], mode);
+        }
         "help" | "--help" | "-h" => {
             print_help();
             return Ok(0);
@@ -193,10 +197,7 @@ fn run(mut args: Vec<String>) -> Result<u8, String> {
         "backup" => backup(&agents, &args[1..]),
         "rebuild" => rebuild(&config),
         "update" => update(&config),
-        "agent" => Err(
-            "the interactive agent wizard was removed; edit agents.json or my-agents.nix, then rebuild"
-                .into(),
-        ),
+        "agent" => onboarding::run(&config, &agents, &args[1..], mode),
         "top" | "console" => Err(format!(
             "`{command}` was removed with the auditd/SQLite web-console stack; use the observability profile"
         )),
@@ -293,16 +294,25 @@ fn remote_component_is_safe(value: &str) -> bool {
 
 fn take_output_flags(args: &mut Vec<String>) -> OutputMode {
     let mut mode = OutputMode::default();
-    args.retain(|arg| match arg.as_str() {
-        "--hide" | "-H" => {
-            mode.hide = true;
-            false
+    let mut command_arguments = false;
+    args.retain(|arg| {
+        if arg == "--" {
+            command_arguments = true;
         }
-        "--json" => {
-            mode.json = true;
-            false
+        if command_arguments {
+            return true;
         }
-        _ => true,
+        match arg.as_str() {
+            "--hide" | "-H" => {
+                mode.hide = true;
+                false
+            }
+            "--json" => {
+                mode.json = true;
+                false
+            }
+            _ => true,
+        }
     });
     mode
 }
@@ -2557,6 +2567,8 @@ fn print_help() {
          USAGE\n\
            tentaflake help|--help|-h\n\
            tentaflake runtimes [--json]\n\
+           tentaflake agent template <preset> <name> [--image <digest-reference> -- <command>...]\n\
+           tentaflake agent validate|plan|import <file> [--json] [--hide]\n\
            tentaflake [status] [--hide] [--json]\n\
            tentaflake logs <name> [journalctl args]\n\
            tentaflake restart|start|stop <name>\n\

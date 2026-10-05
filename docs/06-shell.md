@@ -22,6 +22,8 @@ Do not hand-edit them. Change the Nix configuration and rebuild explicitly.
 ```text
 tentaflake help
 tentaflake runtimes [--json]
+tentaflake agent template <preset> <name>
+tentaflake agent validate|plan|import <file> [--json] [--hide]
 tentaflake status [--json] [--hide]
 tentaflake health [--json] [--hide]
 tentaflake doctor [--json] [--hide]
@@ -48,8 +50,10 @@ status renderer and is used by the login banner.
 image downloads. See [generic workloads](agent-adapters.md#generic-isolated-workload).
 
 `help`, `--help`, and `-h` display usage even when the generated host
-configuration or inventory is missing or invalid. Management commands still
-require the generated inputs.
+configuration or inventory is missing or invalid. `agent template` is also
+configuration-free; other management commands require the generated inputs.
+See [installed-host onboarding](08-agent-cli.md#add-an-agent-on-an-installed-host)
+for generic image/command templates, additive imports and explicit host updates.
 
 `health` adds host load to the same diagnosis used by `doctor`. Both check
 failed systemd units, root-disk usage of at least 90%, and failed or unknown
