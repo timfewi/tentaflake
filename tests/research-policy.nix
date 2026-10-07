@@ -133,6 +133,9 @@ let
 in
 assert lib.elemAt (lib.splitString "\t" record) 10 == "true";
 assert failures valid == [ ];
+assert import ./research-vpn-observer.nix { inherit self pkgs; };
+assert valid.systemd.services.agent-research-egress-control.serviceConfig.PrivateNetwork;
+assert valid.systemd.services.agent-research-egress-control.bindsTo == [ "nftables.service" ];
 assert lib.all (name: lib.elem name client.settings.agent.disabled_toolsets) [
   "terminal"
   "web"

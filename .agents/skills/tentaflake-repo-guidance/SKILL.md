@@ -1,7 +1,7 @@
 ---
 name: tentaflake-repo-guidance
 description: Locate the owning source, guide and checks before changing Tentaflake modules, adapters, CLI or installer.
-version: 2.6.1
+version: 2.6.2
 ---
 
 # Tentaflake repository guidance
@@ -46,6 +46,11 @@ relevant source and guide. Avoid loading unrelated references.
 - Model calls use the LLM broker; web uses only `secure-research-tool`.
   Preserve host-held keys, exact read-only socket/closure mounts, no remote MCP
   or provider-hosted tools, and no dispatched-operation replay.
+- Configure VPN evidence directly through `services.secureResearch.vpnObserver`;
+  keep disabled defaults and root-owned markers. Management enrollment is not an
+  Internet exit. Use fresh controller leases and the bounded drain procedure in
+  the [Research guide](../../../docs/16-research.md); source/upstream fixture
+  evidence does not accept a local tunnel or exit node.
 - A worker declaration does not prove vendor execution mediation. Synthetic
   fixtures do not establish vendor startup or tool discovery.
 - Worker queue changes preserve one operator/drain lock and durable running

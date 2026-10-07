@@ -128,6 +128,15 @@ are already published or require access to another repository for public checks.
   provider-hosted network tools. See `docs/16-research.md` and its evidence limits.
   Research client recovery must never replay dispatched operations or reopen
   after explicit close; every new session repeats negotiation and UID checks.
+- Research VPN observer selections belong to the imported
+  `services.secureResearch.vpnObserver` module; keep its disabled defaults and
+  generic observation lease, without a second option owner. Host operators own
+  exits, credentials and protected markers. Read fresh controller leases before
+  draining; preserve the old firewall until work finishes or the bounded drain
+  expires, then require a new ready generation. Management membership is not
+  Internet-exit evidence; region/firewall markers remain operator assertions.
+  Source evaluations and upstream fixtures do not establish local runtime
+  acceptance. See `docs/16-research.md` before changing this boundary.
 - Security manifests carry exact live mount, tmpfs, network, and resource
   expectations. Incomplete/legacy runtime evidence must remain unknown.
   Secure bind sources must not be nested below another writable source. Generic
