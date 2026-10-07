@@ -54,6 +54,19 @@ Mutable upstream OpenCode/Pi documentation is only a candidate lead: no reviewed
 artifact, provider call or vendor acceptance follows from it. M03-M10 and the
 remaining issues retain all their acceptance requirements.
 
+#141 source integration is prepared on `feat/research-vpn-evidence`: the existing
+public Research pin already supplies observer selections through the default
+module, without another wrapper or changed defaults. The Research guide now
+documents WireGuard/tun evidence, public peer checks and bounded operator draining.
+The focused `tests/research-vpn-observer.nix` evaluation passes with builds disabled:
+three valid configurations, five refusals, exact unit arguments and observer authority.
+It is included in `tests/research-policy.nix`; its broader closure-backed check
+was not built. Nix formatting/lint, local Markdown links/anchors and both guide
+Nix examples pass. Real-tunnel
+VM verification is explicitly excluded from this lightweight-only run. Upstream
+WireGuard fixture evidence stays separate; local integration, non-WireGuard exit
+and production acceptance remain outstanding. #141 remains open.
+
 #113 implementation is prepared on `feat/worker-durable-claims`. Owning files:
 `crates/tentaflake-worker/src/queue.rs`, worker dispatch, `modules/worker.nix`
 and the worker guide. Captured requests/approvals publish atomically; one
