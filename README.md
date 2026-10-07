@@ -204,7 +204,7 @@ evaluation or a successful build does not authorize activation.
 See [the CLI guide](docs/06-shell.md) and
 [agent configuration guide](docs/08-agent-cli.md).
 Management-plane policy is covered by the
-[Tailscale policy guide](docs/11-tailscale-management.md).
+[private management and Tailscale policy guide](docs/11-tailscale-management.md).
 
 ## Security profiles
 
@@ -222,9 +222,15 @@ mounts, secret-like environment keys, and attempts to override OCI security
 flags. The only secure network exception is the module-generated internal
 broker network and its runtime-generated virtual credential file.
 The administrative user is not placed in the root-equivalent Docker group.
-Balanced also requires Tailscale, advertises `tag:agent-host`, and rejects the
-public OpenSSH module; the tailnet grants/SSH policy remains an operator-owned
-external control that must be installed separately.
+Balanced also requires configured private management and SSH authorization through
+`tentaflake.management`. Defaults retain the currently reviewed `tailscale`
+transport, `ssh.policy = "tailnet-policy"`, and `tag:agent-host`; public OpenSSH
+remains forbidden. `tentaflake.tailscale.enable` aliases `management.enable` for
+existing consumers. Version-2 security manifests distinguish this configured
+contract from unknown legacy evidence. Enrollment, effective tailnet grants and
+operator access still require separate evidence; remote policy remains an
+operator-owned control installed separately. See the [contract and
+migration](docs/11-tailscale-management.md#host-contract-and-migration).
 
 Phase B adds per-agent LLM credential and SSRF-safe fetch brokers, model/host
 allowlists, request and daily budgets, prompt-free JSONL audit, DNS pinning,
@@ -259,7 +265,8 @@ The default module imports only:
 
 - host options, boot, hardening, locale, networking, broker/worker and image
   provenance policy, agent-instance inventory, research integration, Nix settings;
-- base packages, users, SSH, Tailscale, and operator shell.
+- base packages, users, the private management contract, SSH, Tailscale,
+  and operator shell.
 
 Optional profiles must be imported explicitly from the flake output.
 

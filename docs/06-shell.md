@@ -69,7 +69,11 @@ It emits stable `TFSEC-*` findings with severity and remediation; critical or
 high findings return non-zero. JSON output is CI-friendly. The desired-state check
 covers the declared profile, capsule flags, mounts, images, credential files,
 OpenSSH, AppArmor, Docker-group membership, backup declaration, workspace
-quota, and missing broker. It also inspects root-disk pressure, the last
+quota, missing broker, and the declared private management/SSH capabilities.
+Manifest v2 carries a separate typed management record; unversioned legacy or
+incomplete records report `TFSEC-038` unknown management evidence. Configured
+capabilities do not prove enrollment or effective remote grants. It also
+inspects root-disk pressure, the last
 successful Restic timestamp, and live Tailscale Serve/Funnel JSON. If a live
 command is unavailable or blocked, the result is an explicit warning rather
 than green. A non-interactive backend inspect also compares a running Docker or

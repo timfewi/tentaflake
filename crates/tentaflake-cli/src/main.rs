@@ -113,11 +113,30 @@ struct SecurityAgent {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+enum ManagementTransport {
+    Tailscale,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum ManagementSshPolicy {
+    TailnetPolicy,
+    Disabled,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct ManagementState {
+    transport: ManagementTransport,
+    enabled: bool,
+    private_connectivity: bool,
+    ssh_policy: ManagementSshPolicy,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 struct SecurityState {
     profile: String,
     openssh_enabled: bool,
     broker_configured: bool,
-    tailscale_enabled: bool,
+    management: Option<ManagementState>,
     apparmor_enabled: bool,
     docker_group_absent: bool,
     backup_enabled: bool,
@@ -443,32 +462,71 @@ fn security_doctor(config: &Config, mode: OutputMode) -> Result<u8, String> {
 fn parse_security_state(text: &str) -> Result<SecurityState, String> {
     let mut state = None;
     let mut agents = Vec::new();
+    let mut versioned = false;
+    let mut record_seen = false;
+    let mut management = None;
     for (index, line) in text.lines().enumerate() {
         if line.trim().is_empty() || line.starts_with('#') {
             continue;
         }
         let fields: Vec<&str> = line.split('\t').collect();
+        if fields.first() == Some(&"manifest") {
+            if record_seen {
+                return Err("security manifest header must be first and unique".into());
+            }
+            if fields.len() != 2 || fields[1] != "2" {
+                return Err("unsupported security manifest version".into());
+            }
+            versioned = true;
+            record_seen = true;
+            continue;
+        }
+        record_seen = true;
         match fields.first().copied() {
-            Some("host") if fields.len() == 9 => {
+            Some("host") if fields.len() == if versioned { 8 } else { 9 } => {
                 if state.is_some() {
                     return Err("security manifest contains multiple host records".into());
                 }
+                let apparmor_index = if versioned {
+                    4
+                } else {
+                    // Old manifests provide no typed management contract. Validate
+                    // their local enable flag without treating it as proof.
+                    parse_bool(fields[4], index + 1)?;
+                    5
+                };
                 state = Some(SecurityState {
                     profile: fields[1].into(),
                     openssh_enabled: parse_bool(fields[2], index + 1)?,
                     broker_configured: parse_bool(fields[3], index + 1)?,
-                    tailscale_enabled: parse_bool(fields[4], index + 1)?,
-                    apparmor_enabled: parse_bool(fields[5], index + 1)?,
-                    docker_group_absent: parse_bool(fields[6], index + 1)?,
-                    backup_enabled: parse_bool(fields[7], index + 1)?,
-                    backup_max_age_hours: fields[8].parse().map_err(|_| {
-                        format!(
-                            "invalid backup age `{}` on security manifest line {}",
-                            fields[8],
-                            index + 1
-                        )
+                    management: None,
+                    apparmor_enabled: parse_bool(fields[apparmor_index], index + 1)?,
+                    docker_group_absent: parse_bool(fields[apparmor_index + 1], index + 1)?,
+                    backup_enabled: parse_bool(fields[apparmor_index + 2], index + 1)?,
+                    backup_max_age_hours: fields[apparmor_index + 3].parse().map_err(|_| {
+                        format!("invalid backup age on security manifest line {}", index + 1)
                     })?,
                     agents: Vec::new(),
+                });
+            }
+            Some("management") if versioned && fields.len() == 5 => {
+                if management.is_some() {
+                    return Err("security manifest contains multiple management records".into());
+                }
+                let transport = match fields[1] {
+                    "tailscale" => ManagementTransport::Tailscale,
+                    _ => return Err("unsupported security manifest management transport".into()),
+                };
+                let ssh_policy = match fields[4] {
+                    "tailnet-policy" => ManagementSshPolicy::TailnetPolicy,
+                    "disabled" => ManagementSshPolicy::Disabled,
+                    _ => return Err("unsupported security manifest management SSH policy".into()),
+                };
+                management = Some(ManagementState {
+                    transport,
+                    enabled: parse_bool(fields[2], index + 1)?,
+                    private_connectivity: parse_bool(fields[3], index + 1)?,
+                    ssh_policy,
                 });
             }
             Some("agent") if (25..=30).contains(&fields.len()) => agents.push(SecurityAgent {
@@ -529,6 +587,7 @@ fn parse_security_state(text: &str) -> Result<SecurityState, String> {
         }
     }
     let mut state = state.ok_or("security manifest has no host record")?;
+    state.management = management;
     state.agents = agents;
     Ok(state)
 }
@@ -537,9 +596,7 @@ fn parse_bool(value: &str, line: usize) -> Result<bool, String> {
     match value {
         "true" => Ok(true),
         "false" => Ok(false),
-        _ => Err(format!(
-            "invalid boolean `{value}` on security manifest line {line}"
-        )),
+        _ => Err(format!("invalid boolean on security manifest line {line}")),
     }
 }
 
@@ -558,7 +615,7 @@ fn parse_optional_socket(value: &str, line: usize) -> Result<Option<SocketAddr>,
         value
             .parse()
             .map(Some)
-            .map_err(|_| format!("invalid broker endpoint `{value}` on manifest line {line}"))
+            .map_err(|_| format!("invalid broker endpoint on security manifest line {line}"))
     }
 }
 
@@ -575,7 +632,7 @@ fn parse_optional_network(value: &str, line: usize) -> Result<Option<String>, St
         Ok(Some(value.to_owned()))
     } else {
         Err(format!(
-            "invalid broker network `{value}` on security manifest line {line}"
+            "invalid broker network on security manifest line {line}"
         ))
     }
 }
@@ -594,7 +651,7 @@ fn parse_declared_mounts(value: &str, line: usize) -> Result<Option<Vec<Declared
             || !fields[1].starts_with('/')
         {
             return Err(format!(
-                "invalid declared mount `{volume}` on security manifest line {line}"
+                "invalid declared mount on security manifest line {line}"
             ));
         }
         let writable = match fields.get(2).copied() {
@@ -602,7 +659,7 @@ fn parse_declared_mounts(value: &str, line: usize) -> Result<Option<Vec<Declared
             Some("ro") => false,
             Some(_) => {
                 return Err(format!(
-                    "unsupported declared mount mode in `{volume}` on security manifest line {line}"
+                    "unsupported declared mount mode on security manifest line {line}"
                 ));
             }
         };
@@ -722,7 +779,7 @@ fn security_findings(state: &SecurityState) -> Vec<Finding> {
         findings.push(host_finding(
             "TFSEC-015",
             "high",
-            "OpenSSH is enabled; the secure management baseline expects the private Tailscale path",
+            "OpenSSH is enabled; the secure management baseline requires its reviewed private SSH policy",
             "disable tentaflake.ssh or document and restrict the exceptional SSH path",
         ));
     }
@@ -734,13 +791,32 @@ fn security_findings(state: &SecurityState) -> Vec<Finding> {
             "configure the Phase B broker network before granting external connectivity",
         ));
     }
-    if !state.tailscale_enabled && state.profile != "dev" {
-        findings.push(host_finding(
-            "TFSEC-019",
-            "critical",
-            "the private Tailscale management path is disabled",
-            "enable Tailscale and install a restrictive grants plus SSH policy",
-        ));
+    match &state.management {
+        None => findings.push(host_finding(
+            "TFSEC-038",
+            "warning",
+            "the declared private management contract is unknown",
+            "rebuild the host with the versioned management manifest; enrollment and effective remote policy require separate evidence",
+        )),
+        Some(management) if state.profile != "dev" => {
+            if !management.enabled || !management.private_connectivity {
+                findings.push(host_finding(
+                    "TFSEC-019",
+                    "critical",
+                    "the declared private management transport is disabled or lacks private connectivity",
+                    "enable the reviewed private management transport and verify its enrollment and access policy separately",
+                ));
+            }
+            if management.ssh_policy == ManagementSshPolicy::Disabled {
+                findings.push(host_finding(
+                    "TFSEC-039",
+                    "critical",
+                    "the declared private management SSH policy is disabled",
+                    "enable the reviewed private SSH policy and verify the operator's effective access separately",
+                ));
+            }
+        }
+        Some(_) => {}
     }
     if !state.apparmor_enabled && state.profile != "dev" {
         findings.push(host_finding(
@@ -979,7 +1055,11 @@ fn security_live_findings(config: &Config, state: &SecurityState) -> Vec<Finding
         )),
     }
 
-    if state.tailscale_enabled {
+    // Unknown legacy declarations cannot establish authority, but must not
+    // suppress the existing live public-exposure check.
+    if state.management.as_ref().is_none_or(|management| {
+        management.enabled && management.transport == ManagementTransport::Tailscale
+    }) {
         match output("tailscale", &["serve", "status", "--json"]) {
             Ok(result) if result.status.success() => {
                 match serde_json::from_slice::<serde_json::Value>(&result.stdout) {
@@ -2726,7 +2806,7 @@ mod tests {
     #[test]
     fn parses_security_manifest_and_reports_fail_closed_broker_gap() {
         let state = parse_security_state(
-            "host\tbalanced\tfalse\tfalse\ttrue\ttrue\ttrue\ttrue\t36\n\
+            "manifest\t2\nhost\tbalanced\tfalse\tfalse\ttrue\ttrue\ttrue\t36\nmanagement\ttailscale\ttrue\ttrue\ttailnet-policy\n\
              agent\tcoding\tbalanced\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\tfalse\tfalse\t-\tfalse\t-\n",
         )
         .unwrap();
@@ -2739,7 +2819,7 @@ mod tests {
     #[test]
     fn security_findings_have_stable_ids_for_unsafe_fixture() {
         let state = parse_security_state(
-            "host\tdev\ttrue\tfalse\tfalse\tfalse\tfalse\tfalse\t36\n\
+            "manifest\t2\nhost\tdev\ttrue\tfalse\tfalse\tfalse\tfalse\t36\nmanagement\ttailscale\tfalse\tfalse\tdisabled\n\
              agent\tcoding\tdev\tfalse\tfalse\tfalse\tfalse\tfalse\tfalse\tfalse\tfalse\tfalse\tfalse\tfalse\tfalse\tfalse\tfalse\tfalse\tfalse\tfalse\tfalse\tfalse\t-\tfalse\t-\n",
         )
         .unwrap();
@@ -2770,7 +2850,7 @@ mod tests {
     #[test]
     fn secure_profile_requires_disposable_worker() {
         let state = parse_security_state(
-            "host\tbalanced\tfalse\ttrue\ttrue\ttrue\ttrue\ttrue\t36\n\
+            "manifest\t2\nhost\tbalanced\tfalse\ttrue\ttrue\ttrue\ttrue\t36\nmanagement\ttailscale\ttrue\ttrue\ttailnet-policy\n\
              agent\tcoding\tbalanced\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\tfalse\ttrue\ttrue\ttrue\ttrue\ttrue\tfalse\t-\ttrue\t10.0.0.1:7811\n",
         )
         .unwrap();
@@ -2783,7 +2863,7 @@ mod tests {
     #[test]
     fn secure_profile_requires_workspace_quota() {
         let state = parse_security_state(
-            "host\tbalanced\tfalse\ttrue\ttrue\ttrue\ttrue\ttrue\t36\n\
+            "manifest\t2\nhost\tbalanced\tfalse\ttrue\ttrue\ttrue\ttrue\t36\nmanagement\ttailscale\ttrue\ttrue\ttailnet-policy\n\
              agent\tcoding\tbalanced\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\tfalse\ttrue\ttrue\ttrue\ttrue\tfalse\t-\ttrue\t10.0.0.1:7811\n",
         )
         .unwrap();
@@ -2796,7 +2876,7 @@ mod tests {
     #[test]
     fn secure_profile_requires_seccomp_and_apparmor() {
         let state = parse_security_state(
-            "host\tbalanced\tfalse\ttrue\ttrue\ttrue\ttrue\ttrue\t36\n\
+            "manifest\t2\nhost\tbalanced\tfalse\ttrue\ttrue\ttrue\ttrue\t36\nmanagement\ttailscale\ttrue\ttrue\ttailnet-policy\n\
              agent\tcoding\tbalanced\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\tfalse\tfalse\ttrue\ttrue\tfalse\t-\ttrue\t10.0.0.1:7811\n",
         )
         .unwrap();
@@ -2810,16 +2890,146 @@ mod tests {
     #[test]
     fn rejects_malformed_security_manifest() {
         assert!(
-            parse_security_state("host\tbalanced\tmaybe\tfalse\ttrue\ttrue\ttrue\tfalse\t36\n")
-                .is_err()
+            parse_security_state(
+                "manifest\t2\nhost\tbalanced\tmaybe\tfalse\ttrue\ttrue\tfalse\t36\n"
+            )
+            .is_err()
         );
         assert!(parse_security_state("agent\tonly\ttwo\n").is_err());
     }
 
     #[test]
+    fn management_contract_parses_as_declaration_without_remote_policy_evidence() {
+        let state = parse_security_state(
+            "manifest\t2\nhost\tbalanced\tfalse\ttrue\ttrue\ttrue\ttrue\t36\n\
+             management\ttailscale\ttrue\ttrue\ttailnet-policy\n",
+        )
+        .unwrap();
+        assert_eq!(
+            state.management,
+            Some(ManagementState {
+                transport: ManagementTransport::Tailscale,
+                enabled: true,
+                private_connectivity: true,
+                ssh_policy: ManagementSshPolicy::TailnetPolicy,
+            })
+        );
+        assert!(security_findings(&state).is_empty());
+    }
+
+    #[test]
+    fn legacy_and_incomplete_management_contracts_remain_unknown() {
+        for manifest in [
+            "host\tbalanced\tfalse\ttrue\ttrue\ttrue\ttrue\ttrue\t36\n",
+            "host\tbalanced\tfalse\ttrue\tfalse\ttrue\ttrue\ttrue\t36\n",
+            "manifest\t2\nhost\tbalanced\tfalse\ttrue\ttrue\ttrue\ttrue\t36\n",
+        ] {
+            let state = parse_security_state(manifest).unwrap();
+            assert!(state.management.is_none());
+            let findings = security_findings(&state);
+            assert_eq!(findings.len(), 1);
+            assert_eq!(findings[0].id, "TFSEC-038");
+            assert_eq!(findings[0].severity, "warning");
+        }
+        assert!(
+            parse_security_state("host\tbalanced\tfalse\ttrue\tinvalid\ttrue\ttrue\ttrue\t36\n")
+                .is_err()
+        );
+        let development =
+            parse_security_state("host\tdev\tfalse\ttrue\ttrue\ttrue\ttrue\ttrue\t36\n").unwrap();
+        assert!(
+            security_findings(&development)
+                .iter()
+                .any(|finding| finding.id == "TFSEC-038")
+        );
+    }
+
+    #[test]
+    fn management_capabilities_fail_closed_when_disabled() {
+        for profile in ["balanced", "strict"] {
+            for (record, expected) in [
+                (
+                    "management\ttailscale\tfalse\ttrue\ttailnet-policy",
+                    vec!["TFSEC-019"],
+                ),
+                (
+                    "management\ttailscale\ttrue\tfalse\ttailnet-policy",
+                    vec!["TFSEC-019"],
+                ),
+                (
+                    "management\ttailscale\ttrue\ttrue\tdisabled",
+                    vec!["TFSEC-039"],
+                ),
+                (
+                    "management\ttailscale\tfalse\tfalse\tdisabled",
+                    vec!["TFSEC-019", "TFSEC-039"],
+                ),
+            ] {
+                let state = parse_security_state(&format!(
+                    "manifest\t2\nhost\t{profile}\tfalse\ttrue\ttrue\ttrue\ttrue\t36\n{record}\n"
+                ))
+                .unwrap();
+                let findings = security_findings(&state);
+                assert_eq!(
+                    findings
+                        .iter()
+                        .map(|finding| finding.id)
+                        .collect::<Vec<_>>(),
+                    expected
+                );
+                assert!(
+                    findings
+                        .iter()
+                        .all(|finding| finding.severity == "critical")
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn rejects_unknown_or_duplicate_management_records_without_echoing_values() {
+        let host = "manifest\t2\nhost\tbalanced\tfalse\ttrue\ttrue\ttrue\ttrue\t36\n";
+        for record in [
+            "management\tprivate-fixture-value\ttrue\ttrue\ttailnet-policy",
+            "management\ttailscale\ttrue\ttrue\tprivate-fixture-value",
+            "management\ttailscale\tprivate-fixture-value\ttrue\ttailnet-policy",
+            "management\ttailscale\ttrue\tprivate-fixture-value\ttailnet-policy",
+            "management\ttailscale\ttrue\ttrue\ttailnet-policy\tprivate-fixture-value",
+            "management\ttailscale\ttrue\ttrue\ttailnet-policy\nmanagement\ttailscale\ttrue\ttrue\ttailnet-policy",
+        ] {
+            let error = parse_security_state(&format!("{host}{record}\n")).unwrap_err();
+            assert!(!error.contains("private-fixture-value"), "{error}");
+        }
+        assert!(
+            parse_security_state(
+                "host\tbalanced\tfalse\ttrue\ttrue\ttrue\ttrue\ttrue\t36\n\
+             management\ttailscale\ttrue\ttrue\ttailnet-policy\n"
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn rejects_unknown_duplicate_or_misplaced_manifest_headers() {
+        for manifest in [
+            "manifest\tprivate-fixture-value\n",
+            "manifest\t1\n",
+            "manifest\t3\n",
+            "manifest\t2\tprivate-fixture-value\n",
+            "manifest\t2\nmanifest\t2\n",
+            "host\tbalanced\tfalse\ttrue\ttrue\ttrue\ttrue\ttrue\t36\nmanifest\t2\n",
+            "manifest\t2\nhost\tbalanced\tfalse\ttrue\ttrue\ttrue\ttrue\ttrue\t36\n",
+            "host\tbalanced\tfalse\ttrue\ttrue\ttrue\ttrue\t36\n",
+        ] {
+            let error = parse_security_state(manifest).unwrap_err();
+            assert!(!error.contains("private-fixture-value"), "{error}");
+        }
+    }
+
+    #[test]
     fn secure_profile_reports_missing_image_signature_gate() {
         let state = parse_security_state(
-            "host\tbalanced\tfalse\ttrue\ttrue\ttrue\ttrue\ttrue\t36\n\
+            "manifest\t2\nhost\tbalanced\tfalse\ttrue\ttrue\ttrue\ttrue\t36\nmanagement\ttailscale\ttrue\ttrue\ttailnet-policy\n\
              agent\tcoding\tbalanced\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\tfalse\ttrue\tfalse\t-\ttrue\t10.0.0.1:7811\n",
         )
         .unwrap();
@@ -2970,7 +3180,7 @@ mod tests {
     #[test]
     fn broker_manifest_modes_must_match_the_network_label() {
         let state = parse_security_state(
-            "host\tbalanced\tfalse\ttrue\ttrue\ttrue\ttrue\ttrue\t36\n\
+            "manifest\t2\nhost\tbalanced\tfalse\ttrue\ttrue\ttrue\ttrue\t36\nmanagement\ttailscale\ttrue\ttrue\ttailnet-policy\n\
              agent\tcoding\tbalanced\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\tfalse\t-\tfalse\t-\n",
         )
         .unwrap();
@@ -2983,7 +3193,7 @@ mod tests {
     #[test]
     fn security_inspection_targets_the_manifest_container_name() {
         let state = parse_security_state(
-            "host\tbalanced\tfalse\tfalse\ttrue\ttrue\ttrue\ttrue\t36\n\
+            "manifest\t2\nhost\tbalanced\tfalse\tfalse\ttrue\ttrue\ttrue\t36\nmanagement\ttailscale\ttrue\ttrue\ttailnet-policy\n\
              agent\thermes-fixture\tbalanced\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\tfalse\tfalse\t-\tfalse\t-\n",
         )
         .unwrap();
@@ -3010,7 +3220,7 @@ mod tests {
     #[test]
     fn parses_current_live_evidence_manifest_fields() {
         let state = parse_security_state(concat!(
-            "host\tbalanced\tfalse\tfalse\ttrue\ttrue\ttrue\ttrue\t36\n",
+            "manifest\t2\nhost\tbalanced\tfalse\tfalse\ttrue\ttrue\ttrue\t36\nmanagement\ttailscale\ttrue\ttrue\ttailnet-policy\n",
             "agent\thermes-fixture\tbalanced\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\tfalse\tfalse\t-\tfalse\t-",
             "\tnone\t[]\t",
             r#"{"/run":67108864,"/tmp":268435456,"/var/tmp":268435456}"#,
@@ -3044,7 +3254,7 @@ mod tests {
     #[test]
     fn dev_manifest_omits_strict_live_desired_fields() {
         let state = parse_security_state(
-            "host\tdev\ttrue\tfalse\tfalse\tfalse\tfalse\tfalse\t36\n\
+            "manifest\t2\nhost\tdev\ttrue\tfalse\tfalse\tfalse\tfalse\t36\nmanagement\ttailscale\tfalse\tfalse\tdisabled\n\
              agent\tdev-fixture\tdev\tfalse\tfalse\tfalse\tfalse\tfalse\tfalse\tfalse\tfalse\tfalse\tfalse\tfalse\tfalse\tfalse\tfalse\tfalse\tfalse\tfalse\tfalse\tfalse\t-\tfalse\t-\t-\t-\t-\t-\t-\n",
         )
         .unwrap();

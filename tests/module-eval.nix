@@ -937,7 +937,10 @@ assert lib.hasInfix "safe.directory=\"$repo\"" gitScript;
 assert !(lib.hasInfix "safe.directory='*'" gitScript);
 assert !(lib.hasInfix "case \"$url\" in *github.com*" gitScript);
 assert capsule.config.tentaflake.security.profile == "balanced";
+assert import ./management-policy.nix { inherit pkgs; };
+assert lib.hasPrefix "manifest\t2\n" capsuleManifest;
 assert lib.hasInfix "host\tbalanced\tfalse\tfalse\ttrue\ttrue\ttrue" capsuleManifest;
+assert lib.hasInfix "management\ttailscale\ttrue\ttrue\ttailnet-policy" capsuleManifest;
 assert lib.hasInfix "agent\thermes-hermes-fixture\tbalanced" capsuleManifest;
 assert
   lib.getExe' pkgs.gvisor "runsc"
@@ -1121,6 +1124,7 @@ assert lib.hasInfix "refusing to hide non-empty workspace"
 assert lib.hasInfix " load --input "
   workerCapsule.config.systemd.services.tentaflake-worker-image.serviceConfig.ExecStart;
 assert lib.hasInfix "host\tbalanced\tfalse\ttrue\ttrue\ttrue\ttrue" brokerManifest;
+assert lib.hasInfix "management\ttailscale\ttrue\ttrue\ttailnet-policy" brokerManifest;
 assert
   brokerCapsule.config.systemd.services."tentaflake-broker-llm-hermes-brokered".serviceConfig.LoadCredential
   == [

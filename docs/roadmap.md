@@ -54,6 +54,18 @@ Mutable upstream OpenCode/Pi documentation is only a candidate lead: no reviewed
 artifact, provider call or vendor acceptance follows from it. M03-M10 and the
 remaining issues retain all their acceptance requirements.
 
+#106 source work is prepared on `feat/private-management-contract`: an explicit
+host management/SSH contract retains the existing Tailscale defaults and legacy
+enable alias. Read-only configured capabilities replace the security module's
+transport-specific gate; public OpenSSH remains forbidden. The version-2 manifest
+and CLI preserve unknown management evidence for legacy/incomplete records.
+Focused option refusals, 53 CLI checks and Clippy pass. A blackbox regression
+fails against the skipped-probe implementation and passes when unknown
+management evidence retains live Serve/Funnel inspection. Authorized runtime
+fixtures for public-access denial and existing-consumer access remain excluded
+from this lightweight-only run. No enrollment, remote grants or host activation
+is claimed; #106 remains open for that acceptance.
+
 #113 implementation is prepared on `feat/worker-durable-claims`. Owning files:
 `crates/tentaflake-worker/src/queue.rs`, worker dispatch, `modules/worker.nix`
 and the worker guide. Captured requests/approvals publish atomically; one

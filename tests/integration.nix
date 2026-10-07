@@ -309,7 +309,8 @@
         fields = ["agent", name, "balanced"] + ["true"] * 17
         fields += ["true", "false", "-", "true", endpoint, network,
                    "[]", json.dumps(tmpfs), "true", json.dumps(resources)]
-        manifest = "host\tbalanced\tfalse\ttrue\ttrue\ttrue\ttrue\tfalse\t36\n"
+        manifest = "manifest\t2\nhost\tbalanced\tfalse\ttrue\ttrue\ttrue\tfalse\t36\n"
+        manifest += "management\ttailscale\ttrue\ttrue\ttailnet-policy\n"
         manifest += "\t".join(fields) + "\n"
         config = (f"backend={backend}\nflake_dir=/fixture\nhost_name=fixture\n"
                   "agents_file=/tmp/doctor-agents.tsv\nsecurity_profile=balanced\n"
@@ -1448,7 +1449,9 @@
     with subtest("security doctor reports an intentionally unsafe fixture"):
         machine.succeed(
             "cat > /tmp/tentaflake-unsafe.tsv <<'EOF'\n"
-            "host\tdev\ttrue\tfalse\tfalse\tfalse\tfalse\tfalse\t36\n"
+            "manifest\t2\n"
+            "host\tdev\ttrue\tfalse\tfalse\tfalse\tfalse\t36\n"
+            "management\ttailscale\tfalse\tfalse\tdisabled\n"
             "agent\tcoding\tdev\tfalse\tfalse\tfalse\tfalse\tfalse\tfalse\tfalse\tfalse\tfalse\tfalse\tfalse\tfalse\tfalse\tfalse\tfalse\tfalse\tfalse\tfalse\tfalse\t-\tfalse\t-\n"
             "EOF\n"
             "cat > /tmp/tentaflake-unsafe.conf <<'EOF'\n"

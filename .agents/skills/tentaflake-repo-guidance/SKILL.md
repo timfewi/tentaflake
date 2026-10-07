@@ -1,7 +1,7 @@
 ---
 name: tentaflake-repo-guidance
 description: Locate the owning source, guide and checks before changing Tentaflake modules, adapters, CLI or installer.
-version: 2.6.1
+version: 2.6.3
 ---
 
 # Tentaflake repository guidance
@@ -15,6 +15,7 @@ relevant source and guide. Avoid loading unrelated references.
 | Builders and contracts | `adapters/catalog.json`, `adapters/`, `lib/mkAgent.nix`, `lib/runtimeContract.nix` | [Adapters](../../../docs/agent-adapters.md) |
 | Declarative input, onboarding and inventory | `configuration.nix`, `lib/agentsFromData.nix`, `lib/agentPlan.nix`, CLI onboarding | [Configuration](../../../docs/08-agent-cli.md) |
 | CLI and diagnostics | `crates/tentaflake-cli/`, `modules/shell.nix`, `modules/security.nix` | [CLI](../../../docs/06-shell.md) |
+| Private management | `modules/management.nix`, `modules/tailscale.nix`, versioned security manifest | [Management](../../../docs/11-tailscale-management.md) |
 | LLM broker and streaming | `modules/broker.nix`, `crates/tentaflake-broker/` | [Broker](../../../docs/12-brokered-egress.md) |
 | Research projection | `modules/research.nix`, `lib/researchClient.nix`, adapter hooks | [Research](../../../docs/16-research.md) |
 | Offline execution | `modules/worker.nix`, `crates/tentaflake-worker/` | [Worker](../../../docs/13-disposable-worker.md) |
@@ -46,6 +47,10 @@ relevant source and guide. Avoid loading unrelated references.
 - Model calls use the LLM broker; web uses only `secure-research-tool`.
   Preserve host-held keys, exact read-only socket/closure mounts, no remote MCP
   or provider-hosted tools, and no dispatched-operation replay.
+- Private management capabilities describe configured transport/SSH authority;
+  they never establish enrollment or effective remote grants. Keep the legacy
+  enable alias, unsupported transport refusal and unknown legacy manifests.
+  Management connectivity does not select the Research Internet exit.
 - A worker declaration does not prove vendor execution mediation. Synthetic
   fixtures do not establish vendor startup or tool discovery.
 - Worker queue changes preserve one operator/drain lock and durable running

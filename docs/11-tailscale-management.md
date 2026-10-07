@@ -1,4 +1,62 @@
-# Tailscale management-plane policy
+# Private management contract and Tailscale policy
+
+## Host contract and migration
+
+Configure private operator connectivity and SSH authorization separately from
+agent capabilities and Research Internet egress:
+
+```nix
+tentaflake.management = {
+  enable = true;
+  transport = "tailscale";
+  ssh.policy = "tailnet-policy";
+};
+```
+
+These are the existing defaults. `tailscale` is the only currently reviewed
+transport, using the Tailscale client; the contract does not require a hosted
+control-plane account or automatically configure Headscale. Other transport
+names fail validation until their implementation and acceptance are added.
+`tailnet-policy` selects Tailscale SSH and requires the operator to maintain
+restrictive remote grants and SSH rules. `ssh.policy = "disabled"` is available
+only for development configurations; it cannot satisfy `balanced`.
+
+The existing `tentaflake.tailscale.enable` option is an alias for
+`tentaflake.management.enable`. Existing consumers retain their behavior; migrate
+declarations to the new name when convenient. The two names are the same option,
+not independent switches, so do not give them conflicting values. Disabling
+management through either name still fails `balanced`; it does not waive the
+private management requirement. The public OpenSSH module remains forbidden.
+
+The internal, read-only `management.capabilities.privateConnectivity` is derived
+from the enabled contract and actual configured Tailscale service.
+`management.capabilities.sshAuthorization` is derived from that connectivity,
+the selected policy and the final SSH flags after overrides. It becomes
+`disabled` if SSH is not enabled in `extraSetFlags`, if a disabling SSH argument
+appears in the set/up flags, or if an argument separator prevents reliable
+interpretation. Balanced requires both configured capabilities. They cannot be
+set by an agent or replaced with operator-written readiness booleans.
+
+These capabilities describe configuration. They do not establish enrollment,
+live connectivity, operator-tested access, remotely effective grants or a usable
+recovery path. Host configuration remains operator-owned; importing agent data
+does not choose transports, control servers, firewall policy or credentials.
+Keep console access and a separately tested operator session before any
+explicitly authorized management change.
+
+The generated `/etc/tentaflake/security.tsv` now starts with `manifest` and
+version `2`, separated by a tab. Its `management` record carries the transport,
+enabled state, configured private connectivity and derived SSH authorization.
+The host record no longer carries the Tailscale-specific enable boolean. The CLI
+reads legacy unversioned manifests but treats their management contract as
+unknown; a missing version-2 management record is also unknown. Under balanced,
+`TFSEC-038` reports that gap, `TFSEC-019` reports disabled/missing private
+connectivity, and `TFSEC-039` reports disabled configured SSH authorization.
+Unsupported versions/transports/policies and duplicate records fail parsing.
+Regenerate the manifest through an authorized host update; never hand-edit it
+to manufacture evidence.
+
+## Remote authorization
 
 Tailscale connectivity is private transport, not authorization by itself. A
 new tailnet's permissive default policy must be replaced before treating it as
@@ -21,11 +79,12 @@ nodes and testing the recovery procedure. Keep auth keys and lock signing keys
 out of Nix expressions and the Nix store.
 
 The template cannot confirm the remote admin-console policy from local Nix
-evaluation. The security doctor checks local `tailscale serve status --json`
+evaluation. For an enabled Tailscale declaration or an unknown legacy/incomplete
+management contract, the security doctor checks local `tailscale serve status --json`
 for active Serve/Funnel state and reports a blocked local API as unknown, but
 the operator must still inspect and validate the remotely active policy;
-neither restrictive grants nor SSH rules are inferred from
-`tentaflake.tailscale.enable = true`.
+neither restrictive grants nor SSH rules are inferred from an enabled management
+contract or its configured capabilities.
 
 
 ## Enrollment and local preferences
@@ -63,10 +122,10 @@ provide an Internet exit node.
 
 | Priority / proposed issue | Current evidence | Acceptance criteria |
 | --- | --- | --- |
-| [P1: Generic private management contract](https://github.com/timfewi/tentaflake/issues/106) | `modules/security.nix` requires `tentaflake.tailscale.enable`; the security manifest and CLI also carry a Tailscale-specific boolean. A different private transport cannot satisfy balanced policy. | Define explicit management transport and private SSH policy; keep current defaults compatible, reject public access, version the manifest and make diagnostics transport-aware. Disabling Tailscale must not silently disable the management requirement. |
-| [P1: Optional Headscale control-server configuration](https://github.com/timfewi/tentaflake/issues/107) | `modules/tailscale.nix` has no first-class login server, enrollment credential, tag or SSH-mode options. Consumers can override upstream NixOS options, but enrollment is not a template-tested workflow. | Select a control server explicitly while retaining the Tailscale client. Keep runtime credentials out of the store; test enrollment, logout, restart and unreachable server. Tags must be configurable and constrained by remote policy. No automatic control-plane hosting. |
+| [P1: Generic private management contract](https://github.com/timfewi/tentaflake/issues/106) | The typed management/SSH contract, legacy alias and version-2 manifest describe configured capabilities. Tailscale is the only reviewed transport; enrollment and remote policy remain unverified. | Preserve current consumers and public-access refusal. Authorized runtime fixtures still need to prove public-access denial and operator access before acceptance; source evaluation alone does not close this issue. |
+| [P1: Optional Headscale control-server configuration](https://github.com/timfewi/tentaflake/issues/107) | The management contract selects Tailscale SSH, but login-server, enrollment-credential and configurable-tag support remain separate. Consumers can override upstream NixOS options; Headscale enrollment is not a template-tested workflow. | Select a control server explicitly while retaining the Tailscale client. Keep runtime credentials out of the store; test enrollment, logout, restart and unreachable server. Tags must be configurable and constrained by remote policy. No automatic control-plane hosting. |
 | [P1: SSH policy compatible with the chosen control plane](https://github.com/timfewi/tentaflake/issues/108) | Balanced forbids every OpenSSH service and assumes Tailscale SSH. The example's `check` action and Tailnet Lock guidance target the hosted Tailscale policy. | Verify the chosen Headscale version's SSH capabilities, or support key-only OpenSSH restricted to the private interface. Test public denial and operator access; do not assume hosted policy features work on another control plane. |
-| [P1: Management readiness and recovery evidence](https://github.com/timfewi/tentaflake/issues/109) | The doctor checks the declared enable flag and Serve/Funnel state; it does not verify enrollment, a usable operator path or the remote grants. | Report declared, enrolled, reachable and remotely unverified states separately with bounded probes. Test offline control plane, reboot and credential expiry; retain console/recovery access. Never mark remote authorization verified from a local flag. |
+| [P1: Management readiness and recovery evidence](https://github.com/timfewi/tentaflake/issues/109) | The doctor checks the typed configured contract and Serve/Funnel state; it does not verify enrollment, a usable operator path or the remote grants. | Report declared, enrolled, reachable and remotely unverified states separately with bounded probes. Test offline control plane, reboot and credential expiry; retain console/recovery access. Never mark remote authorization verified from a local flag. |
 | [P1: Provider-independent Research VPN adapter acceptance](https://github.com/timfewi/tentaflake-research/issues/4) | Research already accepts an external observation adapter. Its optional reference observer checks interface-up, an IPv4 route across routing tables and a root-owned firewall marker; the marker is not verification of live rules or tunnel identity. | Document a reusable adapter contract and test selected tunnel/exit-node configurations for IPv4, IPv6, DNS, policy routing, tunnel loss and stale observations. Keep the independent UID firewall fail-closed. The observer's `region` is an operator assertion. |
 
 The manual-enrollment preference bug above is addressed in
@@ -88,3 +147,16 @@ activation was run; Research and lockfile pins remain unchanged.
 The reviewed Research pin update is tracked separately in
 [issue #110](https://github.com/timfewi/tentaflake/issues/110); it requires upstream review and
 affected integration acceptance before deployment.
+
+## Contract acceptance limits
+
+Focused option and CLI regressions cover defaults, the old alias, service/SSH
+overrides, unsupported selections, public OpenSSH refusal, versioned parsing and
+legacy/missing management evidence. These are source-level checks. Issue
+[#106](https://github.com/timfewi/tentaflake/issues/106) remains open for authorized
+runtime fixtures proving public-access denial and existing-consumer operator
+access. VM/runtime workloads were excluded from this lightweight-only run;
+no enrollment, remote policy change, host activation or runtime acceptance is
+claimed. Headscale enrollment and alternative private SSH remain separate
+[#107](https://github.com/timfewi/tentaflake/issues/107) and
+[#108](https://github.com/timfewi/tentaflake/issues/108) work.
