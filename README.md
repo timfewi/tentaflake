@@ -156,6 +156,14 @@ native web tools and the legacy fetch broker are disabled for research agents.
 See [configuration and verification](docs/16-research.md). This prevents an
 incomplete 24/7 declaration from silently starting with missing policy boundaries.
 
+Research VPN readiness uses the pinned module's existing
+`services.secureResearch.vpnObserver` options. The observer stays disabled by
+default; operators can select WireGuard or tun link/path evidence, with optional
+WireGuard handshake/public-peer checks and planned draining. Management enrollment
+does not supply an Internet exit. See the [VPN selection and operator drain
+procedure](docs/16-research.md#vpn-readiness-selection); configuration evaluations
+do not prove live tunnel, exit-node or production readiness.
+
 Existing configurations that require direct provider credentials or host
 networking must deliberately select `dev`; this is a breaking change and is
 not suitable for untrusted 24/7 agents. Never put secret values in Nix

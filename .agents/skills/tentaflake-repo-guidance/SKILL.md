@@ -47,6 +47,11 @@ relevant source and guide. Avoid loading unrelated references.
 - Model calls use the LLM broker; web uses only `secure-research-tool`.
   Preserve host-held keys, exact read-only socket/closure mounts, no remote MCP
   or provider-hosted tools, and no dispatched-operation replay.
+- Configure VPN evidence directly through `services.secureResearch.vpnObserver`;
+  keep disabled defaults and root-owned markers. Management enrollment is not an
+  Internet exit. Use fresh controller leases and the bounded drain procedure in
+  the [Research guide](../../../docs/16-research.md); source/upstream fixture
+  evidence does not accept a local tunnel or exit node.
 - Private management capabilities describe configured transport/SSH authority;
   they never establish enrollment or effective remote grants. Keep the legacy
   enable alias, unsupported transport refusal and unknown legacy manifests.
