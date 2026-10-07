@@ -1,6 +1,7 @@
 { pkgs }:
 let
   inherit (pkgs) lib;
+  builders = import ../lib { inherit pkgs lib; };
   evaluate =
     extra:
     (import (pkgs.path + "/nixos/lib/eval-config.nix") {
@@ -49,6 +50,46 @@ let
     tentaflake.management.capabilities.privateConnectivity = lib.mkForce true;
   };
   manifest = valid.environment.etc."tentaflake/security.tsv".text;
+  capsules = evaluate {
+    imports = [
+      (builders.mkHermesAgent {
+        name = "management-hermes";
+        autoStart = false;
+      })
+      (builders.mkZeroClawAgent {
+        name = "management-zero";
+        autoStart = false;
+      })
+    ];
+  };
+  brokerCapsule = evaluate {
+    imports = [
+      (builders.mkHermesAgent {
+        name = "management-broker";
+        autoStart = false;
+      })
+    ];
+    tentaflake.networking.enable = lib.mkForce true;
+    tentaflake.broker.agents.hermes-management-broker = {
+      enable = true;
+      subnet = "10.203.20.0/30";
+      gateway = "10.203.20.1";
+      llm = {
+        enable = true;
+        upstreamBaseUrl = "https://api.example.com/v1/";
+        providerCredentialFile = "/run/agenix/example-provider";
+        allowedModels = [
+          {
+            name = "example/model";
+            inputMicrousdPerMillion = 1000000;
+            outputMicrousdPerMillion = 2000000;
+          }
+        ];
+      };
+    };
+  };
+  capsuleManifest = capsules.environment.etc."tentaflake/security.tsv".text;
+  brokerManifest = brokerCapsule.environment.etc."tentaflake/security.tsv".text;
 in
 assert lib.assertMsg (failures valid == [ ]) (
   builtins.toJSON (map (entry: entry.message) (failures valid))
@@ -68,6 +109,12 @@ assert
   !(lib.any (flag: lib.hasPrefix "--advertise-tags" flag) valid.services.tailscale.extraSetFlags);
 assert lib.hasPrefix "manifest\t2\nhost\tbalanced\tfalse\tfalse\t" manifest;
 assert lib.hasInfix "\nmanagement\ttailscale\ttrue\ttrue\ttailnet-policy\n" manifest;
+assert lib.hasInfix "host\tbalanced\tfalse\tfalse\ttrue\ttrue\tfalse\t36\n" capsuleManifest;
+assert lib.hasInfix "host\tbalanced\tfalse\ttrue\ttrue\ttrue\tfalse\t36\n" brokerManifest;
+assert lib.all (name: lib.hasInfix "agent\t${name}\tbalanced" capsuleManifest) [
+  "hermes-management-hermes"
+  "zeroclaw-management-zero"
+];
 assert denies "private management transport" disabledAlias;
 assert denies "private management transport" disabled;
 assert denies "private management transport" absentService;

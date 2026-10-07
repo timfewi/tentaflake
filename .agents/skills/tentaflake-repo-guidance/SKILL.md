@@ -51,6 +51,8 @@ relevant source and guide. Avoid loading unrelated references.
   they never establish enrollment or effective remote grants. Keep the legacy
   enable alias, unsupported transport refusal and unknown legacy manifests.
   Management connectivity does not select the Research Internet exit.
+  Manifest migrations must include CLI, capsule and broker fixtures; evaluate
+  generated records rather than retaining prefixes with obsolete columns.
 - A worker declaration does not prove vendor execution mediation. Synthetic
   fixtures do not establish vendor startup or tool discovery.
 - Worker queue changes preserve one operator/drain lock and durable running
