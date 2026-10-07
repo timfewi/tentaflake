@@ -12,6 +12,7 @@
     ./hardening.nix
     ./image-provenance.nix
     ./locale.nix
+    ./management.nix
     ./networking.nix
     ./nix-settings.nix
     ./packages.nix

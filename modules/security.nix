@@ -263,6 +263,7 @@ let
     lib.concatStringsSep "\t" fields;
   securityManifest = lib.concatStringsSep "\n" (
     [
+      "manifest\t2"
       (lib.concatStringsSep "\t" [
         "host"
         cfg.profile
@@ -273,11 +274,17 @@ let
             lib.attrValues agentContainers
           )
         ))
-        (bool config.tentaflake.tailscale.enable)
         (bool config.security.apparmor.enable)
         (bool (!lib.elem "docker" (config.users.users.${config.tentaflake.adminUser}.extraGroups or [ ])))
         (bool config.tentaflake.backup.enable)
         (toString config.tentaflake.backup.lastSuccessMaxAgeHours)
+      ])
+      (lib.concatStringsSep "\t" [
+        "management"
+        config.tentaflake.management.transport
+        (bool config.tentaflake.management.enable)
+        (bool config.tentaflake.management.capabilities.privateConnectivity)
+        config.tentaflake.management.capabilities.sshAuthorization
       ])
     ]
     ++ lib.mapAttrsToList agentRecord agentContainers
@@ -357,12 +364,16 @@ in
           message = "tentaflake: balanced/strict requires AppArmor on the host.";
         }
         {
-          assertion = config.tentaflake.tailscale.enable;
-          message = "tentaflake: balanced/strict requires the private Tailscale management path.";
+          assertion = config.tentaflake.management.capabilities.privateConnectivity;
+          message = "tentaflake: balanced/strict requires a configured private management transport.";
+        }
+        {
+          assertion = config.tentaflake.management.capabilities.sshAuthorization != "disabled";
+          message = "tentaflake: balanced/strict requires a configured private SSH authorization policy.";
         }
         {
           assertion = !config.services.openssh.enable;
-          message = "tentaflake: balanced/strict forbids the public OpenSSH module; use Tailscale SSH with a restrictive tailnet policy.";
+          message = "tentaflake: balanced/strict forbids the public OpenSSH module; use the reviewed private management SSH policy.";
         }
         {
           assertion =

@@ -7,10 +7,10 @@ let
   cfg = config.tentaflake;
   preferences = [
     "--hostname=${cfg.hostName}"
-    "--ssh"
+    (if cfg.management.ssh.policy == "tailnet-policy" then "--ssh" else "--ssh=false")
   ];
 in
-lib.mkIf cfg.tailscale.enable {
+lib.mkIf (cfg.management.enable && cfg.management.transport == "tailscale") {
   services.tailscale = {
     enable = true;
     openFirewall = true;

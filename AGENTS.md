@@ -85,6 +85,11 @@ are already published or require access to another repository for public checks.
   belongs to `extraUpFlags` and manual `tailscale up` enrollment. NixOS applies
   `extraUpFlags` only with `authKeyFile`. Keep management access separate from
   Research VPN readiness and never infer remote grants from a local enable flag.
+- `tentaflake.management` owns the private transport and SSH policy contract;
+  `tailscale.enable` remains an alias for existing consumers. Balanced requires
+  read-only configured capabilities and still rejects public OpenSSH. Manifest
+  v2 declarations do not prove enrollment or remote grants; legacy/incomplete
+  management evidence stays unknown. Alternative transports require review.
 - `modules/` — reusable NixOS modules, including security, brokered egress,
   image-provenance gates, disposable workers, workspace quotas, encrypted
   backup, and generic options

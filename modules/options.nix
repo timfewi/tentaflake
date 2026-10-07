@@ -13,6 +13,10 @@ let
 in
 {
   imports = [
+    (lib.mkAliasOptionModule
+      [ "tentaflake" "tailscale" "enable" ]
+      [ "tentaflake" "management" "enable" ]
+    )
     (lib.mkRenamedOptionModule
       [ "tentaflake" "shell" "hermesCli" "enable" ]
       [ "tentaflake" "shell" "tentaflakeCli" "enable" ]
@@ -215,12 +219,6 @@ in
 
     users = {
       enable = lib.mkEnableOption "admin user creation" // {
-        default = true;
-      };
-    };
-
-    tailscale = {
-      enable = lib.mkEnableOption "Tailscale VPN" // {
         default = true;
       };
     };

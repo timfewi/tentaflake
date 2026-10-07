@@ -60,8 +60,11 @@ overrides cannot bypass the final checks. It enforces:
 - optional fail-closed Cosign verification before an OCI unit starts; publisher
   identity is a separate policy decision from digest pinning;
 - AppArmor on the host and no administrative Docker-group membership.
-- the Tailscale management path with `tag:agent-host`, while the public
-  OpenSSH module is rejected.
+- configured private management and SSH authorization capabilities under
+  `tentaflake.management`; the supported Tailscale backend retains
+  `tag:agent-host` and restrictive operator-maintained remote policy, while
+  the public OpenSSH module is rejected. See the
+  [management contract](11-tailscale-management.md#host-contract-and-migration).
 - normalized mount paths; `.` and `..` escapes are rejected;
 - an enabled broker, disposable worker, fixed-size workspace quota, and research relay before
   a secure controller may set `autoStart = true`.
@@ -190,6 +193,10 @@ root-disk pressure. `TFSEC-033` marks unavailable live OCI evidence and
 `TFSEC-034` is a critical live-inspect mismatch. `TFSEC-035` keeps an
 unreachable broker unknown, `TFSEC-036` is a high-severity explicit unhealthy
 response, and `TFSEC-037` detects inconsistent broker labels/modes/endpoints.
+`TFSEC-038` keeps legacy/incomplete management declarations unknown;
+`TFSEC-039` reports a disabled declared private SSH policy. The generated
+manifest starts with `manifest<TAB>2` and separates host policy from its typed
+management record. Legacy enable flags never prove private operator access.
 
 The check combines declarative desired-state evidence with narrow live probes
 for Tailscale Serve/Funnel, backup freshness, root-disk pressure, and narrow
