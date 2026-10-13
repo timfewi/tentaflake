@@ -1,5 +1,4 @@
-//! Offline explanation of a recorded, non-secret admission snapshot.
-//! This command does not collect live evidence, claim capacity or dispatch work.
+//! Recorded decisions and read-only host inventory. Neither grants authority.
 
 use crate::OutputMode;
 use std::fs::OpenOptions;
@@ -12,10 +11,13 @@ const MAX_SNAPSHOT_BYTES: u64 = 4 * 1024 * 1024;
 
 pub(crate) fn run(args: &[String], mode: OutputMode) -> Result<u8, String> {
     let [command, file] = args else {
-        return Err("admission requires: explain <snapshot-file> [--hide]".into());
+        return Err("admission requires: explain <snapshot-file> or inventory <generated-store-plan> [--hide]".into());
     };
+    if command == "inventory" {
+        return crate::admission_host::inventory(Path::new(file), mode);
+    }
     if command != "explain" {
-        return Err("admission supports only offline explain".into());
+        return Err("unsupported admission command".into());
     }
     let mut decision = explain_file(Path::new(file))?;
     if mode.hide

@@ -59,14 +59,28 @@ returns an image-creation permit. Existing receipts cannot recreate a missing
 image. Startup requires exact owned Present workspace and state allocations;
 storage-only admission also covers legacy workspace-only quotas. Review removed
 an obsolete historical-size rule that disagreed with this allocation accounting.
-Fast-gate components pass with 195 Rust tests, 31 routing regressions and the
-47-route API contract. Host inventory collection and quota-unit integration
-remain outstanding; the library alone does not fence existing image creators.
+Fast-gate components passed with 195 Rust tests, 31 routing regressions and the
+47-route API contract. The library alone does not fence existing image creators.
 
-Next: host-owned inventory and policy publication, quota creation fencing, live
-collectors and mandatory startup/stop integration with
-the ledger, then the authenticated dynamic host API. Offline `admission explain`
-and library tests do not establish live admission, runtime or vendor acceptance.
+The current host preparation slice adds private ledger v3 published authority
+and durable Pending publication; pure snapshots remain v2. Explicit finish or
+cancel requires host installation/drain/fence proof and preserves Unknown
+charges. Present-storage callbacks hold the lock but provide no durable
+idempotency. Nix generates an immutable plan, and root-only `admission inventory`
+scans fixed quota roots including orphan images, always returning Unknown rows
+and `complete: false`. Quota units now share immutable create/verify/owner helpers
+with exclusive staged creation, sync and no overwrite; they still call helpers
+directly without ledger permits. `just fast` passed with 222 Rust tests,
+31 routing regressions and API validation of 47 routes, 38 valid examples and
+38 rejected counterexamples. The focused adapter gate also passed the generated
+plan assertions and 24 actual-helper refusal checks. This checkpoint claims no
+new VM or live acceptance.
+
+Next: fenced host bootstrap and actual policy-publication orchestration,
+mandatory quota creation/ownership and startup/stop ledger integration, live
+collectors, then the authenticated dynamic host API. The admission plan option
+currently prepares data only. Offline commands and library/helper tests do not
+establish enforceable host admission, runtime isolation or vendor acceptance.
 
 Research work is tracked in [environment admission #8](https://github.com/timfewi/tentaflake-research/issues/8)
 and [guest transport #9](https://github.com/timfewi/tentaflake-research/issues/9).

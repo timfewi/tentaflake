@@ -10,7 +10,10 @@ mod decision;
 pub mod ledger;
 mod storage_decision;
 
-pub use decision::{authorize, decide, validate_reservations};
+pub use decision::{
+    authorize, check_policy as validate_policy, decide, identifier, validate_authority,
+    validate_reservations,
+};
 use serde::{Deserialize, Serialize};
 pub use storage_decision::{authorize_storage, decide_storage};
 

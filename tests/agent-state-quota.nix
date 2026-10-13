@@ -77,7 +77,41 @@ let
       ++ extra
     );
   config = fixture [ ];
+  emptyReserve = lib.genAttrs [
+    "memoryBytes"
+    "memorySwapBytes"
+    "nanoCpus"
+    "pids"
+    "workspaceBytes"
+    "stateBytes"
+  ] (_: 0);
+  admitted = fixture [
+    {
+      tentaflake.security.admission = {
+        authorityEpoch = "fixture-authority";
+        capacity = {
+          memoryBytes = 2147483648;
+          memorySwapBytes = 2147483648;
+          nanoCpus = 2000000000;
+          pids = 512;
+          workspaceBytes = 4294967296;
+          stateBytes = 4294967296;
+        };
+        hostReserve = emptyReserve;
+        researchReserve = emptyReserve;
+        maxActive = 2;
+      };
+    }
+  ];
+  # Inspect JSON values only; the generated writeText derivation retains every
+  # tool/helper dependency. fromJSON rejects contextual strings even in tests.
+  plan = builtins.fromJSON (
+    builtins.unsafeDiscardStringContext admitted.tentaflake.admissionManifest.text
+  );
   services = config.systemd.services;
+  stateHelpers = config.tentaflake.admissionVolumes."state:generic-quota".helpers;
+  prepareLines = lib.splitString "\n" services.tentaflake-state-quota-prepare-generic-quota.script;
+  ownerHelper = config.tentaflake.admissionVolumes."state:hermes-quota".helpers.owner;
   mount = path: lib.findFirst (entry: entry.where == path) null config.systemd.mounts;
   failed = config: lib.filter (item: !item.assertion) config.assertions;
   refuses =
@@ -177,7 +211,31 @@ assert refuses "may not overlap" {
     lib.mkForce "/var/lib/hermes-quota/other";
 };
 assert refuses "intended for balanced/strict" { tentaflake.security.profile = lib.mkForce "dev"; };
+assert lib.elem "  exec ${stateHelpers.create}" prepareLines;
+assert lib.elem "  exec ${stateHelpers.verify}" prepareLines;
+assert services.tentaflake-state-quota-hermes-quota.script == "exec ${ownerHelper}";
+assert config.tentaflake.admissionManifest == null;
+assert plan.schemaVersion == 1;
+assert plan.policy.generation == "fixture-authority";
+assert builtins.stringLength plan.policy.revision == 71;
+assert plan.policy.maxActive == 2;
+assert plan.policy.grants == [ ];
+assert builtins.length plan.volumes == 6;
+assert plan.instances.generic-quota.ownerId == "host-root";
+assert plan.instances.generic-quota.resources.workspaceBytes == 134217728;
+assert plan.instances.generic-quota.resources.stateBytes == 134217728;
+assert
+  map (requirement: requirement.id) plan.instances.generic-quota.storage == [
+    "state:generic-quota"
+    "workspace:generic-quota"
+  ];
+assert lib.all (
+  volume:
+  volume.spec.ownerId == "host-root" && builtins.stringLength volume.spec.bindingRevision == 71
+) plan.volumes;
 {
-  prepareScript = services.tentaflake-state-quota-prepare-generic-quota.script;
-  ownerScript = services.tentaflake-state-quota-hermes-quota.script;
+  quotaHelpers = {
+    inherit (stateHelpers) create verify;
+    owner = ownerHelper;
+  };
 }

@@ -15,7 +15,7 @@ relevant source and guide. Avoid loading unrelated references.
 | Builders and contracts | `adapters/catalog.json`, `adapters/`, `lib/mkAgent.nix`, `lib/runtimeContract.nix` | [Adapters](../../../docs/agent-adapters.md) |
 | Declarative input, onboarding and inventory | `configuration.nix`, `lib/agentsFromData.nix`, `lib/agentPlan.nix`, CLI onboarding | [Configuration](../../../docs/08-agent-cli.md) |
 | CLI and diagnostics | `crates/tentaflake-cli/`, `modules/shell.nix`, `modules/security.nix` | [CLI](../../../docs/06-shell.md) |
-| Shared startup decisions and durable claims | `crates/tentaflake-admission/`, CLI `admission.rs` | [Security](../../../docs/10-security-profiles.md#shared-admission-core) |
+| Admission decisions, publication and diagnostic inventory | `crates/tentaflake-admission/`, CLI `admission*.rs`, `modules/admission.nix` | [Security](../../../docs/10-security-profiles.md#shared-admission-core) |
 | Private management | `modules/management.nix`, `modules/tailscale.nix`, versioned security manifest | [Management](../../../docs/11-tailscale-management.md) |
 | LLM broker and streaming | `modules/broker.nix`, `crates/tentaflake-broker/` | [Broker](../../../docs/12-brokered-egress.md) |
 | Research projection | `modules/research.nix`, `lib/researchClient.nix`, adapter hooks | [Research](../../../docs/16-research.md) |
@@ -41,6 +41,11 @@ relevant source and guide. Avoid loading unrelated references.
   Charge volumes independently of runtime receipts, including never-started and
   orphan images. Complete inventory and fenced creators precede authority;
   existing allocations never permit implicit recreation, resize or rebinding.
+  Private ledger v3 adds durable Pending publication; pure snapshots remain v2.
+  Require exact installation and mutator fencing before finish/cancel. Present
+  storage callbacks hold the lock but may repeat; use repeat-safe helpers.
+  The Nix admission plan is preparation only: no host bootstrap or mandatory
+  unit gating yet. Root inventory always emits incomplete, Unknown evidence.
 - Generate support facts with `python3 scripts/runtime-catalog-docs.py`;
   catalog declarations and source fixtures never prove vendor acceptance.
   Generic definitions reject extra authority and preserve current startup gates.
@@ -85,6 +90,8 @@ relevant source and guide. Avoid loading unrelated references.
   selected state/workspace mounts separately in Restic and verify both restores.
   `ReadWritePaths` creates bind mounts: identify the exact loop backing image,
   never infer quota readiness from a mount point or filesystem type alone.
+  Preserve exclusive synced creation and separate read-only verification;
+  missing images, unsafe backing ancestors or any `.new` entry must refuse.
 - Keep exact runtime resource/mount/network expectations and unknown evidence.
   Generic requests bound grants and resource overrides; both fixed-size quotas
   gate automatic and manual starts. Manifest v3 records requested capabilities;

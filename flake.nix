@@ -160,8 +160,9 @@
                 pkgs.gnugrep
                 pkgs.util-linux
               ];
-              quotaPrepare = pkgs.writeText "state-quota-prepare" tests.prepareScript;
-              quotaOwner = pkgs.writeText "state-quota-owner" tests.ownerScript;
+              quotaCreate = tests.quotaHelpers.create;
+              quotaVerify = tests.quotaHelpers.verify;
+              quotaOwner = tests.quotaHelpers.owner;
               deniedStart = pkgs.writeText "generic-admission-refusal" tests.deniedStartScript;
               src = lib.fileset.toSource {
                 root = ./.;
@@ -175,7 +176,7 @@
             }
             ''
               python3 "$src/scripts/runtime-catalog-docs.py" --check --root "$src"
-              python3 "$src/scripts/state-quota-test.py" "$quotaPrepare" "$quotaOwner"
+              python3 "$src/scripts/state-quota-test.py" "$quotaCreate" "$quotaVerify" "$quotaOwner"
               status=0
               bash "$deniedStart" > admission.log 2>&1 || status=$?
               test "$status" -eq 1

@@ -14,6 +14,8 @@ use std::time::{Duration, Instant, SystemTime};
 const RUNTIME_CATALOG: &str = include_str!("../../../adapters/catalog.json");
 mod admission;
 mod admission_evidence;
+mod admission_host;
+mod admission_storage;
 mod onboarding;
 
 const DEFAULT_CONFIG: &str = "/etc/tentaflake/cli.conf";
@@ -2772,6 +2774,7 @@ fn print_help() {
            tentaflake help|--help|-h\n\
            tentaflake runtimes [--json]\n\
            tentaflake admission explain <snapshot-file> [--hide]\n\
+           tentaflake admission inventory <generated-store-plan> [--hide]\n\
            tentaflake agent template <preset> <name> [--image <digest-reference> -- <command>...]\n\
            tentaflake agent validate|plan|import <file> [--json] [--hide]\n\
            tentaflake [status] [--hide] [--json]\n\

@@ -62,10 +62,16 @@ Enabling the option and activating the resulting NixOS generation creates:
   state/hermes-coding.img
 ```
 
-The prepare unit creates the exact-size sparse file, formats it as Btrfs, and
-mounts it with `loop,nodev,nosuid,noatime`. This is an intentional filesystem
-mutation. A source build or evaluation does not perform it and does not
-authorize activation.
+The prepare unit selects immutable create or verify helpers; a separate mount
+unit mounts the image with `loop,nodev,nosuid,noatime`, followed by an immutable
+ownership helper. Creation exclusively opens a `.new` staging file, sets its
+exact sparse size and formats Btrfs. It syncs the file, publishes without
+overwriting an existing final path, and syncs the directory before and after
+removing staging. Interrupted staging remains for explicit recovery. Verification
+is read-only and refuses a missing image; it never falls back to creation.
+These units currently call the helpers directly, without a ledger permit.
+Activation is an intentional filesystem mutation; a source build or evaluation
+does not perform it or authorize activation.
 
 The managed mount starts after the host's ordinary local filesystems and
 tmpfiles setup. Its ownership unit then recreates the private worker-control
@@ -85,11 +91,40 @@ The module refuses to mount over non-empty state/workspace sources, including
 files written below an unmounted path while its backing image already exists.
 It tolerates only the empty `.tentaflake-worker/inbox` scaffolding that NixOS
 tmpfiles may create during workspace activation; private state must be empty.
-It also rejects a symlink/non-regular
-backing path, a leftover `.new` file during image creation, or any size mismatch. It never mounts
-over existing data, shrinks, grows, or reformats an existing image silently.
+Backing-image directories and their ancestors must be root-owned and not
+group/world writable. Creation and verification reject symlink/non-regular
+backing paths, size mismatch and leftover `.new` entries, including staging
+beside an existing final image. They never mount over existing data, shrink,
+grow, or reformat an existing image silently.
 Existing ext4 images are rejected without modification and require the explicit
 backup/restore migration below; this update does not convert them in place.
+
+## Read-only admission inventory
+
+The optional [host admission plan](10-security-profiles.md#shared-admission-core)
+is preparation for future fenced bootstrap and unit integration. As root, pass
+its resolved immutable store file; the `/etc` symlink itself is not accepted:
+
+```bash
+tentaflake admission inventory "$(readlink -f /etc/tentaflake/admission.json)" --hide
+```
+
+The command validates the closed plan, owner/resource/binding matches and exact
+unit names, then scans `/var/lib/tentaflake-workspace-volumes` and its optional
+`state` subdirectory. Protected descriptor-relative traversal refuses symlinks,
+unsafe ownership/permissions, non-regular or hardlinked images, unfinished
+`.new` files and incomplete enumeration. An absent root is an error, not an
+empty inventory. The bounded scan includes removed definitions and orphan
+images, using positive logical file sizes rather than allocated sparse blocks.
+Only exact declared slot/size matches retain a binding; size drift stays orphaned.
+
+Every returned allocation is `Unknown`, and command output always has
+`complete: false`, including an empty existing root. This diagnostic does not
+fence creators, initialize a ledger, verify Btrfs/mount readiness or establish
+physical free capacity. It cannot authorize image creation or ledger bootstrap.
+`--hide` redacts allocation and binding identities. The future host integration
+must fence all managed creators and account for old/orphan storage before any
+inventory can become authoritative.
 
 ## Existing workspace migration
 
