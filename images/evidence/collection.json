@@ -1,0 +1,84 @@
+{
+  "schemaVersion": 1,
+  "method": "registry-metadata-only",
+  "client": "skopeo version 1.23.0",
+  "clientSource": {
+    "revision": "v1.23.0",
+    "hash": "sha256-crt6TYEOQaBdP1lIixtnrMPeWQ/GAyA6N6K3Il+ZA1E=",
+    "nixpkgs": {
+      "lastModified": 1784356753,
+      "narHash": "sha256-12KrbMiWLcf8m7pCvAtZh1ZrgF85ZXDXvfR/fWTKy84=",
+      "owner": "NixOS",
+      "repo": "nixpkgs",
+      "rev": "61b7c44c4073f0b827768aff0049561b5110ea5a",
+      "type": "github"
+    }
+  },
+  "transport": {
+    "tlsVerified": true,
+    "credentials": "none",
+    "registryCommandTimeoutSeconds": 30,
+    "outputFileByteLimit": 2097152
+  },
+  "commands": [
+    [
+      "skopeo",
+      "--command-timeout",
+      "30s",
+      "inspect",
+      "--raw",
+      "--no-creds",
+      "--no-tags",
+      "--tls-verify=true",
+      "docker://<repository>:<discoveryTag>"
+    ],
+    [
+      "skopeo",
+      "--command-timeout",
+      "30s",
+      "inspect",
+      "--raw",
+      "--no-creds",
+      "--no-tags",
+      "--tls-verify=true",
+      "docker://<repository>@<indexDigest>"
+    ],
+    [
+      "skopeo",
+      "--command-timeout",
+      "30s",
+      "inspect",
+      "--raw",
+      "--no-creds",
+      "--no-tags",
+      "--tls-verify=true",
+      "docker://<repository>@<manifestDigest>"
+    ],
+    [
+      "skopeo",
+      "--command-timeout",
+      "30s",
+      "inspect",
+      "--raw",
+      "--no-creds",
+      "--no-tags",
+      "--tls-verify=true",
+      "--config",
+      "docker://<repository>@<manifestDigest>"
+    ]
+  ],
+  "verified": [
+    "Exact raw index SHA256 and repeat fetch by immutable digest",
+    "Platform manifest SHA256 and descriptor size",
+    "Raw config SHA256 and descriptor size",
+    "Both index and config declare Linux amd64 or Linux arm64/v8"
+  ],
+  "notVerified": [
+    "Publisher signatures or attestations",
+    "Layer bytes or root filesystem content",
+    "Runtime behavior, installed tools or actual distribution patch level",
+    "Support lifetime; this remains separate prior public-source research"
+  ],
+  "layersFetched": false,
+  "imagesUnpackedBuiltInstalledOrRun": false
+}

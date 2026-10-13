@@ -61,7 +61,12 @@
       constants = import ./lib/constants.nix;
 
       # ── Shared agent builders ──
-      inherit ((import ./lib { inherit pkgs lib; })) mkAgent adapters runtimeCatalog;
+      inherit ((import ./lib { inherit pkgs lib; }))
+        mkAgent
+        adapters
+        runtimeCatalog
+        baseImages
+        ;
       inherit ((import ./lib { inherit pkgs lib; })) mkHermesAgent;
       inherit ((import ./lib { inherit pkgs lib; })) mkZeroClawAgent;
       inherit ((import ./lib { inherit pkgs lib; })) agentsFromData;
@@ -124,6 +129,7 @@
           mkAgent
           adapters
           runtimeCatalog
+          baseImages
           constants
           ;
       };

@@ -58,6 +58,16 @@ Next: host-owned live collectors and mandatory startup/stop integration with
 the ledger, then the authenticated dynamic host API. Offline `admission explain`
 and library tests do not establish live admission, runtime or vendor acceptance.
 
+The [base-image catalog](20-base-images.md) adds Debian 13 and Ubuntu 26.04 LTS
+platform manifest selection with an offline metadata validator. The 2026-10-13
+registry collection verified 12 raw metadata files (45,878 bytes). Formatting,
+lint, ShellCheck, 122 Rust tests, 30 routing tests, 11 image tests and the API
+contract checks (47 routes, 38 valid/38 rejected examples) passed. Focused image
+pinning evaluation, the public selector, CLI build and generated installed flake
+also passed. No image layers, signatures or native runtime acceptance were
+established. Host image acquisition remains separate from Research and is not
+implemented by this catalog.
+
 Research work is tracked in [environment admission #8](https://github.com/timfewi/tentaflake-research/issues/8)
 and [guest transport #9](https://github.com/timfewi/tentaflake-research/issues/9).
 Strict guests have a distinct [backend track #153](https://github.com/timfewi/tentaflake/issues/153)
