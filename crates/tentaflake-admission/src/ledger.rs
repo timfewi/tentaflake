@@ -93,12 +93,28 @@ pub struct Ledger {
     directory: File,
 }
 
+struct LedgerLock {
+    file: File,
+}
+
+impl Drop for LedgerLock {
+    fn drop(&mut self) {
+        // fork temporarily shares the open file description even with CLOEXEC.
+        // Release our completed transaction explicitly; closing only this copy
+        // can otherwise keep the lock until an unrelated child reaches exec.
+        // File's drop still closes the descriptor if unlocking fails.
+        unsafe {
+            libc::flock(self.file.as_raw_fd(), libc::LOCK_UN);
+        }
+    }
+}
+
 /// Not Clone or serializable: this is the only dispatch authority returned by
 /// the ledger. Dropping it leaves the already durable Unknown reservation.
 #[must_use = "a new permit owns one bounded dispatch; dropping retains an uncertain claim"]
 pub struct DispatchPermit<'a> {
     ledger: &'a Ledger,
-    _lock: File,
+    _lock: LedgerLock,
     state: State,
     index: usize,
 }
@@ -292,7 +308,7 @@ impl Ledger {
         Ok(())
     }
 
-    fn lock(&self, create: bool) -> Result<File, LedgerError> {
+    fn lock(&self, create: bool) -> Result<LedgerLock, LedgerError> {
         self.validate_directory()?;
         let flags = libc::O_RDWR
             | if create {
@@ -309,7 +325,7 @@ impl Ledger {
                 error.into()
             });
         }
-        Ok(file)
+        Ok(LedgerLock { file })
     }
 
     fn open_file(&self, name: &str, flags: i32) -> Result<File, LedgerError> {
@@ -787,6 +803,20 @@ mod tests {
             reopened.snapshot().unwrap().entries[0].state,
             ReservationState::Active
         );
+    }
+
+    #[test]
+    fn releasing_lock_does_not_wait_for_an_inherited_descriptor_to_close() {
+        let fixture = Fixture::new();
+        let ledger = fixture.ledger();
+        let lock = ledger.lock(false).unwrap();
+        // A forked child briefly shares this open file description before exec
+        // closes O_CLOEXEC descriptors. A duplicate reproduces that ownership.
+        let inherited = lock.file.try_clone().unwrap();
+        assert!(matches!(ledger.snapshot(), Err(LedgerError::Busy)));
+        drop(lock);
+        assert_eq!(ledger.snapshot().unwrap().revision, 1);
+        drop(inherited);
     }
 
     #[test]

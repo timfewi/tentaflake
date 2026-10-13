@@ -45,8 +45,10 @@ decisions, checked aggregate reservations including host/Research reserves,
 source-generation freshness and a private durable claim ledger. Only newly
 synced claims yield a dispatch permit; existing receipts never redispatch,
 unknown outcomes retain capacity and confirmed stops retain storage. Review
-fixed unsafe directory ancestry and stale-owner capability grants. Fast-gate
-components pass with 169 Rust tests and 31 routing regressions; the API fixtures
+fixed unsafe directory ancestry and stale-owner capability grants. CI then exposed
+an inherited-descriptor lock-release race; a deterministic failing regression
+now passes with explicit lock release. Fast-gate components pass with 170 Rust
+tests and 31 routing regressions; the API fixtures
 and focused Nix package-source check pass. Actual offline CLI interactions cover
 allow, redaction, owner/expiry/strict denial and unsafe-input refusal.
 
