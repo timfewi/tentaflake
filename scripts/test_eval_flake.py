@@ -97,7 +97,7 @@ elif args[:2] == ["flake", "check"] and os.environ["EVAL_TEST_FAIL"] == "1":
                                   "EVAL_TEST_INVENTORY": json.dumps(inventory())},
             )
             calls = [json.loads(line) for line in log.read_text().splitlines()]
-            self.assertIn(json.dumps("git+" + root.as_uri()), calls[0]["flake"])
+            self.assertIn(json.dumps("git+" + root.as_uri() + "?shallow=1"), calls[0]["flake"])
             return result, calls
 
     def test_real_entrypoint_uses_one_temporary_lock_and_only_no_build_validation(self):

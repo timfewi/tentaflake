@@ -1,7 +1,7 @@
 ---
 name: tentaflake-repo-guidance
 description: Locate the owning source, guide and checks before changing Tentaflake modules, adapters, CLI or installer.
-version: 2.6.7
+version: 2.6.8
 ---
 
 # Tentaflake repository guidance
@@ -111,6 +111,9 @@ evidence for the current revision; skipped builds do not prove acceptance.
 See the [build guide](../../../docs/17-builds.md) for dispatch and focused checks.
 Keep `just eval` and CI on the shared sequential projection helper. Preserve
 every output/check and Git source filtering; pair host aliases in one evaluator.
+Allow shallow Git history explicitly; CI's depth-one checkout lacks `revCount`.
+Keep the real shallow-source fixture in the Nix-enabled static gate: mocked
+command tests alone missed this transport failure.
 Heavy VM, system and ISO builds require explicit workload authorization.
 Source checks never authorize activation.
 
