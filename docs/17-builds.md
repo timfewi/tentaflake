@@ -1,7 +1,7 @@
 # Build boundaries and contributor checks
 
 Start with `just fast`. It runs formatting, Nix lint, ShellCheck, Rust
-formatting/Clippy/unit tests, CI routing/evaluation-planning regressions and actionlint.
+formatting/Clippy/unit tests, CI routing, small no-build evaluator fixtures and actionlint.
 It does not prepare Research closures, evaluate configurations/generated flakes,
 or build Nix packages, images, systems or VMs. Loading the pinned development
 environment can still realize contributor tools.
@@ -21,6 +21,12 @@ one host with its matching check/package aliases, or one remaining output group.
 The installed-host check and installer ISO package stay with their host, avoiding
 duplicate host evaluation. Source inputs retain Git filtering and existing pins;
 only the temporary wrapper writes a lock. Each evaluator exits before the next.
+The local Git input explicitly allows shallow history (`shallow=1`), because CI's
+depth-one checkout has no complete revision count. `just ci-policy` and the
+Nix-enabled static CI job exercise a real shallow local clone: clean and dirty
+tracked files, ignored/untracked exclusion, preserved input pins and lock bytes,
+and upstream rejection of malformed outputs. This fixture requires no downloads
+or builds; planning tests still run separately in the job without Nix.
 This bounds the amount of evaluation retained together, not an individual
 fixture's memory or duration. CI run `38463440894` spent over 19 minutes in the
 previous whole-flake evaluation after Research closure preparation; this was
@@ -99,6 +105,8 @@ The routing regression runs directly on every runner without Nix setup;
 `checks.*.ci-vm-selection` also packages it for the full local flake gate.
 Documentation starts no Nix installation. Fast checks use the pinned binary
 cache for contributor tools; only explicit builds upload a GitHub Nix cache.
+Optional cache setup has a three-minute timeout; setup failure does not skip
+or fail the subsequent build and runtime checks.
 A Rust-only dispatch
 does not build the separate Research service. Worker-module dispatch uses the
 same focused package/runtime gates; the Research fixture enables no workers.

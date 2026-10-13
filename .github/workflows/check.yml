@@ -81,6 +81,11 @@ jobs:
         if: needs.changes.outputs.static == 'true'
         run: nix develop --command just formatter-test
 
+      - name: Shallow flake source regression
+        if: needs.changes.outputs.static == 'true'
+        # Use the installed CI Nix, as the explicit evaluation job does.
+        run: python3 scripts/test_eval_flake_nix.py
+
       - name: Nix lint
         if: needs.changes.outputs.static == 'true'
         run: |
@@ -147,7 +152,10 @@ jobs:
           extra-conf: |
             accept-flake-config = true
 
-      - uses: DeterminateSystems/magic-nix-cache-action@84c0677f58dcedf3b91f8223ce36a9ea5b3c84b7 # v15
+      - name: Optional Nix cache
+        uses: DeterminateSystems/magic-nix-cache-action@84c0677f58dcedf3b91f8223ce36a9ea5b3c84b7 # v15
+        timeout-minutes: 3
+        continue-on-error: true
         with:
           use-flakehub: false
 
