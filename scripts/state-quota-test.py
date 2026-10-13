@@ -2,8 +2,10 @@
 """Exercise generated quota helpers on private temporary files, without mounts."""
 
 from pathlib import Path
+import hashlib
 import re
 import shlex
+import stat
 import subprocess
 import sys
 import tempfile
@@ -13,12 +15,13 @@ def run(
     helpers: dict[str, Path],
     kind: str,
     root: Path,
-    expected: str,
+    expected: str | None = None,
     evidence: str | None = None,
     foreign_owner: Path | None = None,
 ) -> None:
+    """Require success, or refusal containing the supplied diagnostic."""
     tools = root.parent / "queries"
-    tools.mkdir()
+    tools.mkdir(exist_ok=True)
     metadata = tools / "image-metadata"
     # Model host UID0 without privileges. Permission bits are real, every query
     # stays inside the virtual host, and foreign ownership has a refusal case.
@@ -82,8 +85,11 @@ def run(
     result = subprocess.run(
         ["bash", "-eu", "-c", relocated], capture_output=True, text=True, timeout=15
     )
-    assert result.returncode != 0, "unsafe source was accepted"
-    assert expected in result.stderr, result.stderr
+    if expected is None:
+        assert result.returncode == 0, result.stderr
+    else:
+        assert result.returncode != 0, "unsafe source was accepted"
+        assert expected in result.stderr, result.stderr
 
 
 def check(helpers: dict[str, Path], kind: str, case: str, expected: str) -> None:
@@ -165,6 +171,65 @@ def check(helpers: dict[str, Path], kind: str, case: str, expected: str) -> None
             assert image.stat().st_size == (128 * 1024 * 1024 if case in {"wrong-format", "existing-image", "final-and-staging"} else 1024)
 
 
+def check_create_and_readonly_verify(helpers: dict[str, Path]) -> None:
+    with tempfile.TemporaryDirectory(prefix="tentaflake-quota-create-") as temporary:
+        root = Path(temporary) / "host"
+        root.mkdir(mode=0o700)
+        other = root / "unrelated"
+        other.mkdir(mode=0o755)
+        marker = other / "marker"
+        marker.write_bytes(b"preserve unrelated data\n")
+        before_other = (other.stat().st_mode, other.stat().st_mtime_ns)
+        before_marker = (marker.stat().st_mode, marker.stat().st_mtime_ns, marker.read_bytes())
+        source = root / "var/lib/generic-quota/state"
+        image = root / "var/lib/tentaflake-workspace-volumes/state/generic-quota.img"
+        staging = image.with_suffix(".img.new")
+        expected_bytes = 128 * 1024 * 1024
+
+        def fingerprint() -> tuple:
+            metadata = image.lstat()
+            assert stat.S_ISREG(metadata.st_mode)
+            assert metadata.st_size == expected_bytes
+            assert stat.S_IMODE(metadata.st_mode) == 0o600
+            assert metadata.st_nlink == 1
+            assert metadata.st_blocks * 512 < expected_bytes, "created image is not sparse"
+            digest = hashlib.sha256()
+            remaining = expected_bytes
+            with image.open("rb") as contents:
+                contents.seek(0x10040)
+                assert contents.read(8) == b"_BHRfS_M", "missing Btrfs superblock magic"
+                contents.seek(0)
+                while remaining:
+                    chunk = contents.read(min(1024 * 1024, remaining))
+                    assert chunk, "image shortened while hashing"
+                    digest.update(chunk)
+                    remaining -= len(chunk)
+                assert contents.read(1) == b"", "image grew while hashing"
+            return (
+                digest.digest(), metadata.st_dev, metadata.st_ino,
+                metadata.st_mode, metadata.st_nlink, metadata.st_size,
+                metadata.st_mtime_ns, metadata.st_ctime_ns,
+            )
+
+        # No command substitution for mkfs, blkid, Btrfs check, sync or size:
+        # create also executes its actual relocated verification helper.
+        run(helpers, "create", root)
+        assert source.is_dir() and list(source.iterdir()) == []
+        assert not staging.exists() and not staging.is_symlink()
+        created = fingerprint()
+        for missing_mount_directory in [False, True]:
+            if missing_mount_directory:
+                source.rmdir()
+            paths_before = set(root.rglob("*"))
+            run(helpers, "verify", root)
+            assert fingerprint() == created, "readonly verification changed the image"
+            assert set(root.rglob("*")) == paths_before, "verification changed paths"
+            assert source.exists() != missing_mount_directory
+            assert not staging.exists() and not staging.is_symlink()
+        assert (other.stat().st_mode, other.stat().st_mtime_ns) == before_other
+        assert (marker.stat().st_mode, marker.stat().st_mtime_ns, marker.read_bytes()) == before_marker
+
+
 def main() -> None:
     helpers = dict(zip(["create", "verify", "owner"], map(Path, sys.argv[1:]), strict=True))
     cases = [
@@ -195,7 +260,8 @@ def main() -> None:
     ]
     for kind, case, expected in cases:
         check(helpers, kind, case, expected)
-    print(f"{len(cases)} generated quota helper refusal checks passed")
+    check_create_and_readonly_verify(helpers)
+    print(f"{len(cases)} quota helper refusal checks and create/readonly-verify check passed")
 
 
 if __name__ == "__main__":

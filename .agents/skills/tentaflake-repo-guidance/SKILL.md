@@ -106,6 +106,9 @@ relevant source and guide. Avoid loading unrelated references.
 Start with `just fast` for static/unit checks; `just list` lists recipes. Recipes
 load pinned tools; direct Cargo/lint commands need `nix develop`. Configuration
 evaluation (`just eval`), generated flakes and builds are explicit gates.
+Generated helper paths carry Nix string context: compare exact invocation lines,
+not regex patterns. Strip context only from test-only JSON inspection copies;
+generated manifests and helpers must retain their dependency references.
 `.github/ci-paths.json` selects fast PR/push checks and affected dispatch builds
 from the same rules. Unknown paths/history select all fast checks automatically
 and the full inventory on dispatch. Before merging, obtain relevant build/runtime

@@ -75,8 +75,10 @@ with exclusive staged creation, sync and no overwrite; they still call helpers
 directly without ledger permits. `just fast` passed with 222 Rust tests,
 31 routing regressions and API validation of 47 routes, 38 valid examples and
 38 rejected counterexamples. The focused adapter gate also passed the generated
-plan assertions and 24 actual-helper refusal checks. This checkpoint claims no
-new VM or live acceptance.
+plan assertions and 24 actual-helper refusal checks. An additional actual-helper
+fixture creates a Btrfs image and verifies unchanged bytes/metadata, including
+when the empty mount directory is missing. The fast gate also passes with the
+merged libc/Tokio pins. This checkpoint claims no new VM or live acceptance.
 
 Next: fenced host bootstrap and actual policy-publication orchestration,
 mandatory quota creation/ownership and startup/stop ledger integration, live
