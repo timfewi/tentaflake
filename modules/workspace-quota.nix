@@ -7,6 +7,8 @@
 let
   constants = import ../lib/constants.nix;
   cfg = config.tentaflake.workspaceQuota;
+  enforced = config.tentaflake.security.admission != null;
+  admissionCli = "${pkgs.callPackage ../pkgs/tentaflake-cli { }}/bin/tentaflake";
   utils = import (pkgs.path + "/nixos/lib/utils.nix") { inherit lib config pkgs; };
   enabledAgents = lib.filterAttrs (_: agent: agent.enable) cfg.agents;
   containerNames = lib.attrNames config.virtualisation.oci-containers.containers;
@@ -196,7 +198,15 @@ let
         fi
       '';
       verify = writeQuotaHelper "tentaflake-${kind}-quota-verify-${name}" (
-        preparePrelude
+        ''
+          require_mounted=false
+          case "$#:$*" in
+            0:) ;;
+            1:--mounted) require_mounted=true ;;
+            *) echo "tentaflake: invalid quota verification arguments" >&2; exit 1 ;;
+          esac
+        ''
+        + preparePrelude
         + refuseStaging
         + ''
           if [ -L "$image" ] || { [ -e "$image" ] && [ ! -f "$image" ]; }; then
@@ -223,13 +233,65 @@ let
             exit 1
           fi
           if ! image_mounted_here; then
-            btrfs check --readonly "$image"
+            if "$require_mounted"; then
+              echo "tentaflake: expected quota image is not mounted" >&2
+              exit 1
+            fi
+            # The bounded read-only observer must own the actual checker PID.
+            exec btrfs check --readonly "$image"
+          fi
+          if "$require_mounted"; then
+            if [ "$(findmnt --noheadings --raw --mountpoint "$workspace" --output FSTYPE)" != btrfs ]; then
+              echo "tentaflake: quota mount is not Btrfs" >&2
+              exit 1
+            fi
+            mount_options=$(findmnt --noheadings --raw --mountpoint "$workspace" --output OPTIONS)
+            for required_option in nodev nosuid noatime; do
+              case ",$mount_options," in
+                *,"$required_option",*) ;;
+                *) echo "tentaflake: quota mount options drifted" >&2; exit 1 ;;
+              esac
+            done
           fi
         ''
       );
     in
     {
       inherit verify;
+      mount = writeQuotaHelper "tentaflake-${kind}-quota-mount-${name}" (
+        preparePrelude
+        + ''
+          ${verify}
+          if image_mounted_here; then
+            exec ${verify} --mounted
+          fi
+          if findmnt --noheadings --raw --mountpoint "$workspace" --output TARGET >/dev/null; then
+            echo "tentaflake: refusing to replace a different quota mount" >&2
+            exit 1
+          fi
+          install -d -m 0700 "$workspace"
+          check_directory "$workspace"
+          mount --types btrfs --options loop,nodev,nosuid,noatime -- "$image" "$workspace"
+          exec ${verify} --mounted
+        ''
+      );
+      unmount = writeQuotaHelper "tentaflake-${kind}-quota-unmount-${name}" (
+        preparePrelude
+        + refuseStaging
+        + ''
+          if image_mounted_here; then
+            ${verify} --mounted
+            umount -- "$workspace"
+          elif findmnt --noheadings --raw --mountpoint "$workspace" --output TARGET >/dev/null; then
+            echo "tentaflake: refusing to unmount a different quota image" >&2
+            exit 1
+          fi
+          if findmnt --noheadings --raw --mountpoint "$workspace" --output TARGET >/dev/null; then
+            echo "tentaflake: quota mount remains after unmount" >&2
+            exit 1
+          fi
+        ''
+      );
       create = writeQuotaHelper "tentaflake-${kind}-quota-create-${name}" (
         preparePrelude
         + refuseStaging
@@ -413,6 +475,52 @@ let
         ];
       };
     };
+
+  guardedService =
+    name: agent: kind:
+    let
+      stateDependency = lib.optional (kind == "workspace" && agent.state != null) (
+        ownerUnit name "state"
+      );
+      command =
+        action:
+        lib.escapeShellArgs [
+          admissionCli
+          "admission"
+          action
+          (toString config.tentaflake.admissionManifest)
+          "${kind}:${name}"
+        ];
+    in
+    {
+      description = "Guard fixed-size ${kind} lifecycle for ${name}";
+      requires = [ "systemd-tmpfiles-setup.service" ] ++ stateDependency;
+      after = [
+        "local-fs.target"
+        "systemd-tmpfiles-setup.service"
+      ]
+      ++ stateDependency;
+      before = [ "umount.target" ];
+      conflicts = [ "umount.target" ];
+      wantedBy = [ "multi-user.target" ];
+      serviceConfig = {
+        Type = "oneshot";
+        RemainAfterExit = true;
+        ExecStart = command "volume-start";
+        ExecStop = command "volume-stop";
+        KillMode = "control-group";
+        TimeoutStartSec = 300;
+        TimeoutStopSec = 120;
+        UMask = "0077";
+        NoNewPrivileges = true;
+        # Mount/unmount must affect the host. Filesystem namespace hardening
+        # here would hide the mounted image from controllers and the ledger.
+        PrivateMounts = false;
+        PrivateTmp = false;
+        ProtectSystem = false;
+        ProtectHome = false;
+      };
+    };
 in
 {
   options.tentaflake.workspaceQuota.agents = lib.mkOption {
@@ -519,43 +627,50 @@ in
         services
         // {
           "tentaflake-${volume.kind}-quota-prepare-${volume.name}" =
-            prepareService volume.name volume.agent
-              volume.kind;
+            if enforced then { enable = false; } else prepareService volume.name volume.agent volume.kind;
           "tentaflake-${volume.kind}-quota-${volume.name}" =
-            ownerService volume.name volume.agent
+            (if enforced then guardedService else ownerService) volume.name volume.agent
               volume.kind;
         }
       ) { } volumes;
 
-      mounts = map (
-        {
-          name,
-          agent,
-          kind,
-        }:
-        {
-          description = "Fixed-size persistent ${kind} for ${name}";
-          what = imagePath name kind;
-          where = mountPath agent kind;
-          type = "btrfs";
-          options = "loop,nodev,nosuid,noatime";
-          requires = [ (prepareUnit name kind) ];
-          after = [
-            "local-fs.target"
-            (prepareUnit name kind)
-          ];
-          before = [
-            (ownerUnit name kind)
-            "umount.target"
-          ];
-          conflicts = [ "umount.target" ];
-          wantedBy = [ "multi-user.target" ];
-          # This managed image is intentionally mounted after the ordinary local
-          # filesystems. Disable mount-unit defaults that would otherwise force it
-          # back before local-fs.target and create an ordering cycle with prepare.
-          unitConfig.DefaultDependencies = false;
-        }
-      ) volumes;
+      units = lib.mkIf enforced (
+        builtins.listToAttrs (
+          map (volume: lib.nameValuePair (mountUnit volume.agent volume.kind) { enable = false; }) volumes
+        )
+      );
+
+      mounts = lib.optionals (!enforced) (
+        map (
+          {
+            name,
+            agent,
+            kind,
+          }:
+          {
+            description = "Fixed-size persistent ${kind} for ${name}";
+            what = imagePath name kind;
+            where = mountPath agent kind;
+            type = "btrfs";
+            options = "loop,nodev,nosuid,noatime";
+            requires = [ (prepareUnit name kind) ];
+            after = [
+              "local-fs.target"
+              (prepareUnit name kind)
+            ];
+            before = [
+              (ownerUnit name kind)
+              "umount.target"
+            ];
+            conflicts = [ "umount.target" ];
+            wantedBy = [ "multi-user.target" ];
+            # This managed image is intentionally mounted after the ordinary local
+            # filesystems. Disable mount-unit defaults that would otherwise force it
+            # back before local-fs.target and create an ordering cycle with prepare.
+            unitConfig.DefaultDependencies = false;
+          }
+        ) volumes
+      );
     };
   };
 }

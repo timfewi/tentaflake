@@ -17,6 +17,7 @@ const MAX_PLAN_BYTES: u64 = 4 * 1024 * 1024;
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub(crate) struct HostPlan {
     schema_version: u32,
+    pub physical_space_headroom_bytes: u64,
     pub policy: HostPolicy,
     pub instances: BTreeMap<String, Instance>,
     pub volumes: Vec<Volume>,
@@ -45,6 +46,8 @@ pub(crate) struct Helpers {
     pub create: PathBuf,
     pub verify: PathBuf,
     pub owner: PathBuf,
+    pub mount: PathBuf,
+    pub unmount: PathBuf,
 }
 
 #[derive(Debug, Deserialize)]
@@ -60,7 +63,7 @@ pub(crate) struct Tools {
     pub docker: PathBuf,
 }
 
-fn store_path(path: &Path) -> bool {
+pub(crate) fn store_path(path: &Path) -> bool {
     let parts: Vec<_> = path.components().collect();
     let Some(Component::Normal(object)) = parts.get(3) else {
         return false;
@@ -109,7 +112,7 @@ fn mount_unit(path: &Path) -> String {
 
 impl HostPlan {
     fn validate(&self) -> Result<(), String> {
-        if self.schema_version != 1
+        if self.schema_version != 2
             || !identifier(&self.policy.generation)
             || !identifier(&self.policy.revision)
             || !validate_policy(&self.policy).is_empty()
@@ -182,6 +185,8 @@ impl HostPlan {
                     &volume.helpers.create,
                     &volume.helpers.verify,
                     &volume.helpers.owner,
+                    &volume.helpers.mount,
+                    &volume.helpers.unmount,
                 ]
                 .iter()
                 .any(|path| !store_path(path))
@@ -218,7 +223,7 @@ fn parse_plan(bytes: &[u8]) -> Result<HostPlan, String> {
     Ok(plan)
 }
 
-fn load_plan(path: &Path) -> Result<HostPlan, String> {
+pub(crate) fn load_plan(path: &Path) -> Result<HostPlan, String> {
     if !store_path(path) || path.parent() != Some(Path::new("/nix/store")) {
         return Err("host admission requires the exact generated store file".into());
     }
@@ -283,7 +288,7 @@ pub(crate) fn inventory(path: &Path, mode: OutputMode) -> Result<u8, String> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use serde_json::{Value, json};
     use tentaflake_admission::{RecordedAdmission, StorageKind, StorageRequirement};
@@ -291,7 +296,7 @@ mod tests {
     const INSTANCE: &str = "agent-fixture";
     const STORE: &str = "/nix/store/00000000000000000000000000000000-fixture-tools";
 
-    fn plan_fixture() -> Value {
+    pub(crate) fn plan_fixture() -> Value {
         let recorded: RecordedAdmission = serde_json::from_slice(include_bytes!(
             "../../tentaflake-admission/tests/recorded-start.json"
         ))
@@ -346,7 +351,9 @@ mod tests {
                 "helpers": {
                     "create": format!("{STORE}/bin/{label}-create"),
                     "verify": format!("{STORE}/bin/{label}-verify"),
-                    "owner": format!("{STORE}/bin/{label}-owner")
+                    "owner": format!("{STORE}/bin/{label}-owner"),
+                    "mount": format!("{STORE}/bin/{label}-mount"),
+                    "unmount": format!("{STORE}/bin/{label}-unmount")
                 }
             }));
         }
@@ -364,7 +371,8 @@ mod tests {
         .map(|(name, binary)| (name, format!("{STORE}/bin/{binary}")))
         .collect();
         json!({
-            "schemaVersion": 1,
+            "schemaVersion": 2,
+            "physicalSpaceHeadroomBytes": 1073741824,
             "policy": recorded.snapshot.policy,
             "instances": BTreeMap::from([(INSTANCE, instance)]),
             "volumes": volumes,
@@ -383,7 +391,7 @@ mod tests {
     #[test]
     fn accepts_nix_shaped_plan_without_live_files_or_readiness() {
         let plan = parse_fixture(&plan_fixture()).unwrap();
-        assert_eq!(plan.schema_version, 1);
+        assert_eq!(plan.schema_version, 2);
         assert_eq!(plan.instances[INSTANCE].owner_id, "host-root");
         assert_eq!(plan.volumes.len(), 2);
         assert_eq!(
@@ -504,7 +512,7 @@ mod tests {
             );
         }
         let mut wrong_version = plan_fixture();
-        wrong_version["schemaVersion"] = 2.into();
+        wrong_version["schemaVersion"] = 1.into();
         assert!(parse_fixture(&wrong_version).is_err());
     }
 

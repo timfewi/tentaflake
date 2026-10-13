@@ -132,10 +132,14 @@ are already published or require access to another repository for public checks.
   once and never authorize recreation, resize or rebinding. Initialization needs
   complete fenced inventory. `with_present_storage` holds the lock through a
   repeat-safe helper callback; it provides no durable idempotency.
-  `security.admission` currently prepares an immutable plan only. Root-only
-  `admission inventory` always emits `complete: false` and Unknown rows; no host
-  bootstrap or mandatory quota/OCI ledger gating exists yet. Keep this boundary
-  explicit until all creators, collectors and lifecycle units are integrated.
+  `security.admission` selects guarded quota supervisors and masks legacy
+  prepare/native mount units. Explicit stopped-host bootstrap owns completeness;
+  diagnostic inventory still emits `complete: false` and Unknown rows. Preserve
+  the exact systemd invocation, host mount namespace and inherited exclusive
+  fence through helper lifetimes. Full logical image charges plus explicit
+  headroom must fit current shared-pool free bytes before new creation; this
+  reserves no physical extents. OCI aggregate gating and host publication
+  orchestration remain unfinished. See `docs/14-workspace-quota.md`.
 - CLI help is configuration-free; management commands require generated
   host configuration and inventory.
 - `api/v1/openapi.json` owns the host API wire contract; clients consume its

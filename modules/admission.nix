@@ -65,7 +65,8 @@ let
     in
     definition // { revision = revision definition; };
   plan = {
-    schemaVersion = 1;
+    schemaVersion = 2;
+    inherit (cfg) physicalSpaceHeadroomBytes;
     policy = {
       generation = cfg.authorityEpoch;
       inherit (cfg)
@@ -128,6 +129,14 @@ in
             evidenceMaxAgeSeconds = lib.mkOption {
               type = lib.types.ints.between 1 300;
               default = 5;
+            };
+            physicalSpaceHeadroomBytes = lib.mkOption {
+              type = lib.types.ints.unsigned;
+              description = ''
+                Required free-byte headroom at storage admission, in addition to
+                conservative outstanding shared-pool image charges. This is a
+                live admission-time guard, not a physical-space reservation.
+              '';
             };
           };
         }

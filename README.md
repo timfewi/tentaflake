@@ -30,8 +30,9 @@ The shared Rust admission core can [explain a recorded startup decision](docs/10
 and persist conservative runtime and volume claims, including storage for
 never-started environments. Root-only [`admission inventory`](docs/14-workspace-quota.md#read-only-admission-inventory)
 lists existing quota images as Unknown and always reports incomplete bootstrap
-evidence. Host bootstrap, mandatory lifecycle integration and the host API
-service are still under development.
+evidence. Explicit [storage bootstrap and guarded quota services](docs/14-workspace-quota.md#guarded-storage-lifecycle)
+connect volume claims to image creation and mounting. Aggregate OCI lifecycle
+integration, policy publication and the host API service remain under development.
 
 Discover presets with `tentaflake runtimes --json`. A digest-pinned image and
 command can use the [common isolated workload definition](docs/agent-adapters.md#generic-isolated-workload)

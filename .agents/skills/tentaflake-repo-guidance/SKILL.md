@@ -45,8 +45,11 @@ relevant source and guide. Avoid loading unrelated references.
   Private ledger v3 adds durable Pending publication; pure snapshots remain v2.
   Require exact installation and mutator fencing before finish/cancel. Present
   storage callbacks hold the lock but may repeat; use repeat-safe helpers.
-  The Nix admission plan is preparation only: no host bootstrap or mandatory
-  unit gating yet. Root inventory always emits incomplete, Unknown evidence.
+  Guarded quota services bind mutations to the exact systemd invocation and
+  host mount namespace; preserve the inherited exclusive fence through helpers.
+  Only stopped-host bootstrap establishes complete inventory. Root diagnostics
+  remain incomplete/Unknown. Physical headroom is an admission-time shared-pool
+  check, not an extent reservation. OCI gating/publication remain unfinished.
 - Base images select reviewed platform manifests, separate from native presets.
   Preserve raw metadata bytes and run `just image-catalog`. Acquisition is separate
   from Research; digest chains do not prove signatures or runtime acceptance.

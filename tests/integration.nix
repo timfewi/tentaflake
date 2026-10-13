@@ -18,10 +18,14 @@
   mkZeroClawAgent,
   ...
 }:
+let
+  storageAdmission = import ./storage-admission.nix { inherit self; };
+in
 {
   name = "tentaflake-integration";
 
   nodes = {
+    storage = storageAdmission.node;
     machine =
       { pkgs, ... }:
       let
@@ -1765,5 +1769,9 @@
         )
         assert machine.succeed("cat /var/lib/hermes-test/restore-fixture").strip() == "restore-fixture"
 
-  '';
+    machine.shutdown()
+    attacker.shutdown()
+    podman.shutdown()
+  ''
+  + storageAdmission.testScript;
 }

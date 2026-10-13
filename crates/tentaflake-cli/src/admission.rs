@@ -1,4 +1,4 @@
-//! Recorded decisions and read-only host inventory. Neither grants authority.
+//! Recorded decisions, diagnostic inventory and root-owned storage lifecycle.
 
 use crate::OutputMode;
 use std::fs::OpenOptions;
@@ -10,8 +10,24 @@ use tentaflake_admission::{Decision, RecordedAdmission, decide};
 const MAX_SNAPSHOT_BYTES: u64 = 4 * 1024 * 1024;
 
 pub(crate) fn run(args: &[String], mode: OutputMode) -> Result<u8, String> {
+    match args {
+        [command, file] if command == "bootstrap" => {
+            return crate::admission_runtime::bootstrap(Path::new(file));
+        }
+        [command, file, id] if command == "volume-start" || command == "volume-stop" => {
+            return crate::admission_runtime::lifecycle(
+                Path::new(file),
+                id,
+                command == "volume-start",
+            );
+        }
+        [command, file, id] if command == "storage-recover" => {
+            return crate::admission_runtime::recover(Path::new(file), id);
+        }
+        _ => {}
+    }
     let [command, file] = args else {
-        return Err("admission requires: explain <snapshot-file> or inventory <generated-store-plan> [--hide]".into());
+        return Err("admission requires explain <snapshot-file>, inventory|bootstrap <generated-store-plan>, or storage-recover <generated-store-plan> <allocation-id>".into());
     };
     if command == "inventory" {
         return crate::admission_host::inventory(Path::new(file), mode);
@@ -84,7 +100,7 @@ mod tests {
     }
 
     #[test]
-    fn rejects_non_files_and_never_opens_a_mutation_command() {
+    fn rejects_non_files_and_unknown_or_incomplete_commands() {
         assert!(explain_file(Path::new(".")).is_err());
         assert!(run(&["start".into(), "missing".into()], OutputMode::default()).is_err());
         assert!(run(&["explain".into()], OutputMode::default()).is_err());

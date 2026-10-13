@@ -1,8 +1,9 @@
-//! Read-only inventory of the two fixed quota-image directories.
+//! Protected quota roots, inventory and admission-time backing headroom.
 //!
 //! The caller must fence every quota creator and privileged writer throughout
 //! scanning and ledger initialization. Metadata checks detect observed changes;
-//! they do not replace that fence, verify Btrfs, or establish physical capacity.
+//! they do not replace that fence or verify Btrfs. The creation-space check is
+//! a conservative current-space guard, not a reservation of physical extents.
 
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -52,6 +53,39 @@ pub fn scan_inventory(specs: &[VolumeSpec]) -> Result<StorageInventory, String> 
         return Err("quota inventory requires root".into());
     }
     scan_at(specs, Path::new(VOLUME_ROOT), 0, false)
+}
+
+/// Explicit bootstrap only. Create the two fixed roots without repairing any
+/// existing entry. The caller must fence other privileged quota mutators.
+pub fn ensure_backing_roots() -> Result<(), String> {
+    if unsafe { libc::geteuid() } != 0 {
+        return Err("quota root initialization requires root".into());
+    }
+    ensure_roots_at(Path::new(VOLUME_ROOT), 0, false)
+}
+
+/// Call under the ledger guard, against its exact retained snapshot, only for
+/// an absent allocation. Every retained byte stays charged, including missing,
+/// orphaned and Unknown images. Unrelated host writes can consume space after
+/// this observation; no allocated blocks or shared extents receive credit.
+pub fn check_creation_space(
+    specs: &[VolumeSpec],
+    retained: &[StorageAllocation],
+    new: &VolumeSpec,
+    headroom: u64,
+) -> Result<(), String> {
+    if unsafe { libc::geteuid() } != 0 {
+        return Err("quota creation-space inspection requires root".into());
+    }
+    check_creation_at(
+        specs,
+        retained,
+        new,
+        headroom,
+        Path::new(VOLUME_ROOT),
+        0,
+        false,
+    )
 }
 
 fn valid_slot_name(name: &str) -> bool {
@@ -172,7 +206,7 @@ fn protected_directory(
     Ok(meta)
 }
 
-fn open_root(root: &Path, owner_uid: u32, fixture: bool) -> Result<File, String> {
+pub(crate) fn open_root(root: &Path, owner_uid: u32, fixture: bool) -> Result<File, String> {
     if !root.is_absolute() {
         return Err("quota root must be absolute".into());
     }
@@ -200,6 +234,97 @@ fn open_root(root: &Path, owner_uid: u32, fixture: bool) -> Result<File, String>
     Ok(directory)
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct PoolIdentity {
+    device: u64,
+    mount_id: u64,
+}
+
+fn pool_identity(file: &File) -> Result<PoolIdentity, String> {
+    let mut stat = std::mem::MaybeUninit::<libc::statx>::zeroed();
+    if unsafe {
+        libc::statx(
+            file.as_raw_fd(),
+            c"".as_ptr(),
+            libc::AT_EMPTY_PATH | libc::AT_SYMLINK_NOFOLLOW,
+            libc::STATX_MNT_ID,
+            stat.as_mut_ptr(),
+        )
+    } != 0
+    {
+        return Err("cannot identify quota backing mount".into());
+    }
+    let stat = unsafe { stat.assume_init() };
+    if stat.stx_mask & libc::STATX_MNT_ID == 0 {
+        return Err("quota backing mount identity is unavailable".into());
+    }
+    Ok(PoolIdentity {
+        device: metadata(file)?.dev(),
+        mount_id: stat.stx_mnt_id,
+    })
+}
+
+fn require_same_pool(expected: PoolIdentity, actual: PoolIdentity) -> Result<(), String> {
+    if expected != actual {
+        return Err(
+            "quota backing entries must share one mount; nested and bind mounts are refused".into(),
+        );
+    }
+    Ok(())
+}
+
+fn ensure_directory(
+    parent: &File,
+    name: &OsStr,
+    owner_uid: u32,
+    fixture: bool,
+) -> Result<File, String> {
+    let encoded = CString::new(name.as_bytes()).map_err(|_| "invalid quota directory")?;
+    let created = unsafe { libc::mkdirat(parent.as_raw_fd(), encoded.as_ptr(), 0o700) } == 0;
+    if !created && io::Error::last_os_error().raw_os_error() != Some(libc::EEXIST) {
+        return Err("cannot create quota backing directory".into());
+    }
+    let directory = open_at(parent.as_raw_fd(), name, libc::O_RDONLY | libc::O_DIRECTORY)?;
+    protected_directory(&directory, owner_uid, false, fixture)?;
+    if created {
+        // Only our new inode is chmodded; an existing entry is never repaired.
+        // This also establishes 0700 when the caller has an unusually strict umask.
+        if unsafe { libc::fchmod(directory.as_raw_fd(), 0o700) } != 0 {
+            return Err("cannot protect new quota backing directory".into());
+        }
+        directory
+            .sync_all()
+            .map_err(|_| "cannot sync quota directory")?;
+        parent
+            .sync_all()
+            .map_err(|_| "cannot sync quota directory parent")?;
+    }
+    Ok(directory)
+}
+
+fn ensure_roots_at(root: &Path, owner_uid: u32, fixture: bool) -> Result<(), String> {
+    let parent = open_root(
+        root.parent().ok_or("invalid quota root")?,
+        owner_uid,
+        fixture,
+    )?;
+    let directory = ensure_directory(
+        &parent,
+        root.file_name().ok_or("invalid quota root")?,
+        owner_uid,
+        fixture,
+    )?;
+    let state = ensure_directory(&directory, OsStr::new("state"), owner_uid, fixture)?;
+    let pool = pool_identity(&directory)?;
+    require_same_pool(pool, pool_identity(&state)?)?;
+    let current = open_root(root, owner_uid, fixture)?;
+    require_same_pool(pool, pool_identity(&current)?)?;
+    if stamp(&metadata(&directory)?) != stamp(&metadata(&current)?) {
+        return Err("quota backing root changed during initialization".into());
+    }
+    Ok(())
+}
+
 fn stamp(meta: &Metadata) -> [u64; 11] {
     [
         meta.dev(),
@@ -216,7 +341,25 @@ fn stamp(meta: &Metadata) -> [u64; 11] {
     ]
 }
 
-fn inspect_image(directory: &File, name: &OsStr, owner_uid: u32) -> Result<Metadata, String> {
+fn image_unchanged(before: &Metadata, after: &Metadata, quiescent: bool) -> bool {
+    let before = stamp(before);
+    let after = stamp(after);
+    // Inner-filesystem writes change timestamps but cannot change the protected
+    // backing file's identity, ownership, permissions, links or logical length.
+    if quiescent {
+        before == after
+    } else {
+        before[..7] == after[..7]
+    }
+}
+
+fn inspect_image(
+    directory: &File,
+    name: &OsStr,
+    owner_uid: u32,
+    pool: PoolIdentity,
+    quiescent: bool,
+) -> Result<Metadata, String> {
     // Inspect through O_PATH first: opening a device node for reading can have
     // effects even when the subsequent regular-file check would reject it.
     let image = open_at(directory.as_raw_fd(), name, libc::O_PATH)?;
@@ -229,8 +372,10 @@ fn inspect_image(directory: &File, name: &OsStr, owner_uid: u32) -> Result<Metad
     {
         return Err("unsafe or empty quota image".into());
     }
+    require_same_pool(pool, pool_identity(&image)?)?;
     let readable = open_at(directory.as_raw_fd(), name, libc::O_RDONLY)?;
-    if stamp(&meta) != stamp(&metadata(&readable)?) {
+    require_same_pool(pool, pool_identity(&readable)?)?;
+    if !image_unchanged(&meta, &metadata(&readable)?, quiescent) {
         return Err("quota image changed during inventory".into());
     }
     Ok(meta)
@@ -283,31 +428,26 @@ struct ScannedDirectory {
     images: Vec<(OsString, Metadata)>,
 }
 
-fn scan_at(
-    specs: &[VolumeSpec],
+fn scan_pool(
     root: &Path,
     owner_uid: u32,
     fixture: bool,
-) -> Result<StorageInventory, String> {
-    let specs = declared_slots(specs, root)?;
+    quiescent: bool,
+) -> Result<Vec<ScannedDirectory>, String> {
     let directory = open_root(root, owner_uid, fixture)?;
+    let pool = pool_identity(&directory)?;
     let before = metadata(&directory)?;
     let mut directories = vec![ScannedDirectory {
         file: directory,
         before,
         images: Vec::new(),
     }];
-    let mut allocations = BTreeMap::new();
+    let mut image_count = 0;
     // Exactly the workspace root and, when present, its state child.
     for index in 0..2 {
         if index == directories.len() {
             break;
         }
-        let kind = if index == 0 {
-            StorageKind::Workspace
-        } else {
-            StorageKind::State
-        };
         let mut stream = DirectoryStream::new(&directories[index].file)?;
         let mut names = BTreeSet::new();
         while let Some(name) = stream.next()? {
@@ -324,6 +464,7 @@ fn scan_at(
                     libc::O_RDONLY | libc::O_DIRECTORY,
                 )?;
                 let before = protected_directory(&file, owner_uid, false, fixture)?;
+                require_same_pool(pool, pool_identity(&file)?)?;
                 directories.push(ScannedDirectory {
                     file,
                     before,
@@ -337,41 +478,28 @@ fn scan_at(
             if name_text.ends_with(".new") {
                 return Err("unfinished quota image creation requires reconciliation".into());
             }
-            let Some(slot) = name_text
+            if name_text
                 .strip_suffix(".img")
                 .filter(|name| valid_slot_name(name))
-            else {
+                .is_none()
+            {
                 return Err("unexpected quota inventory entry".into());
-            };
-            if allocations.len() >= MAX_STORAGE_ALLOCATIONS {
+            }
+            if image_count >= MAX_STORAGE_ALLOCATIONS {
                 return Err("quota inventory exceeds allocation limit".into());
             }
-            let meta = inspect_image(&directories[index].file, &name, owner_uid)?;
-            let id = slot_id(kind, slot);
-            let binding = specs
-                .get(&id)
-                .filter(|spec| spec.bytes == meta.len())
-                .map(|spec| StorageBinding {
-                    instance_id: spec.instance_id.clone(),
-                    owner_id: spec.owner_id.clone(),
-                    revision: spec.binding_revision.clone(),
-                });
-            allocations.insert(
-                id.clone(),
-                StorageAllocation {
-                    id,
-                    kind,
-                    bytes: meta.len(),
-                    binding,
-                    state: StorageState::Unknown,
-                },
-            );
+            let meta = inspect_image(&directories[index].file, &name, owner_uid, pool, quiescent)?;
+            image_count += 1;
             directories[index].images.push((name, meta));
         }
     }
     for directory in &directories {
         for (name, before) in &directory.images {
-            if stamp(before) != stamp(&inspect_image(&directory.file, name, owner_uid)?) {
+            if !image_unchanged(
+                before,
+                &inspect_image(&directory.file, name, owner_uid, pool, quiescent)?,
+                quiescent,
+            ) {
                 return Err("quota image changed during inventory".into());
             }
         }
@@ -380,20 +508,185 @@ fn scan_at(
         }
     }
     // Also detect replacement of the fixed root while its original FD was held.
-    if stamp(&directories[0].before) != stamp(&metadata(&open_root(root, owner_uid, fixture)?)?) {
+    let current = open_root(root, owner_uid, fixture)?;
+    require_same_pool(pool, pool_identity(&current)?)?;
+    if stamp(&directories[0].before) != stamp(&metadata(&current)?) {
         return Err("quota inventory root changed".into());
     }
+    if directories.len() == 2 {
+        let state = open_at(
+            current.as_raw_fd(),
+            OsStr::new("state"),
+            libc::O_RDONLY | libc::O_DIRECTORY,
+        )?;
+        require_same_pool(pool, pool_identity(&state)?)?;
+        if stamp(&directories[1].before) != stamp(&metadata(&state)?) {
+            return Err("quota inventory state directory changed".into());
+        }
+    }
+    Ok(directories)
+}
+
+fn observed_slots(
+    directories: &[ScannedDirectory],
+) -> impl Iterator<Item = (String, StorageKind, &Metadata)> {
+    directories
+        .iter()
+        .enumerate()
+        .flat_map(|(index, directory)| {
+            let kind = if index == 0 {
+                StorageKind::Workspace
+            } else {
+                StorageKind::State
+            };
+            directory.images.iter().map(move |(name, meta)| {
+                let slot = name
+                    .to_str()
+                    .expect("validated slot name")
+                    .strip_suffix(".img")
+                    .expect("validated image suffix");
+                (slot_id(kind, slot), kind, meta)
+            })
+        })
+}
+
+fn scan_at(
+    specs: &[VolumeSpec],
+    root: &Path,
+    owner_uid: u32,
+    fixture: bool,
+) -> Result<StorageInventory, String> {
+    let specs = declared_slots(specs, root)?;
+    let directories = scan_pool(root, owner_uid, fixture, true)?;
+    let allocations: BTreeMap<_, _> = observed_slots(&directories)
+        .map(|(id, kind, meta)| {
+            let binding = specs
+                .get(&id)
+                .filter(|spec| spec.bytes == meta.len())
+                .map(|spec| StorageBinding {
+                    instance_id: spec.instance_id.clone(),
+                    owner_id: spec.owner_id.clone(),
+                    revision: spec.binding_revision.clone(),
+                });
+            (
+                id.clone(),
+                StorageAllocation {
+                    id,
+                    kind,
+                    bytes: meta.len(),
+                    binding,
+                    state: StorageState::Unknown,
+                },
+            )
+        })
+        .collect();
     Ok(StorageInventory {
         complete: true,
         allocations: allocations.into_values().collect(),
     })
 }
 
+fn required_creation_bytes(
+    retained: &[StorageAllocation],
+    new_bytes: u64,
+    headroom: u64,
+) -> Result<u64, String> {
+    if retained.len() >= MAX_STORAGE_ALLOCATIONS || new_bytes == 0 {
+        return Err("invalid quota creation charge".into());
+    }
+    let mut ids = BTreeSet::new();
+    let mut total = new_bytes
+        .checked_add(headroom)
+        .ok_or("quota backing charge overflow")?;
+    for allocation in retained {
+        if allocation.bytes == 0 || !identifier(&allocation.id) || !ids.insert(&allocation.id) {
+            return Err("invalid retained quota allocation".into());
+        }
+        total = total
+            .checked_add(allocation.bytes)
+            .ok_or("quota backing charge overflow")?;
+    }
+    Ok(total)
+}
+
+fn available_bytes(blocks: u64, fragment_size: u64) -> Result<u64, String> {
+    if fragment_size == 0 {
+        return Err("quota backing fragment size is unavailable".into());
+    }
+    blocks
+        .checked_mul(fragment_size)
+        .ok_or_else(|| "quota backing space overflow".into())
+}
+
+fn backing_available(directory: &File) -> Result<u64, String> {
+    let mut stat = std::mem::MaybeUninit::<libc::statvfs>::zeroed();
+    if unsafe { libc::fstatvfs(directory.as_raw_fd(), stat.as_mut_ptr()) } != 0 {
+        return Err("cannot observe available quota backing space".into());
+    }
+    let stat = unsafe { stat.assume_init() };
+    if stat.f_flag & libc::ST_RDONLY != 0 {
+        return Err("quota backing filesystem is read-only".into());
+    }
+    available_bytes(stat.f_bavail, stat.f_frsize)
+}
+
+fn check_creation_at(
+    specs: &[VolumeSpec],
+    retained: &[StorageAllocation],
+    new: &VolumeSpec,
+    headroom: u64,
+    root: &Path,
+    owner_uid: u32,
+    fixture: bool,
+) -> Result<(), String> {
+    let required = required_creation_bytes(retained, new.bytes, headroom)?;
+    let directory = creation_pool(specs, retained, new, root, owner_uid, fixture)?;
+    if backing_available(&directory)? < required {
+        return Err("insufficient backing headroom for all retained and new quota bytes".into());
+    }
+    Ok(())
+}
+
+fn creation_pool(
+    specs: &[VolumeSpec],
+    retained: &[StorageAllocation],
+    new: &VolumeSpec,
+    root: &Path,
+    owner_uid: u32,
+    fixture: bool,
+) -> Result<File, String> {
+    let declared = declared_slots(specs, root)?;
+    if declared.get(&new.allocation_id).copied() != Some(new)
+        || retained
+            .iter()
+            .any(|allocation| allocation.id == new.allocation_id)
+    {
+        return Err("creation requires one exact declared, unallocated quota slot".into());
+    }
+    let mut directories = scan_pool(root, owner_uid, fixture, false)?;
+    if directories.len() != 2 {
+        return Err("quota backing roots require explicit bootstrap".into());
+    }
+    let retained: BTreeMap<_, _> = retained
+        .iter()
+        .map(|allocation| (allocation.id.as_str(), allocation))
+        .collect();
+    for (id, kind, meta) in observed_slots(&directories) {
+        if !retained
+            .get(id.as_str())
+            .is_some_and(|allocation| allocation.kind == kind && allocation.bytes == meta.len())
+        {
+            return Err("actual quota image is not represented by its retained allocation".into());
+        }
+    }
+    Ok(directories.remove(0).file)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::fs::{self, DirBuilder, OpenOptions};
-    use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt, symlink};
+    use std::os::unix::fs::{DirBuilderExt, FileExt, OpenOptionsExt, PermissionsExt, symlink};
     use std::sync::atomic::{AtomicU64, Ordering};
 
     struct Fixture(PathBuf);
@@ -445,6 +738,25 @@ mod tests {
 
         fn scan(&self, specs: &[VolumeSpec]) -> Result<StorageInventory, String> {
             scan_at(specs, &self.0, unsafe { libc::geteuid() }, true)
+        }
+
+        fn initialize(&self) {
+            ensure_roots_at(&self.0, unsafe { libc::geteuid() }, true).unwrap();
+        }
+
+        fn creation_pool(
+            &self,
+            retained: &[StorageAllocation],
+            new: &VolumeSpec,
+        ) -> Result<File, String> {
+            creation_pool(
+                std::slice::from_ref(new),
+                retained,
+                new,
+                &self.0,
+                unsafe { libc::geteuid() },
+                true,
+            )
         }
     }
 
@@ -664,5 +976,207 @@ mod tests {
         assert!(inventory.complete);
         assert!(inventory.allocations.is_empty());
         assert_eq!(fs::read_dir(&fixture.0).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn bootstrap_creates_only_private_roots_and_leaves_existing_modes_unchanged() {
+        let fixture = Fixture::new();
+        let root = fixture.0.join("volumes");
+        let uid = unsafe { libc::geteuid() };
+        ensure_roots_at(&root, uid, true).unwrap();
+        for path in [&root, &root.join("state")] {
+            assert_eq!(fs::metadata(path).unwrap().mode() & 0o7777, 0o700);
+        }
+        assert_eq!(fs::read_dir(&root).unwrap().count(), 1);
+        assert_eq!(fs::read_dir(root.join("state")).unwrap().count(), 0);
+        fs::set_permissions(&root, fs::Permissions::from_mode(0o750)).unwrap();
+        ensure_roots_at(&root, uid, true).unwrap();
+        assert_eq!(fs::metadata(&root).unwrap().mode() & 0o7777, 0o750);
+    }
+
+    #[test]
+    fn bootstrap_refuses_unsafe_existing_entries_without_repair() {
+        let fixture = Fixture::new();
+        let uid = unsafe { libc::geteuid() };
+        let root = fixture.0.join("volumes");
+        fs::write(&root, b"preserve").unwrap();
+        assert!(ensure_roots_at(&root, uid, true).is_err());
+        assert_eq!(fs::read(&root).unwrap(), b"preserve");
+        fs::remove_file(&root).unwrap();
+        symlink(&fixture.0, &root).unwrap();
+        assert!(ensure_roots_at(&root, uid, true).is_err());
+        assert!(!fixture.0.join("state").exists());
+        fs::remove_file(&root).unwrap();
+        ensure_roots_at(&root, uid, true).unwrap();
+        let state = root.join("state");
+        fs::set_permissions(&state, fs::Permissions::from_mode(0o777)).unwrap();
+        assert!(ensure_roots_at(&root, uid, true).is_err());
+        assert_eq!(fs::metadata(&state).unwrap().mode() & 0o7777, 0o777);
+        fs::set_permissions(&state, fs::Permissions::from_mode(0o700)).unwrap();
+        fs::set_permissions(&fixture.0, fs::Permissions::from_mode(0o777)).unwrap();
+        assert!(ensure_roots_at(&root, uid, true).is_err());
+        fs::set_permissions(&fixture.0, fs::Permissions::from_mode(0o700)).unwrap();
+        assert!(ensure_roots_at(&root, uid.wrapping_add(1), true).is_err());
+    }
+
+    #[test]
+    fn charges_every_retained_kind_and_state_without_block_credit() {
+        let fixture = Fixture::new();
+        fixture.image(StorageKind::Workspace, "agent-a", 7);
+        fixture.image(StorageKind::State, "orphan", 11);
+        let mut retained = fixture.scan(&[]).unwrap().allocations;
+        retained[0].state = StorageState::Present;
+        assert_eq!(required_creation_bytes(&retained, 13, 17).unwrap(), 48);
+        assert!(required_creation_bytes(&retained, u64::MAX, 1).is_err());
+        retained[0].bytes = u64::MAX;
+        assert!(required_creation_bytes(&retained, 1, 0).is_err());
+        retained[0].bytes = 0;
+        assert!(required_creation_bytes(&retained, 1, 0).is_err());
+        retained[0] = retained[1].clone();
+        assert!(required_creation_bytes(&retained, 1, 0).is_err());
+        assert_eq!(available_bytes(7, 4096).unwrap(), 28672);
+        assert_eq!(available_bytes(0, 4096).unwrap(), 0);
+        assert!(available_bytes(u64::MAX, 4096).is_err());
+        assert!(available_bytes(1, 0).is_err());
+    }
+
+    #[test]
+    fn creation_requires_complete_actual_accounting_but_keeps_missing_charges() {
+        let fixture = Fixture::new();
+        fixture.initialize();
+        fixture.image(StorageKind::Workspace, "old", MIN_STORAGE_BYTES);
+        fixture.image(StorageKind::State, "orphan", MIN_STORAGE_BYTES);
+        let mut retained = fixture.scan(&[]).unwrap().allocations;
+        let new = fixture.spec(StorageKind::Workspace, "new");
+        assert!(fixture.creation_pool(&[], &new).is_err());
+        assert!(fixture.creation_pool(&retained[..1], &new).is_err());
+        assert!(fixture.creation_pool(&retained, &new).is_ok());
+        fs::remove_file(image_path(&fixture.0, StorageKind::State, "orphan")).unwrap();
+        assert!(fixture.creation_pool(&retained, &new).is_ok());
+        assert_eq!(
+            required_creation_bytes(&retained, new.bytes, 19).unwrap(),
+            3 * MIN_STORAGE_BYTES + 19,
+        );
+        retained
+            .iter_mut()
+            .find(|allocation| allocation.kind == StorageKind::Workspace)
+            .unwrap()
+            .bytes += 1;
+        assert!(fixture.creation_pool(&retained, &new).is_err());
+        assert!(!new.image_path.exists());
+    }
+
+    #[test]
+    fn creation_never_replays_a_retained_slot_or_touches_staging() {
+        let fixture = Fixture::new();
+        fixture.initialize();
+        let new = fixture.spec(StorageKind::Workspace, "new");
+        let retained = StorageAllocation {
+            id: new.allocation_id.clone(),
+            kind: new.kind,
+            bytes: new.bytes,
+            binding: None,
+            state: StorageState::Unknown,
+        };
+        assert!(
+            fixture
+                .creation_pool(std::slice::from_ref(&retained), &new)
+                .is_err()
+        );
+        let mut changed = new.clone();
+        changed.bytes += 1;
+        assert!(
+            creation_pool(
+                std::slice::from_ref(&new),
+                &[],
+                &changed,
+                &fixture.0,
+                unsafe { libc::geteuid() },
+                true,
+            )
+            .is_err()
+        );
+        let staging = fixture.0.join("new.img.new");
+        fs::write(&staging, b"partial").unwrap();
+        assert!(fixture.creation_pool(&[], &new).is_err());
+        assert_eq!(fs::read(&staging).unwrap(), b"partial");
+        assert!(!new.image_path.exists());
+        fs::remove_file(&staging).unwrap();
+        fixture.image(new.kind, "new", new.bytes);
+        assert!(fixture.creation_pool(&[], &new).is_err());
+        assert!(fixture.creation_pool(&[retained], &new).is_err());
+        assert_eq!(fs::metadata(&new.image_path).unwrap().len(), new.bytes);
+    }
+
+    #[test]
+    fn live_image_writes_are_allowed_but_size_and_permissions_are_not() {
+        let fixture = Fixture::new();
+        fixture.initialize();
+        let path = fixture.image(StorageKind::Workspace, "old", MIN_STORAGE_BYTES);
+        let retained = fixture.scan(&[]).unwrap().allocations;
+        let before = fs::metadata(&path).unwrap();
+        let file = OpenOptions::new().write(true).open(&path).unwrap();
+        file.write_at(b"updated", 0).unwrap();
+        file.set_modified(std::time::UNIX_EPOCH + std::time::Duration::from_secs(1))
+            .unwrap();
+        let after = fs::metadata(&path).unwrap();
+        assert!(image_unchanged(&before, &after, false));
+        assert!(!image_unchanged(&before, &after, true));
+        let new = fixture.spec(StorageKind::State, "new");
+        assert!(fixture.creation_pool(&retained, &new).is_ok());
+        file.set_len(MIN_STORAGE_BYTES + 1).unwrap();
+        assert!(fixture.creation_pool(&retained, &new).is_err());
+        file.set_len(MIN_STORAGE_BYTES).unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o640)).unwrap();
+        assert!(fixture.creation_pool(&retained, &new).is_err());
+    }
+
+    #[test]
+    fn pool_identity_rejects_bind_mounts_even_when_device_matches() {
+        let fixture = Fixture::new();
+        fixture.initialize();
+        let root = open_root(&fixture.0, unsafe { libc::geteuid() }, true).unwrap();
+        let identity = pool_identity(&root).unwrap();
+        let state = open_at(
+            root.as_raw_fd(),
+            OsStr::new("state"),
+            libc::O_RDONLY | libc::O_DIRECTORY,
+        )
+        .unwrap();
+        assert_eq!(identity, pool_identity(&state).unwrap());
+        assert!(
+            require_same_pool(
+                identity,
+                PoolIdentity {
+                    mount_id: identity.mount_id.wrapping_add(1),
+                    ..identity
+                },
+            )
+            .is_err()
+        );
+        assert!(
+            require_same_pool(
+                identity,
+                PoolIdentity {
+                    device: identity.device.wrapping_add(1),
+                    ..identity
+                },
+            )
+            .is_err()
+        );
+        let new = fixture.spec(StorageKind::Workspace, "new");
+        assert!(
+            check_creation_at(
+                std::slice::from_ref(&new),
+                &[],
+                &new,
+                u64::MAX - new.bytes,
+                &fixture.0,
+                unsafe { libc::geteuid() },
+                true,
+            )
+            .is_err()
+        );
+        assert!(!new.image_path.exists());
     }
 }

@@ -131,7 +131,8 @@ The private on-disk ledger now uses schema version 3; pure snapshots and request
 remain version 2. Its initialization API requires a new directory, an explicit
 `PublishedAuthority` and a complete storage inventory. Ordinary opens refuse
 missing, corrupt, unsafe or older-version state; migration is explicit and never
-interprets old state as empty. There is no host bootstrap command yet.
+interprets old state as empty. Explicit host bootstrap is a stopped-host
+[storage maintenance operation](14-workspace-quota.md#guarded-storage-lifecycle).
 A nonblocking exclusive lock serializes decisions, and a durable unknown
 reservation precedes any new dispatch permit. The in-memory permit retains
 that lock through the launch handoff. An identical operation key returns the
@@ -176,21 +177,26 @@ It provides no creation permit or durable idempotency: retries may repeat the
 callback. Callers must use repeat-safe helpers, verify exact files and mounts,
 and keep helper processes within the callback's lifetime.
 
-The optional `tentaflake.security.admission` declaration prepares a closed
-version-1 `HostPlan` for balanced Docker hosts. It takes `authorityEpoch`,
+The optional `tentaflake.security.admission` declaration generates a closed
+version-2 `HostPlan` for balanced Docker hosts. It takes `authorityEpoch`,
 `capacity`, `hostReserve`, `researchReserve`, `maxActive` and
-`evidenceMaxAgeSeconds`; per-instance ceilings remain owned by
+`evidenceMaxAgeSeconds`, plus explicit `physicalSpaceHeadroomBytes`;
+per-instance ceilings remain owned by
 `security.resources` and quota options. Legacy compute, independent workers and
 other unmanaged workloads must fit the explicit host reserve. The generated
 store file is linked at `/etc/tentaflake/admission.json`; it contains configured
 policy, exact quota bindings and immutable helper paths, with no live readiness.
 
-This option is preparation only. It does not initialize a ledger, publish its
-authority or put quota/OCI units behind ledger admission. The root-only
+This option puts quota creation, mounting and ownership behind the root-owned
+storage supervisor. It does not initialize a ledger automatically. Explicit
+bootstrap verifies stopped guarded units, masked legacy creators, detached
+managed backing images and an idle Docker backend before importing inventory.
+The root-only
 [`admission inventory` diagnostic](14-workspace-quota.md#read-only-admission-inventory)
 always reports `complete: false`; its output cannot bootstrap the ledger.
-Mandatory unit/lifecycle gating, live collectors and the HTTP service remain
-unfinished. Existing generic units retain their declarative capability/quota
+Mandatory OCI startup/stop accounting, live capability collectors, policy
+publication orchestration and the HTTP service remain unfinished. Existing
+generic units retain their declarative capability/quota
 gates. A successful core decision or inventory scan does not establish runtime
 isolation, upstream model authorization or vendor acceptance.
 

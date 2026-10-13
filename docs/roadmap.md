@@ -21,14 +21,12 @@ affected configuration, package and VM gates. The fast gate passed with 122
 Rust tests and 28 routing regressions; automatic and explicit GitHub runs passed
 at `20e0273`. This is workflow evidence, not runtime acceptance.
 
-PRs #149/#150 (libc/Tokio), #160 (bounded evaluation and read-only formatting)
-and #161 (reviewed Debian/Ubuntu metadata) are merged. PRs #156–#159 retain
-their implementation boundaries below and await relevant build/runtime evidence.
-The replacement explicit run `38471901780` tests capability head `72c63d5`
-against current main; the older whole-flake run was cancelled after its revision
-was superseded. The combined host-preparation tree passes read-only formatting,
-Nix lint, 34 routing tests, four evaluator tests and 11 offline image tests;
-its unchanged Rust/helper results below remain applicable.
+PRs #149/#150 (libc/Tokio), #160/#162 (bounded and shallow-checkout evaluation),
+#161 (reviewed Debian/Ubuntu metadata) and #163 (bounded optional cache setup)
+are merged. PRs #156–#159 retain their implementation boundaries below and
+await relevant build/runtime evidence. Explicit run `38478204372` tests
+capability head `bc25fc6` against main `01340a9`, including the repaired
+onboarding fixture. Current storage source verification is recorded below.
 
 Next: capability admission [#116](https://github.com/timfewi/tentaflake/issues/116),
 real coding-agent acceptance [#136](https://github.com/timfewi/tentaflake/issues/136),
@@ -73,34 +71,45 @@ an obsolete historical-size rule that disagreed with this allocation accounting.
 Fast-gate components passed with 195 Rust tests, 31 routing regressions and the
 47-route API contract. The library alone does not fence existing image creators.
 
-The current host preparation slice adds private ledger v3 published authority
-and durable Pending publication; pure snapshots remain v2. Explicit finish or
-cancel requires host installation/drain/fence proof and preserves Unknown
-charges. Present-storage callbacks hold the lock but provide no durable
-idempotency. Nix generates an immutable plan, and root-only `admission inventory`
-scans fixed quota roots including orphan images, always returning Unknown rows
-and `complete: false`. Quota units now share immutable create/verify/owner helpers
-with exclusive staged creation, sync and no overwrite; they still call helpers
-directly without ledger permits. `just fast` passed with 222 Rust tests,
-31 routing regressions and API validation of 47 routes, 38 valid examples and
-38 rejected counterexamples. The focused adapter gate also passed the generated
-plan assertions and 24 actual-helper refusal checks. An additional actual-helper
-fixture creates a Btrfs image and verifies unchanged bytes/metadata, including
-when the empty mount directory is missing. The fast gate also passes with the
-merged libc/Tokio pins. This checkpoint claims no new VM or live acceptance.
+The storage runtime slice connects ledger v3 to the generated quota services.
+Explicit stopped-host bootstrap verifies masked legacy creators, a complete
+loaded/installed mount inventory, idle Docker and no attached loop devices;
+diagnostic inventory remains incomplete and Unknown. An exact systemd invocation
+holds an inherited exclusive host fence and the ledger transaction through
+create/mount/ownership. New images require synced Unknown claims; existing,
+orphan, missing and uncertain images retain charges and never authorize implicit
+recreation. Stop unmounts without releasing storage. Read-only explicit recovery
+can verify an exact retained image. Backups depend on the guarded services and
+verify exact host mounts before reading them.
 
-Next: fenced host bootstrap and actual policy-publication orchestration,
-mandatory quota creation/ownership and startup/stop ledger integration, live
-collectors, then the authenticated dynamic host API. The admission plan option
-currently prepares data only. Offline commands and library/helper tests do not
-establish enforceable host admission, runtime isolation or vendor acceptance.
-The next storage slice should consolidate prepare/mount/owner under the existing
-quota service names and migrate backup dependencies. It must preserve host mount
-visibility and fence complete helper lifetimes. Sparse images do not reserve
-physical capacity: formatting/loop discard can undo preallocation. The physical
-backing and discard boundary still needs kernel evidence and a VM regression;
-a bounded Research fetch returned `budget_exceeded` without source evidence.
-Existing images must remain charged and must never be implicitly recreated.
+The shared backing filesystem must have current free bytes for every retained
+logical image, the new image and explicit headroom. Device/mount identities are
+checked; sparse/shared extents receive no credit. This is a conservative
+admission-time guard, not a physical extent reservation. Unrelated host writes
+and later filesystem metadata allocation can still exhaust space. Kernel discard
+proof is therefore not claimed or required for this model.
+
+Changed ownership: CLI `admission_runtime`, `admission_fence`, `admission_systemd`
+and protected storage code; quota/admission/backup modules; a dedicated sequential
+storage node in the existing integration VM. `just fast` passes with 253 Rust
+tests, 34 routing regressions, four evaluator tests, 11 image tests and API
+validation of 47 routes with 38 valid and 38 rejected examples. Focused adapter
+evaluation and the actual-helper check pass, including read-only Btrfs
+verification. The integration VM derivation evaluates; its new storage phase
+has not run and no live host acceptance is claimed. PRs 149/150/160/161/162/163
+are merged. Capability CI 38474537889 passed complete evaluation and non-VM
+builds, then exposed a stale stopped-Research import refusal fixture. The old
+failure was reproduced with the actual CLI; the repaired generated-flake suite
+passes, including exact stopped Research requests and unsupported capability
+refusal. Replacement CI is pending. Keep dependent PRs open until their
+relevant runtime checks pass at the reviewed revision.
+
+Next: complete storage verification, then host policy-publication orchestration,
+aggregate OCI startup/stop accounting, live capability collectors and the
+authenticated dynamic host API. Pinned image acquisition, the first real coding
+agent, strict guest-kernel execution and the private VPS deployment remain in
+scope. Publication APIs still require trusted drain/install/fence proof; library
+or source checks do not establish runtime isolation or vendor acceptance.
 
 The [base-image catalog](20-base-images.md) adds Debian 13 and Ubuntu 26.04 LTS
 platform manifest selection with an offline metadata validator. The 2026-10-13

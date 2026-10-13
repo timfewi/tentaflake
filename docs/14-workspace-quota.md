@@ -54,7 +54,8 @@ and outside the workspace. Mounts may not overlap another agent's filesystems.
 
 ## First activation is a disk mutation
 
-Enabling the option and activating the resulting NixOS generation creates:
+With `security.admission = null`, enabling the quota option and activating the
+resulting NixOS generation creates:
 
 ```text
 /var/lib/tentaflake-workspace-volumes/
@@ -69,7 +70,8 @@ exact sparse size and formats Btrfs. It syncs the file, publishes without
 overwriting an existing final path, and syncs the directory before and after
 removing staging. Interrupted staging remains for explicit recovery. Verification
 is read-only and refuses a missing image; it never falls back to creation.
-These units currently call the helpers directly, without a ledger permit.
+These legacy units call helpers directly. An explicit host admission declaration
+selects the guarded lifecycle below and refuses creation until bootstrap.
 Activation is an intentional filesystem mutation; a source build or evaluation
 does not perform it or authorize activation.
 
@@ -102,7 +104,7 @@ backup/restore migration below; this update does not convert them in place.
 ## Read-only admission inventory
 
 The optional [host admission plan](10-security-profiles.md#shared-admission-core)
-is preparation for future fenced bootstrap and unit integration. As root, pass
+also supports a read-only diagnostic. As root, pass
 its resolved immutable store file; the `/etc` symlink itself is not accepted:
 
 ```bash
@@ -122,9 +124,72 @@ Every returned allocation is `Unknown`, and command output always has
 `complete: false`, including an empty existing root. This diagnostic does not
 fence creators, initialize a ledger, verify Btrfs/mount readiness or establish
 physical free capacity. It cannot authorize image creation or ledger bootstrap.
-`--hide` redacts allocation and binding identities. The future host integration
-must fence all managed creators and account for old/orphan storage before any
-inventory can become authoritative.
+`--hide` redacts allocation and binding identities.
+
+## Guarded storage lifecycle
+
+Setting `security.admission` replaces the prepare/mount/owner chain with the
+existing quota ownership service as a single supervised transaction. Legacy
+prepare and native mount units are masked. Controllers, seeds and backups keep
+their quota-service dependencies; Restic additionally verifies the exact mounted
+image before reading it. The supervisor mounts in the host namespace with
+`loop,nodev,nosuid,noatime`; state starts before workspace and stops after it.
+
+First bootstrap is an explicit maintenance operation. Stop all Docker workloads
+and quota services, detach all loop devices, and load the generated
+guarded units before running as root:
+
+```bash
+tentaflake admission bootstrap "$(readlink -f /etc/tentaflake/admission.json)"
+```
+
+Bootstrap refuses an existing or partial `/var/lib/tentaflake-admission` ledger,
+queued or surviving legacy quota work, unmasked file-backed native mount units,
+unavailable Docker observations, unsafe roots and unfinished staging. It checks
+loaded and installed mount units, including removed definitions. Refusing all
+attached loops avoids mistaking a backing-image alias for an unrelated image.
+It creates only missing
+protected backing directories, imports all images including removed definitions,
+and records verified exact declared Btrfs images as Present. Other images remain
+Unknown and charged. It never stops foreign workloads or converts images.
+Do not delete a ledger or change its authority epoch to retry bootstrap.
+
+Start the generated quota service through systemd. Internal `volume-start` and
+`volume-stop` commands require its exact current invocation, executable, command
+arguments, PID, cgroup, cleanup policy and host mount namespace. An exclusive
+protected host lock serializes transactions and is inherited by trusted helpers;
+systemd bounds their whole control group to 300 seconds at start and 120 at stop.
+A busy lock refuses the operation after five seconds; retry the service after
+the existing transaction finishes. Direct CLI calls cannot create an image.
+
+Creation requires a new synced Unknown ledger allocation under the published
+immutable plan. Only successful create/mount/ownership completion marks it
+Present. Restart verifies existing Present images; missing, partial, mismatched
+or Unknown images never fall back to creation. Stopping unmounts the exact image
+and retains its full charge. Exact cleanup is allowed under its original loaded
+unit even when a changed declaration prevents new starts.
+
+Before new creation, all retained logical bytes, the new image size and
+`physicalSpaceHeadroomBytes` must fit the current available bytes of the shared
+backing filesystem. Root, state directory and images must share its device and
+mount identity. Missing and orphan images remain charged; allocated sparse or
+shared blocks receive no credit. This conservative guard can refuse early and
+does not reserve extents against unrelated host writes or guarantee that later
+filesystem metadata allocation cannot exhaust space.
+
+After a failed transaction, stop all quota services and Docker workloads and
+detach all loop devices before read-only recovery of an exact retained slot:
+
+```bash
+tentaflake admission storage-recover "$(readlink -f /etc/tentaflake/admission.json)" workspace:hermes-coding
+```
+
+Recovery only records a verified existing image as Present. It never recreates,
+resizes, deletes, rebinds or releases storage. Preserve partial files for explicit
+repair. Changing the admission manifest currently blocks new starts until host
+publication orchestration is implemented; never reset existing authority as a
+workaround. This storage path does not yet account for aggregate OCI compute or
+establish model, Research, strict-kernel or vendor acceptance.
 
 ## Existing workspace migration
 
