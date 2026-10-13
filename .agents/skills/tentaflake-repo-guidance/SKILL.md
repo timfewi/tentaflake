@@ -1,7 +1,7 @@
 ---
 name: tentaflake-repo-guidance
 description: Locate the owning source, guide and checks before changing Tentaflake modules, adapters, CLI or installer.
-version: 2.6.4
+version: 2.6.5
 ---
 
 # Tentaflake repository guidance
@@ -15,6 +15,7 @@ relevant source and guide. Avoid loading unrelated references.
 | Builders and contracts | `adapters/catalog.json`, `adapters/`, `lib/mkAgent.nix`, `lib/runtimeContract.nix` | [Adapters](../../../docs/agent-adapters.md) |
 | Declarative input, onboarding and inventory | `configuration.nix`, `lib/agentsFromData.nix`, `lib/agentPlan.nix`, CLI onboarding | [Configuration](../../../docs/08-agent-cli.md) |
 | CLI and diagnostics | `crates/tentaflake-cli/`, `modules/shell.nix`, `modules/security.nix` | [CLI](../../../docs/06-shell.md) |
+| Shared startup decisions and durable claims | `crates/tentaflake-admission/`, CLI `admission.rs` | [Security](../../../docs/10-security-profiles.md#shared-admission-core) |
 | Private management | `modules/management.nix`, `modules/tailscale.nix`, versioned security manifest | [Management](../../../docs/11-tailscale-management.md) |
 | LLM broker and streaming | `modules/broker.nix`, `crates/tentaflake-broker/` | [Broker](../../../docs/12-brokered-egress.md) |
 | Research projection | `modules/research.nix`, `lib/researchClient.nix`, adapter hooks | [Research](../../../docs/16-research.md) |
@@ -33,6 +34,10 @@ relevant source and guide. Avoid loading unrelated references.
   belong in forks. Settings, JSON and seed paths are Nix-store inputs.
 - Host API clients consume the shared schema. Run `just api-contract`; fixture
   validity does not establish backend availability, authority or live acceptance.
+- Admission snapshots are host-owned inputs; offline explanation grants no
+  authority. Preserve checked aggregate accounting, exact grants and generation
+  binding. Only a new synced ledger claim yields a dispatch permit; retain its
+  lock through handoff and preserve unknown outcomes and stopped storage.
 - Generate support facts with `python3 scripts/runtime-catalog-docs.py`;
   catalog declarations and source fixtures never prove vendor acceptance.
   Generic definitions reject extra authority and preserve current startup gates.

@@ -128,6 +128,19 @@ class CiSelection(unittest.TestCase):
         self.assertEqual(select(self.base, self.commit(), self.repository),
                          {"runtime", "cli", "broker", "worker", "rust", "static"})
 
+    def test_shared_admission_selects_its_cli_consumer_without_research(self):
+        self.write("crates/tentaflake-admission/src/ledger.rs")
+        self.assertEqual(select(self.base, self.commit(), self.repository),
+                         {"runtime", "cli", "rust", "static"})
+
+    def test_rust_packaging_selects_all_consumers_without_research(self):
+        for path in ("lib/mkRustPackage.nix", "tests/rust-package-sources.nix"):
+            with self.subTest(path=path):
+                base = self.git("rev-parse", "HEAD")
+                self.write(path)
+                self.assertEqual(select(base, self.commit(), self.repository),
+                                 {"runtime", "cli", "broker", "worker", "rust", "static"})
+
     def test_worker_module_uses_runtime_and_worker_gates_without_research(self):
         self.write("modules/worker.nix", "changed\n")
         head = self.commit()

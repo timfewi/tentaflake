@@ -21,7 +21,8 @@ still require the contributor shell.
 
 The three Rust packages share `lib/mkRustPackage.nix`. Each build source
 contains the root Cargo manifest and lockfile, all workspace manifests, and only
-the selected crate's complete source. Editing CLI source does not rebuild the
+the selected crate's complete source and local dependencies. The CLI includes
+and tests the shared admission library. Editing CLI source does not rebuild the
 broker or worker. Package versions come from `[workspace.package]` in
 `Cargo.toml`; descriptions come from each crate manifest. The worker image tag
 uses that same version, and its default reference follows the image metadata.

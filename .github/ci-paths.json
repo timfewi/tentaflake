@@ -20,6 +20,10 @@
     "paths": ["crates/tentaflake-cli/src/onboarding.rs"],
     "checks": ["cli", "rust", "generated", "static"]
   },
+  "admission": {
+    "paths": ["crates/tentaflake-admission/**"],
+    "checks": ["runtime", "cli", "rust", "static"]
+  },
   "cli": {
     "paths": [
       "crates/tentaflake-cli/**",
@@ -84,6 +88,10 @@
       "rust",
       "static"
     ]
+  },
+  "rust-packaging": {
+    "paths": ["lib/mkRustPackage.nix", "tests/rust-package-sources.nix"],
+    "checks": ["runtime", "cli", "broker", "worker", "rust", "static"]
   },
   "installer-nix": {
     "paths": [

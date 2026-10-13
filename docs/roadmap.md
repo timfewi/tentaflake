@@ -38,8 +38,21 @@ passes 130 Rust tests and 29 routing regressions; the adapter policy/helper chec
 also passes, including generated manual-start refusal. Broader module evaluation
 requires an uncached Research client closure; no local dependency rebuild was
 started. Added generic startup and Research projection VM regressions await CI.
-Live readiness, bounded aggregate decisions and recovery remain outstanding;
-no dynamic host API is implemented.
+Its explicit CI runtime/build gate is still pending at `787eb85`.
+
+The next shared-core slice adds `crates/tentaflake-admission`: exact typed
+decisions, checked aggregate reservations including host/Research reserves,
+source-generation freshness and a private durable claim ledger. Only newly
+synced claims yield a dispatch permit; existing receipts never redispatch,
+unknown outcomes retain capacity and confirmed stops retain storage. Review
+fixed unsafe directory ancestry and stale-owner capability grants. Fast-gate
+components pass with 169 Rust tests and 31 routing regressions; the API fixtures
+and focused Nix package-source check pass. Actual offline CLI interactions cover
+allow, redaction, owner/expiry/strict denial and unsafe-input refusal.
+
+Next: host-owned live collectors and mandatory startup/stop integration with
+the ledger, then the authenticated dynamic host API. Offline `admission explain`
+and library tests do not establish live admission, runtime or vendor acceptance.
 
 Research work is tracked in [environment admission #8](https://github.com/timfewi/tentaflake-research/issues/8)
 and [guest transport #9](https://github.com/timfewi/tentaflake-research/issues/9).

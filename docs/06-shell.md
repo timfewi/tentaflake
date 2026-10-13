@@ -22,6 +22,7 @@ Do not hand-edit them. Change the Nix configuration and rebuild explicitly.
 ```text
 tentaflake help
 tentaflake runtimes [--json]
+tentaflake admission explain <snapshot-file> [--hide]
 tentaflake agent template <preset> <name>
 tentaflake agent validate|plan|import <file> [--json] [--hide]
 tentaflake status [--json] [--hide]
@@ -50,8 +51,11 @@ status renderer and is used by the login banner.
 image downloads. See [generic workloads](agent-adapters.md#generic-isolated-workload).
 
 `help`, `--help`, and `-h` display usage even when the generated host
-configuration or inventory is missing or invalid. `agent template` is also
-configuration-free; other management commands require the generated inputs.
+configuration or inventory is missing or invalid. `agent template`, `runtimes`
+and `admission explain` are also configuration-free; other management commands
+require the generated inputs. [Admission explanation](10-security-profiles.md#shared-admission-core)
+re-evaluates bounded recorded evidence and emits a JSON decision without any
+host mutation or live acceptance claim.
 See [installed-host onboarding](08-agent-cli.md#add-an-agent-on-an-installed-host)
 for generic image/command templates, additive imports and explicit host updates.
 

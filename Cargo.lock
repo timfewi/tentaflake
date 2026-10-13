@@ -869,6 +869,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "tentaflake-admission"
+version = "0.4.0"
+dependencies = [
+ "libc",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "tentaflake-broker"
 version = "0.4.0"
 dependencies = [
@@ -883,8 +892,10 @@ dependencies = [
 name = "tentaflake-cli"
 version = "0.4.0"
 dependencies = [
+ "libc",
  "serde",
  "serde_json",
+ "tentaflake-admission",
 ]
 
 [[package]]

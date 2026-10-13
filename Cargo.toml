@@ -1,5 +1,6 @@
 [workspace]
 members = [
+  "crates/tentaflake-admission",
   "crates/tentaflake-broker",
   "crates/tentaflake-cli",
   "crates/tentaflake-worker",

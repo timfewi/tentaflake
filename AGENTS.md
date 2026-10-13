@@ -111,7 +111,12 @@ are already published or require access to another repository for public checks.
   adapters, retaining unmanaged OCI fallback. Generic JSON requires
   `schemaVersion = 1`; generic and legacy arrays are additive with collisions
   rejected. See `docs/agent-adapters.md` and `checks.*.agent-adapters`.
-- `crates/` and `pkgs/` — Rust CLI/broker/worker workspace and Nix packages
+- `crates/` and `pkgs/` — Rust admission/CLI/broker/worker workspace and Nix packages
+- `tentaflake-admission` owns typed startup decisions and the private durable
+  ledger. `admission explain` only re-evaluates recorded non-secret evidence;
+  it never claims or dispatches. A newly synced claim alone returns an in-memory
+  dispatch permit holding the ledger lock; uncertain outcomes keep reservations.
+  Live collectors and mandatory runtime integration remain separate work.
 - CLI help is configuration-free; management commands require generated
   host configuration and inventory.
 - `api/v1/openapi.json` owns the host API wire contract; clients consume its
@@ -125,7 +130,7 @@ are already published or require access to another repository for public checks.
   agent states are problems, while stopped agents remain valid. `--hide`
   must redact host and agent names in both text and JSON.
 - `lib/mkRustPackage.nix` shares Rust packaging: root Cargo files, all member
-  manifests, and only the selected crate's source. Add required root inputs
+  manifests, the selected crate's source, and its local library dependencies. Add required root inputs
   explicitly. Versions come from the root Cargo workspace; descriptions from
   crate manifests. Derive worker image references from the image metadata.
   Shared container identities live in `lib/constants.nix`.
