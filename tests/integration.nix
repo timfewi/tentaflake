@@ -26,7 +26,9 @@
       { pkgs, ... }:
       let
         brokerPackage = pkgs.callPackage ../pkgs/tentaflake-broker { };
-        builders = self.lib.${pkgs.stdenv.hostPlatform.system};
+        # This flake exports only x86_64-linux. Imports must not depend on the
+        # node's config-derived pkgs argument while its modules are collected.
+        builders = self.lib.x86_64-linux;
         genericImage = "fixture.invalid/tentaflake-network-test@sha256:0000000000000000000000000000000000000000000000000000000000000000";
         genericDefinition = {
           schemaVersion = 1;
