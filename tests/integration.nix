@@ -355,6 +355,15 @@
     # the runtime probes bounded while leaving headroom for gVisor itself.
     runtime_probe_pids_limit = 64
 
+    def stop_unit(node, unit):
+        node.succeed("systemctl stop " + shlex.quote(unit))
+        # A successful stop may unload the unit. reset-failed then errors even
+        # though no failed state remains; verify the required quiescence directly.
+        state = node.succeed("systemctl show --property=ActiveState --value " + shlex.quote(unit)).strip()
+        assert state == "inactive", (unit, state)
+        jobs = node.succeed("systemctl list-jobs --no-legend --no-pager").splitlines()
+        assert all(unit not in line.split() for line in jobs), (unit, jobs)
+
     def check_live_doctor(node, backend, image, network, endpoint):
         name = "tf-doctor-fixture"
         apparmor = "--security-opt=apparmor=docker-default " if backend == "docker" else ""
@@ -787,7 +796,7 @@
         machine.fail("systemctl start docker-generic-missing-model.service")
         journal = machine.succeed("journalctl --no-pager -b -u docker-generic-missing-model.service")
         assert "Generic runtime admission refused: missing model." in journal, journal
-        machine.succeed("systemctl stop docker-generic-missing-model.service; systemctl reset-failed docker-generic-missing-model.service")
+        stop_unit(machine, "docker-generic-missing-model.service")
         machine.fail("docker inspect generic-missing-model")
         after_refusal = int(machine.succeed("date +%s").strip()) + 1
         creations = machine.succeed(
@@ -1491,7 +1500,7 @@
         )
         machine.succeed("systemctl stop " + watcher)
         machine.succeed("systemctl kill --kill-who=main --signal=SIGKILL " + worker)
-        machine.succeed("systemctl stop " + worker)
+        stop_unit(machine, worker)
         machine.succeed("test -f " + state + "/running/crash_1.json")
         machine.succeed(command)
         machine.succeed("jq -e '.status == \"interrupted\" and .artifacts_available == false' " + state + "/results/crash_1/result.json")
@@ -1499,7 +1508,6 @@
         machine.fail("test -e " + state + "/running/crash_1.json")
         machine.fail("test -e " + state + "/jobs/crash_1")
         machine.succeed(command)
-        machine.succeed("systemctl reset-failed " + worker)
         machine.succeed(
             "jq -e '.max_inbox_entries == 4 and .max_queue_entries == 2 and "
             ".max_queue_bytes == 1048576' /etc/tentaflake/workers/hermes-test.json"
