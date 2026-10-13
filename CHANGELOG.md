@@ -19,6 +19,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   budget reservation or upstream dispatch, omit session IDs from audit logs,
   and keep arbitrary client headers excluded. Clients still own ID propagation.
 ### Added
+- Reviewed Debian 13 and Ubuntu 26.04 LTS base-image metadata, platform-specific
+  immutable Nix selection, and offline digest-chain regression checks. This
+  catalog does not acquire layers or establish signature/runtime acceptance.
 - Durable worker pending/running claims, conservative interrupted-job recovery,
   per-agent operator/worker exclusion and aggregate inbox/private queue ceilings.
 - Optional fixed-size private agent state through the existing Btrfs quota

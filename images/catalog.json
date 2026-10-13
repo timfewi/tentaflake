@@ -1,0 +1,65 @@
+{
+  "schemaVersion": 1,
+  "images": {
+    "debian-13": {
+      "distro": "debian",
+      "release": "13",
+      "codename": "trixie",
+      "label": "Debian 13 (Trixie)",
+      "repository": "docker.io/library/debian",
+      "discoveryTag": "trixie-20261005",
+      "observedAt": "2026-10-13T20:32:24.010594+00:00",
+      "indexDigest": "sha256:913f6706df59a68922d1dd08f78c2476560a8d367897200a6005b00e5f67c2d5",
+      "sourceUrl": "https://github.com/debuerreotype/docker-debian-artifacts.git",
+      "platforms": {
+        "x86_64-linux": {
+          "platform": {
+            "architecture": "amd64",
+            "os": "linux"
+          },
+          "manifestDigest": "sha256:bcf83fd8af414eda0c0a99d25a4e61dedd88e7aac7f7bc519d04555ff0c40ec5",
+          "configDigest": "sha256:99339bdd341ab316eeae3dcf870b98bc7243d99269d01666b0f49a565c1399da"
+        },
+        "aarch64-linux": {
+          "platform": {
+            "architecture": "arm64",
+            "os": "linux",
+            "variant": "v8"
+          },
+          "manifestDigest": "sha256:b55910b579d6eb05ebd79fbc8468b974fa39bb0610d52e1f1390bb2177ab7614",
+          "configDigest": "sha256:4bb08c595249772893799a9189839e5a94900e8deaa14885896307e562b51e88"
+        }
+      }
+    },
+    "ubuntu-26.04": {
+      "distro": "ubuntu",
+      "release": "26.04",
+      "codename": "resolute",
+      "label": "Ubuntu 26.04 LTS (Resolute Raccoon)",
+      "repository": "docker.io/library/ubuntu",
+      "discoveryTag": "resolute-20260927",
+      "observedAt": "2026-10-13T20:32:32.736579+00:00",
+      "indexDigest": "sha256:f144425ff09be612d6d9ad965196e9cdc23dae1f42110a8a11a3e9a8198759f7",
+      "sourceUrl": "https://git.launchpad.net/cloud-images/+oci/ubuntu-base",
+      "platforms": {
+        "x86_64-linux": {
+          "platform": {
+            "architecture": "amd64",
+            "os": "linux"
+          },
+          "manifestDigest": "sha256:88a381d5b5eeb2b35d3ad70925a362c37ce569daf43ede89ff818ec20e4d3794",
+          "configDigest": "sha256:6e92c4fd8dfdf7276d56743a65002a91c9eb35dbe7af327e6c85bd204b646156"
+        },
+        "aarch64-linux": {
+          "platform": {
+            "architecture": "arm64",
+            "os": "linux",
+            "variant": "v8"
+          },
+          "manifestDigest": "sha256:3ad1c71aa6b7e477f7aa91445a5442fbb163742849393b511661a88081c3d7a2",
+          "configDigest": "sha256:a1b016b8418dc08803fa0fb3aea39d5029a8a6c05a861adf9905a20d7307bdb4"
+        }
+      }
+    }
+  }
+}
