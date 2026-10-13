@@ -113,6 +113,9 @@ are already published or require access to another repository for public checks.
 - `crates/` and `pkgs/` — Rust CLI/broker/worker workspace and Nix packages
 - CLI help is configuration-free; management commands require generated
   host configuration and inventory.
+- `api/v1/openapi.json` owns the host API wire contract; clients consume its
+  schema and offline fixtures. Run `just api-contract` for local-only schema
+  validation. Fixtures do not establish a working backend or host authority.
   `agent template` is also configuration-free. Onboarding validates through
   `lib/agentPlan.nix` and the shared JSON parser; imports add stopped entries
   atomically without activation. Preserve ordinary flake source filtering and

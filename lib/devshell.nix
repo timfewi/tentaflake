@@ -132,7 +132,10 @@ pkgs.mkShell {
     rustfmt
     shellcheck
     actionlint
-    python3
+    (python3.withPackages (pythonPackages: [
+      pythonPackages.jsonschema
+      pythonPackages.rfc3339-validator
+    ]))
   ];
 
   shellHook = ''

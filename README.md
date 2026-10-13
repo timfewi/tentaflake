@@ -452,6 +452,7 @@ therefore be newer than the website.
 | Model, research and execution | [Broker](docs/12-brokered-egress.md), [research](docs/16-research.md), [worker](docs/13-disposable-worker.md) |
 | Storage and monitoring | [Workspace quota](docs/14-workspace-quota.md), [observability](docs/09-observability.md) |
 | Documentation maintenance | [Source ownership and release synchronization](docs/18-documentation.md) |
+| Host API contract | [Versioned schema and fixtures](docs/19-host-api.md) (implementation pending) |
 
 [Archive comparison](docs/archive-comparison.md) records a historical review;
 use the current guides for implementation and support status.

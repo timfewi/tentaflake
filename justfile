@@ -14,11 +14,15 @@ alias list := default
 # ── The gates ────────────────────────────────────────────────
 
 # Full local gate: source checks, all flake checks and the installer ISO
-ci: fmt-check lint shellcheck rust ci-policy check generated-flake iso-installer
+ci: fmt-check lint shellcheck rust ci-policy api-contract check generated-flake iso-installer
     @echo "==> all green"
 
 # Fast source checks; evaluation and all Nix package/runtime builds are explicit
-fast: fmt-check lint shellcheck rust ci-policy
+fast: fmt-check lint shellcheck rust ci-policy api-contract
+
+# Validate the versioned host API and all offline contract exchanges
+api-contract:
+    python3 scripts/test_api_contract.py
 
 # Test routing with real Git histories and validate workflow syntax
 ci-policy:
