@@ -73,12 +73,8 @@ jobs:
           extra-conf: |
             accept-flake-config = true
 
-      - uses: DeterminateSystems/magic-nix-cache-action@84c0677f58dcedf3b91f8223ce36a9ea5b3c84b7 # v15
-        if: needs.changes.outputs.nix == 'true'
-        with:
-          # No FlakeHub account; skip the doomed OIDC login and use the GH cache.
-          use-flakehub: false
-
+      # Contributor tools use the pinned binary cache. Uploading that store
+      # again costs more than these source checks; cache only explicit builds.
       - name: nix fmt check
         if: needs.changes.outputs.static == 'true'
         run: nix fmt -- --ci
