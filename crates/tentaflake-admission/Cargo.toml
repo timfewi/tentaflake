@@ -9,6 +9,6 @@ description = "Shared fail-closed admission decisions for tentaflake hosts"
 path = "src/lib.rs"
 
 [dependencies]
-libc = "=0.2.189"
+libc = "=0.2.190"
 serde = { version = "=1.0.229", features = ["derive"] }
 serde_json = "=1.0.151"
