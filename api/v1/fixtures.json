@@ -1,0 +1,3398 @@
+{
+  "contract": "openapi.json",
+  "backend": "unavailable",
+  "description": "Wire-shape examples and rejection cases only. Nothing here runs or accepts a backend, environment, agent or guest. Request and response cases are independent examples, not a successful lifecycle transcript.",
+  "exchanges": [
+    {
+      "name": "getMeta",
+      "request": {
+        "method": "GET",
+        "path": "/api/meta",
+        "pathParameters": {},
+        "query": {},
+        "headers": {}
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "Cache-Control": "no-store"
+        },
+        "contentType": "application/json",
+        "body": {
+          "service": "tentaflake",
+          "apiVersions": [
+            1
+          ],
+          "host": "host-fixture",
+          "auth": {
+            "methods": []
+          },
+          "backend": "unavailable",
+          "fixture": true
+        }
+      }
+    },
+    {
+      "name": "getSession",
+      "request": {
+        "method": "GET",
+        "path": "/api/v1/session",
+        "pathParameters": {},
+        "query": {},
+        "headers": {}
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "Cache-Control": "no-store"
+        },
+        "contentType": "application/json",
+        "body": {
+          "user": {
+            "id": "owner-fixture",
+            "name": "Example owner"
+          },
+          "csrfToken": "fixture-only-not-a-real-csrf-token-000000",
+          "expiresAt": "2026-10-13T12:05:00Z",
+          "grants": [
+            {
+              "id": "grant-fixture-create",
+              "action": "environments.create",
+              "target": {
+                "kind": "host",
+                "id": "host-fixture"
+              },
+              "expiresAt": "2026-10-13T12:05:00Z"
+            }
+          ],
+          "revisions": {
+            "policy": "policy-fixture-1",
+            "catalog": "catalog-fixture-1",
+            "grants": "grants-fixture-1",
+            "host": "host-fixture-1"
+          },
+          "mutationEpoch": "ledger-fixture-1"
+        }
+      }
+    },
+    {
+      "name": "createSession",
+      "request": {
+        "method": "POST",
+        "path": "/api/v1/session",
+        "pathParameters": {},
+        "query": {},
+        "headers": {},
+        "contentType": "application/json",
+        "body": {
+          "method": "operator-token",
+          "secret": "fixture-only-not-a-real-login-token"
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "Cache-Control": "no-store"
+        },
+        "contentType": "application/json",
+        "body": {
+          "user": {
+            "id": "owner-fixture",
+            "name": "Example owner"
+          },
+          "csrfToken": "fixture-only-not-a-real-csrf-token-000000",
+          "expiresAt": "2026-10-13T12:05:00Z",
+          "grants": [
+            {
+              "id": "grant-fixture-create",
+              "action": "environments.create",
+              "target": {
+                "kind": "host",
+                "id": "host-fixture"
+              },
+              "expiresAt": "2026-10-13T12:05:00Z"
+            }
+          ],
+          "revisions": {
+            "policy": "policy-fixture-1",
+            "catalog": "catalog-fixture-1",
+            "grants": "grants-fixture-1",
+            "host": "host-fixture-1"
+          },
+          "mutationEpoch": "ledger-fixture-1"
+        }
+      }
+    },
+    {
+      "name": "deleteSession",
+      "request": {
+        "method": "DELETE",
+        "path": "/api/v1/session",
+        "pathParameters": {},
+        "query": {},
+        "headers": {
+          "X-Tentaflake-CSRF": "fixture-only-not-a-real-csrf-token-000000"
+        }
+      },
+      "response": {
+        "status": 204,
+        "headers": {
+          "Cache-Control": "no-store"
+        }
+      }
+    },
+    {
+      "name": "getOidcChallenge",
+      "request": {
+        "method": "GET",
+        "path": "/api/v1/session/oidc",
+        "pathParameters": {},
+        "query": {},
+        "headers": {}
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "Cache-Control": "no-store"
+        },
+        "contentType": "application/json",
+        "body": {
+          "method": "oidc",
+          "authorizationPath": "/api/v1/session/oidc/authorize"
+        }
+      }
+    },
+    {
+      "name": "beginOidc",
+      "request": {
+        "method": "GET",
+        "path": "/api/v1/session/oidc/authorize",
+        "pathParameters": {},
+        "query": {},
+        "headers": {}
+      },
+      "response": {
+        "status": 303,
+        "headers": {
+          "Cache-Control": "no-store"
+        }
+      }
+    },
+    {
+      "name": "finishOidc",
+      "request": {
+        "method": "GET",
+        "path": "/api/v1/session/oidc/callback",
+        "pathParameters": {},
+        "query": {
+          "code": "fixture-only-authorization-code",
+          "state": "fixture-only-oidc-state-000000000000"
+        },
+        "headers": {}
+      },
+      "response": {
+        "status": 303,
+        "headers": {
+          "Cache-Control": "no-store"
+        }
+      }
+    },
+    {
+      "name": "getCapabilities",
+      "request": {
+        "method": "GET",
+        "path": "/api/v1/capabilities",
+        "pathParameters": {},
+        "query": {},
+        "headers": {}
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "Cache-Control": "no-store"
+        },
+        "contentType": "application/json",
+        "body": {
+          "revisions": {
+            "policy": "policy-fixture-1",
+            "catalog": "catalog-fixture-1",
+            "grants": "grants-fixture-1",
+            "host": "host-fixture-1"
+          },
+          "features": {
+            "environments.create": {
+              "available": false,
+              "state": "unsupported",
+              "reason": "Contract fixture only; host environment API is unavailable."
+            },
+            "terminal": {
+              "available": false,
+              "state": "unsupported",
+              "reason": "Contract fixture only; host environment API is unavailable."
+            }
+          },
+          "isolation": [
+            {
+              "id": "container",
+              "name": "Container",
+              "detail": "Shares the host kernel; not strict isolation.",
+              "availability": {
+                "available": false,
+                "state": "unsupported",
+                "reason": "Contract fixture only; host environment API is unavailable."
+              },
+              "evidence": [
+                {
+                  "source": "fixture",
+                  "status": "unknown",
+                  "observedAt": null,
+                  "detail": "Shape example only; no backend or runtime acceptance."
+                }
+              ]
+            },
+            {
+              "id": "guest-kernel",
+              "name": "Separate kernel",
+              "detail": "Unavailable until KVM and actual guest backend acceptance.",
+              "availability": {
+                "available": false,
+                "state": "unready",
+                "reason": "No accepted guest backend or usable KVM evidence."
+              },
+              "evidence": [
+                {
+                  "source": "fixture",
+                  "status": "unknown",
+                  "observedAt": null,
+                  "detail": "Shape example only; no backend or runtime acceptance."
+                }
+              ]
+            }
+          ],
+          "agentRuntimes": [],
+          "optional": [],
+          "limits": {
+            "cpu": {
+              "min": 1,
+              "max": 2,
+              "default": 1,
+              "step": 1
+            },
+            "memoryMiB": {
+              "min": 128,
+              "max": 4096,
+              "default": 1024,
+              "step": 128
+            },
+            "storageMiB": {
+              "min": 128,
+              "max": 8192,
+              "default": 1024,
+              "step": 128
+            },
+            "maxActiveEnvironments": 2,
+            "maxEditBytes": 1048576,
+            "maxUploadBytes": 16777216,
+            "maxPageEntries": 100,
+            "maxStreamFrameBytes": 65536,
+            "maxStreamReplayBytes": 1048576,
+            "maxTerminals": 2,
+            "maxTerminalIdleSeconds": 900,
+            "maxOperationRecords": 4096,
+            "reservedCpu": 1,
+            "reservedMemoryMiB": 1024
+          }
+        }
+      }
+    },
+    {
+      "name": "listImages",
+      "request": {
+        "method": "GET",
+        "path": "/api/v1/catalog/images",
+        "pathParameters": {},
+        "query": {},
+        "headers": {}
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "Cache-Control": "no-store"
+        },
+        "contentType": "application/json",
+        "body": [
+          {
+            "id": "debian-fixture",
+            "distro": "debian",
+            "release": "fixture",
+            "label": "Debian fixture",
+            "digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+            "availability": {
+              "available": false,
+              "state": "unsupported",
+              "reason": "Contract fixture only; host environment API is unavailable."
+            },
+            "evidence": [
+              {
+                "source": "fixture",
+                "status": "unknown",
+                "observedAt": null,
+                "detail": "Shape example only; no backend or runtime acceptance."
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "listBlocks",
+      "request": {
+        "method": "GET",
+        "path": "/api/v1/catalog/blocks",
+        "pathParameters": {},
+        "query": {},
+        "headers": {}
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "Cache-Control": "no-store"
+        },
+        "contentType": "application/json",
+        "body": [
+          {
+            "id": "tool-fixture",
+            "type": "tool",
+            "name": "Example tool",
+            "purpose": "Unaccepted fixture",
+            "group": "fixture",
+            "source": {
+              "kind": "host",
+              "label": "Fixture catalog"
+            },
+            "version": "fixture-1",
+            "digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+            "images": [
+              "debian-fixture"
+            ],
+            "requires": [],
+            "conflicts": [],
+            "applies": "unsupported",
+            "availability": {
+              "available": false,
+              "state": "unsupported",
+              "reason": "Contract fixture only; host environment API is unavailable."
+            },
+            "evidence": [
+              {
+                "source": "fixture",
+                "status": "unknown",
+                "observedAt": null,
+                "detail": "Shape example only; no backend or runtime acceptance."
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "previewImport",
+      "request": {
+        "method": "POST",
+        "path": "/api/v1/catalog/imports/preview",
+        "pathParameters": {},
+        "query": {},
+        "headers": {
+          "X-Tentaflake-CSRF": "fixture-only-not-a-real-csrf-token-000000"
+        },
+        "contentType": "application/json",
+        "body": {
+          "source": "{\"blocks\":[]}",
+          "revisions": {
+            "policy": "policy-fixture-1",
+            "catalog": "catalog-fixture-1",
+            "grants": "grants-fixture-1",
+            "host": "host-fixture-1"
+          }
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "Cache-Control": "no-store"
+        },
+        "contentType": "application/json",
+        "body": {
+          "id": "preview-fixture",
+          "ownerId": "owner-fixture",
+          "expiresAt": "2026-10-13T12:05:00Z",
+          "revisions": {
+            "policy": "policy-fixture-1",
+            "catalog": "catalog-fixture-1",
+            "grants": "grants-fixture-1",
+            "host": "host-fixture-1"
+          },
+          "blocks": [
+            {
+              "id": "tool-fixture",
+              "type": "tool",
+              "name": "Example tool",
+              "purpose": "Unaccepted fixture",
+              "group": "fixture",
+              "source": {
+                "kind": "host",
+                "label": "Fixture catalog"
+              },
+              "version": "fixture-1",
+              "digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+              "images": [
+                "debian-fixture"
+              ],
+              "requires": [],
+              "conflicts": [],
+              "applies": "unsupported",
+              "availability": {
+                "available": false,
+                "state": "unsupported",
+                "reason": "Contract fixture only; host environment API is unavailable."
+              },
+              "evidence": [
+                {
+                  "source": "fixture",
+                  "status": "unknown",
+                  "observedAt": null,
+                  "detail": "Shape example only; no backend or runtime acceptance."
+                }
+              ]
+            }
+          ],
+          "problems": [
+            {
+              "severity": "error",
+              "code": "unsupported",
+              "message": "Environment backend is not implemented.",
+              "subject": "backend"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "confirmImport",
+      "request": {
+        "method": "POST",
+        "path": "/api/v1/catalog/imports",
+        "pathParameters": {},
+        "query": {},
+        "headers": {
+          "X-Tentaflake-CSRF": "fixture-only-not-a-real-csrf-token-000000",
+          "Idempotency-Key": "00000000-0000-4000-8000-000000000001",
+          "Idempotency-Epoch": "ledger-fixture-1"
+        },
+        "contentType": "application/json",
+        "body": {
+          "previewId": "preview-fixture"
+        }
+      },
+      "response": {
+        "status": 201,
+        "headers": {
+          "Cache-Control": "no-store",
+          "Operation-Id": "operation-fixture"
+        },
+        "contentType": "application/json",
+        "body": [
+          {
+            "id": "tool-fixture",
+            "type": "tool",
+            "name": "Example tool",
+            "purpose": "Unaccepted fixture",
+            "group": "fixture",
+            "source": {
+              "kind": "host",
+              "label": "Fixture catalog"
+            },
+            "version": "fixture-1",
+            "digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+            "images": [
+              "debian-fixture"
+            ],
+            "requires": [],
+            "conflicts": [],
+            "applies": "unsupported",
+            "availability": {
+              "available": false,
+              "state": "unsupported",
+              "reason": "Contract fixture only; host environment API is unavailable."
+            },
+            "evidence": [
+              {
+                "source": "fixture",
+                "status": "unknown",
+                "observedAt": null,
+                "detail": "Shape example only; no backend or runtime acceptance."
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "listPresets",
+      "request": {
+        "method": "GET",
+        "path": "/api/v1/presets",
+        "pathParameters": {},
+        "query": {},
+        "headers": {}
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "Cache-Control": "no-store"
+        },
+        "contentType": "application/json",
+        "body": [
+          {
+            "id": "preset-fixture",
+            "ownerId": "owner-fixture",
+            "name": "Example preset",
+            "description": "Fixture only",
+            "config": {
+              "image": "debian-fixture",
+              "isolation": "container",
+              "agentRuntime": null,
+              "tools": [],
+              "skills": [],
+              "capabilities": [],
+              "resources": {
+                "cpu": 1,
+                "memoryMiB": 1024,
+                "storageMiB": 1024
+              }
+            },
+            "revision": "preset-fixture-1",
+            "updatedAt": "2026-10-13T12:00:00Z"
+          }
+        ]
+      }
+    },
+    {
+      "name": "createPreset",
+      "request": {
+        "method": "POST",
+        "path": "/api/v1/presets",
+        "pathParameters": {},
+        "query": {},
+        "headers": {
+          "X-Tentaflake-CSRF": "fixture-only-not-a-real-csrf-token-000000",
+          "Idempotency-Key": "00000000-0000-4000-8000-000000000001",
+          "Idempotency-Epoch": "ledger-fixture-1"
+        },
+        "contentType": "application/json",
+        "body": {
+          "name": "Example preset",
+          "description": "Fixture only",
+          "config": {
+            "image": "debian-fixture",
+            "isolation": "container",
+            "agentRuntime": null,
+            "tools": [],
+            "skills": [],
+            "capabilities": [],
+            "resources": {
+              "cpu": 1,
+              "memoryMiB": 1024,
+              "storageMiB": 1024
+            }
+          }
+        }
+      },
+      "response": {
+        "status": 201,
+        "headers": {
+          "Cache-Control": "no-store",
+          "Operation-Id": "operation-fixture",
+          "ETag": "\"preset-fixture-1\""
+        },
+        "contentType": "application/json",
+        "body": {
+          "id": "preset-fixture",
+          "ownerId": "owner-fixture",
+          "name": "Example preset",
+          "description": "Fixture only",
+          "config": {
+            "image": "debian-fixture",
+            "isolation": "container",
+            "agentRuntime": null,
+            "tools": [],
+            "skills": [],
+            "capabilities": [],
+            "resources": {
+              "cpu": 1,
+              "memoryMiB": 1024,
+              "storageMiB": 1024
+            }
+          },
+          "revision": "preset-fixture-1",
+          "updatedAt": "2026-10-13T12:00:00Z"
+        }
+      }
+    },
+    {
+      "name": "updatePreset",
+      "request": {
+        "method": "PUT",
+        "path": "/api/v1/presets/{presetId}",
+        "pathParameters": {
+          "presetId": "preset-fixture"
+        },
+        "query": {},
+        "headers": {
+          "X-Tentaflake-CSRF": "fixture-only-not-a-real-csrf-token-000000",
+          "Idempotency-Key": "00000000-0000-4000-8000-000000000001",
+          "Idempotency-Epoch": "ledger-fixture-1",
+          "If-Match": "\"file-fixture-1\""
+        },
+        "contentType": "application/json",
+        "body": {
+          "name": "Example preset",
+          "description": "Fixture only",
+          "config": {
+            "image": "debian-fixture",
+            "isolation": "container",
+            "agentRuntime": null,
+            "tools": [],
+            "skills": [],
+            "capabilities": [],
+            "resources": {
+              "cpu": 1,
+              "memoryMiB": 1024,
+              "storageMiB": 1024
+            }
+          }
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "Cache-Control": "no-store",
+          "Operation-Id": "operation-fixture",
+          "ETag": "\"preset-fixture-1\""
+        },
+        "contentType": "application/json",
+        "body": {
+          "id": "preset-fixture",
+          "ownerId": "owner-fixture",
+          "name": "Example preset",
+          "description": "Fixture only",
+          "config": {
+            "image": "debian-fixture",
+            "isolation": "container",
+            "agentRuntime": null,
+            "tools": [],
+            "skills": [],
+            "capabilities": [],
+            "resources": {
+              "cpu": 1,
+              "memoryMiB": 1024,
+              "storageMiB": 1024
+            }
+          },
+          "revision": "preset-fixture-1",
+          "updatedAt": "2026-10-13T12:00:00Z"
+        }
+      }
+    },
+    {
+      "name": "deletePreset",
+      "request": {
+        "method": "DELETE",
+        "path": "/api/v1/presets/{presetId}",
+        "pathParameters": {
+          "presetId": "preset-fixture"
+        },
+        "query": {},
+        "headers": {
+          "X-Tentaflake-CSRF": "fixture-only-not-a-real-csrf-token-000000",
+          "Idempotency-Key": "00000000-0000-4000-8000-000000000001",
+          "Idempotency-Epoch": "ledger-fixture-1",
+          "If-Match": "\"file-fixture-1\""
+        }
+      },
+      "response": {
+        "status": 204,
+        "headers": {
+          "Cache-Control": "no-store",
+          "Operation-Id": "operation-fixture"
+        }
+      }
+    },
+    {
+      "name": "createPlan",
+      "request": {
+        "method": "POST",
+        "path": "/api/v1/plans",
+        "pathParameters": {},
+        "query": {},
+        "headers": {
+          "X-Tentaflake-CSRF": "fixture-only-not-a-real-csrf-token-000000"
+        },
+        "contentType": "application/json",
+        "body": {
+          "name": "Example environment",
+          "config": {
+            "image": "debian-fixture",
+            "isolation": "container",
+            "agentRuntime": null,
+            "tools": [],
+            "skills": [],
+            "capabilities": [],
+            "resources": {
+              "cpu": 1,
+              "memoryMiB": 1024,
+              "storageMiB": 1024
+            }
+          },
+          "workspace": {
+            "kind": "new"
+          },
+          "revisions": {
+            "policy": "policy-fixture-1",
+            "catalog": "catalog-fixture-1",
+            "grants": "grants-fixture-1",
+            "host": "host-fixture-1"
+          }
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "Cache-Control": "no-store"
+        },
+        "contentType": "application/json",
+        "body": {
+          "id": "plan-fixture",
+          "ownerId": "owner-fixture",
+          "valid": false,
+          "expiresAt": "2026-10-13T12:05:00Z",
+          "request": {
+            "name": "Example environment",
+            "config": {
+              "image": "debian-fixture",
+              "isolation": "container",
+              "agentRuntime": null,
+              "tools": [],
+              "skills": [],
+              "capabilities": [],
+              "resources": {
+                "cpu": 1,
+                "memoryMiB": 1024,
+                "storageMiB": 1024
+              }
+            },
+            "workspace": {
+              "kind": "new"
+            },
+            "revisions": {
+              "policy": "policy-fixture-1",
+              "catalog": "catalog-fixture-1",
+              "grants": "grants-fixture-1",
+              "host": "host-fixture-1"
+            }
+          },
+          "revisions": {
+            "policy": "policy-fixture-1",
+            "catalog": "catalog-fixture-1",
+            "grants": "grants-fixture-1",
+            "host": "host-fixture-1"
+          },
+          "resolved": null,
+          "problems": [
+            {
+              "severity": "error",
+              "code": "unsupported",
+              "message": "Environment backend is not implemented.",
+              "subject": "backend"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "listEnvironments",
+      "request": {
+        "method": "GET",
+        "path": "/api/v1/environments",
+        "pathParameters": {},
+        "query": {},
+        "headers": {}
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "Cache-Control": "no-store"
+        },
+        "contentType": "application/json",
+        "body": [
+          {
+            "id": "environment-fixture",
+            "ownerId": "owner-fixture",
+            "name": "Example environment",
+            "state": "stopped",
+            "detail": "Fixture only; not provisioned.",
+            "config": {
+              "image": "debian-fixture",
+              "isolation": "container",
+              "agentRuntime": null,
+              "tools": [],
+              "skills": [],
+              "capabilities": [],
+              "resources": {
+                "cpu": 1,
+                "memoryMiB": 1024,
+                "storageMiB": 1024
+              }
+            },
+            "active": null,
+            "presetId": null,
+            "workspace": {
+              "id": "workspace-fixture",
+              "ownerId": "owner-fixture",
+              "revision": "workspace-fixture-1",
+              "usedBytes": 0,
+              "quotaBytes": 1073741824
+            },
+            "usage": null,
+            "operation": null,
+            "createdAt": "2026-10-13T12:00:00Z",
+            "revision": "environment-fixture-1",
+            "revisions": {
+              "policy": "policy-fixture-1",
+              "catalog": "catalog-fixture-1",
+              "grants": "grants-fixture-1",
+              "host": "host-fixture-1"
+            },
+            "availability": {
+              "available": false,
+              "state": "unsupported",
+              "reason": "Contract fixture only; host environment API is unavailable."
+            },
+            "evidence": [
+              {
+                "source": "fixture",
+                "status": "unknown",
+                "observedAt": null,
+                "detail": "Shape example only; no backend or runtime acceptance."
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "createEnvironment",
+      "request": {
+        "method": "POST",
+        "path": "/api/v1/environments",
+        "pathParameters": {},
+        "query": {},
+        "headers": {
+          "X-Tentaflake-CSRF": "fixture-only-not-a-real-csrf-token-000000",
+          "Idempotency-Key": "00000000-0000-4000-8000-000000000001",
+          "Idempotency-Epoch": "ledger-fixture-1"
+        },
+        "contentType": "application/json",
+        "body": {
+          "planId": "plan-fixture",
+          "startAfterCreate": false
+        }
+      },
+      "response": {
+        "status": 202,
+        "headers": {
+          "Cache-Control": "no-store",
+          "Operation-Id": "operation-fixture"
+        },
+        "contentType": "application/json",
+        "body": {
+          "environment": {
+            "id": "environment-fixture",
+            "ownerId": "owner-fixture",
+            "name": "Example environment",
+            "state": "stopped",
+            "detail": "Fixture only; not provisioned.",
+            "config": {
+              "image": "debian-fixture",
+              "isolation": "container",
+              "agentRuntime": null,
+              "tools": [],
+              "skills": [],
+              "capabilities": [],
+              "resources": {
+                "cpu": 1,
+                "memoryMiB": 1024,
+                "storageMiB": 1024
+              }
+            },
+            "active": null,
+            "presetId": null,
+            "workspace": {
+              "id": "workspace-fixture",
+              "ownerId": "owner-fixture",
+              "revision": "workspace-fixture-1",
+              "usedBytes": 0,
+              "quotaBytes": 1073741824
+            },
+            "usage": null,
+            "operation": null,
+            "createdAt": "2026-10-13T12:00:00Z",
+            "revision": "environment-fixture-1",
+            "revisions": {
+              "policy": "policy-fixture-1",
+              "catalog": "catalog-fixture-1",
+              "grants": "grants-fixture-1",
+              "host": "host-fixture-1"
+            },
+            "availability": {
+              "available": false,
+              "state": "unsupported",
+              "reason": "Contract fixture only; host environment API is unavailable."
+            },
+            "evidence": [
+              {
+                "source": "fixture",
+                "status": "unknown",
+                "observedAt": null,
+                "detail": "Shape example only; no backend or runtime acceptance."
+              }
+            ]
+          },
+          "operation": {
+            "id": "operation-fixture",
+            "ownerId": "owner-fixture",
+            "kind": "create",
+            "environmentId": "environment-fixture",
+            "target": {
+              "kind": "environment",
+              "id": "environment-fixture"
+            },
+            "state": "unknown",
+            "steps": [
+              {
+                "label": "Reconcile durable claim",
+                "state": "unknown"
+              }
+            ],
+            "error": {
+              "code": "outcome_unknown",
+              "message": "Example uncertain dispatch; reconciliation required."
+            },
+            "createdAt": "2026-10-13T12:00:00Z",
+            "updatedAt": "2026-10-13T12:00:00Z",
+            "revision": "operation-fixture-1",
+            "requestDigest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+            "result": null
+          }
+        }
+      }
+    },
+    {
+      "name": "getEnvironment",
+      "request": {
+        "method": "GET",
+        "path": "/api/v1/environments/{environmentId}",
+        "pathParameters": {
+          "environmentId": "environment-fixture"
+        },
+        "query": {},
+        "headers": {}
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "Cache-Control": "no-store",
+          "ETag": "\"environment-fixture-1\""
+        },
+        "contentType": "application/json",
+        "body": {
+          "id": "environment-fixture",
+          "ownerId": "owner-fixture",
+          "name": "Example environment",
+          "state": "stopped",
+          "detail": "Fixture only; not provisioned.",
+          "config": {
+            "image": "debian-fixture",
+            "isolation": "container",
+            "agentRuntime": null,
+            "tools": [],
+            "skills": [],
+            "capabilities": [],
+            "resources": {
+              "cpu": 1,
+              "memoryMiB": 1024,
+              "storageMiB": 1024
+            }
+          },
+          "active": null,
+          "presetId": null,
+          "workspace": {
+            "id": "workspace-fixture",
+            "ownerId": "owner-fixture",
+            "revision": "workspace-fixture-1",
+            "usedBytes": 0,
+            "quotaBytes": 1073741824
+          },
+          "usage": null,
+          "operation": null,
+          "createdAt": "2026-10-13T12:00:00Z",
+          "revision": "environment-fixture-1",
+          "revisions": {
+            "policy": "policy-fixture-1",
+            "catalog": "catalog-fixture-1",
+            "grants": "grants-fixture-1",
+            "host": "host-fixture-1"
+          },
+          "availability": {
+            "available": false,
+            "state": "unsupported",
+            "reason": "Contract fixture only; host environment API is unavailable."
+          },
+          "evidence": [
+            {
+              "source": "fixture",
+              "status": "unknown",
+              "observedAt": null,
+              "detail": "Shape example only; no backend or runtime acceptance."
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "renameEnvironment",
+      "request": {
+        "method": "PATCH",
+        "path": "/api/v1/environments/{environmentId}",
+        "pathParameters": {
+          "environmentId": "environment-fixture"
+        },
+        "query": {},
+        "headers": {
+          "X-Tentaflake-CSRF": "fixture-only-not-a-real-csrf-token-000000",
+          "Idempotency-Key": "00000000-0000-4000-8000-000000000001",
+          "Idempotency-Epoch": "ledger-fixture-1",
+          "If-Match": "\"file-fixture-1\""
+        },
+        "contentType": "application/json",
+        "body": {
+          "name": "Renamed fixture"
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "Cache-Control": "no-store",
+          "Operation-Id": "operation-fixture",
+          "ETag": "\"environment-fixture-1\""
+        },
+        "contentType": "application/json",
+        "body": {
+          "id": "environment-fixture",
+          "ownerId": "owner-fixture",
+          "name": "Example environment",
+          "state": "stopped",
+          "detail": "Fixture only; not provisioned.",
+          "config": {
+            "image": "debian-fixture",
+            "isolation": "container",
+            "agentRuntime": null,
+            "tools": [],
+            "skills": [],
+            "capabilities": [],
+            "resources": {
+              "cpu": 1,
+              "memoryMiB": 1024,
+              "storageMiB": 1024
+            }
+          },
+          "active": null,
+          "presetId": null,
+          "workspace": {
+            "id": "workspace-fixture",
+            "ownerId": "owner-fixture",
+            "revision": "workspace-fixture-1",
+            "usedBytes": 0,
+            "quotaBytes": 1073741824
+          },
+          "usage": null,
+          "operation": null,
+          "createdAt": "2026-10-13T12:00:00Z",
+          "revision": "environment-fixture-1",
+          "revisions": {
+            "policy": "policy-fixture-1",
+            "catalog": "catalog-fixture-1",
+            "grants": "grants-fixture-1",
+            "host": "host-fixture-1"
+          },
+          "availability": {
+            "available": false,
+            "state": "unsupported",
+            "reason": "Contract fixture only; host environment API is unavailable."
+          },
+          "evidence": [
+            {
+              "source": "fixture",
+              "status": "unknown",
+              "observedAt": null,
+              "detail": "Shape example only; no backend or runtime acceptance."
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "deleteEnvironment",
+      "request": {
+        "method": "DELETE",
+        "path": "/api/v1/environments/{environmentId}",
+        "pathParameters": {
+          "environmentId": "environment-fixture"
+        },
+        "query": {
+          "workspace": "retain"
+        },
+        "headers": {
+          "X-Tentaflake-CSRF": "fixture-only-not-a-real-csrf-token-000000",
+          "Idempotency-Key": "00000000-0000-4000-8000-000000000001",
+          "Idempotency-Epoch": "ledger-fixture-1",
+          "If-Match": "\"file-fixture-1\""
+        }
+      },
+      "response": {
+        "status": 202,
+        "headers": {
+          "Cache-Control": "no-store",
+          "Operation-Id": "operation-fixture",
+          "ETag": "\"operation-fixture-1\""
+        },
+        "contentType": "application/json",
+        "body": {
+          "id": "operation-fixture",
+          "ownerId": "owner-fixture",
+          "kind": "create",
+          "environmentId": "environment-fixture",
+          "target": {
+            "kind": "environment",
+            "id": "environment-fixture"
+          },
+          "state": "unknown",
+          "steps": [
+            {
+              "label": "Reconcile durable claim",
+              "state": "unknown"
+            }
+          ],
+          "error": {
+            "code": "outcome_unknown",
+            "message": "Example uncertain dispatch; reconciliation required."
+          },
+          "createdAt": "2026-10-13T12:00:00Z",
+          "updatedAt": "2026-10-13T12:00:00Z",
+          "revision": "operation-fixture-1",
+          "requestDigest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+          "result": null
+        }
+      }
+    },
+    {
+      "name": "startEnvironment",
+      "request": {
+        "method": "POST",
+        "path": "/api/v1/environments/{environmentId}/start",
+        "pathParameters": {
+          "environmentId": "environment-fixture"
+        },
+        "query": {},
+        "headers": {
+          "X-Tentaflake-CSRF": "fixture-only-not-a-real-csrf-token-000000",
+          "Idempotency-Key": "00000000-0000-4000-8000-000000000001",
+          "Idempotency-Epoch": "ledger-fixture-1",
+          "If-Match": "\"file-fixture-1\""
+        }
+      },
+      "response": {
+        "status": 202,
+        "headers": {
+          "Cache-Control": "no-store",
+          "Operation-Id": "operation-fixture",
+          "ETag": "\"operation-fixture-1\""
+        },
+        "contentType": "application/json",
+        "body": {
+          "id": "operation-fixture",
+          "ownerId": "owner-fixture",
+          "kind": "create",
+          "environmentId": "environment-fixture",
+          "target": {
+            "kind": "environment",
+            "id": "environment-fixture"
+          },
+          "state": "unknown",
+          "steps": [
+            {
+              "label": "Reconcile durable claim",
+              "state": "unknown"
+            }
+          ],
+          "error": {
+            "code": "outcome_unknown",
+            "message": "Example uncertain dispatch; reconciliation required."
+          },
+          "createdAt": "2026-10-13T12:00:00Z",
+          "updatedAt": "2026-10-13T12:00:00Z",
+          "revision": "operation-fixture-1",
+          "requestDigest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+          "result": null
+        }
+      }
+    },
+    {
+      "name": "stopEnvironment",
+      "request": {
+        "method": "POST",
+        "path": "/api/v1/environments/{environmentId}/stop",
+        "pathParameters": {
+          "environmentId": "environment-fixture"
+        },
+        "query": {},
+        "headers": {
+          "X-Tentaflake-CSRF": "fixture-only-not-a-real-csrf-token-000000",
+          "Idempotency-Key": "00000000-0000-4000-8000-000000000001",
+          "Idempotency-Epoch": "ledger-fixture-1",
+          "If-Match": "\"file-fixture-1\""
+        }
+      },
+      "response": {
+        "status": 202,
+        "headers": {
+          "Cache-Control": "no-store",
+          "Operation-Id": "operation-fixture",
+          "ETag": "\"operation-fixture-1\""
+        },
+        "contentType": "application/json",
+        "body": {
+          "id": "operation-fixture",
+          "ownerId": "owner-fixture",
+          "kind": "create",
+          "environmentId": "environment-fixture",
+          "target": {
+            "kind": "environment",
+            "id": "environment-fixture"
+          },
+          "state": "unknown",
+          "steps": [
+            {
+              "label": "Reconcile durable claim",
+              "state": "unknown"
+            }
+          ],
+          "error": {
+            "code": "outcome_unknown",
+            "message": "Example uncertain dispatch; reconciliation required."
+          },
+          "createdAt": "2026-10-13T12:00:00Z",
+          "updatedAt": "2026-10-13T12:00:00Z",
+          "revision": "operation-fixture-1",
+          "requestDigest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+          "result": null
+        }
+      }
+    },
+    {
+      "name": "previewChange",
+      "request": {
+        "method": "POST",
+        "path": "/api/v1/environments/{environmentId}/changes/preview",
+        "pathParameters": {
+          "environmentId": "environment-fixture"
+        },
+        "query": {},
+        "headers": {
+          "X-Tentaflake-CSRF": "fixture-only-not-a-real-csrf-token-000000",
+          "If-Match": "\"file-fixture-1\""
+        },
+        "contentType": "application/json",
+        "body": {
+          "config": {
+            "image": "debian-fixture",
+            "isolation": "container",
+            "agentRuntime": null,
+            "tools": [],
+            "skills": [],
+            "capabilities": [],
+            "resources": {
+              "cpu": 1,
+              "memoryMiB": 1024,
+              "storageMiB": 1024
+            }
+          },
+          "revisions": {
+            "policy": "policy-fixture-1",
+            "catalog": "catalog-fixture-1",
+            "grants": "grants-fixture-1",
+            "host": "host-fixture-1"
+          }
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "Cache-Control": "no-store"
+        },
+        "contentType": "application/json",
+        "body": {
+          "id": "preview-fixture",
+          "ownerId": "owner-fixture",
+          "environmentId": "environment-fixture",
+          "environmentRevision": "environment-fixture-1",
+          "expiresAt": "2026-10-13T12:05:00Z",
+          "revisions": {
+            "policy": "policy-fixture-1",
+            "catalog": "catalog-fixture-1",
+            "grants": "grants-fixture-1",
+            "host": "host-fixture-1"
+          },
+          "valid": false,
+          "effects": [
+            {
+              "subject": "isolation",
+              "summary": "Guest backend has no runtime acceptance.",
+              "applies": "unsupported"
+            }
+          ],
+          "problems": [
+            {
+              "severity": "error",
+              "code": "unsupported",
+              "message": "Environment backend is not implemented.",
+              "subject": "backend"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "applyChange",
+      "request": {
+        "method": "POST",
+        "path": "/api/v1/environments/{environmentId}/changes",
+        "pathParameters": {
+          "environmentId": "environment-fixture"
+        },
+        "query": {},
+        "headers": {
+          "X-Tentaflake-CSRF": "fixture-only-not-a-real-csrf-token-000000",
+          "Idempotency-Key": "00000000-0000-4000-8000-000000000001",
+          "Idempotency-Epoch": "ledger-fixture-1",
+          "If-Match": "\"file-fixture-1\""
+        },
+        "contentType": "application/json",
+        "body": {
+          "previewId": "preview-fixture"
+        }
+      },
+      "response": {
+        "status": 202,
+        "headers": {
+          "Cache-Control": "no-store",
+          "Operation-Id": "operation-fixture",
+          "ETag": "\"operation-fixture-1\""
+        },
+        "contentType": "application/json",
+        "body": {
+          "id": "operation-fixture",
+          "ownerId": "owner-fixture",
+          "kind": "create",
+          "environmentId": "environment-fixture",
+          "target": {
+            "kind": "environment",
+            "id": "environment-fixture"
+          },
+          "state": "unknown",
+          "steps": [
+            {
+              "label": "Reconcile durable claim",
+              "state": "unknown"
+            }
+          ],
+          "error": {
+            "code": "outcome_unknown",
+            "message": "Example uncertain dispatch; reconciliation required."
+          },
+          "createdAt": "2026-10-13T12:00:00Z",
+          "updatedAt": "2026-10-13T12:00:00Z",
+          "revision": "operation-fixture-1",
+          "requestDigest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+          "result": null
+        }
+      }
+    },
+    {
+      "name": "getOperation",
+      "request": {
+        "method": "GET",
+        "path": "/api/v1/operations/{operationId}",
+        "pathParameters": {
+          "operationId": "operation-fixture"
+        },
+        "query": {},
+        "headers": {}
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "Cache-Control": "no-store",
+          "ETag": "\"operation-fixture-1\""
+        },
+        "contentType": "application/json",
+        "body": {
+          "id": "operation-fixture",
+          "ownerId": "owner-fixture",
+          "kind": "create",
+          "environmentId": "environment-fixture",
+          "target": {
+            "kind": "environment",
+            "id": "environment-fixture"
+          },
+          "state": "unknown",
+          "steps": [
+            {
+              "label": "Reconcile durable claim",
+              "state": "unknown"
+            }
+          ],
+          "error": {
+            "code": "outcome_unknown",
+            "message": "Example uncertain dispatch; reconciliation required."
+          },
+          "createdAt": "2026-10-13T12:00:00Z",
+          "updatedAt": "2026-10-13T12:00:00Z",
+          "revision": "operation-fixture-1",
+          "requestDigest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+          "result": null
+        }
+      }
+    },
+    {
+      "name": "recoverOperation",
+      "request": {
+        "method": "GET",
+        "path": "/api/v1/operations",
+        "pathParameters": {},
+        "query": {
+          "idempotencyKey": "00000000-0000-4000-8000-000000000001",
+          "mutationEpoch": "ledger-fixture-1",
+          "method": "POST",
+          "target": "/api/v1/environments"
+        },
+        "headers": {}
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "Cache-Control": "no-store"
+        },
+        "contentType": "application/json",
+        "body": {
+          "state": "unknown",
+          "operation": null,
+          "retrySafe": false,
+          "reason": "Example ledger unavailable; never replay uncertain mutation."
+        }
+      }
+    },
+    {
+      "name": "listWorkspaces",
+      "request": {
+        "method": "GET",
+        "path": "/api/v1/workspaces",
+        "pathParameters": {},
+        "query": {},
+        "headers": {}
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "Cache-Control": "no-store"
+        },
+        "contentType": "application/json",
+        "body": [
+          {
+            "id": "workspace-fixture",
+            "ownerId": "owner-fixture",
+            "revision": "workspace-fixture-1",
+            "usedBytes": 0,
+            "quotaBytes": 1073741824,
+            "origin": "Example environment",
+            "retainedAt": "2026-10-13T12:00:00Z",
+            "availability": {
+              "available": false,
+              "state": "unsupported",
+              "reason": "Contract fixture only; host environment API is unavailable."
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "deleteWorkspace",
+      "request": {
+        "method": "DELETE",
+        "path": "/api/v1/workspaces/{workspaceId}",
+        "pathParameters": {
+          "workspaceId": "workspace-fixture"
+        },
+        "query": {},
+        "headers": {
+          "X-Tentaflake-CSRF": "fixture-only-not-a-real-csrf-token-000000",
+          "Idempotency-Key": "00000000-0000-4000-8000-000000000001",
+          "Idempotency-Epoch": "ledger-fixture-1",
+          "If-Match": "\"file-fixture-1\""
+        }
+      },
+      "response": {
+        "status": 204,
+        "headers": {
+          "Cache-Control": "no-store",
+          "Operation-Id": "operation-fixture"
+        }
+      }
+    },
+    {
+      "name": "listFiles",
+      "request": {
+        "method": "GET",
+        "path": "/api/v1/environments/{environmentId}/files",
+        "pathParameters": {
+          "environmentId": "environment-fixture"
+        },
+        "query": {
+          "path": "/notes.txt"
+        },
+        "headers": {}
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "Cache-Control": "no-store",
+          "ETag": "\"directory-fixture-1\""
+        },
+        "contentType": "application/json",
+        "body": {
+          "path": "/",
+          "revision": "directory-fixture-1",
+          "entries": [
+            {
+              "path": "/notes.txt",
+              "name": "notes.txt",
+              "kind": "file",
+              "size": 5,
+              "modifiedAt": "2026-10-13T12:00:00Z",
+              "revision": "file-fixture-1",
+              "mediaType": "text/plain"
+            }
+          ],
+          "next": null
+        }
+      }
+    },
+    {
+      "name": "deleteFile",
+      "request": {
+        "method": "DELETE",
+        "path": "/api/v1/environments/{environmentId}/files",
+        "pathParameters": {
+          "environmentId": "environment-fixture"
+        },
+        "query": {
+          "path": "/notes.txt"
+        },
+        "headers": {
+          "X-Tentaflake-CSRF": "fixture-only-not-a-real-csrf-token-000000",
+          "Idempotency-Key": "00000000-0000-4000-8000-000000000001",
+          "Idempotency-Epoch": "ledger-fixture-1",
+          "If-Match": "\"file-fixture-1\""
+        }
+      },
+      "response": {
+        "status": 204,
+        "headers": {
+          "Cache-Control": "no-store",
+          "Operation-Id": "operation-fixture"
+        }
+      }
+    },
+    {
+      "name": "searchFiles",
+      "request": {
+        "method": "GET",
+        "path": "/api/v1/environments/{environmentId}/files/search",
+        "pathParameters": {
+          "environmentId": "environment-fixture"
+        },
+        "query": {
+          "q": "notes"
+        },
+        "headers": {}
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "Cache-Control": "no-store"
+        },
+        "contentType": "application/json",
+        "body": [
+          {
+            "path": "/notes.txt",
+            "name": "notes.txt",
+            "kind": "file",
+            "size": 5,
+            "modifiedAt": "2026-10-13T12:00:00Z",
+            "revision": "file-fixture-1",
+            "mediaType": "text/plain"
+          }
+        ]
+      }
+    },
+    {
+      "name": "getFileEntry",
+      "request": {
+        "method": "GET",
+        "path": "/api/v1/environments/{environmentId}/files/entry",
+        "pathParameters": {
+          "environmentId": "environment-fixture"
+        },
+        "query": {
+          "path": "/notes.txt"
+        },
+        "headers": {}
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "Cache-Control": "no-store",
+          "ETag": "\"file-fixture-1\""
+        },
+        "contentType": "application/json",
+        "body": {
+          "path": "/notes.txt",
+          "name": "notes.txt",
+          "kind": "file",
+          "size": 5,
+          "modifiedAt": "2026-10-13T12:00:00Z",
+          "revision": "file-fixture-1",
+          "mediaType": "text/plain"
+        }
+      }
+    },
+    {
+      "name": "readFile",
+      "request": {
+        "method": "GET",
+        "path": "/api/v1/environments/{environmentId}/files/content",
+        "pathParameters": {
+          "environmentId": "environment-fixture"
+        },
+        "query": {
+          "path": "/notes.txt"
+        },
+        "headers": {
+          "If-Match": "\"file-fixture-1\""
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "Cache-Control": "no-store",
+          "ETag": "\"fixture-revision-1\"",
+          "Content-Disposition": "attachment",
+          "X-Content-Type-Options": "nosniff",
+          "Content-Length": 5
+        },
+        "contentType": "application/octet-stream",
+        "body": "hello"
+      }
+    },
+    {
+      "name": "writeFile",
+      "request": {
+        "method": "PUT",
+        "path": "/api/v1/environments/{environmentId}/files/content",
+        "pathParameters": {
+          "environmentId": "environment-fixture"
+        },
+        "query": {
+          "path": "/notes.txt"
+        },
+        "headers": {
+          "X-Tentaflake-CSRF": "fixture-only-not-a-real-csrf-token-000000",
+          "Idempotency-Key": "00000000-0000-4000-8000-000000000001",
+          "Idempotency-Epoch": "ledger-fixture-1",
+          "If-None-Match": "*"
+        },
+        "contentType": "application/octet-stream",
+        "body": "hello"
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "Cache-Control": "no-store",
+          "Operation-Id": "operation-fixture",
+          "ETag": "\"file-fixture-1\""
+        },
+        "contentType": "application/json",
+        "body": {
+          "path": "/notes.txt",
+          "name": "notes.txt",
+          "kind": "file",
+          "size": 5,
+          "modifiedAt": "2026-10-13T12:00:00Z",
+          "revision": "file-fixture-1",
+          "mediaType": "text/plain"
+        }
+      }
+    },
+    {
+      "name": "createDirectory",
+      "request": {
+        "method": "POST",
+        "path": "/api/v1/environments/{environmentId}/files/directories",
+        "pathParameters": {
+          "environmentId": "environment-fixture"
+        },
+        "query": {},
+        "headers": {
+          "X-Tentaflake-CSRF": "fixture-only-not-a-real-csrf-token-000000",
+          "Idempotency-Key": "00000000-0000-4000-8000-000000000001",
+          "Idempotency-Epoch": "ledger-fixture-1",
+          "If-Match": "\"file-fixture-1\""
+        },
+        "contentType": "application/json",
+        "body": {
+          "path": "/drafts"
+        }
+      },
+      "response": {
+        "status": 201,
+        "headers": {
+          "Cache-Control": "no-store",
+          "Operation-Id": "operation-fixture",
+          "ETag": "\"file-fixture-1\""
+        },
+        "contentType": "application/json",
+        "body": {
+          "path": "/notes.txt",
+          "name": "notes.txt",
+          "kind": "file",
+          "size": 5,
+          "modifiedAt": "2026-10-13T12:00:00Z",
+          "revision": "file-fixture-1",
+          "mediaType": "text/plain"
+        }
+      }
+    },
+    {
+      "name": "moveFile",
+      "request": {
+        "method": "POST",
+        "path": "/api/v1/environments/{environmentId}/files/move",
+        "pathParameters": {
+          "environmentId": "environment-fixture"
+        },
+        "query": {},
+        "headers": {
+          "X-Tentaflake-CSRF": "fixture-only-not-a-real-csrf-token-000000",
+          "Idempotency-Key": "00000000-0000-4000-8000-000000000001",
+          "Idempotency-Epoch": "ledger-fixture-1"
+        },
+        "contentType": "application/json",
+        "body": {
+          "from": "/notes.txt",
+          "to": "/renamed.txt",
+          "sourceRevision": "file-fixture-1",
+          "destinationParentRevision": "directory-fixture-1"
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "Cache-Control": "no-store",
+          "Operation-Id": "operation-fixture",
+          "ETag": "\"file-fixture-1\""
+        },
+        "contentType": "application/json",
+        "body": {
+          "path": "/notes.txt",
+          "name": "notes.txt",
+          "kind": "file",
+          "size": 5,
+          "modifiedAt": "2026-10-13T12:00:00Z",
+          "revision": "file-fixture-1",
+          "mediaType": "text/plain"
+        }
+      }
+    },
+    {
+      "name": "uploadFile",
+      "request": {
+        "method": "PUT",
+        "path": "/api/v1/environments/{environmentId}/files/upload",
+        "pathParameters": {
+          "environmentId": "environment-fixture"
+        },
+        "query": {
+          "path": "/notes.txt"
+        },
+        "headers": {
+          "X-Tentaflake-CSRF": "fixture-only-not-a-real-csrf-token-000000",
+          "Idempotency-Key": "00000000-0000-4000-8000-000000000001",
+          "Idempotency-Epoch": "ledger-fixture-1",
+          "If-None-Match": "*"
+        },
+        "contentType": "application/octet-stream",
+        "body": "hello"
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "Cache-Control": "no-store",
+          "Operation-Id": "operation-fixture",
+          "ETag": "\"file-fixture-1\""
+        },
+        "contentType": "application/json",
+        "body": {
+          "path": "/notes.txt",
+          "name": "notes.txt",
+          "kind": "file",
+          "size": 5,
+          "modifiedAt": "2026-10-13T12:00:00Z",
+          "revision": "file-fixture-1",
+          "mediaType": "text/plain"
+        }
+      }
+    },
+    {
+      "name": "downloadFile",
+      "request": {
+        "method": "GET",
+        "path": "/api/v1/environments/{environmentId}/files/download",
+        "pathParameters": {
+          "environmentId": "environment-fixture"
+        },
+        "query": {
+          "path": "/notes.txt"
+        },
+        "headers": {
+          "If-Match": "\"file-fixture-1\""
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "Cache-Control": "no-store",
+          "ETag": "\"fixture-revision-1\"",
+          "Content-Disposition": "attachment",
+          "X-Content-Type-Options": "nosniff",
+          "Content-Length": 5
+        },
+        "contentType": "application/octet-stream",
+        "body": "hello"
+      }
+    },
+    {
+      "name": "listArtifacts",
+      "request": {
+        "method": "GET",
+        "path": "/api/v1/environments/{environmentId}/artifacts",
+        "pathParameters": {
+          "environmentId": "environment-fixture"
+        },
+        "query": {},
+        "headers": {}
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "Cache-Control": "no-store"
+        },
+        "contentType": "application/json",
+        "body": [
+          {
+            "id": "artifact-fixture",
+            "ownerId": "owner-fixture",
+            "name": "notes.txt",
+            "path": "/notes.txt",
+            "mediaType": "text/plain",
+            "size": 5,
+            "createdAt": "2026-10-13T12:00:00Z",
+            "producer": "fixture",
+            "revision": "file-fixture-1",
+            "digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+          }
+        ]
+      }
+    },
+    {
+      "name": "listTerminals",
+      "request": {
+        "method": "GET",
+        "path": "/api/v1/environments/{environmentId}/terminals",
+        "pathParameters": {
+          "environmentId": "environment-fixture"
+        },
+        "query": {},
+        "headers": {}
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "Cache-Control": "no-store"
+        },
+        "contentType": "application/json",
+        "body": [
+          {
+            "id": "terminal-fixture",
+            "ownerId": "owner-fixture",
+            "title": "Fixture terminal",
+            "state": "unknown",
+            "exitCode": null,
+            "createdAt": "2026-10-13T12:00:00Z",
+            "revision": "terminal-fixture-1",
+            "idleExpiresAt": "2026-10-13T12:05:00Z",
+            "earliestOffset": 0,
+            "nextOffset": 5
+          }
+        ]
+      }
+    },
+    {
+      "name": "createTerminal",
+      "request": {
+        "method": "POST",
+        "path": "/api/v1/environments/{environmentId}/terminals",
+        "pathParameters": {
+          "environmentId": "environment-fixture"
+        },
+        "query": {},
+        "headers": {
+          "X-Tentaflake-CSRF": "fixture-only-not-a-real-csrf-token-000000",
+          "Idempotency-Key": "00000000-0000-4000-8000-000000000001",
+          "Idempotency-Epoch": "ledger-fixture-1",
+          "If-Match": "\"file-fixture-1\""
+        }
+      },
+      "response": {
+        "status": 201,
+        "headers": {
+          "Cache-Control": "no-store",
+          "Operation-Id": "operation-fixture",
+          "ETag": "\"terminal-fixture-1\""
+        },
+        "contentType": "application/json",
+        "body": {
+          "id": "terminal-fixture",
+          "ownerId": "owner-fixture",
+          "title": "Fixture terminal",
+          "state": "unknown",
+          "exitCode": null,
+          "createdAt": "2026-10-13T12:00:00Z",
+          "revision": "terminal-fixture-1",
+          "idleExpiresAt": "2026-10-13T12:05:00Z",
+          "earliestOffset": 0,
+          "nextOffset": 5
+        }
+      }
+    },
+    {
+      "name": "deleteTerminal",
+      "request": {
+        "method": "DELETE",
+        "path": "/api/v1/environments/{environmentId}/terminals/{terminalId}",
+        "pathParameters": {
+          "environmentId": "environment-fixture",
+          "terminalId": "terminal-fixture"
+        },
+        "query": {},
+        "headers": {
+          "X-Tentaflake-CSRF": "fixture-only-not-a-real-csrf-token-000000",
+          "Idempotency-Key": "00000000-0000-4000-8000-000000000001",
+          "Idempotency-Epoch": "ledger-fixture-1",
+          "If-Match": "\"file-fixture-1\""
+        }
+      },
+      "response": {
+        "status": 204,
+        "headers": {
+          "Cache-Control": "no-store",
+          "Operation-Id": "operation-fixture"
+        }
+      }
+    },
+    {
+      "name": "attachTerminal",
+      "request": {
+        "method": "GET",
+        "path": "/api/v1/environments/{environmentId}/terminals/{terminalId}/attach",
+        "pathParameters": {
+          "environmentId": "environment-fixture",
+          "terminalId": "terminal-fixture"
+        },
+        "query": {},
+        "headers": {}
+      },
+      "response": {
+        "status": 101,
+        "headers": {
+          "Cache-Control": "no-store"
+        }
+      }
+    },
+    {
+      "name": "streamLogs",
+      "request": {
+        "method": "GET",
+        "path": "/api/v1/environments/{environmentId}/logs",
+        "pathParameters": {
+          "environmentId": "environment-fixture"
+        },
+        "query": {},
+        "headers": {}
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "Cache-Control": "no-store"
+        },
+        "contentType": "text/event-stream",
+        "body": {
+          "cursor": "log-fixture-1",
+          "time": "2026-10-13T12:00:00Z",
+          "source": "system",
+          "text": "Fixture only; no running backend."
+        }
+      }
+    },
+    {
+      "name": "streamEvents",
+      "request": {
+        "method": "GET",
+        "path": "/api/v1/events",
+        "pathParameters": {},
+        "query": {},
+        "headers": {}
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "Cache-Control": "no-store"
+        },
+        "contentType": "text/event-stream",
+        "body": {
+          "type": "environment",
+          "cursor": "event-fixture-1",
+          "environment": {
+            "id": "environment-fixture",
+            "ownerId": "owner-fixture",
+            "name": "Example environment",
+            "state": "stopped",
+            "detail": "Fixture only; not provisioned.",
+            "config": {
+              "image": "debian-fixture",
+              "isolation": "container",
+              "agentRuntime": null,
+              "tools": [],
+              "skills": [],
+              "capabilities": [],
+              "resources": {
+                "cpu": 1,
+                "memoryMiB": 1024,
+                "storageMiB": 1024
+              }
+            },
+            "active": null,
+            "presetId": null,
+            "workspace": {
+              "id": "workspace-fixture",
+              "ownerId": "owner-fixture",
+              "revision": "workspace-fixture-1",
+              "usedBytes": 0,
+              "quotaBytes": 1073741824
+            },
+            "usage": null,
+            "operation": null,
+            "createdAt": "2026-10-13T12:00:00Z",
+            "revision": "environment-fixture-1",
+            "revisions": {
+              "policy": "policy-fixture-1",
+              "catalog": "catalog-fixture-1",
+              "grants": "grants-fixture-1",
+              "host": "host-fixture-1"
+            },
+            "availability": {
+              "available": false,
+              "state": "unsupported",
+              "reason": "Contract fixture only; host environment API is unavailable."
+            },
+            "evidence": [
+              {
+                "source": "fixture",
+                "status": "unknown",
+                "observedAt": null,
+                "detail": "Shape example only; no backend or runtime acceptance."
+              }
+            ]
+          }
+        }
+      }
+    }
+  ],
+  "valid": [
+    {
+      "name": "strict guest unavailable",
+      "schema": "Capabilities",
+      "value": {
+        "revisions": {
+          "policy": "policy-fixture-1",
+          "catalog": "catalog-fixture-1",
+          "grants": "grants-fixture-1",
+          "host": "host-fixture-1"
+        },
+        "features": {
+          "environments.create": {
+            "available": false,
+            "state": "unsupported",
+            "reason": "Contract fixture only; host environment API is unavailable."
+          },
+          "terminal": {
+            "available": false,
+            "state": "unsupported",
+            "reason": "Contract fixture only; host environment API is unavailable."
+          }
+        },
+        "isolation": [
+          {
+            "id": "container",
+            "name": "Container",
+            "detail": "Shares the host kernel; not strict isolation.",
+            "availability": {
+              "available": false,
+              "state": "unsupported",
+              "reason": "Contract fixture only; host environment API is unavailable."
+            },
+            "evidence": [
+              {
+                "source": "fixture",
+                "status": "unknown",
+                "observedAt": null,
+                "detail": "Shape example only; no backend or runtime acceptance."
+              }
+            ]
+          },
+          {
+            "id": "guest-kernel",
+            "name": "Separate kernel",
+            "detail": "Unavailable until KVM and actual guest backend acceptance.",
+            "availability": {
+              "available": false,
+              "state": "unready",
+              "reason": "No accepted guest backend or usable KVM evidence."
+            },
+            "evidence": [
+              {
+                "source": "fixture",
+                "status": "unknown",
+                "observedAt": null,
+                "detail": "Shape example only; no backend or runtime acceptance."
+              }
+            ]
+          }
+        ],
+        "agentRuntimes": [],
+        "optional": [],
+        "limits": {
+          "cpu": {
+            "min": 1,
+            "max": 2,
+            "default": 1,
+            "step": 1
+          },
+          "memoryMiB": {
+            "min": 128,
+            "max": 4096,
+            "default": 1024,
+            "step": 128
+          },
+          "storageMiB": {
+            "min": 128,
+            "max": 8192,
+            "default": 1024,
+            "step": 128
+          },
+          "maxActiveEnvironments": 2,
+          "maxEditBytes": 1048576,
+          "maxUploadBytes": 16777216,
+          "maxPageEntries": 100,
+          "maxStreamFrameBytes": 65536,
+          "maxStreamReplayBytes": 1048576,
+          "maxTerminals": 2,
+          "maxTerminalIdleSeconds": 900,
+          "maxOperationRecords": 4096,
+          "reservedCpu": 1,
+          "reservedMemoryMiB": 1024
+        }
+      }
+    },
+    {
+      "name": "found uncertain operation",
+      "schema": "OperationRecovery",
+      "value": {
+        "state": "found",
+        "operation": {
+          "id": "operation-fixture",
+          "ownerId": "owner-fixture",
+          "kind": "create",
+          "environmentId": "environment-fixture",
+          "target": {
+            "kind": "environment",
+            "id": "environment-fixture"
+          },
+          "state": "unknown",
+          "steps": [
+            {
+              "label": "Reconcile durable claim",
+              "state": "unknown"
+            }
+          ],
+          "error": {
+            "code": "outcome_unknown",
+            "message": "Example uncertain dispatch; reconciliation required."
+          },
+          "createdAt": "2026-10-13T12:00:00Z",
+          "updatedAt": "2026-10-13T12:00:00Z",
+          "revision": "operation-fixture-1",
+          "requestDigest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+          "result": null
+        },
+        "retrySafe": false
+      }
+    },
+    {
+      "name": "authoritative current-epoch absence",
+      "schema": "OperationRecovery",
+      "value": {
+        "state": "absent",
+        "operation": null,
+        "retrySafe": true,
+        "mutationEpoch": "ledger-fixture-1"
+      }
+    },
+    {
+      "name": "terminal resize",
+      "schema": "TerminalInput",
+      "value": {
+        "t": "r",
+        "cols": 80,
+        "rows": 24
+      }
+    },
+    {
+      "name": "terminal exit",
+      "schema": "TerminalOutput",
+      "value": {
+        "t": "x",
+        "code": 0
+      }
+    },
+    {
+      "name": "terminal revoked",
+      "schema": "TerminalOutput",
+      "value": {
+        "t": "e",
+        "code": "session_revoked",
+        "message": "Session revoked."
+      }
+    },
+    {
+      "name": "safe root path",
+      "schema": "WorkspacePath",
+      "value": "/"
+    },
+    {
+      "name": "safe Unicode path",
+      "schema": "WorkspacePath",
+      "value": "/drafts/\u00fcberblick.txt"
+    },
+    {
+      "name": "symlink displayed without authority",
+      "schema": "FileEntry",
+      "value": {
+        "path": "/notes.txt",
+        "name": "notes.txt",
+        "kind": "symlink",
+        "size": 5,
+        "modifiedAt": "2026-10-13T12:00:00Z",
+        "revision": "file-fixture-1",
+        "mediaType": "text/plain",
+        "target": "../../host",
+        "readOnly": "Symlink traversal is forbidden."
+      }
+    },
+    {
+      "name": "revoked stream",
+      "schema": "HostEvent",
+      "value": {
+        "type": "session-ended",
+        "cursor": "event-fixture-2",
+        "code": "session_revoked"
+      }
+    },
+    {
+      "name": "stream replay gap",
+      "schema": "HostEvent",
+      "value": {
+        "type": "resync-required",
+        "cursor": "event-fixture-3"
+      }
+    },
+    {
+      "name": "error unauthenticated",
+      "schema": "Error",
+      "value": {
+        "error": {
+          "code": "unauthenticated",
+          "message": "Fixture refusal: unauthenticated"
+        },
+        "requestId": "request-fixture"
+      }
+    },
+    {
+      "name": "error session_expired",
+      "schema": "Error",
+      "value": {
+        "error": {
+          "code": "session_expired",
+          "message": "Fixture refusal: session_expired"
+        },
+        "requestId": "request-fixture"
+      }
+    },
+    {
+      "name": "error session_revoked",
+      "schema": "Error",
+      "value": {
+        "error": {
+          "code": "session_revoked",
+          "message": "Fixture refusal: session_revoked"
+        },
+        "requestId": "request-fixture"
+      }
+    },
+    {
+      "name": "error csrf_failed",
+      "schema": "Error",
+      "value": {
+        "error": {
+          "code": "csrf_failed",
+          "message": "Fixture refusal: csrf_failed"
+        },
+        "requestId": "request-fixture"
+      }
+    },
+    {
+      "name": "error forbidden",
+      "schema": "Error",
+      "value": {
+        "error": {
+          "code": "forbidden",
+          "message": "Fixture refusal: forbidden"
+        },
+        "requestId": "request-fixture"
+      }
+    },
+    {
+      "name": "error not_found",
+      "schema": "Error",
+      "value": {
+        "error": {
+          "code": "not_found",
+          "message": "Fixture refusal: not_found"
+        },
+        "requestId": "request-fixture"
+      }
+    },
+    {
+      "name": "error already_exists",
+      "schema": "Error",
+      "value": {
+        "error": {
+          "code": "already_exists",
+          "message": "Fixture refusal: already_exists"
+        },
+        "requestId": "request-fixture"
+      }
+    },
+    {
+      "name": "error revision_conflict",
+      "schema": "Error",
+      "value": {
+        "error": {
+          "code": "revision_conflict",
+          "message": "Fixture refusal: revision_conflict"
+        },
+        "requestId": "request-fixture"
+      }
+    },
+    {
+      "name": "error precondition_required",
+      "schema": "Error",
+      "value": {
+        "error": {
+          "code": "precondition_required",
+          "message": "Fixture refusal: precondition_required"
+        },
+        "requestId": "request-fixture"
+      }
+    },
+    {
+      "name": "error read_only",
+      "schema": "Error",
+      "value": {
+        "error": {
+          "code": "read_only",
+          "message": "Fixture refusal: read_only"
+        },
+        "requestId": "request-fixture"
+      }
+    },
+    {
+      "name": "error quota_exceeded",
+      "schema": "Error",
+      "value": {
+        "error": {
+          "code": "quota_exceeded",
+          "message": "Fixture refusal: quota_exceeded"
+        },
+        "requestId": "request-fixture"
+      }
+    },
+    {
+      "name": "error too_large",
+      "schema": "Error",
+      "value": {
+        "error": {
+          "code": "too_large",
+          "message": "Fixture refusal: too_large"
+        },
+        "requestId": "request-fixture"
+      }
+    },
+    {
+      "name": "error invalid",
+      "schema": "Error",
+      "value": {
+        "error": {
+          "code": "invalid",
+          "message": "Fixture refusal: invalid"
+        },
+        "requestId": "request-fixture"
+      }
+    },
+    {
+      "name": "error plan_stale",
+      "schema": "Error",
+      "value": {
+        "error": {
+          "code": "plan_stale",
+          "message": "Fixture refusal: plan_stale"
+        },
+        "requestId": "request-fixture"
+      }
+    },
+    {
+      "name": "error environment_running",
+      "schema": "Error",
+      "value": {
+        "error": {
+          "code": "environment_running",
+          "message": "Fixture refusal: environment_running"
+        },
+        "requestId": "request-fixture"
+      }
+    },
+    {
+      "name": "error operation_pending",
+      "schema": "Error",
+      "value": {
+        "error": {
+          "code": "operation_pending",
+          "message": "Fixture refusal: operation_pending"
+        },
+        "requestId": "request-fixture"
+      }
+    },
+    {
+      "name": "error unsupported",
+      "schema": "Error",
+      "value": {
+        "error": {
+          "code": "unsupported",
+          "message": "Fixture refusal: unsupported"
+        },
+        "requestId": "request-fixture"
+      }
+    },
+    {
+      "name": "error unready",
+      "schema": "Error",
+      "value": {
+        "error": {
+          "code": "unready",
+          "message": "Fixture refusal: unready"
+        },
+        "requestId": "request-fixture"
+      }
+    },
+    {
+      "name": "error cursor_expired",
+      "schema": "Error",
+      "value": {
+        "error": {
+          "code": "cursor_expired",
+          "message": "Fixture refusal: cursor_expired"
+        },
+        "requestId": "request-fixture"
+      }
+    },
+    {
+      "name": "error idempotency_conflict",
+      "schema": "Error",
+      "value": {
+        "error": {
+          "code": "idempotency_conflict",
+          "message": "Fixture refusal: idempotency_conflict"
+        },
+        "requestId": "request-fixture"
+      }
+    },
+    {
+      "name": "error idempotency_expired",
+      "schema": "Error",
+      "value": {
+        "error": {
+          "code": "idempotency_expired",
+          "message": "Fixture refusal: idempotency_expired"
+        },
+        "requestId": "request-fixture"
+      }
+    },
+    {
+      "name": "error outcome_unknown",
+      "schema": "Error",
+      "value": {
+        "error": {
+          "code": "outcome_unknown",
+          "message": "Fixture refusal: outcome_unknown"
+        },
+        "requestId": "request-fixture"
+      }
+    },
+    {
+      "name": "error rate_limited",
+      "schema": "Error",
+      "value": {
+        "error": {
+          "code": "rate_limited",
+          "message": "Fixture refusal: rate_limited"
+        },
+        "requestId": "request-fixture"
+      }
+    },
+    {
+      "name": "error unavailable",
+      "schema": "Error",
+      "value": {
+        "error": {
+          "code": "unavailable",
+          "message": "Fixture refusal: unavailable"
+        },
+        "requestId": "request-fixture"
+      }
+    },
+    {
+      "name": "error internal",
+      "schema": "Error",
+      "value": {
+        "error": {
+          "code": "internal",
+          "message": "Fixture refusal: internal"
+        },
+        "requestId": "request-fixture"
+      }
+    },
+    {
+      "name": "lost terminal creation recovers exact terminal identity",
+      "schema": "Operation",
+      "value": {
+        "id": "operation-fixture",
+        "ownerId": "owner-fixture",
+        "kind": "terminal-create",
+        "environmentId": "environment-fixture",
+        "target": {
+          "kind": "environment",
+          "id": "environment-fixture"
+        },
+        "state": "succeeded",
+        "steps": [
+          {
+            "label": "Create terminal",
+            "state": "done"
+          }
+        ],
+        "error": null,
+        "createdAt": "2026-10-13T12:00:00Z",
+        "updatedAt": "2026-10-13T12:00:00Z",
+        "revision": "operation-fixture-1",
+        "requestDigest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+        "result": {
+          "resources": [
+            {
+              "kind": "terminal",
+              "id": "terminal-fixture",
+              "environmentId": "environment-fixture",
+              "revision": "terminal-fixture-1",
+              "state": "created"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "admitted plan shape with proposed exact grants only",
+      "schema": "Plan",
+      "value": {
+        "id": "plan-fixture",
+        "ownerId": "owner-fixture",
+        "valid": true,
+        "expiresAt": "2026-10-13T12:05:00Z",
+        "request": {
+          "name": "Example environment",
+          "config": {
+            "image": "debian-fixture",
+            "isolation": "container",
+            "agentRuntime": null,
+            "tools": [],
+            "skills": [],
+            "capabilities": [],
+            "resources": {
+              "cpu": 1,
+              "memoryMiB": 1024,
+              "storageMiB": 1024
+            }
+          },
+          "workspace": {
+            "kind": "new"
+          },
+          "revisions": {
+            "policy": "policy-fixture-1",
+            "catalog": "catalog-fixture-1",
+            "grants": "grants-fixture-1",
+            "host": "host-fixture-1"
+          }
+        },
+        "revisions": {
+          "policy": "policy-fixture-1",
+          "catalog": "catalog-fixture-1",
+          "grants": "grants-fixture-1",
+          "host": "host-fixture-1"
+        },
+        "resolved": {
+          "image": {
+            "label": "Debian fixture",
+            "digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "isolation": "container",
+          "agentRuntime": null,
+          "blocks": [],
+          "capabilities": [],
+          "resources": {
+            "cpu": 1,
+            "memoryMiB": 1024,
+            "storageMiB": 1024
+          },
+          "workspace": "New managed workspace",
+          "grantIds": [
+            "grant-fixture-create"
+          ],
+          "environmentId": "environment-fixture",
+          "workspaceId": "workspace-fixture",
+          "proposedGrants": [
+            {
+              "id": "grant-fixture-start",
+              "action": "environments.start",
+              "target": {
+                "kind": "environment",
+                "id": "environment-fixture"
+              },
+              "expiresAt": null
+            }
+          ]
+        },
+        "problems": []
+      }
+    }
+  ],
+  "invalid": [
+    {
+      "name": "request cannot select another owner",
+      "schema": "PlanRequest",
+      "value": {
+        "name": "Example environment",
+        "config": {
+          "image": "debian-fixture",
+          "isolation": "container",
+          "agentRuntime": null,
+          "tools": [],
+          "skills": [],
+          "capabilities": [],
+          "resources": {
+            "cpu": 1,
+            "memoryMiB": 1024,
+            "storageMiB": 1024
+          }
+        },
+        "workspace": {
+          "kind": "new"
+        },
+        "revisions": {
+          "policy": "policy-fixture-1",
+          "catalog": "catalog-fixture-1",
+          "grants": "grants-fixture-1",
+          "host": "host-fixture-1"
+        },
+        "ownerId": "other-owner"
+      }
+    },
+    {
+      "name": "plan cannot forge a grant",
+      "schema": "PlanRequest",
+      "value": {
+        "name": "Example environment",
+        "config": {
+          "image": "debian-fixture",
+          "isolation": "container",
+          "agentRuntime": null,
+          "tools": [],
+          "skills": [],
+          "capabilities": [],
+          "resources": {
+            "cpu": 1,
+            "memoryMiB": 1024,
+            "storageMiB": 1024
+          }
+        },
+        "workspace": {
+          "kind": "new"
+        },
+        "revisions": {
+          "policy": "policy-fixture-1",
+          "catalog": "catalog-fixture-1",
+          "grants": "grants-fixture-1",
+          "host": "host-fixture-1"
+        },
+        "grantIds": [
+          "administrator"
+        ]
+      }
+    },
+    {
+      "name": "unknown isolation does not downgrade",
+      "schema": "EnvConfig",
+      "value": {
+        "image": "debian-fixture",
+        "isolation": "strict",
+        "agentRuntime": null,
+        "tools": [],
+        "skills": [],
+        "capabilities": [],
+        "resources": {
+          "cpu": 1,
+          "memoryMiB": 1024,
+          "storageMiB": 1024
+        }
+      }
+    },
+    {
+      "name": "zero CPU is invalid",
+      "schema": "Resources",
+      "value": {
+        "cpu": 0,
+        "memoryMiB": 1024,
+        "storageMiB": 1024
+      }
+    },
+    {
+      "name": "storage below physical quota minimum",
+      "schema": "Resources",
+      "value": {
+        "cpu": 1,
+        "memoryMiB": 1024,
+        "storageMiB": 1
+      }
+    },
+    {
+      "name": "unbounded resource request",
+      "schema": "Resources",
+      "value": {
+        "cpu": 999999,
+        "memoryMiB": 1024,
+        "storageMiB": 1024
+      }
+    },
+    {
+      "name": "floating image reference is not provenance",
+      "schema": "Image",
+      "value": {
+        "id": "debian-fixture",
+        "distro": "debian",
+        "release": "fixture",
+        "label": "Debian fixture",
+        "digest": "debian:latest",
+        "availability": {
+          "available": false,
+          "state": "unsupported",
+          "reason": "Contract fixture only; host environment API is unavailable."
+        },
+        "evidence": [
+          {
+            "source": "fixture",
+            "status": "unknown",
+            "observedAt": null,
+            "detail": "Shape example only; no backend or runtime acceptance."
+          }
+        ]
+      }
+    },
+    {
+      "name": "unsupported cannot be advertised available",
+      "schema": "Availability",
+      "value": {
+        "available": true,
+        "state": "unsupported",
+        "reason": "No backend"
+      }
+    },
+    {
+      "name": "unready needs a reason",
+      "schema": "Availability",
+      "value": {
+        "available": false,
+        "state": "unready"
+      }
+    },
+    {
+      "name": "valid plan requires resolution",
+      "schema": "Plan",
+      "value": {
+        "id": "plan-fixture",
+        "ownerId": "owner-fixture",
+        "valid": true,
+        "expiresAt": "2026-10-13T12:05:00Z",
+        "request": {
+          "name": "Example environment",
+          "config": {
+            "image": "debian-fixture",
+            "isolation": "container",
+            "agentRuntime": null,
+            "tools": [],
+            "skills": [],
+            "capabilities": [],
+            "resources": {
+              "cpu": 1,
+              "memoryMiB": 1024,
+              "storageMiB": 1024
+            }
+          },
+          "workspace": {
+            "kind": "new"
+          },
+          "revisions": {
+            "policy": "policy-fixture-1",
+            "catalog": "catalog-fixture-1",
+            "grants": "grants-fixture-1",
+            "host": "host-fixture-1"
+          }
+        },
+        "revisions": {
+          "policy": "policy-fixture-1",
+          "catalog": "catalog-fixture-1",
+          "grants": "grants-fixture-1",
+          "host": "host-fixture-1"
+        },
+        "resolved": null,
+        "problems": [
+          {
+            "severity": "error",
+            "code": "unsupported",
+            "message": "Environment backend is not implemented.",
+            "subject": "backend"
+          }
+        ]
+      }
+    },
+    {
+      "name": "valid plan cannot contain errors",
+      "schema": "Plan",
+      "value": {
+        "id": "plan-fixture",
+        "ownerId": "owner-fixture",
+        "valid": true,
+        "expiresAt": "2026-10-13T12:05:00Z",
+        "request": {
+          "name": "Example environment",
+          "config": {
+            "image": "debian-fixture",
+            "isolation": "container",
+            "agentRuntime": null,
+            "tools": [],
+            "skills": [],
+            "capabilities": [],
+            "resources": {
+              "cpu": 1,
+              "memoryMiB": 1024,
+              "storageMiB": 1024
+            }
+          },
+          "workspace": {
+            "kind": "new"
+          },
+          "revisions": {
+            "policy": "policy-fixture-1",
+            "catalog": "catalog-fixture-1",
+            "grants": "grants-fixture-1",
+            "host": "host-fixture-1"
+          }
+        },
+        "revisions": {
+          "policy": "policy-fixture-1",
+          "catalog": "catalog-fixture-1",
+          "grants": "grants-fixture-1",
+          "host": "host-fixture-1"
+        },
+        "resolved": {
+          "image": {
+            "label": "Debian fixture",
+            "digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "isolation": "container",
+          "agentRuntime": null,
+          "blocks": [],
+          "capabilities": [],
+          "resources": {
+            "cpu": 1,
+            "memoryMiB": 1024,
+            "storageMiB": 1024
+          },
+          "workspace": "New managed workspace",
+          "grantIds": [
+            "grant-fixture-create"
+          ],
+          "environmentId": "environment-fixture",
+          "workspaceId": "workspace-fixture",
+          "proposedGrants": [
+            {
+              "id": "grant-fixture-start",
+              "action": "environments.start",
+              "target": {
+                "kind": "environment",
+                "id": "environment-fixture"
+              },
+              "expiresAt": null
+            }
+          ]
+        },
+        "problems": [
+          {
+            "severity": "error",
+            "code": "unsupported",
+            "message": "Environment backend is not implemented.",
+            "subject": "backend"
+          }
+        ]
+      }
+    },
+    {
+      "name": "retained workspace requires exact revision",
+      "schema": "WorkspaceChoice",
+      "value": {
+        "kind": "retained",
+        "workspaceId": "workspace-fixture"
+      }
+    },
+    {
+      "name": "foreign grant wildcard is not an identifier",
+      "schema": "Grant",
+      "value": {
+        "id": "grant-fixture",
+        "action": "files.write",
+        "target": {
+          "kind": "workspace",
+          "id": "*"
+        },
+        "expiresAt": null
+      }
+    },
+    {
+      "name": "unknown recovery cannot authorize replay",
+      "schema": "OperationRecovery",
+      "value": {
+        "state": "unknown",
+        "operation": null,
+        "retrySafe": true,
+        "reason": "Lost receipt"
+      }
+    },
+    {
+      "name": "confirmed absence requires ledger epoch",
+      "schema": "OperationRecovery",
+      "value": {
+        "state": "absent",
+        "operation": null,
+        "retrySafe": true
+      }
+    },
+    {
+      "name": "empty array is not mutation recovery",
+      "schema": "OperationRecovery",
+      "value": []
+    },
+    {
+      "name": "move must bind destination parent",
+      "schema": "MoveInput",
+      "value": {
+        "from": "/one",
+        "to": "/two",
+        "sourceRevision": "revision-1"
+      }
+    },
+    {
+      "name": "symlink entry must be read-only",
+      "schema": "FileEntry",
+      "value": {
+        "path": "/notes.txt",
+        "name": "notes.txt",
+        "kind": "symlink",
+        "size": 5,
+        "modifiedAt": "2026-10-13T12:00:00Z",
+        "revision": "file-fixture-1",
+        "mediaType": "text/plain",
+        "target": "../../host"
+      }
+    },
+    {
+      "name": "terminal cannot choose a host shell",
+      "schema": "TerminalInput",
+      "value": {
+        "t": "i",
+        "d": "hello",
+        "shell": "/bin/sh"
+      }
+    },
+    {
+      "name": "terminal resize bounded",
+      "schema": "TerminalInput",
+      "value": {
+        "t": "r",
+        "cols": 1000000,
+        "rows": 1
+      }
+    },
+    {
+      "name": "negative stream offset rejected",
+      "schema": "TerminalOutput",
+      "value": {
+        "t": "o",
+        "d": "hello",
+        "o": -1
+      }
+    },
+    {
+      "name": "timestamp format checked",
+      "schema": "Timestamp",
+      "value": "yesterday"
+    },
+    {
+      "name": "unsafe path '../host'",
+      "schema": "WorkspacePath",
+      "value": "../host"
+    },
+    {
+      "name": "unsafe path '/../host'",
+      "schema": "WorkspacePath",
+      "value": "/../host"
+    },
+    {
+      "name": "unsafe path '/a/../../host'",
+      "schema": "WorkspacePath",
+      "value": "/a/../../host"
+    },
+    {
+      "name": "unsafe path '/a/./file'",
+      "schema": "WorkspacePath",
+      "value": "/a/./file"
+    },
+    {
+      "name": "unsafe path '/a//file'",
+      "schema": "WorkspacePath",
+      "value": "/a//file"
+    },
+    {
+      "name": "unsafe path '/a/'",
+      "schema": "WorkspacePath",
+      "value": "/a/"
+    },
+    {
+      "name": "unsafe path '/a\\\\host'",
+      "schema": "WorkspacePath",
+      "value": "/a\\host"
+    },
+    {
+      "name": "unsafe path '/%2e%2e/host'",
+      "schema": "WorkspacePath",
+      "value": "/%2e%2e/host"
+    },
+    {
+      "name": "unsafe path '/a\\x00b'",
+      "schema": "WorkspacePath",
+      "value": "/a\u0000b"
+    },
+    {
+      "name": "unsafe path '/a\\nb'",
+      "schema": "WorkspacePath",
+      "value": "/a\nb"
+    },
+    {
+      "name": "successful mutation must retain a typed result",
+      "schema": "Operation",
+      "value": {
+        "id": "operation-fixture",
+        "ownerId": "owner-fixture",
+        "kind": "terminal-create",
+        "environmentId": "environment-fixture",
+        "target": {
+          "kind": "environment",
+          "id": "environment-fixture"
+        },
+        "state": "succeeded",
+        "steps": [
+          {
+            "label": "Create terminal",
+            "state": "done"
+          }
+        ],
+        "error": null,
+        "createdAt": "2026-10-13T12:00:00Z",
+        "updatedAt": "2026-10-13T12:00:00Z",
+        "revision": "operation-fixture-1",
+        "requestDigest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+        "result": null
+      }
+    },
+    {
+      "name": "terminal recovery must preserve environment binding",
+      "schema": "OperationResource",
+      "value": {
+        "kind": "terminal",
+        "id": "terminal-fixture",
+        "revision": "terminal-fixture-1",
+        "state": "created"
+      }
+    },
+    {
+      "name": "invalid plan must explain refusal",
+      "schema": "Plan",
+      "value": {
+        "id": "plan-fixture",
+        "ownerId": "owner-fixture",
+        "valid": false,
+        "expiresAt": "2026-10-13T12:05:00Z",
+        "request": {
+          "name": "Example environment",
+          "config": {
+            "image": "debian-fixture",
+            "isolation": "container",
+            "agentRuntime": null,
+            "tools": [],
+            "skills": [],
+            "capabilities": [],
+            "resources": {
+              "cpu": 1,
+              "memoryMiB": 1024,
+              "storageMiB": 1024
+            }
+          },
+          "workspace": {
+            "kind": "new"
+          },
+          "revisions": {
+            "policy": "policy-fixture-1",
+            "catalog": "catalog-fixture-1",
+            "grants": "grants-fixture-1",
+            "host": "host-fixture-1"
+          }
+        },
+        "revisions": {
+          "policy": "policy-fixture-1",
+          "catalog": "catalog-fixture-1",
+          "grants": "grants-fixture-1",
+          "host": "host-fixture-1"
+        },
+        "resolved": {
+          "image": {
+            "label": "Debian fixture",
+            "digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "isolation": "container",
+          "agentRuntime": null,
+          "blocks": [],
+          "capabilities": [],
+          "resources": {
+            "cpu": 1,
+            "memoryMiB": 1024,
+            "storageMiB": 1024
+          },
+          "workspace": "New managed workspace",
+          "grantIds": [
+            "grant-fixture-create"
+          ],
+          "environmentId": "environment-fixture",
+          "workspaceId": "workspace-fixture",
+          "proposedGrants": [
+            {
+              "id": "grant-fixture-start",
+              "action": "environments.start",
+              "target": {
+                "kind": "environment",
+                "id": "environment-fixture"
+              },
+              "expiresAt": null
+            }
+          ]
+        },
+        "problems": []
+      }
+    },
+    {
+      "name": "successful terminal receipt cannot omit identity",
+      "schema": "Operation",
+      "value": {
+        "id": "operation-fixture",
+        "ownerId": "owner-fixture",
+        "kind": "terminal-create",
+        "environmentId": "environment-fixture",
+        "target": {
+          "kind": "environment",
+          "id": "environment-fixture"
+        },
+        "state": "succeeded",
+        "steps": [
+          {
+            "label": "Create terminal",
+            "state": "done"
+          }
+        ],
+        "error": null,
+        "createdAt": "2026-10-13T12:00:00Z",
+        "updatedAt": "2026-10-13T12:00:00Z",
+        "revision": "operation-fixture-1",
+        "requestDigest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+        "result": {
+          "resources": []
+        }
+      }
+    },
+    {
+      "name": "successful terminal receipt cannot substitute environment identity",
+      "schema": "Operation",
+      "value": {
+        "id": "operation-fixture",
+        "ownerId": "owner-fixture",
+        "kind": "terminal-create",
+        "environmentId": "environment-fixture",
+        "target": {
+          "kind": "environment",
+          "id": "environment-fixture"
+        },
+        "state": "succeeded",
+        "steps": [
+          {
+            "label": "Create terminal",
+            "state": "done"
+          }
+        ],
+        "error": null,
+        "createdAt": "2026-10-13T12:00:00Z",
+        "updatedAt": "2026-10-13T12:00:00Z",
+        "revision": "operation-fixture-1",
+        "requestDigest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+        "result": {
+          "resources": [
+            {
+              "kind": "environment",
+              "id": "environment-fixture",
+              "revision": "environment-fixture-1",
+              "state": "created"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "successful terminal creation cannot return deletion",
+      "schema": "Operation",
+      "value": {
+        "id": "operation-fixture",
+        "ownerId": "owner-fixture",
+        "kind": "terminal-create",
+        "environmentId": "environment-fixture",
+        "target": {
+          "kind": "environment",
+          "id": "environment-fixture"
+        },
+        "state": "succeeded",
+        "steps": [
+          {
+            "label": "Create terminal",
+            "state": "done"
+          }
+        ],
+        "error": null,
+        "createdAt": "2026-10-13T12:00:00Z",
+        "updatedAt": "2026-10-13T12:00:00Z",
+        "revision": "operation-fixture-1",
+        "requestDigest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+        "result": {
+          "resources": [
+            {
+              "kind": "terminal",
+              "id": "terminal-fixture",
+              "environmentId": "environment-fixture",
+              "revision": "terminal-fixture-1",
+              "state": "deleted"
+            }
+          ]
+        }
+      }
+    }
+  ]
+}

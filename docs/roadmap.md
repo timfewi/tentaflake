@@ -25,9 +25,13 @@ Next: capability admission [#116](https://github.com/timfewi/tentaflake/issues/1
 real coding-agent acceptance [#136](https://github.com/timfewi/tentaflake/issues/136),
 and the versioned CLI/UI environment API [#152](https://github.com/timfewi/tentaflake/issues/152).
 Generic model/Research capabilities still fail closed; no dynamic host API is
-implemented. The separate UI has provisional fixtures only. Its API handoff
-must cover ownership, exact grants, policy-bound plans, durable idempotency,
-workspace/file operations and reconnectable streams before claiming backend support.
+implemented. The [v1 API contract](19-host-api.md) now owns 47 routes, exact grants,
+policy-bound plans, durable receipts, workspace/files and stream schemas. Its
+local-only validator passes 38 valid and 38 rejected examples; `just fast` passes
+122 Rust and 29 routing tests. Review tightened creation authority, receipt
+recovery and native-writer file conflicts. These are contract/source checks only.
+The separately owned UI still needs generated types and transport migration;
+the host service, matching CLI and live interaction acceptance remain next.
 
 Research work is tracked in [environment admission #8](https://github.com/timfewi/tentaflake-research/issues/8)
 and [guest transport #9](https://github.com/timfewi/tentaflake-research/issues/9).

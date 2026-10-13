@@ -18,6 +18,7 @@ relevant source and guide. Avoid loading unrelated references.
 | Private management | `modules/management.nix`, `modules/tailscale.nix`, versioned security manifest | [Management](../../../docs/11-tailscale-management.md) |
 | LLM broker and streaming | `modules/broker.nix`, `crates/tentaflake-broker/` | [Broker](../../../docs/12-brokered-egress.md) |
 | Research projection | `modules/research.nix`, `lib/researchClient.nix`, adapter hooks | [Research](../../../docs/16-research.md) |
+| Host API contract | `api/v1/openapi.json`, fixtures, `scripts/test_api_contract.py` | [Host API](../../../docs/19-host-api.md) |
 | Offline execution | `modules/worker.nix`, `crates/tentaflake-worker/` | [Worker](../../../docs/13-disposable-worker.md) |
 | Workspace/state limits | `modules/workspace-quota.nix`, adapter metadata, `modules/backup.nix` | [Quota](../../../docs/14-workspace-quota.md) |
 | Containment and provenance | `lib/containerSecurity.nix`, `lib/pinnedImage.nix`, `modules/image-provenance.nix` | [Security](../../../docs/10-security-profiles.md) |
@@ -30,6 +31,8 @@ relevant source and guide. Avoid loading unrelated references.
 
 - Keep the template generic. Deployment identities, private context and secrets
   belong in forks. Settings, JSON and seed paths are Nix-store inputs.
+- Host API clients consume the shared schema. Run `just api-contract`; fixture
+  validity does not establish backend availability, authority or live acceptance.
 - Generate support facts with `python3 scripts/runtime-catalog-docs.py`;
   catalog declarations and source fixtures never prove vendor acceptance.
   Generic definitions reject extra authority and preserve current startup gates.

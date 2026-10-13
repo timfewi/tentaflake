@@ -1,4 +1,8 @@
 {
+  "host-api-contract": {
+    "paths": ["api/**", "scripts/test_api_contract.py"],
+    "checks": ["static"]
+  },
   "research": {
     "paths": [
       "modules/research.nix",

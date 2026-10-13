@@ -57,6 +57,11 @@ class CiSelection(unittest.TestCase):
             self.write(name)
         self.assertEqual(self.vms(self.base, self.commit(), self.repository), set())
 
+    def test_host_api_contract_selects_static_checks_only(self):
+        self.write("api/v1/openapi.json", "{}\n")
+        self.write("scripts/test_api_contract.py")
+        self.assertEqual(select(self.base, self.commit(), self.repository), {"static"})
+
     def test_runtime_and_research_changes_select_only_their_suite(self):
         for name, expected in (("crates/tentaflake-worker/src/main.rs", {"runtime"}),
                                ("installer/installer.sh", {"runtime"}),
