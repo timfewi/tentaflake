@@ -28,7 +28,10 @@ pub(crate) fn exclusive() -> Result<HostFence, String> {
     if unsafe { libc::geteuid() } != 0 {
         return Err("host admission fence requires root".into());
     }
-    acquire(Path::new(FENCE_PATH), 0, false, LOCK_TIMEOUT)
+    let path = Path::new(FENCE_PATH);
+    acquire(path, 0, LOCK_TIMEOUT, || {
+        open_root(path.parent().ok_or("invalid host admission fence path")?, 0)
+    })
 }
 
 impl HostFence {
@@ -107,12 +110,11 @@ fn verify_path(parent: &File, name: &CString, file: &File, owner_uid: u32) -> Re
 fn acquire(
     path: &Path,
     owner_uid: u32,
-    fixture: bool,
     timeout: Duration,
+    reopen_parent: impl Fn() -> Result<File, String>,
 ) -> Result<HostFence, String> {
     let deadline = Instant::now() + timeout;
-    let parent_path = path.parent().ok_or("invalid host admission fence path")?;
-    let parent = open_root(parent_path, owner_uid, fixture)?;
+    let parent = reopen_parent()?;
     let name = CString::new(
         path.file_name()
             .ok_or("invalid host admission fence path")?
@@ -165,7 +167,7 @@ fn acquire(
     }
     // Recheck after waiting: neither a renamed ancestor nor a replaced lock
     // inode may create a second locking domain under the fixed path.
-    let current_parent = open_root(parent_path, owner_uid, fixture)?;
+    let current_parent = reopen_parent()?;
     if !identity_matches(
         &parent
             .metadata()
@@ -183,44 +185,69 @@ fn acquire(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::fs::{self, DirBuilder};
+    use crate::admission_storage::open_relative;
+    use std::cell::Cell;
+    use std::fs::{self, DirBuilder, OpenOptions};
     use std::io::{Read, Write};
-    use std::os::unix::fs::{DirBuilderExt, PermissionsExt, symlink};
+    use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt, symlink};
     use std::path::PathBuf;
     use std::process::{Child, Stdio};
     use std::sync::atomic::{AtomicU64, Ordering};
 
-    struct Fixture(PathBuf);
+    struct Fixture {
+        root: PathBuf,
+        anchor_path: PathBuf,
+        anchor: File,
+    }
 
     impl Fixture {
         fn new() -> Self {
             static SEQUENCE: AtomicU64 = AtomicU64::new(0);
-            let path = std::env::temp_dir().join(format!(
+            let anchor_path = std::env::temp_dir().join(format!(
                 "tentaflake-fence-{}-{}",
                 std::process::id(),
                 SEQUENCE.fetch_add(1, Ordering::Relaxed),
             ));
-            DirBuilder::new().mode(0o700).create(&path).unwrap();
-            Self(path)
+            DirBuilder::new().mode(0o700).create(&anchor_path).unwrap();
+            let anchor = OpenOptions::new()
+                .read(true)
+                .custom_flags(
+                    libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC,
+                )
+                .open(&anchor_path)
+                .unwrap();
+            let root = anchor_path.join("fences");
+            DirBuilder::new().mode(0o700).create(&root).unwrap();
+            Self {
+                root,
+                anchor_path,
+                anchor,
+            }
         }
 
         fn path(&self) -> PathBuf {
-            self.0.join("admission.lock")
+            self.root.join("admission.lock")
+        }
+
+        fn open_parent(&self) -> Result<File, String> {
+            open_relative(&self.anchor, Path::new("fences"), unsafe {
+                libc::geteuid()
+            })
         }
 
         fn acquire(&self) -> Result<HostFence, String> {
             acquire(
                 &self.path(),
                 unsafe { libc::geteuid() },
-                true,
                 Duration::ZERO,
+                || self.open_parent(),
             )
         }
     }
 
     impl Drop for Fixture {
         fn drop(&mut self) {
-            let _ = fs::remove_dir_all(&self.0);
+            let _ = fs::remove_dir_all(&self.anchor_path);
         }
     }
 
@@ -256,13 +283,13 @@ mod tests {
         assert!(fixture.acquire().is_err());
         assert_eq!(fs::metadata(fixture.path()).unwrap().mode() & 0o7777, 0o640);
         fs::set_permissions(fixture.path(), fs::Permissions::from_mode(0o600)).unwrap();
-        let alias = fixture.0.join("alias");
+        let alias = fixture.root.join("alias");
         fs::hard_link(fixture.path(), &alias).unwrap();
         assert!(fixture.acquire().is_err());
         fs::remove_file(&alias).unwrap();
-        fs::set_permissions(&fixture.0, fs::Permissions::from_mode(0o777)).unwrap();
+        fs::set_permissions(&fixture.root, fs::Permissions::from_mode(0o777)).unwrap();
         assert!(fixture.acquire().is_err());
-        fs::set_permissions(&fixture.0, fs::Permissions::from_mode(0o700)).unwrap();
+        fs::set_permissions(&fixture.root, fs::Permissions::from_mode(0o700)).unwrap();
         fs::rename(fixture.path(), &alias).unwrap();
         symlink(&alias, fixture.path()).unwrap();
         assert!(fixture.acquire().is_err());
@@ -282,20 +309,62 @@ mod tests {
     fn path_verification_refuses_replaced_lock_inode() {
         let fixture = Fixture::new();
         let guard = fixture.acquire().unwrap();
-        fs::rename(fixture.path(), fixture.0.join("old.lock")).unwrap();
+        fs::rename(fixture.path(), fixture.root.join("old.lock")).unwrap();
         fs::write(fixture.path(), b"").unwrap();
         fs::set_permissions(fixture.path(), fs::Permissions::from_mode(0o600)).unwrap();
         let uid = unsafe { libc::geteuid() };
-        let parent = open_root(&fixture.0, uid, true).unwrap();
+        let parent = fixture.open_parent().unwrap();
         let name = CString::new("admission.lock").unwrap();
         assert!(verify_path(&parent, &name, &guard.file, uid).is_err());
+    }
+
+    #[test]
+    fn final_parent_reopen_refuses_replacement_or_symlink() {
+        for replace_with_symlink in [false, true] {
+            let fixture = Fixture::new();
+            let opens = Cell::new(0);
+            let result = acquire(
+                &fixture.path(),
+                unsafe { libc::geteuid() },
+                Duration::ZERO,
+                || {
+                    opens.set(opens.get() + 1);
+                    if opens.get() == 2 {
+                        let previous = fixture.anchor_path.join("previous-fences");
+                        fs::rename(&fixture.root, &previous).unwrap();
+                        if replace_with_symlink {
+                            symlink(previous, &fixture.root).unwrap();
+                        } else {
+                            DirBuilder::new().mode(0o700).create(&fixture.root).unwrap();
+                        }
+                    }
+                    fixture.open_parent()
+                },
+            );
+            assert_eq!(opens.get(), 2);
+            if replace_with_symlink {
+                assert!(result.is_err());
+            } else {
+                assert_eq!(result.unwrap_err(), "host admission fence parent changed");
+            }
+        }
+    }
+
+    #[test]
+    fn refuses_unprotected_anchor_before_creating_lock() {
+        let fixture = Fixture::new();
+        fs::set_permissions(&fixture.anchor_path, fs::Permissions::from_mode(0o1777)).unwrap();
+        assert!(fixture.acquire().is_err());
+        assert!(!fixture.path().exists());
+        fs::set_permissions(&fixture.anchor_path, fs::Permissions::from_mode(0o700)).unwrap();
+        drop(fixture.acquire().unwrap());
     }
 
     #[test]
     fn failed_spawn_retains_only_the_commands_owned_duplicate() {
         let fixture = Fixture::new();
         let guard = fixture.acquire().unwrap();
-        let mut command = Command::new(fixture.0.join("missing-helper"));
+        let mut command = Command::new(fixture.root.join("missing-helper"));
         guard.inherit(&mut command).unwrap();
         drop(guard);
         assert!(command.spawn().is_err());
@@ -308,7 +377,7 @@ mod tests {
     fn exec_child_keeps_fence_after_parent_drops_every_copy() {
         let fixture = Fixture::new();
         let guard = fixture.acquire().unwrap();
-        let ready = fixture.0.join("ready");
+        let ready = fixture.root.join("ready");
         let mut command = Command::new(std::env::current_exe().unwrap());
         command
             .args(["--exact", "admission_fence::tests::inherited_helper"])

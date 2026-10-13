@@ -15,18 +15,25 @@ commands and interfaces below are not installed APIs.
 
 ## Delivery checkpoint
 
-2026-10-13: [PR #151](https://github.com/timfewi/tentaflake/pull/151) merged lighter
-CI. Automatic PR/push runs keep static/unit checks; explicit dispatch selects
-affected configuration, package and VM gates. The fast gate passed with 122
-Rust tests and 28 routing regressions; automatic and explicit GitHub runs passed
-at `20e0273`. This is workflow evidence, not runtime acceptance.
+2026-10-14: PRs #149/#150 (libc/Tokio), #151/#160/#162 (bounded source checks and
+evaluation), #161 (reviewed Debian/Ubuntu metadata) and #163 (bounded optional
+cache setup) are merged. Automatic PR/push checks remain separate from explicit
+configuration, package and VM gates.
 
-PRs #149/#150 (libc/Tokio), #160/#162 (bounded and shallow-checkout evaluation),
-#161 (reviewed Debian/Ubuntu metadata) and #163 (bounded optional cache setup)
-are merged. PRs #156–#159 retain their implementation boundaries below and
-await relevant build/runtime evidence. Explicit run `38478204372` tests
-capability head `bc25fc6` against main `01340a9`, including the repaired
-onboarding fixture. Current storage source verification is recorded below.
+PRs #156–#159 retain their implementation boundaries below. Complete run
+`38478204372` passed evaluation, non-VM builds and the repaired onboarding gate,
+then exposed a test race between an active Docker client unit and a running
+container. The bounded Running wait preserves every capability/security
+assertion. Replacement run `38483033310` tests capability head `33c435f` against
+main `01340a9`, including the previously unreached Research VM. Dependent PRs
+remain open until their relevant runtime gates pass.
+
+Actual Nix CLI package builds for #157–#159 and draft #164/#165 now pass after
+anchoring filesystem fixtures at explicitly owned directory descriptors. The
+Nix sandbox maps `/` to an unrelated UID; public absolute-path ownership checks
+still reject that root. The same protected traversal, replacement detection and
+process-lock tests run beneath each fixture anchor. No production UID or sticky
+directory exception was added. Both draft branches also pass `just fast`.
 
 Next: capability admission [#116](https://github.com/timfewi/tentaflake/issues/116),
 real coding-agent acceptance [#136](https://github.com/timfewi/tentaflake/issues/136),
@@ -91,20 +98,10 @@ proof is therefore not claimed or required for this model.
 
 Changed ownership: CLI `admission_runtime`, `admission_fence`, `admission_systemd`
 and protected storage code; quota/admission/backup modules; a dedicated sequential
-storage node in the existing integration VM. `just fast` passes with 253 Rust
-tests, 34 routing regressions, four evaluator tests, 11 image tests and API
-validation of 47 routes with 38 valid and 38 rejected examples. Focused adapter
-evaluation and the actual-helper check pass, including read-only Btrfs
-verification. After merging the CI/onboarding fixes, `just ci-policy` passes
-35 routing tests, four evaluator tests and the real shallow-checkout fixture.
-The integration VM derivation evaluates; its new storage phase
-has not run and no live host acceptance is claimed. PRs 149/150/160/161/162/163
-are merged. Capability CI 38474537889 passed complete evaluation and non-VM
-builds, then exposed a stale stopped-Research import refusal fixture. The old
-failure was reproduced with the actual CLI; the repaired generated-flake suite
-passes, including exact stopped Research requests and unsupported capability
-refusal. Replacement CI is pending. Keep dependent PRs open until their
-relevant runtime checks pass at the reviewed revision.
+storage node in the existing integration VM. Fast source checks, the actual Nix
+CLI package, focused adapter evaluation and the actual-helper check pass,
+including read-only Btrfs verification. The integration VM derivation evaluates;
+its storage phase has not run and no live host acceptance is claimed.
 
 Storage runtime is prepared in draft [PR #164](https://github.com/timfewi/tentaflake/pull/164).
 The next slice adds root-only `admission publication status|begin|finish|cancel`.
@@ -116,11 +113,12 @@ reopening candidate artifacts or repeating observations. No charges are released
 The existing storage VM now includes a genuine NixOS specialisation, activation,
 rollback/cancel, retained-image checks and a real Unknown-claim refusal.
 
-Publication verification: `just fast` passed, followed by focused CLI Clippy and
-publication tests after the final retry change. The integration VM derivation
-and its rendered Python script validate; the VM has not run. Independent source
-reviews found no further blocker. Changed owners are the CLI publication/host
-observer, the ledger receipt query, the storage VM and their operator guidance.
+Publication verification: `just fast` and the actual Nix CLI package pass. The
+package gate caught one remaining public-path reopen in a publication fixture;
+its anchored reopen now exercises the same durable historical receipt query.
+The integration VM derivation and rendered Python script validate; the VM has
+not run. Changed owners are the CLI publication/host observer, ledger receipt
+query, storage VM and operator guidance.
 
 Next: complete storage/publication runtime verification, then automated host
 installation, aggregate OCI startup/stop accounting, live capability collectors and the
