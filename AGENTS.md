@@ -10,7 +10,7 @@ features; planned capability admission does not relax current startup gates.
 `just` recipes load the pinned contributor tools automatically; `just list`
 lists them. Enter `nix develop` before running Cargo or lint tools directly.
 Start with `just fast`: formatting, lint, ShellCheck, Rust unit checks and
-CI routing/evaluation regressions and actionlint. Evaluation and builds are explicit gates.
+CI routing/small evaluator fixtures and actionlint. Host evaluation and builds are explicit gates.
 GitHub PR/push runs always check routing and whitespace, plus affected static
 and Rust checks. `.github/ci-paths.json` also selects affected build/evaluation/VM
 gates for `workflow_dispatch`; optional `base_sha` is a full comparison SHA.

@@ -77,6 +77,7 @@ class CiSelection(unittest.TestCase):
     def test_evaluator_changes_preserve_explicit_evaluation_without_automatic_builds(self):
         self.write("scripts/eval_flake.py")
         self.write("scripts/test_eval_flake.py")
+        self.write("scripts/test_eval_flake_nix.py")
         affected = select(self.base, self.commit(), self.repository)
         self.assertEqual(affected, {"evaluate", "selection", "static"})
         self.assertFalse(execution(affected, "fast")["builds"])

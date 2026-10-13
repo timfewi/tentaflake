@@ -8,7 +8,7 @@
     "checks": ["static"]
   },
   "flake-evaluation": {
-    "paths": ["scripts/eval_flake.py", "scripts/test_eval_flake.py"],
+    "paths": ["scripts/eval_flake.py", "scripts/test_eval_flake.py", "scripts/test_eval_flake_nix.py"],
     "checks": ["evaluate", "selection", "static"]
   },
   "formatter-test": {

@@ -81,6 +81,11 @@ jobs:
         if: needs.changes.outputs.static == 'true'
         run: nix develop --command just formatter-test
 
+      - name: Shallow flake source regression
+        if: needs.changes.outputs.static == 'true'
+        # Use the installed CI Nix, as the explicit evaluation job does.
+        run: python3 scripts/test_eval_flake_nix.py
+
       - name: Nix lint
         if: needs.changes.outputs.static == 'true'
         run: |
