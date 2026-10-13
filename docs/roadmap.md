@@ -771,10 +771,12 @@ remains a separate maintainer action.
 ## Sequential delivery and autonomous work
 
 Deliver M01's runtime contract (#115) before its installed-host onboarding (#135).
-Next implement capability admission (#116) and accept M02's first coding
-reference and then its second (#136), sharing the same containment.
-Deliver the environment API/CLI (#152), separate UI and bounded host pilot
-before M03's employee compiler and organization layer. Additional
+Next implement capability admission (#116), M02's first coding reference (#136)
+and the environment API/CLI (#152), sharing the same containment. Hand the
+versioned contract to the separate UI consumer with the first working CLI
+environment; continue second-agent acceptance alongside UI delivery.
+The separate UI and bounded host pilot precede M03's employee compiler and
+organization layer. Additional
 runtime presets can follow this path independently of the company feature set.
 
 Each issue is a bounded change with requirement, artifact, proportionate checks,
