@@ -196,6 +196,10 @@ isolation, upstream model authorization or vendor acceptance.
 
 ## Image signatures and provenance
 
+The [base-image catalog](20-base-images.md) records reviewed Debian/Ubuntu
+platform metadata. Its raw digest checks establish metadata consistency;
+they do not verify signatures, image layers or runtime behavior.
+
 Digest pinning makes image bytes reproducible but does not identify or trust a
 publisher. When an upstream publishes Cosign signatures, record the exact
 signing identity (or reviewed public key) per generated container name:

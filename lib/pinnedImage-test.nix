@@ -5,6 +5,7 @@ let
   inherit (pkgs) lib;
   constants = import ./constants.nix;
   pinnedImage = import ./pinnedImage.nix { inherit lib; };
+  baseImages = import ./baseImages.nix { inherit lib; };
 
   # bare hex — call sites add the "sha256:" prefix themselves
   digest = "4a2f23bd3ffaa6ee7b3be8a302a38be43ab0321a2988cd3fb16b7dd472dde812";
@@ -51,6 +52,36 @@ let
     # the shipped defaults are pinned
     (accepts constants.hermesImage)
     (accepts constants.zeroclawImage)
+    # Base selection returns a reviewed platform manifest, never the index/tag.
+    (lib.all (
+      id:
+      lib.all (
+        system:
+        let
+          entry = baseImages.catalog.images.${id};
+          selected = baseImages.image { inherit id system; };
+        in
+        accepts selected
+        && selected == "${entry.repository}@${entry.platforms.${system}.manifestDigest}"
+        && selected != "${entry.repository}@${entry.indexDigest}"
+      ) (builtins.attrNames baseImages.catalog.images.${id}.platforms)
+    ) (builtins.attrNames baseImages.catalog.images))
+    (
+      !(builtins.tryEval (
+        baseImages.image {
+          id = "missing";
+          system = "x86_64-linux";
+        }
+      )).success
+    )
+    (
+      !(builtins.tryEval (
+        baseImages.image {
+          id = "debian-13";
+          system = "powerpc64le-linux";
+        }
+      )).success
+    )
   ];
 
   failed = lib.length (lib.filter (ok: !ok) cases);

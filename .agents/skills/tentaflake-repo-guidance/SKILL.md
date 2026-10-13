@@ -1,7 +1,7 @@
 ---
 name: tentaflake-repo-guidance
 description: Locate the owning source, guide and checks before changing Tentaflake modules, adapters, CLI or installer.
-version: 2.6.6
+version: 2.6.7
 ---
 
 # Tentaflake repository guidance
@@ -13,6 +13,7 @@ relevant source and guide. Avoid loading unrelated references.
 |---|---|---|
 | Host options and exports | `modules/options.nix`, `modules/default.nix`, `flake.nix` | [Quickstart](../../../docs/01-quickstart.md) |
 | Builders and contracts | `adapters/catalog.json`, `adapters/`, `lib/mkAgent.nix`, `lib/runtimeContract.nix` | [Adapters](../../../docs/agent-adapters.md) |
+| Base-image pins | `images/catalog.json`, `lib/baseImages.nix`, `scripts/test_image_catalog.py` | [Base images](../../../docs/20-base-images.md) |
 | Declarative input, onboarding and inventory | `configuration.nix`, `lib/agentsFromData.nix`, `lib/agentPlan.nix`, CLI onboarding | [Configuration](../../../docs/08-agent-cli.md) |
 | CLI and diagnostics | `crates/tentaflake-cli/`, `modules/shell.nix`, `modules/security.nix` | [CLI](../../../docs/06-shell.md) |
 | Admission decisions, publication and diagnostic inventory | `crates/tentaflake-admission/`, CLI `admission*.rs`, `modules/admission.nix` | [Security](../../../docs/10-security-profiles.md#shared-admission-core) |
@@ -46,6 +47,9 @@ relevant source and guide. Avoid loading unrelated references.
   storage callbacks hold the lock but may repeat; use repeat-safe helpers.
   The Nix admission plan is preparation only: no host bootstrap or mandatory
   unit gating yet. Root inventory always emits incomplete, Unknown evidence.
+- Base images select reviewed platform manifests, separate from native presets.
+  Preserve raw metadata bytes and run `just image-catalog`. Acquisition is separate
+  from Research; digest chains do not prove signatures or runtime acceptance.
 - Generate support facts with `python3 scripts/runtime-catalog-docs.py`;
   catalog declarations and source fixtures never prove vendor acceptance.
   Generic definitions reject extra authority and preserve current startup gates.
