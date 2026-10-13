@@ -59,8 +59,9 @@ just fast
 ```
 
 Enter `nix develop` before invoking Cargo or lint tools directly. The fast gate
-includes formatting, lint, Rust checks, policy and adapter evaluation, and the
-installer-generated flake. For changes that need runtime evidence, run the
+includes formatting, lint, ShellCheck, Rust unit checks, CI routing regressions
+and workflow lint. Run `just eval` and `just generated-flake` explicitly for
+configuration evidence. For changes that need runtime evidence, run the
 affected VM suite explicitly; the full flake check includes both VM suites:
 
 ```bash
@@ -94,7 +95,9 @@ short recipes. They load the Nix development tools automatically, so `just lint`
 lists the available recipes:
 
 ```bash
-just fast                # contributor checks without VM or ISO builds
+just fast                # static checks and unit tests
+just eval                # configuration evaluation with Research closure preparation
+just generated-flake     # validate the installer-generated flake
 just e2e                 # complete automated local gate
 just e2e-devcontainer    # rebuild and smoke-test the locked Dev Container
 just security            # Semgrep source scan + OSV dependency scan

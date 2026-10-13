@@ -131,6 +131,8 @@ pkgs.mkShell {
     rustc
     rustfmt
     shellcheck
+    actionlint
+    python3
   ];
 
   shellHook = ''

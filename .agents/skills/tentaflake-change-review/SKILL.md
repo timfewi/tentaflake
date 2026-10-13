@@ -1,7 +1,7 @@
 ---
 name: tentaflake-change-review
 description: Review a Tentaflake change for a concrete requirement, proportionate verification, synchronized docs and a complete PR.
-version: 1.1.0
+version: 1.1.1
 ---
 
 # Tentaflake change review
@@ -27,9 +27,12 @@ Use for features, fixes and substantive reviews. Read `AGENTS.md` and
 | Installer | Focused disk/generated-flake checks; ISO/VM builds when explicitly authorized |
 
 `just` loads pinned tools; direct Cargo/lint commands need `nix develop`.
-See [build boundaries](../../../docs/17-builds.md). Full `just ci`/`just e2e`,
-VM, ISO and system builds are larger workloads. Evaluation does not prove
-runtime behavior or authorize activation.
+PR/push CI and `just fast` cover static/unit checks; evaluation and builds are
+explicit gates. Before merging, identify and obtain relevant build/runtime
+evidence for the current revision. A skipped build is not runtime acceptance.
+See [build boundaries](../../../docs/17-builds.md) for affected workflow dispatch.
+Full `just ci`/`just e2e`, VM, ISO and system builds are larger workloads.
+Evaluation does not prove runtime behavior or authorize activation.
 
 - Keep the template generic and secret-free; deployment policy belongs in forks.
 - Preserve identified consumers and state. Document intentional API changes and

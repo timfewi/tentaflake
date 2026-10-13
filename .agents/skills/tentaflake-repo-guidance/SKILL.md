@@ -1,7 +1,7 @@
 ---
 name: tentaflake-repo-guidance
 description: Locate the owning source, guide and checks before changing Tentaflake modules, adapters, CLI or installer.
-version: 2.6.3
+version: 2.6.4
 ---
 
 # Tentaflake repository guidance
@@ -82,10 +82,14 @@ relevant source and guide. Avoid loading unrelated references.
 
 ## Check and synchronize
 
-Start with `just fast`; `just list` lists recipes. Recipes load pinned tools;
-direct Cargo/lint commands need `nix develop`. Use focused checks from
-`tests/` and the build guide. Identify affected checks via `.github/ci-paths.json`;
-docs and CI metadata skip VM/Research builds; unknown paths retain the full gate.
+Start with `just fast` for static/unit checks; `just list` lists recipes. Recipes
+load pinned tools; direct Cargo/lint commands need `nix develop`. Configuration
+evaluation (`just eval`), generated flakes and builds are explicit gates.
+`.github/ci-paths.json` selects fast PR/push checks and affected dispatch builds
+from the same rules. Unknown paths/history select all fast checks automatically
+and the full inventory on dispatch. Before merging, obtain relevant build/runtime
+evidence for the current revision; skipped builds do not prove acceptance.
+See the [build guide](../../../docs/17-builds.md) for dispatch and focused checks.
 Heavy VM, system and ISO builds require explicit workload authorization.
 Source checks never authorize activation.
 

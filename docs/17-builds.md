@@ -1,14 +1,19 @@
 # Build boundaries and contributor checks
 
-Start with `just fast`. It runs formatting, Nix lint, ShellCheck, Rust checks,
-the CI-selection/source-boundary regressions, read-only flake evaluation and
-the generated installed flake, including focused adapter evaluation.
+Start with `just fast`. It runs formatting, Nix lint, ShellCheck, Rust
+formatting/Clippy/unit tests, real-Git CI routing regressions and actionlint.
+It does not prepare Research closures, evaluate configurations/generated flakes,
+or build Nix packages, images, systems or VMs. Loading the pinned development
+environment can still realize contributor tools.
+
+Use `just eval` explicitly for read-only flake evaluation, including focused
+adapter evaluation and the required non-VM Research closure preparation.
+`just generated-flake` validates the installer-generated flake separately.
 `checks.*.agent-adapters` covers compatible mappings, JSON, inventory, lazy
 selection, stopped OpenClaw, quota declarations and generated quota-helper refusal
-regressions without mounts. Required research closure preparation uses
-non-VM builds. `just e2e` still runs the complete gate, both VM suites and the
-installer ISO. Run an affected VM suite when changing runtime or security
-behavior; use the ISO gate when changing installation.
+regressions without mounts. `just ci`/`just e2e` run the complete gate, both VM
+suites and the installer ISO. Run an affected VM suite when changing runtime
+or security behavior; use the ISO gate when changing installation.
 
 ## Rust cache boundaries
 
@@ -34,47 +39,59 @@ guards manifest availability, source isolation and the worker image version.
 ## GitHub check selection
 
 The imported policy is `.github/ci-paths.json`; its consumer is
-`scripts/ci_changes.py`. One ordered policy selects non-VM checks and the two
-VM suites independently. Component paths take precedence over Markdown suffixes.
+`scripts/ci_changes.py`. Both modes use this ordered policy. Component paths
+take precedence over Markdown suffixes, and the selector reads NUL-delimited
+Git paths, including deletions and both sides of renames.
 
-| Change | Non-VM checks | VM suite |
-| --- | --- | --- |
-| Docs and listed presentation metadata | Routing regression and whitespace; no Nix setup/cache | None |
-| CI routing/workflow/test definition | Routing regression, focused selection package and static checks | None |
-| One Rust crate/package | Rust workspace checks, that package and source-boundary check; worker includes its image | Runtime |
-| Worker module | Rust workspace/worker package and image; actual worker configuration and policy in the runtime fixture | Runtime |
-| Shared Cargo inputs | Rust workspace and all three packages/image; no Research/configuration preparation | Runtime |
-| Installer scripts or host VM fixture | Static checks and generated installed flake | Runtime |
-| Installer Nix | Configuration evaluation, static checks and generated installed flake | Runtime |
-| Research module/client/fixture or research-only input pin | Research/configuration preparation and evaluation, static checks and generated installed flake | Research |
-| Dev Container inputs | Dev Container package and static checks | None |
-| Generated-flake script or module-evaluation fixture | Its generated-flake or configuration gate and static checks | None |
-| Onboarding validator/fixture | Installed preset/generic CLI fixture and static checks; no Research preparation | None |
-| Operator onboarding CLI module | Rust/CLI package, source-boundary and installed fixture checks; no Research preparation | None |
-| Shared JSON agent parser | Installed fixture and static checks; no Research preparation | Runtime |
-| Adapters, shared modules/helpers, other lock updates, unknown paths/history | Full gate | Both |
+Automatic PR/push runs always check real-Git routing regressions and whitespace.
+Affected paths add formatting/lint, including actionlint, and Rust crate
+Clippy/unit tests with workspace formatting. Unknown paths, invalid lock data or
+unavailable comparison history select all fast checks. No automatic path selects Research
+closure preparation, configuration/generated-flake evaluation, Nix package/image/
+system builds or VM suites. DCO and secret scanning remain separate checks.
 
-The selector reads NUL-delimited Git paths and includes deleted/old rename
-paths. Invalid lock data requires the full gate. The real-Git regression check
-runs on every event directly on the runner; `checks.*.ci-vm-selection` also
-packages it for the contributor gate. CI metadata changes are covered by these
-regressions rather than building unchanged guest systems.
+Use the check workflow's **Run workflow** action (`workflow_dispatch`) when a
+change needs build or runtime evidence. Select the revision to verify and set
+optional `base_sha` to the full 40-character SHA to compare against that revision.
+An empty, malformed or unavailable comparison SHA selects the full inventory;
+unknown paths and invalid lock data do the same. A dispatch with a usable
+comparison adds the affected expensive gates below to its fast checks.
 
-Documentation does not start Nix installation, cache upload, Research closure
-materialization, full flake evaluation or Rust/system builds. A Rust-only change
-does not build the separate Research service. Worker-module changes use the
-same focused package/runtime gates: the Research fixture enables no workers.
-Mixing these changes with shared security paths retains the full gate.
-Non-VM package builds run in
-groups of at most four. Configuration evaluation still prepares the exact
-Research closures because the full flake/module fixtures need them; shared
-configuration changes retain their applicable runtime and Research evidence.
-Onboarding validation uses the installed fixture rather than full flake checks;
-its CLI binary is a small selected package or an explicitly supplied local binary.
-The standalone host build runs only for configuration changes affecting the
-runtime, not for a Research-only or documentation change. Full VM/ISO/system
-workloads remain separate from local fast checks and require their own scope.
-New pushes cancel superseded runs for the same PR or branch.
+| Change | Automatic checks beyond routing/whitespace | Additional explicit gates | VM suite |
+| --- | --- | --- | --- |
+| Docs and listed presentation metadata | None | None | None |
+| CI routing/workflow/test definition or contributor tooling | Static | None | None |
+| One Rust crate/package | Static and affected crate | Affected package and source-boundary check; worker includes its image | Runtime |
+| Worker module | Static and worker crate | Worker package/image and source-boundary check | Runtime |
+| Shared Cargo inputs | Static and all Rust crates | All Rust packages/image and source-boundary check | Runtime |
+| Installer scripts or host VM fixture | Static | Generated installed flake | Runtime |
+| Installer Nix | Static | Configuration evaluation, generated installed flake and host build | Runtime |
+| Research module/client/fixture or research-only input pin | Static | Research closures, configuration evaluation and generated installed flake | Research |
+| Dev Container inputs | Static | Dev Container package | None |
+| Generated-flake script or module-evaluation fixture | Static | Corresponding generated-flake or configuration gate | None |
+| Onboarding validator/fixture | Static | Installed preset/generic CLI fixture | None |
+| Operator onboarding CLI module | Static and CLI crate | CLI package, source-boundary and installed fixture | None |
+| Shared JSON agent parser | Static | Installed fixture | Runtime |
+| Adapters, shared modules/helpers, other lock updates, unknown paths/history | All fast checks | Full inventory | Both |
+
+The routing regression runs directly on every runner without Nix setup;
+`checks.*.ci-vm-selection` also packages it for the full local flake gate.
+Documentation starts no Nix installation or cache upload. A Rust-only dispatch
+does not build the separate Research service. Worker-module dispatch uses the
+same focused package/runtime gates; the Research fixture enables no workers.
+Mixing these changes with shared security paths selects their combined gates.
+Non-VM package builds run in groups of at most four. Configuration evaluation
+prepares the exact Research closures required by the full flake/module fixtures.
+Onboarding validation uses the installed fixture and a selected CLI package or
+an explicitly supplied local binary. The standalone host build is selected when
+both configuration evaluation and runtime checks are affected.
+
+Before merging, record which build/runtime evidence the change needs and obtain
+it for the current revision. Green fast checks and skipped builds do not prove
+runtime acceptance. Full VM/ISO/system workloads remain separate from local
+fast checks and require their own scope. Automatic runs cancel superseded runs
+for the same PR or branch; dispatch has a separate concurrency group so a push
+does not cancel explicitly requested verification.
 
 ## Nix and Bazel
 

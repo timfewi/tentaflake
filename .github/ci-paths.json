@@ -129,6 +129,10 @@
       "static"
     ]
   },
+  "tooling": {
+    "paths": ["justfile", "lib/devshell.nix"],
+    "checks": ["selection", "static"]
+  },
   "shared": {
     "paths": [
       "adapters/**",
@@ -165,14 +169,6 @@
     ],
     "checks": [
       "evaluate",
-      "static"
-    ]
-  },
-  "tooling": {
-    "paths": [
-      "justfile"
-    ],
-    "checks": [
       "static"
     ]
   },
