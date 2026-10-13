@@ -14,11 +14,11 @@ alias list := default
 # ── The gates ────────────────────────────────────────────────
 
 # Full local gate: source checks, all flake checks and the installer ISO
-ci: fmt-check lint shellcheck rust ci-policy api-contract check generated-flake iso-installer
+ci: formatter-test lint shellcheck rust ci-policy api-contract check generated-flake iso-installer
     @echo "==> all green"
 
 # Fast source checks; evaluation and all Nix package/runtime builds are explicit
-fast: fmt-check lint shellcheck rust ci-policy api-contract
+fast: formatter-test lint shellcheck rust ci-policy api-contract
 
 # Validate the versioned host API and all offline contract exchanges
 api-contract:
@@ -27,12 +27,13 @@ api-contract:
 # Test routing with real Git histories and validate workflow syntax
 ci-policy:
     python3 scripts/test_ci_changes.py
+    python3 scripts/test_eval_flake.py
     actionlint .github/workflows/*.yml
 
 # Materialize exact research closures before read-only flake evaluation
 eval:
-    nix build --no-link .#checks.x86_64-linux.research-policy .#checks.x86_64-linux.module-evaluation .#checks.x86_64-linux.agent-adapters
-    nix flake check --no-build --no-write-lock-file
+    for check in research-policy module-evaluation agent-adapters; do nix build --no-link ".#checks.x86_64-linux.$check"; done
+    python3 scripts/eval_flake.py
 
 # Automated end-to-end gate (alias for the complete local CI path)
 e2e: ci
@@ -67,9 +68,13 @@ build:
 fmt:
     nix fmt -- --tree-root .
 
-# Format check only — fails if anything is unformatted (CI mode)
+# Read-only check of tracked and non-ignored untracked regular Nix files
 fmt-check:
-    nix fmt -- --tree-root . --ci
+    git ls-files -z --cached --others --exclude-standard -- '*.nix' | while IFS= read -r -d '' file; do if [[ -f "$file" && ! -L "$file" ]]; then nixfmt --check "./$file"; fi; done
+
+# Prove the actual formatter gate fails without rewriting its own fixture
+formatter-test: fmt-check
+    python3 scripts/test_format_check.py
 
 # Nix lint: statix (anti-patterns) + deadnix (dead bindings)
 lint:

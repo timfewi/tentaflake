@@ -11,10 +11,13 @@ pkgs.runCommand "tentaflake-ci-vm-selection"
         ../.github/ci-paths.json
         ../scripts/ci_changes.py
         ../scripts/test_ci_changes.py
+        ../scripts/eval_flake.py
+        ../scripts/test_eval_flake.py
       ];
     };
   }
   ''
     python3 "$src/scripts/test_ci_changes.py"
+    python3 "$src/scripts/test_eval_flake.py"
     touch "$out"
   ''

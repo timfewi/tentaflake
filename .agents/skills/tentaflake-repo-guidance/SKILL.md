@@ -1,7 +1,7 @@
 ---
 name: tentaflake-repo-guidance
 description: Locate the owning source, guide and checks before changing Tentaflake modules, adapters, CLI or installer.
-version: 2.6.5
+version: 2.6.6
 ---
 
 # Tentaflake repository guidance
@@ -109,11 +109,14 @@ evaluation (`just eval`), generated flakes and builds are explicit gates.
 Generated helper paths carry Nix string context: compare exact invocation lines,
 not regex patterns. Strip context only from test-only JSON inspection copies;
 generated manifests and helpers must retain their dependency references.
+Use `just fmt-check` for read-only formatting checks; treefmt's `--ci` can rewrite files.
 `.github/ci-paths.json` selects fast PR/push checks and affected dispatch builds
 from the same rules. Unknown paths/history select all fast checks automatically
 and the full inventory on dispatch. Before merging, obtain relevant build/runtime
 evidence for the current revision; skipped builds do not prove acceptance.
 See the [build guide](../../../docs/17-builds.md) for dispatch and focused checks.
+Keep `just eval` and CI on the shared sequential projection helper. Preserve
+every output/check and Git source filtering; pair host aliases in one evaluator.
 Heavy VM, system and ISO builds require explicit workload authorization.
 Source checks never authorize activation.
 
