@@ -3,6 +3,10 @@
     "paths": ["api/**", "scripts/test_api_contract.py"],
     "checks": ["static"]
   },
+  "flake-evaluation": {
+    "paths": ["scripts/eval_flake.py", "scripts/test_eval_flake.py"],
+    "checks": ["evaluate", "selection", "static"]
+  },
   "research": {
     "paths": [
       "modules/research.nix",

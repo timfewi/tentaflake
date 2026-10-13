@@ -10,13 +10,16 @@ features; planned capability admission does not relax current startup gates.
 `just` recipes load the pinned contributor tools automatically; `just list`
 lists them. Enter `nix develop` before running Cargo or lint tools directly.
 Start with `just fast`: formatting, lint, ShellCheck, Rust unit checks and
-CI routing regressions/actionlint. Evaluation and builds are explicit gates.
+CI routing/evaluation regressions and actionlint. Evaluation and builds are explicit gates.
 GitHub PR/push runs always check routing and whitespace, plus affected static
 and Rust checks. `.github/ci-paths.json` also selects affected build/evaluation/VM
 gates for `workflow_dispatch`; optional `base_sha` is a full comparison SHA.
 Unknown paths/history select all fast checks automatically and the full inventory
 on dispatch. Before merging, obtain the relevant build/runtime evidence for the
 current revision; skipped builds do not establish acceptance. See `docs/17-builds.md`.
+`just eval` and CI share `scripts/eval_flake.py`: sequential `--no-build`
+projections preserve every output/check, with at most four checks per evaluator
+and each host paired with its corresponding check/package. Keep Git source filtering.
 
 ```bash
 nix flake check

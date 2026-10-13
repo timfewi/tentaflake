@@ -62,6 +62,15 @@ class CiSelection(unittest.TestCase):
         self.write("scripts/test_api_contract.py")
         self.assertEqual(select(self.base, self.commit(), self.repository), {"static"})
 
+    def test_evaluator_changes_preserve_explicit_evaluation_without_automatic_builds(self):
+        self.write("scripts/eval_flake.py")
+        self.write("scripts/test_eval_flake.py")
+        affected = select(self.base, self.commit(), self.repository)
+        self.assertEqual(affected, {"evaluate", "selection", "static"})
+        self.assertFalse(execution(affected, "fast")["builds"])
+        self.assertTrue(execution(affected, "full")["evaluate"])
+        self.assertTrue(execution(affected, "full")["builds"])
+
     def test_runtime_and_research_changes_select_only_their_suite(self):
         for name, expected in (("crates/tentaflake-worker/src/main.rs", {"runtime"}),
                                ("installer/installer.sh", {"runtime"}),

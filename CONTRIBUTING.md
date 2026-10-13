@@ -79,14 +79,16 @@ and cannot instantiate those derivations. The explicit evaluation gate first
 prepares the non-VM closures (`just eval` also includes adapter checks):
 
 ```bash
-nix build --no-link \
-  .#checks.x86_64-linux.research-policy \
-  .#checks.x86_64-linux.module-evaluation
-nix flake check --no-build
+for check in research-policy module-evaluation; do
+  nix build --no-link ".#checks.x86_64-linux.$check"
+done
+python3 scripts/eval_flake.py
 ```
 
 The normal `nix flake check` permits the required builds. Preparation retains
 the exact closure boundary; it does not mount the entire Nix store into agents.
+The shared evaluator validates every flake output in sequential projections;
+see [build boundaries](docs/17-builds.md).
 
 GitHub uses `.github/ci-paths.json` and `scripts/ci_changes.py` for both modes:
 

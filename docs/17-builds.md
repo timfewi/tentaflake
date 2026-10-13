@@ -1,13 +1,26 @@
 # Build boundaries and contributor checks
 
 Start with `just fast`. It runs formatting, Nix lint, ShellCheck, Rust
-formatting/Clippy/unit tests, real-Git CI routing regressions and actionlint.
+formatting/Clippy/unit tests, CI routing/evaluation-planning regressions and actionlint.
 It does not prepare Research closures, evaluate configurations/generated flakes,
 or build Nix packages, images, systems or VMs. Loading the pinned development
 environment can still realize contributor tools.
 
 Use `just eval` explicitly for read-only flake evaluation, including focused
 adapter evaluation and the required non-VM Research closure preparation.
+
+CI and `just eval` use `scripts/eval_flake.py` after that preparation. It discovers
+the full output/check inventory without evaluating derivations, then runs
+`nix flake check --no-build` in sequential projections: at most four checks,
+one host with its matching check/package aliases, or one remaining output group.
+The installed-host check and installer ISO package stay with their host, avoiding
+duplicate host evaluation. Source inputs retain Git filtering and existing pins;
+only the temporary wrapper writes a lock. Each evaluator exits before the next.
+This bounds the amount of evaluation retained together, not an individual
+fixture's memory or duration. CI run `38463440894` spent over 19 minutes in the
+previous whole-flake evaluation after Research closure preparation; this was
+observed elapsed time, without evidence of a hang or failure.
+
 `just generated-flake` validates the installer-generated flake separately.
 `checks.*.agent-adapters` covers compatible mappings, JSON, inventory, lazy
 selection, stopped OpenClaw, quota declarations and generated quota-helper refusal
@@ -83,7 +96,9 @@ does not build the separate Research service. Worker-module dispatch uses the
 same focused package/runtime gates; the Research fixture enables no workers.
 Mixing these changes with shared security paths selects their combined gates.
 Non-VM package builds run in groups of at most four. Configuration evaluation
-prepares the exact Research closures required by the full flake/module fixtures.
+prepares the same exact Research closure checks sequentially before validating
+the full flake/module inventory. Evaluation-helper changes select this explicit
+gate; automatic checks exercise its coverage and failure handling without Nix.
 Onboarding validation uses the installed fixture and a selected CLI package or
 an explicitly supplied local binary. The standalone host build is selected when
 both configuration evaluation and runtime checks are affected.

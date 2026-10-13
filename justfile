@@ -27,12 +27,13 @@ api-contract:
 # Test routing with real Git histories and validate workflow syntax
 ci-policy:
     python3 scripts/test_ci_changes.py
+    python3 scripts/test_eval_flake.py
     actionlint .github/workflows/*.yml
 
 # Materialize exact research closures before read-only flake evaluation
 eval:
-    nix build --no-link .#checks.x86_64-linux.research-policy .#checks.x86_64-linux.module-evaluation .#checks.x86_64-linux.agent-adapters
-    nix flake check --no-build --no-write-lock-file
+    for check in research-policy module-evaluation agent-adapters; do nix build --no-link ".#checks.x86_64-linux.$check"; done
+    python3 scripts/eval_flake.py
 
 # Automated end-to-end gate (alias for the complete local CI path)
 e2e: ci
