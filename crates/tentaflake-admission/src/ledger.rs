@@ -2,13 +2,20 @@
 //!
 //! The caller owns authentication, current host evidence, bounded dispatch, and
 //! proof of container ownership/absence. An unknown result never frees capacity.
-//! Keep the permit until the bounded start handoff and outcome commit finish.
+//! Persist one intent with the claim, bind the inspected CID before start, and
+//! keep the permit until the bounded handoff and outcome commit finish. Reaping
+//! a Docker client or observing absence is not a daemon mutation fence.
 use crate::decision::identifier;
+use crate::runtime::full_container_id;
+pub use crate::runtime::{
+    DaemonIdentity, RuntimeContext, RuntimeDispatch, RuntimeImage, RuntimeIntent,
+    SupervisorIdentity,
+};
 use crate::{
-    AdmissionRequest, AdmissionSnapshot, Decision, HostPolicy, MAX_RESERVATIONS,
-    MAX_STORAGE_ALLOCATIONS, Reservation, ReservationSnapshot, ReservationState, SCHEMA_VERSION,
-    StorageAdmissionSnapshot, StorageAllocation, StorageDecision, StorageRequest, StorageState,
-    authorize, authorize_storage, decide, decide_storage, validate_reservations,
+    AdmissionRequest, Decision, HostPolicy, MAX_RESERVATIONS, MAX_STORAGE_ALLOCATIONS, Reservation,
+    ReservationSnapshot, ReservationState, SCHEMA_VERSION, StorageAdmissionSnapshot,
+    StorageAllocation, StorageDecision, StorageRequest, StorageState, authorize, authorize_storage,
+    decide, decide_storage, validate_reservations,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -82,6 +89,10 @@ pub struct Receipt {
     pub reservation: Reservation,
     pub claimed_revision: u64,
     pub updated_revision: u64,
+    /// None identifies a legacy v3 runtime receipt, never live identity proof.
+    /// Its full compute charge remains; it cannot be promoted to Running.
+    #[serde(default)]
+    pub runtime: Option<RuntimeDispatch>,
 }
 
 /// A complete, host-collected inventory of all managed backing slots, including
@@ -216,6 +227,7 @@ pub struct DispatchPermit<'a> {
     _lock: LedgerLock,
     state: State,
     index: usize,
+    failed: bool,
 }
 
 /// A charge is not proof that the backing slot is empty. Before dispatching the
@@ -319,6 +331,26 @@ impl Ledger {
     pub fn snapshot(&self) -> Result<ReservationSnapshot, LedgerError> {
         let _lock = self.lock(false)?;
         Ok(self.read()?.snapshot())
+    }
+
+    /// Read the latest operation for one instance and its current ledger CAS
+    /// revision under one lock. This provides neither authorization nor a new
+    /// dispatch permit. The host must authenticate the stop/recovery caller and
+    /// verify the receipt's exact runtime identity before acting on a container.
+    pub fn runtime_receipt(
+        &self,
+        instance_id: &str,
+    ) -> Result<(u64, Option<Receipt>), LedgerError> {
+        if !identifier(instance_id) {
+            return Err(LedgerError::Invalid("runtime instance identity"));
+        }
+        let _lock = self.lock(false)?;
+        let state = self.read()?;
+        let receipt = state
+            .current()
+            .get(instance_id)
+            .map(|index| state.receipts[*index].clone());
+        Ok((state.revision, receipt))
     }
 
     pub fn publication_status(&self) -> Result<PublicationStatus, LedgerError> {
@@ -500,19 +532,23 @@ impl Ledger {
         Ok(state.publications[index].clone())
     }
 
-    /// Collect trusted policy, identity/grants and readiness while holding the
-    /// exclusive lock. The supplied reservation list is always replaced by disk
-    /// state. Even an identical retry repeats current authorization before its
-    /// receipt is disclosed; it can never acquire another dispatch permit.
+    /// Collect trusted policy, identity/grants, readiness and exact dispatch
+    /// identity while holding the exclusive lock. The supplied reservation list
+    /// is always replaced by disk state. Even an identical retry repeats current
+    /// authorization before its receipt is disclosed; it can never acquire
+    /// another dispatch permit or replace its recorded runtime intent.
     pub fn claim(
         &self,
         request: &AdmissionRequest,
-        fresh_context: impl FnOnce(&PublishedAuthority) -> Result<(AdmissionSnapshot, u64), String>,
+        fresh_context: impl FnOnce(&PublishedAuthority) -> Result<RuntimeContext, String>,
     ) -> Result<ClaimOutcome<'_>, LedgerError> {
         let lock = self.lock(false)?;
         let mut state = self.read()?;
-        let (mut snapshot, now) =
-            fresh_context(&state.published).map_err(|_| LedgerError::Context)?;
+        let RuntimeContext {
+            mut snapshot,
+            now,
+            intent,
+        } = fresh_context(&state.published).map_err(|_| LedgerError::Context)?;
         state.check_policy(&snapshot.policy)?;
         snapshot.reservations = state.snapshot();
         let reasons = authorize(&snapshot, request, now);
@@ -551,6 +587,8 @@ impl Ledger {
         if !decision.allowed {
             return Ok(ClaimOutcome::Denied(decision));
         }
+        let intent = intent.ok_or(LedgerError::Context)?;
+        intent.validate_current(&snapshot, request)?;
         if state.receipts.len() >= MAX_RECEIPTS {
             return Err(LedgerError::Full);
         }
@@ -568,6 +606,10 @@ impl Ledger {
             reservation,
             claimed_revision: state.revision,
             updated_revision: state.revision,
+            runtime: Some(RuntimeDispatch {
+                intent,
+                container_id: None,
+            }),
         });
         self.write(&state)?;
         let index = state.receipts.len() - 1;
@@ -576,6 +618,7 @@ impl Ledger {
             _lock: lock,
             state,
             index,
+            failed: false,
         }))
     }
 
@@ -749,6 +792,17 @@ impl Ledger {
         index: usize,
         observation: Observation,
     ) -> Result<Receipt, LedgerError> {
+        if observation == Observation::Running
+            && state.receipts[index]
+                .runtime
+                .as_ref()
+                .and_then(|runtime| runtime.container_id.as_ref())
+                .is_none()
+        {
+            return Err(LedgerError::Invalid(
+                "running requires a durable container identity",
+            ));
+        }
         let next = match observation {
             Observation::Running => ReservationState::Active,
             Observation::Stopped => ReservationState::Retained,
@@ -886,9 +940,49 @@ impl DispatchPermit<'_> {
         &self.state.receipts[self.index]
     }
 
+    /// Persist the inspected, full CID exactly once before sending start. An
+    /// identical binding is a read-only retry; a different CID always conflicts.
+    /// After any write failure this permit cannot bind or complete again. The
+    /// host must not dispatch on an error, including a directory fsync failure.
+    pub fn bind_container(&mut self, container_id: &str) -> Result<&Receipt, LedgerError> {
+        if self.failed {
+            return Err(LedgerError::Context);
+        }
+        if !full_container_id(container_id) {
+            return Err(LedgerError::Invalid("full container ID required"));
+        }
+        let runtime = self.state.receipts[self.index]
+            .runtime
+            .as_ref()
+            .ok_or(LedgerError::Invalid("missing runtime dispatch intent"))?;
+        if let Some(existing) = &runtime.container_id {
+            return if existing == container_id {
+                Ok(self.receipt())
+            } else {
+                Err(LedgerError::Conflict)
+            };
+        }
+        self.state.advance()?;
+        let receipt = &mut self.state.receipts[self.index];
+        receipt
+            .runtime
+            .as_mut()
+            .ok_or(LedgerError::Invalid("missing runtime dispatch intent"))?
+            .container_id = Some(container_id.into());
+        receipt.updated_revision = self.state.revision;
+        if let Err(error) = self.ledger.write(&self.state) {
+            self.failed = true;
+            return Err(error);
+        }
+        Ok(self.receipt())
+    }
+
     /// Commit the outcome before releasing the global dispatch lock. A failed
     /// write cannot return a new permit; uncertain claims remain charged.
     pub fn complete(mut self, observation: Observation) -> Result<Receipt, LedgerError> {
+        if self.failed {
+            return Err(LedgerError::Context);
+        }
         self.ledger.record(&mut self.state, self.index, observation)
     }
 }
@@ -994,7 +1088,16 @@ impl State {
             entries: self
                 .current()
                 .values()
-                .map(|index| self.receipts[*index].reservation.clone())
+                .map(|index| {
+                    let receipt = &self.receipts[*index];
+                    let mut reservation = receipt.reservation.clone();
+                    // Preserve the historical v3 receipt without a revisionless
+                    // write, but never use its identity-free Active as live proof.
+                    if receipt.runtime.is_none() && reservation.state == ReservationState::Active {
+                        reservation.state = ReservationState::Unknown;
+                    }
+                    reservation
+                })
                 .collect(),
             storage: self
                 .storage
@@ -1037,6 +1140,20 @@ impl State {
         }
         for (index, receipt) in self.receipts.iter().enumerate() {
             let request = &receipt.request;
+            if let Some(runtime) = &receipt.runtime {
+                runtime.intent.validate(request)?;
+                if runtime
+                    .container_id
+                    .as_deref()
+                    .is_some_and(|id| !full_container_id(id))
+                    || (runtime.container_id.is_some()
+                        && receipt.updated_revision <= receipt.claimed_revision)
+                    || (runtime.container_id.is_none()
+                        && receipt.reservation.state == ReservationState::Active)
+                {
+                    return Err(LedgerError::Invalid("runtime container binding"));
+                }
+            }
             let original = receipt
                 .decision
                 .reservation
@@ -1237,9 +1354,10 @@ fn trusted_directory(directory: &File) -> Result<(), LedgerError> {
 mod tests {
     use super::*;
     use crate::{
-        Capability, EvidenceKind, EvidenceSource, EvidenceStatus, ExpectedRevisions, Grant,
-        HostPolicy, Instance, Isolation, MIN_STORAGE_BYTES, ReadinessEvidence, ReadinessGeneration,
-        ReadinessSnapshot, ReasonCode, Resources, StorageBinding, StorageKind, StorageRequirement,
+        AdmissionSnapshot, Capability, EvidenceKind, EvidenceSource, EvidenceStatus,
+        ExpectedRevisions, Grant, HostPolicy, Instance, Isolation, MIN_STORAGE_BYTES,
+        ReadinessEvidence, ReadinessGeneration, ReadinessSnapshot, ReasonCode, Resources,
+        StorageBinding, StorageKind, StorageRequirement,
     };
     use std::fs::{self, DirBuilder, OpenOptions};
     use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt, symlink};
@@ -1480,10 +1598,47 @@ mod tests {
         (snapshot, request)
     }
 
+    fn runtime_context(snapshot: AdmissionSnapshot, now: u64) -> RuntimeContext {
+        let intent = RuntimeIntent {
+            boot_id: "12345678-1234-1234-1234-123456789abc".into(),
+            daemon: DaemonIdentity {
+                id: "docker-daemon-1".into(),
+                invocation_id: "1".repeat(32),
+                pid: 100,
+                start_time_ticks: 1000,
+            },
+            supervisor: SupervisorIdentity {
+                unit: format!("docker-{}.service", snapshot.instance.id),
+                invocation_id: "2".repeat(32),
+                pid: 200,
+                start_time_ticks: 2000,
+            },
+            runtime_generation: "source-1".into(),
+            spec_revision: snapshot.instance.revision.clone(),
+            image: RuntimeImage::Registry {
+                reference: format!("docker.io/library/debian@sha256:{}", "a".repeat(64)),
+            },
+            image_id: format!("sha256:{}", "b".repeat(64)),
+        };
+        RuntimeContext {
+            snapshot,
+            now,
+            intent: Some(intent),
+        }
+    }
+
+    fn running(mut permit: DispatchPermit<'_>) -> Receipt {
+        permit.bind_container(&"c".repeat(64)).unwrap();
+        permit.complete(Observation::Running).unwrap()
+    }
+
     fn claim<'a>(ledger: &'a Ledger, instance: &str) -> DispatchPermit<'a> {
         let revision = ledger.snapshot().unwrap().revision;
         let (snapshot, request) = context(instance, revision);
-        match ledger.claim(&request, |_| Ok((snapshot, 110))).unwrap() {
+        match ledger
+            .claim(&request, |_| Ok(runtime_context(snapshot, 110)))
+            .unwrap()
+        {
             ClaimOutcome::New(permit) => permit,
             _ => panic!("expected a new durable claim"),
         }
@@ -1527,9 +1682,12 @@ mod tests {
             .as_str()
         {
             "busy" => assert!(matches!(open(), Err(LedgerError::Busy))),
-            "crash" => {
+            mode @ ("crash" | "bound-crash") => {
                 let ledger = open().unwrap();
-                let _permit = claim(&ledger, "a");
+                let mut permit = claim(&ledger, "a");
+                if mode == "bound-crash" {
+                    permit.bind_container(&"c".repeat(64)).unwrap();
+                }
                 // No Rust destructor runs. The OS releases flock; the durable
                 // uncertain reservation must survive and prohibit redispatch.
                 std::process::exit(0);
@@ -1563,8 +1721,12 @@ mod tests {
                         .any(|reason| reason.code == ReasonCode::ResourceExhausted)
                 );
             }
-            mode @ ("write-failure" | "storage-write-failure" | "publication-write-failure") => {
+            mode @ ("write-failure"
+            | "bind-write-failure"
+            | "storage-write-failure"
+            | "publication-write-failure") => {
                 let ledger = open().unwrap();
+                let mut permit = (mode == "bind-write-failure").then(|| claim(&ledger, "a"));
                 let limit = libc::rlimit {
                     rlim_cur: 64,
                     rlim_max: 64,
@@ -1573,10 +1735,26 @@ mod tests {
                     assert_ne!(libc::signal(libc::SIGXFSZ, libc::SIG_IGN), libc::SIG_ERR);
                     assert_eq!(libc::setrlimit(libc::RLIMIT_FSIZE, &limit), 0);
                 }
-                if mode == "write-failure" {
+                if let Some(mut permit) = permit.take() {
+                    let cid = "c".repeat(64);
+                    assert!(matches!(
+                        permit.bind_container(&cid),
+                        Err(LedgerError::Io(_))
+                    ));
+                    // Even a same-CID retry cannot mistake unsynced memory for
+                    // the committed binding; no later completion is permitted.
+                    assert!(matches!(
+                        permit.bind_container(&cid),
+                        Err(LedgerError::Context)
+                    ));
+                    assert!(matches!(
+                        permit.complete(Observation::Running),
+                        Err(LedgerError::Context)
+                    ));
+                } else if mode == "write-failure" {
                     let (snapshot, request) = context("a", 1);
                     assert!(matches!(
-                        ledger.claim(&request, |_| Ok((snapshot, 110))),
+                        ledger.claim(&request, |_| Ok(runtime_context(snapshot, 110))),
                         Err(LedgerError::Io(_))
                     ));
                 } else if mode == "storage-write-failure" {
@@ -1605,7 +1783,7 @@ mod tests {
         let permit = match ledger
             .claim(&request, |_| {
                 assert!(matches!(ledger.snapshot(), Err(LedgerError::Busy)));
-                Ok((snapshot, 110))
+                Ok(runtime_context(snapshot, 110))
             })
             .unwrap()
         {
@@ -1617,9 +1795,9 @@ mod tests {
             ReservationState::Unknown
         );
         fixture.child("busy");
-        let receipt = permit.complete(Observation::Running).unwrap();
+        let receipt = running(permit);
         assert_eq!(receipt.claimed_revision, 2);
-        assert_eq!(receipt.updated_revision, 3);
+        assert_eq!(receipt.updated_revision, 4);
         let reopened = fixture.open("ledger").unwrap();
         assert_eq!(
             reopened.snapshot().unwrap().entries[0].state,
@@ -1650,6 +1828,9 @@ mod tests {
         assert_eq!(durable.revision, 2);
         assert_eq!(durable.entries[0].state, ReservationState::Unknown);
         assert_eq!(durable.entries[0].resources, resources(1));
+        let intent = ledger.read().unwrap().receipts[0].runtime.clone().unwrap();
+        assert_eq!(intent.container_id, None);
+        assert_eq!(intent.intent.daemon.id, "docker-daemon-1");
 
         let (mut snapshot, request) = context("a", 1);
         snapshot.readiness.evidence.clear();
@@ -1658,24 +1839,28 @@ mod tests {
         let result = ledger
             .claim(&request, |_| {
                 refreshed = true;
-                Ok((snapshot.clone(), 1000))
+                Ok(runtime_context(snapshot.clone(), 1000))
             })
             .unwrap();
         assert!(refreshed);
         assert!(matches!(result, ClaimOutcome::Existing(_)));
         snapshot.instance.owner_id = "new-owner".into();
         assert!(matches!(
-            ledger.claim(&request, |_| Ok((snapshot, 110))).unwrap(),
+            ledger
+                .claim(&request, |_| Ok(runtime_context(snapshot, 110)))
+                .unwrap(),
             ClaimOutcome::Denied(Decision { allowed: false, .. })
         ));
         let (snapshot, mut changed) = context("a", 2);
         changed.operation_id = request.operation_id;
         assert!(matches!(
-            ledger.claim(&changed, |_| Ok((snapshot, 110))),
+            ledger.claim(&changed, |_| Ok(runtime_context(snapshot, 110))),
             Err(LedgerError::Conflict)
         ));
         let (snapshot, other) = context("b", 2);
-        let ClaimOutcome::Denied(decision) = ledger.claim(&other, |_| Ok((snapshot, 110))).unwrap()
+        let ClaimOutcome::Denied(decision) = ledger
+            .claim(&other, |_| Ok(runtime_context(snapshot, 110)))
+            .unwrap()
         else {
             panic!("uncertain claim must block new admission");
         };
@@ -1684,6 +1869,426 @@ mod tests {
                 .reasons
                 .iter()
                 .any(|reason| reason.code == ReasonCode::UnknownReservation)
+        );
+    }
+
+    #[test]
+    fn bound_process_exit_retains_exact_identity_and_never_redispatches() {
+        let fixture = Fixture::new();
+        let ledger = fixture.ledger();
+        fixture.child("bound-crash");
+        let reopened = fixture.open("ledger").unwrap();
+        let state = reopened.read().unwrap();
+        let original = &state.receipts[0];
+        assert_eq!(state.revision, 3);
+        assert_eq!(original.reservation.state, ReservationState::Unknown);
+        assert_eq!(original.reservation.resources, resources(1));
+        assert_eq!(
+            original.runtime.as_ref().unwrap().container_id,
+            Some("c".repeat(64))
+        );
+        let (snapshot, request) = context("a", 1);
+        let ClaimOutcome::Existing(receipt) = ledger
+            .claim(&request, |_| {
+                let mut current = runtime_context(snapshot, 110);
+                current.intent.as_mut().unwrap().daemon.invocation_id = "3".repeat(32);
+                Ok(current)
+            })
+            .unwrap()
+        else {
+            panic!("reopened bound operation must never redispatch")
+        };
+        assert_eq!(*receipt, *original);
+        let publication = publication(&ledger, "publish-bound", "policy-2");
+        ledger.begin_publication(&publication).unwrap();
+        assert!(matches!(
+            ledger.finish_publication("publish-bound", 4, |_, _| {
+                panic!("Unknown compute must block publication before observer")
+            }),
+            Err(LedgerError::NotQuiescent)
+        ));
+        let retained = ledger
+            .reconcile("start-a", 4, |receipt| {
+                assert_eq!(receipt.runtime, original.runtime);
+                // This fixture supplies trusted proof; production must fence old
+                // daemon requests, not infer it from a missing object or dead client.
+                Ok(Observation::Stopped)
+            })
+            .unwrap();
+        assert_eq!(retained.runtime, original.runtime);
+        ledger
+            .finish_publication("publish-bound", 5, |receipt, _| {
+                installed(&receipt.request.candidate)
+            })
+            .unwrap();
+    }
+
+    #[test]
+    fn container_binding_is_durable_once_and_running_requires_it() {
+        let fixture = Fixture::new();
+        let ledger = fixture.ledger();
+        let mut permit = claim(&ledger, "a");
+        let original = permit.receipt().clone();
+        for cid in [
+            "",
+            "abc",
+            &"A".repeat(64),
+            &format!("sha256:{}", "c".repeat(64)),
+        ] {
+            assert!(matches!(
+                permit.bind_container(cid),
+                Err(LedgerError::Invalid(_))
+            ));
+            assert_eq!(permit.receipt(), &original);
+        }
+        let cid = "c".repeat(64);
+        let bound = permit.bind_container(&cid).unwrap().clone();
+        assert_eq!(bound.updated_revision, 3);
+        assert_eq!(bound.reservation.state, ReservationState::Unknown);
+        assert_eq!(permit.bind_container(&cid).unwrap(), &bound);
+        assert!(matches!(
+            permit.bind_container(&"d".repeat(64)),
+            Err(LedgerError::Conflict)
+        ));
+        assert_eq!(permit.receipt(), &bound);
+        let active = permit.complete(Observation::Running).unwrap();
+        assert_eq!(active.updated_revision, 4);
+        assert_eq!(
+            fixture.open("ledger").unwrap().read().unwrap().receipts[0],
+            active
+        );
+
+        let fixture = Fixture::new();
+        let ledger = fixture.ledger();
+        assert!(matches!(
+            claim(&ledger, "a").complete(Observation::Running),
+            Err(LedgerError::Invalid(_))
+        ));
+        assert!(matches!(
+            ledger.reconcile("start-a", 2, |_| Ok(Observation::Running)),
+            Err(LedgerError::Invalid(_))
+        ));
+        let durable = ledger.snapshot().unwrap();
+        assert_eq!(durable.revision, 2);
+        assert_eq!(durable.entries[0].state, ReservationState::Unknown);
+        assert_eq!(durable.entries[0].resources, resources(1));
+    }
+
+    #[test]
+    fn failed_binding_write_never_authorizes_start_or_retry() {
+        let fixture = Fixture::new();
+        let ledger = fixture.ledger();
+        fixture.child("bind-write-failure");
+        let state = ledger.read().unwrap();
+        assert_eq!(state.revision, 2);
+        assert_eq!(
+            state.receipts[0].runtime.as_ref().unwrap().container_id,
+            None
+        );
+        assert_eq!(
+            state.receipts[0].reservation.state,
+            ReservationState::Unknown
+        );
+        assert!(fixture.path().join(STAGING).exists());
+        let (snapshot, request) = context("a", 1);
+        assert!(matches!(
+            ledger
+                .claim(&request, |_| Ok(runtime_context(snapshot, 110)))
+                .unwrap(),
+            ClaimOutcome::Existing(_)
+        ));
+    }
+
+    #[test]
+    fn missing_intent_allows_only_authorized_historical_retry() {
+        let fixture = Fixture::new();
+        let ledger = fixture.ledger();
+        let (snapshot, request) = context("a", 1);
+        assert!(matches!(
+            ledger.claim(&request, |_| Ok(RuntimeContext {
+                snapshot,
+                now: 110,
+                intent: None,
+            })),
+            Err(LedgerError::Context)
+        ));
+        assert_eq!(ledger.snapshot().unwrap().revision, 1);
+        let original = claim(&ledger, "a").receipt().clone();
+        let (mut snapshot, request) = context("a", 1);
+        snapshot.readiness.sources.clear();
+        snapshot.readiness.evidence.clear();
+        let ClaimOutcome::Existing(receipt) = ledger
+            .claim(&request, |_| {
+                Ok(RuntimeContext {
+                    snapshot: snapshot.clone(),
+                    now: 1000,
+                    intent: None,
+                })
+            })
+            .unwrap()
+        else {
+            panic!("historical receipt must not require live daemon evidence")
+        };
+        assert_eq!(*receipt, original);
+        let mut conflicting = request.clone();
+        conflicting.expected.ledger = 2;
+        assert!(matches!(
+            ledger.claim(&conflicting, |_| Ok(RuntimeContext {
+                snapshot: snapshot.clone(),
+                now: 1000,
+                intent: None,
+            })),
+            Err(LedgerError::Conflict)
+        ));
+        snapshot.instance.owner_id = "other-owner".into();
+        assert!(matches!(
+            ledger
+                .claim(&request, |_| Ok(RuntimeContext {
+                    snapshot,
+                    now: 1000,
+                    intent: None,
+                }))
+                .unwrap(),
+            ClaimOutcome::Denied(_)
+        ));
+        assert_eq!(
+            ledger.snapshot().unwrap().revision,
+            original.updated_revision
+        );
+    }
+
+    #[test]
+    fn runtime_query_returns_only_current_operation_with_same_locked_revision() {
+        let fixture = Fixture::new();
+        let ledger = fixture.ledger();
+        assert_eq!(ledger.runtime_receipt("a").unwrap(), (1, None));
+        assert!(matches!(
+            ledger.runtime_receipt("../a"),
+            Err(LedgerError::Invalid(_))
+        ));
+        let permit = claim(&ledger, "a");
+        assert!(matches!(
+            ledger.runtime_receipt("a"),
+            Err(LedgerError::Busy)
+        ));
+        let active = running(permit);
+        assert_eq!(
+            ledger.runtime_receipt("a").unwrap(),
+            (active.updated_revision, Some(active.clone()))
+        );
+        let stopped = ledger
+            .reconcile("start-a", active.updated_revision, |_| {
+                Ok(Observation::Stopped)
+            })
+            .unwrap();
+        let (snapshot, mut request) = context("a", stopped.updated_revision);
+        request.operation_id = "restart-a".into();
+        let ClaimOutcome::New(permit) = ledger
+            .claim(&request, |_| Ok(runtime_context(snapshot, 110)))
+            .unwrap()
+        else {
+            panic!("stopped instance should admit a new operation")
+        };
+        let current = permit.receipt().clone();
+        drop(permit);
+        let reopened = fixture.open("ledger").unwrap();
+        assert_eq!(
+            reopened.runtime_receipt("a").unwrap(),
+            (current.updated_revision, Some(current.clone()))
+        );
+        assert_eq!(
+            reopened.runtime_receipt("absent").unwrap(),
+            (current.updated_revision, None)
+        );
+        assert_eq!(
+            reopened.snapshot().unwrap().revision,
+            current.updated_revision
+        );
+    }
+
+    #[test]
+    fn malformed_or_stale_runtime_context_never_claims() {
+        let fixture = Fixture::new();
+        let ledger = fixture.ledger();
+        let invalid: &[fn(&mut RuntimeIntent)] = &[
+            |intent| intent.boot_id = "1".repeat(36),
+            |intent| intent.boot_id = "00000000-0000-0000-0000-000000000000".into(),
+            |intent| intent.boot_id = intent.boot_id.to_uppercase(),
+            |intent| intent.daemon.id = "x".repeat(129),
+            |intent| intent.daemon.id = "bad\ndaemon".into(),
+            |intent| intent.daemon.invocation_id = "0".repeat(32),
+            |intent| intent.daemon.pid = 0,
+            |intent| intent.daemon.pid = u32::MAX,
+            |intent| intent.daemon.start_time_ticks = 0,
+            |intent| intent.supervisor.unit = "docker-a.socket".into(),
+            |intent| intent.supervisor.unit = format!("{}.service", "x".repeat(256)),
+            |intent| intent.supervisor.unit = "docker-a.service\n".into(),
+            |intent| intent.supervisor.invocation_id = "A".repeat(32),
+            |intent| intent.supervisor.pid = 0,
+            |intent| intent.supervisor.start_time_ticks = 0,
+            |intent| intent.runtime_generation = "stale-source".into(),
+            |intent| intent.runtime_generation = "x".repeat(129),
+            |intent| intent.spec_revision = "different-spec".into(),
+            |intent| intent.spec_revision = "x".repeat(129),
+            |intent| intent.image_id = "sha256:short".into(),
+            |intent| intent.image_id = format!("sha256:{}", "A".repeat(64)),
+            |intent| {
+                intent.image = RuntimeImage::Registry {
+                    reference: "debian:latest".into(),
+                }
+            },
+            |intent| {
+                intent.image = RuntimeImage::Registry {
+                    reference: format!("debian:tag@sha256:{}", "a".repeat(64)),
+                }
+            },
+            |intent| {
+                intent.image = RuntimeImage::Registry {
+                    reference: format!("debian;true@sha256:{}", "a".repeat(64)),
+                }
+            },
+            |intent| {
+                intent.image = RuntimeImage::Registry {
+                    reference: format!("{}@sha256:{}", "x".repeat(512), "a".repeat(64)),
+                }
+            },
+            |intent| {
+                intent.image = RuntimeImage::LocalArtifact {
+                    descriptor: "/tmp/image.json".into(),
+                }
+            },
+            |intent| {
+                intent.image = RuntimeImage::LocalArtifact {
+                    descriptor: format!("/nix/store/{}-image/../other.json", "a".repeat(32)),
+                }
+            },
+            |intent| {
+                intent.image = RuntimeImage::LocalArtifact {
+                    descriptor: format!("/nix/store/{}-image.json", "e".repeat(32)),
+                }
+            },
+        ];
+        for change in invalid {
+            let (snapshot, request) = context("a", 1);
+            let mut current = runtime_context(snapshot, 110);
+            change(current.intent.as_mut().unwrap());
+            assert!(matches!(
+                ledger.claim(&request, |_| Ok(current)),
+                Err(LedgerError::Invalid(_))
+            ));
+            assert_eq!(ledger.snapshot().unwrap().revision, 1);
+        }
+    }
+
+    #[test]
+    fn local_artifact_identity_persists_without_a_registry_reference() {
+        let fixture = Fixture::new();
+        let ledger = fixture.ledger();
+        let (snapshot, request) = context("a", 1);
+        let mut current = runtime_context(snapshot, 110);
+        current.intent.as_mut().unwrap().image = RuntimeImage::LocalArtifact {
+            descriptor: format!("/nix/store/{}-tentaflake-local-image.json", "a".repeat(32)),
+        };
+        let expected = current.intent.clone();
+        let ClaimOutcome::New(permit) = ledger.claim(&request, |_| Ok(current)).unwrap() else {
+            panic!("authenticated local artifact should be claimable")
+        };
+        drop(permit);
+        let receipt = fixture
+            .open("ledger")
+            .unwrap()
+            .read()
+            .unwrap()
+            .receipts
+            .remove(0);
+        assert_eq!(Some(receipt.runtime.unwrap().intent), expected);
+    }
+
+    #[test]
+    fn legacy_v3_active_is_historical_charged_unknown_and_cannot_gain_identity() {
+        let fixture = Fixture::new();
+        let ledger = fixture.ledger();
+        let active = running(claim(&ledger, "a"));
+        let mut encoded: serde_json::Value =
+            serde_json::from_slice(&fs::read(fixture.path().join(STATE)).unwrap()).unwrap();
+        encoded["receipts"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("runtime");
+        let bytes = serde_json::to_vec(&encoded).unwrap();
+        fs::write(fixture.path().join(STATE), &bytes).unwrap();
+        let reopened = fixture.open("ledger").unwrap();
+        let snapshot = reopened.snapshot().unwrap();
+        assert_eq!(snapshot.revision, active.updated_revision);
+        assert_eq!(snapshot.entries[0].state, ReservationState::Unknown);
+        assert_eq!(snapshot.entries[0].resources, resources(1));
+        assert_eq!(fs::read(fixture.path().join(STATE)).unwrap(), bytes);
+        let (snapshot, request) = context("a", 1);
+        let ClaimOutcome::Existing(receipt) = reopened
+            .claim(&request, |_| Ok(runtime_context(snapshot, 110)))
+            .unwrap()
+        else {
+            panic!("legacy receipt must not redispatch")
+        };
+        assert!(receipt.runtime.is_none());
+        assert_eq!(receipt.reservation.state, ReservationState::Active);
+        assert!(matches!(
+            reopened.reconcile("start-a", active.updated_revision, |_| Ok(
+                Observation::Running
+            )),
+            Err(LedgerError::Invalid(_))
+        ));
+        let (snapshot, request) = context("b", active.updated_revision);
+        let ClaimOutcome::Denied(decision) = reopened
+            .claim(&request, |_| Ok(runtime_context(snapshot, 110)))
+            .unwrap()
+        else {
+            panic!("legacy identity uncertainty must deny new dispatch")
+        };
+        assert!(
+            decision
+                .reasons
+                .iter()
+                .any(|reason| reason.code == ReasonCode::UnknownReservation)
+        );
+        let retained = reopened
+            .reconcile("start-a", active.updated_revision, |_| {
+                Ok(Observation::Stopped)
+            })
+            .unwrap();
+        assert!(retained.runtime.is_none());
+        assert_eq!(retained.reservation.resources, resources(1).retained());
+    }
+
+    #[test]
+    fn reopened_runtime_rejects_missing_binding_and_malformed_identity() {
+        let fixture = Fixture::new();
+        let ledger = fixture.ledger();
+        running(claim(&ledger, "a"));
+        let path = fixture.path().join(STATE);
+        let original: serde_json::Value =
+            serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        let changes: &[fn(&mut serde_json::Value)] = &[
+            |record| record["runtime"]["containerId"] = serde_json::Value::Null,
+            |record| record["runtime"]["containerId"] = "short".into(),
+            |record| record["runtime"]["intent"]["specRevision"] = "different".into(),
+            |record| record["runtime"]["intent"]["daemon"]["pid"] = 0.into(),
+            |record| record["runtime"]["intent"]["image"]["kind"] = "mutable-tag".into(),
+            |record| record["runtime"]["intent"]["unexpected"] = true.into(),
+        ];
+        for change in changes {
+            let mut tampered = original.clone();
+            change(&mut tampered["receipts"][0]);
+            fs::write(&path, serde_json::to_vec(&tampered).unwrap()).unwrap();
+            assert!(matches!(
+                fixture.open("ledger"),
+                Err(LedgerError::Invalid(_))
+            ));
+        }
+        fs::write(&path, serde_json::to_vec(&original).unwrap()).unwrap();
+        assert_eq!(
+            fixture.open("ledger").unwrap().snapshot().unwrap().entries[0].state,
+            ReservationState::Active
         );
     }
 
@@ -1713,12 +2318,13 @@ mod tests {
         });
         drop(
             ledger
-                .claim(&request, |_| Ok((snapshot.clone(), 110)))
+                .claim(&request, |_| Ok(runtime_context(snapshot.clone(), 110)))
                 .unwrap(),
         );
         snapshot.policy.grants.clear();
-        let ClaimOutcome::Denied(decision) =
-            ledger.claim(&request, |_| Ok((snapshot, 110))).unwrap()
+        let ClaimOutcome::Denied(decision) = ledger
+            .claim(&request, |_| Ok(runtime_context(snapshot, 110)))
+            .unwrap()
         else {
             panic!("revoked grant must deny receipt visibility");
         };
@@ -1738,7 +2344,7 @@ mod tests {
     fn exact_reconciliation_retains_storage_and_cannot_release_a_newer_operation() {
         let fixture = Fixture::new();
         let ledger = fixture.ledger();
-        let active = claim(&ledger, "a").complete(Observation::Running).unwrap();
+        let active = running(claim(&ledger, "a"));
         assert!(matches!(
             ledger.reconcile("start-a", active.claimed_revision, |_| Ok(
                 Observation::Stopped
@@ -1754,7 +2360,9 @@ mod tests {
         assert_eq!(ledger.snapshot().unwrap().entries[0], stopped.reservation);
         let (snapshot, mut request) = context("a", stopped.updated_revision);
         request.operation_id = "restart-a".into();
-        let ClaimOutcome::New(permit) = ledger.claim(&request, |_| Ok((snapshot, 110))).unwrap()
+        let ClaimOutcome::New(permit) = ledger
+            .claim(&request, |_| Ok(runtime_context(snapshot, 110)))
+            .unwrap()
         else {
             panic!("stopped instance should reuse its retained storage reservation");
         };
@@ -1786,7 +2394,7 @@ mod tests {
         let fixture = Fixture::new();
         let ledger = fixture.ledger();
         claim(&ledger, "a").complete(Observation::Stopped).unwrap();
-        claim(&ledger, "b").complete(Observation::Running).unwrap();
+        running(claim(&ledger, "b"));
         let revision = ledger.snapshot().unwrap().revision;
         let (snapshot, request) = storage_context("c", revision);
         let StorageClaimOutcome::Denied(decision) =
@@ -1825,7 +2433,9 @@ mod tests {
         snapshot.policy.capacity = resources(3);
         snapshot.policy.per_instance = resources(2);
         snapshot.instance.resources = resources(2);
-        let ClaimOutcome::New(permit) = ledger.claim(&request, |_| Ok((snapshot, 110))).unwrap()
+        let ClaimOutcome::New(permit) = ledger
+            .claim(&request, |_| Ok(runtime_context(snapshot, 110)))
+            .unwrap()
         else {
             panic!("original larger slots should be admitted");
         };
@@ -1844,11 +2454,13 @@ mod tests {
         }
         request.operation_id = "restart-on-smaller-slots".into();
         request.expected.instance = "instance-2".into();
-        let ClaimOutcome::New(permit) = ledger.claim(&request, |_| Ok((snapshot, 110))).unwrap()
+        let ClaimOutcome::New(permit) = ledger
+            .claim(&request, |_| Ok(runtime_context(snapshot, 110)))
+            .unwrap()
         else {
             panic!("new exact slots should not resize or release historical allocations");
         };
-        permit.complete(Observation::Running).unwrap();
+        running(permit);
         let current = fixture.open("ledger").unwrap().snapshot().unwrap();
         assert_eq!(current.entries[0].resources, resources(1));
         assert_eq!(current.storage, expected_storage);
@@ -1873,7 +2485,7 @@ mod tests {
         assert!(ledger.snapshot().unwrap().entries.is_empty());
         let (snapshot, request) = context("a", 1);
         assert!(matches!(
-            ledger.claim(&request, |_| Ok((snapshot, 110))),
+            ledger.claim(&request, |_| Ok(runtime_context(snapshot, 110))),
             Err(LedgerError::Io(_))
         ));
         assert!(fixture.path().join(STAGING).is_file());
@@ -1983,8 +2595,9 @@ mod tests {
         let ledger = fixture.ledger_with(initial);
         assert_eq!(ledger.snapshot().unwrap().storage, expected);
         let (snapshot, request) = context("a", 1);
-        let ClaimOutcome::Denied(decision) =
-            ledger.claim(&request, |_| Ok((snapshot, 110))).unwrap()
+        let ClaimOutcome::Denied(decision) = ledger
+            .claim(&request, |_| Ok(runtime_context(snapshot, 110)))
+            .unwrap()
         else {
             panic!("preexisting over-budget inventory must block new startup");
         };
@@ -2070,7 +2683,7 @@ mod tests {
         let (snapshot, mut start) = context("a", original.updated_revision);
         start.operation_id = request.request.operation_id;
         assert!(matches!(
-            ledger.claim(&start, |_| Ok((snapshot, 110))),
+            ledger.claim(&start, |_| Ok(runtime_context(snapshot, 110))),
             Err(LedgerError::Conflict)
         ));
     }
@@ -2114,7 +2727,7 @@ mod tests {
 
         let (snapshot, request) = context("b", 4);
         assert!(matches!(
-            ledger.claim(&request, |_| Ok((snapshot, 110))),
+            ledger.claim(&request, |_| Ok(runtime_context(snapshot, 110))),
             Err(LedgerError::TransitionPending)
         ));
         let (snapshot, request) = storage_context("a", 4);
@@ -2135,7 +2748,7 @@ mod tests {
         let (snapshot, _) = context("a", 4);
         assert!(matches!(
             ledger
-                .claim(&start.request, |_| Ok((snapshot, 110)))
+                .claim(&start.request, |_| Ok(runtime_context(snapshot, 110)))
                 .unwrap(),
             ClaimOutcome::Existing(_)
         ));
@@ -2230,7 +2843,7 @@ mod tests {
         let (snapshot, mut start) = context("a", begun.updated_revision);
         start.operation_id = request.operation_id.clone();
         assert!(matches!(
-            ledger.claim(&start, |_| Ok((snapshot, 110))),
+            ledger.claim(&start, |_| Ok(runtime_context(snapshot, 110))),
             Err(LedgerError::Conflict)
         ));
         let (snapshot, mut provision) = storage_context("a", begun.updated_revision);
@@ -2272,7 +2885,7 @@ mod tests {
             panic!("historical retry")
         };
         assert_eq!(historical, finished);
-        let reopened = Ledger::open(&fixture.path()).unwrap();
+        let reopened = fixture.open("ledger").unwrap();
         assert_eq!(
             reopened.publication_receipt("publish-2").unwrap(),
             Some(finished)
@@ -2378,7 +2991,10 @@ mod tests {
             .unwrap();
         let (snapshot, _) = context("a", 5);
         assert!(matches!(
-            ledger.claim(&original.request, |_| Ok((snapshot.clone(), 110))),
+            ledger.claim(&original.request, |_| Ok(runtime_context(
+                snapshot.clone(),
+                110
+            ))),
             Err(LedgerError::StaleAuthority)
         ));
         let result = ledger
@@ -2387,7 +3003,7 @@ mod tests {
                 let mut current = snapshot.clone();
                 current.policy.revision = published.revision.clone();
                 current.readiness.evidence.clear();
-                Ok((current, 110))
+                Ok(runtime_context(current, 110))
             })
             .unwrap();
         assert!(matches!(result, ClaimOutcome::Existing(_)));
@@ -2396,7 +3012,7 @@ mod tests {
         snapshot.policy.revision = "policy-2".into();
         snapshot.policy.generation = "different-epoch".into();
         assert!(matches!(
-            ledger.claim(&start, |_| Ok((snapshot.clone(), 110))),
+            ledger.claim(&start, |_| Ok(runtime_context(snapshot.clone(), 110))),
             Err(LedgerError::StaleAuthority)
         ));
         snapshot.policy.generation = "authority-1".into();
@@ -2404,7 +3020,9 @@ mod tests {
             evidence.policy_revision = "policy-2".into();
         }
         assert!(matches!(
-            ledger.claim(&start, |_| Ok((snapshot, 110))).unwrap(),
+            ledger
+                .claim(&start, |_| Ok(runtime_context(snapshot, 110)))
+                .unwrap(),
             ClaimOutcome::New(_)
         ));
     }
