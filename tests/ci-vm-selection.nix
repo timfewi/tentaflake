@@ -9,6 +9,7 @@ pkgs.runCommand "tentaflake-ci-vm-selection"
       root = ../.;
       fileset = pkgs.lib.fileset.unions [
         ../.github/ci-paths.json
+        ../.github/workflows/check.yml
         ../scripts/ci_changes.py
         ../scripts/test_ci_changes.py
         ../scripts/eval_flake.py
