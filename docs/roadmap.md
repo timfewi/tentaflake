@@ -21,6 +21,15 @@ affected configuration, package and VM gates. The fast gate passed with 122
 Rust tests and 28 routing regressions; automatic and explicit GitHub runs passed
 at `20e0273`. This is workflow evidence, not runtime acceptance.
 
+PRs #149/#150 (libc/Tokio), #160 (bounded evaluation and read-only formatting)
+and #161 (reviewed Debian/Ubuntu metadata) are merged. PRs #156–#159 retain
+their implementation boundaries below and await relevant build/runtime evidence.
+The replacement explicit run `38471901780` tests capability head `72c63d5`
+against current main; the older whole-flake run was cancelled after its revision
+was superseded. The combined host-preparation tree passes read-only formatting,
+Nix lint, 34 routing tests, four evaluator tests and 11 offline image tests;
+its unchanged Rust/helper results below remain applicable.
+
 Next: capability admission [#116](https://github.com/timfewi/tentaflake/issues/116),
 real coding-agent acceptance [#136](https://github.com/timfewi/tentaflake/issues/136),
 and the versioned CLI/UI environment API [#152](https://github.com/timfewi/tentaflake/issues/152).
@@ -85,6 +94,13 @@ mandatory quota creation/ownership and startup/stop ledger integration, live
 collectors, then the authenticated dynamic host API. The admission plan option
 currently prepares data only. Offline commands and library/helper tests do not
 establish enforceable host admission, runtime isolation or vendor acceptance.
+The next storage slice should consolidate prepare/mount/owner under the existing
+quota service names and migrate backup dependencies. It must preserve host mount
+visibility and fence complete helper lifetimes. Sparse images do not reserve
+physical capacity: formatting/loop discard can undo preallocation. The physical
+backing and discard boundary still needs kernel evidence and a VM regression;
+a bounded Research fetch returned `budget_exceeded` without source evidence.
+Existing images must remain charged and must never be implicitly recreated.
 
 The [base-image catalog](20-base-images.md) adds Debian 13 and Ubuntu 26.04 LTS
 platform manifest selection with an offline metadata validator. The 2026-10-13
