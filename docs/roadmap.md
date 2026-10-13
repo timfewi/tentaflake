@@ -15,6 +15,15 @@ commands and interfaces below are not installed APIs.
 
 ## Delivery checkpoint
 
+2026-10-13 work is prepared on `ci/fast-automatic-checks`: automatic PR/push
+runs keep static/unit checks, while explicit dispatch selects affected
+configuration, package and VM gates from the shared path policy. Review and
+verification of the current revision remain required before merge; this
+checkpoint does not claim delivery. Next tracks remain capability admission,
+real coding-agent acceptance, Debian/Ubuntu environments and the versioned
+CLI/UI host API; Research identity/transport and VPS preparation/installation
+follow that contract. Separate-kernel acceptance still needs usable KVM.
+
 Completed: #115 common runtime/catalog in [PR #139](https://github.com/timfewi/tentaflake/pull/139)
 and #135 installed-host onboarding in [PR #140](https://github.com/timfewi/tentaflake/pull/140),
 merged after green CI. Both issues are closed. Generic definitions remain stopped;

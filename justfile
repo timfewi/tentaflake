@@ -1,5 +1,5 @@
 # tentaflake dev commands — run `just` to list them.
-# Everything here mirrors CI plus the installer ISO build CI does not run.
+# Fast source checks and explicitly selected build/runtime gates.
 
 # Use the pinned contributor tools even from an ordinary shell.
 set shell := ["nix", "develop", "--no-write-lock-file", "--command", "bash", "-euo", "pipefail", "-c"]
@@ -13,16 +13,17 @@ alias list := default
 
 # ── The gates ────────────────────────────────────────────────
 
-# Full local gate: everything CI runs + the installer ISO
+# Full local gate: source checks, all flake checks and the installer ISO
 ci: fmt-check lint shellcheck rust ci-policy check generated-flake iso-installer
     @echo "==> all green"
 
-# Contributor checks without VM suites or the installer ISO
-fast: fmt-check lint shellcheck rust ci-policy eval generated-flake
+# Fast source checks; evaluation and all Nix package/runtime builds are explicit
+fast: fmt-check lint shellcheck rust ci-policy
 
-# Test VM selection and Rust package cache boundaries
+# Test routing with real Git histories and validate workflow syntax
 ci-policy:
-    nix build --no-link .#checks.x86_64-linux.ci-vm-selection .#checks.x86_64-linux.rust-package-sources
+    python3 scripts/test_ci_changes.py
+    actionlint .github/workflows/*.yml
 
 # Materialize exact research closures before read-only flake evaluation
 eval:

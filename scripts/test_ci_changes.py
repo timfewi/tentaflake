@@ -10,7 +10,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from ci_changes import CHECKS, select
+from ci_changes import CHECKS, FAST_CHECKS, execution, select
 
 
 class CiSelection(unittest.TestCase):
@@ -191,7 +191,73 @@ class CiSelection(unittest.TestCase):
         result = subprocess.run([sys.executable, str(self.repository / "scripts/ci_changes.py"),
                                  base, head], check=True, capture_output=True, text=True)
         actual = dict(line.split("=", 1) for line in result.stdout.splitlines())
-        self.assertEqual(actual, {check: "false" for check in CHECKS} | {"nix": "false"})
+        self.assertEqual(actual, {check: "false" for check in CHECKS} |
+                         {"nix": "false", "builds": "false"})
+
+    def test_automatic_unknown_history_never_selects_expensive_work(self):
+        affected = select("", self.base, self.repository)
+        automatic = execution(affected, "fast")
+        self.assertEqual({key for key in CHECKS if automatic[key]}, FAST_CHECKS)
+        self.assertFalse(automatic["builds"])
+        explicit = execution(affected, "full")
+        self.assertTrue(all(explicit.values()))
+
+    def test_explicit_comparison_selects_only_affected_builds(self):
+        self.write("modules/research.nix")
+        affected = select(self.base, self.commit(), self.repository)
+        automatic = execution(affected, "fast")
+        self.assertEqual({key for key in CHECKS if automatic[key]}, {"static"})
+        self.assertFalse(automatic["builds"])
+        explicit = execution(affected, "full")
+        self.assertEqual({key for key in CHECKS if explicit[key]},
+                         {"research", "evaluate", "generated", "static"})
+        self.assertTrue(explicit["builds"])
+
+    def test_crate_units_are_selected_in_both_modes_builds_only_explicit(self):
+        self.write("crates/tentaflake-broker/src/main.rs")
+        affected = select(self.base, self.commit(), self.repository)
+        for mode in ("fast", "full"):
+            with self.subTest(mode=mode):
+                selected = execution(affected, mode)
+                self.assertTrue(selected["broker"])
+                self.assertTrue(selected["rust"])
+                self.assertFalse(selected["cli"])
+                self.assertFalse(selected["worker"])
+                self.assertEqual(selected["builds"], mode == "full")
+                self.assertEqual(selected["runtime"], mode == "full")
+
+    def test_unknown_paths_and_rename_require_full_explicit_inventory(self):
+        self.git("mv", "modules/security.nix", "security.md")
+        self.write("new-component/config")
+        affected = select(self.base, self.commit(), self.repository)
+        self.assertTrue(all(execution(affected, "full").values()))
+        self.assertFalse(execution(affected, "fast")["builds"])
+
+    def test_docs_and_ci_metadata_never_build_even_on_dispatch(self):
+        for name in ("README.md", ".github/workflows/check.yml", "justfile", "lib/devshell.nix"):
+            base = self.git("rev-parse", "HEAD")
+            self.write(name)
+            affected = select(base, self.commit(), self.repository)
+            for mode in ("fast", "full"):
+                self.assertFalse(execution(affected, mode)["builds"])
+
+    def test_cli_default_is_fast_and_explicit_fallback_is_full(self):
+        script = Path(__file__).with_name("ci_changes.py")
+        summary = self.repository / "summary.md"
+        for arguments, full in (([], False), (["--mode", "full"], True)):
+            result = subprocess.run(
+                [sys.executable, str(script), "", "0" * 40, *arguments,
+                 "--summary", str(summary)], check=True, capture_output=True, text=True)
+            actual = dict(line.split("=", 1) for line in result.stdout.splitlines())
+            self.assertEqual(actual["builds"], str(full).lower())
+            self.assertEqual(actual["evaluate"], str(full).lower())
+            self.assertEqual(actual["runtime"], str(full).lower())
+            self.assertEqual(actual["research"], str(full).lower())
+        self.assertIn("Skipped builds are not runtime evidence", summary.read_text())
+
+    def test_invalid_execution_mode_is_rejected(self):
+        with self.assertRaises(ValueError):
+            execution(CHECKS, "automatic-full")
 
     def test_first_parent_whitespace_check_detects_a_bad_docs_merge(self):
         self.git("checkout", "-b", "docs-change")
