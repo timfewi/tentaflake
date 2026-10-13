@@ -4,6 +4,7 @@
 import json
 import os
 from pathlib import Path
+import re
 import subprocess
 import sys
 import tempfile
@@ -307,6 +308,19 @@ class CiSelection(unittest.TestCase):
         self.git("merge", "--no-ff", "--quiet", "-m", "fixture merge", head)
         with self.assertRaises(subprocess.CalledProcessError):
             self.git("show", "--format=", "--check", "--first-parent", "HEAD")
+
+
+class WorkflowPolicy(unittest.TestCase):
+    def test_optional_cache_setup_is_bounded_and_nonfatal(self):
+        workflow = (Path(__file__).resolve().parent.parent / ".github/workflows/check.yml").read_text()
+        # Inspect the small step block; actionlint separately validates YAML.
+        steps = [step for step in re.split(r"(?m)^      - ", workflow)
+                 if "uses: DeterminateSystems/magic-nix-cache-action@" in step]
+        self.assertEqual(len(steps), 1)
+        timeout = re.search(r"(?m)^        timeout-minutes: ([1-9][0-9]*)$", steps[0])
+        self.assertIsNotNone(timeout)
+        self.assertLessEqual(int(timeout.group(1)), 3)
+        self.assertRegex(steps[0], r"(?m)^        continue-on-error: true$")
 
 
 if __name__ == "__main__":
