@@ -42,7 +42,9 @@ jobs:
           fetch-depth: 0
 
       - name: Check CI selection with real Git histories
-        run: python3 scripts/test_ci_changes.py
+        run: |
+          python3 scripts/test_ci_changes.py
+          python3 scripts/test_eval_flake.py
 
       # One path policy; only an explicit dispatch can select expensive work.
       # Unknown history selects all fast checks or the full explicit inventory.
@@ -77,7 +79,7 @@ jobs:
       # again costs more than these source checks; cache only explicit builds.
       - name: nix fmt check
         if: needs.changes.outputs.static == 'true'
-        run: nix fmt -- --ci
+        run: nix develop --command just formatter-test
 
       - name: Nix lint
         if: needs.changes.outputs.static == 'true'
@@ -149,13 +151,13 @@ jobs:
       - name: prepare research evaluation closures
         if: needs.changes.outputs.evaluate == 'true'
         run: |
-          nix build --no-link \
-            .#checks.x86_64-linux.research-policy \
-            .#checks.x86_64-linux.module-evaluation
+          for check in research-policy module-evaluation; do
+            nix build --no-link ".#checks.x86_64-linux.$check"
+          done
 
       - name: nix flake check (eval)
         if: needs.changes.outputs.evaluate == 'true'
-        run: nix flake check --no-build
+        run: python3 scripts/eval_flake.py
 
       # Build only selected packages/checks. A Rust edit does not require the
       # Research closures or host evaluation; worker edits include its image.
