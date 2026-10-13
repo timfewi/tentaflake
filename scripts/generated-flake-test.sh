@@ -23,7 +23,7 @@ TARGET_NIXOS="$WORK/nixos"
 mkdir -p "$TARGET_NIXOS"
 
 # ── Mirror installer.sh's file layout (STEP 10) ──
-cp -r "$REPO_DIR/lib" "$REPO_DIR/adapters" "$REPO_DIR/modules" \
+cp -r "$REPO_DIR/lib" "$REPO_DIR/adapters" "$REPO_DIR/images" "$REPO_DIR/modules" \
   "$REPO_DIR/pkgs" "$REPO_DIR/crates" \
   "$TARGET_NIXOS/"
 cp "$REPO_DIR/Cargo.toml" \

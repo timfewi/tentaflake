@@ -99,6 +99,10 @@ jobs:
         if: needs.changes.outputs.static == 'true'
         run: nix develop --command python3 scripts/test_api_contract.py
 
+      - name: Base image metadata catalog
+        if: needs.changes.outputs.static == 'true'
+        run: nix develop --command python3 scripts/test_image_catalog.py
+
       - name: Rust lint and unit tests
         if: needs.changes.outputs.rust == 'true'
         env:

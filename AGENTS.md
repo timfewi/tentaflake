@@ -102,6 +102,11 @@ are already published or require access to another repository for public checks.
   image-provenance gates, disposable workers, workspace quotas, encrypted
   backup, and generic options
 - `lib/` — helpers (`mkHermesAgent`, `mkZeroClawAgent`, `agentsFromData`, `pinnedImage`, `constants`, `devshell`)
+- `images/catalog.json` owns reviewed base-OS pins, separate from native presets.
+  `lib/baseImages.nix` selects exact platform manifests through `pinnedImage`;
+  `just image-catalog` checks the saved metadata offline. Preserve raw evidence
+  bytes. Acquisition stays separate from Research, and metadata review proves
+  no signature or runtime acceptance. See `docs/20-base-images.md`.
 - `adapters/catalog.json` owns versioned preset/capability/evidence facts for Nix,
   configuration-free `tentaflake runtimes`, and generated adapter docs. Run
   `python3 scripts/runtime-catalog-docs.py` after catalog changes. Generic
