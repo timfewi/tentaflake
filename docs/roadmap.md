@@ -38,6 +38,9 @@ passes 130 Rust tests and 29 routing regressions; the adapter policy/helper chec
 also passes, including generated manual-start refusal. Broader module evaluation
 requires an uncached Research client closure; no local dependency rebuild was
 started. Added generic startup and Research projection VM regressions await CI.
+The explicit gate exposed a VM-fixture import recursion; focused evaluation
+reproduced it and passes after making the import independent of node `pkgs`.
+The full runtime/build gate is being rerun for that fix.
 Live readiness, bounded aggregate decisions and recovery remain outstanding;
 no dynamic host API is implemented.
 
