@@ -95,7 +95,9 @@ storage node in the existing integration VM. `just fast` passes with 253 Rust
 tests, 34 routing regressions, four evaluator tests, 11 image tests and API
 validation of 47 routes with 38 valid and 38 rejected examples. Focused adapter
 evaluation and the actual-helper check pass, including read-only Btrfs
-verification. The integration VM derivation evaluates; its new storage phase
+verification. After merging the CI/onboarding fixes, `just ci-policy` passes
+35 routing tests, four evaluator tests and the real shallow-checkout fixture.
+The integration VM derivation evaluates; its new storage phase
 has not run and no live host acceptance is claimed. PRs 149/150/160/161/162/163
 are merged. Capability CI 38474537889 passed complete evaluation and non-VM
 builds, then exposed a stale stopped-Research import refusal fixture. The old
