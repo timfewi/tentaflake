@@ -1,6 +1,6 @@
 # Tentaflake product roadmap
 
-Planning baseline: 2026-10-05. Status: planned, not an implementation or release
+Planning baseline: 2026-10-13. Status: planned, not an implementation or release
 announcement. Stable M01-M10 IDs map to the GitHub milestones below.
 Issue tracking does not establish implemented, verified or released support.
 
@@ -15,14 +15,26 @@ commands and interfaces below are not installed APIs.
 
 ## Delivery checkpoint
 
-2026-10-13 work is prepared on `ci/fast-automatic-checks`: automatic PR/push
-runs keep static/unit checks, while explicit dispatch selects affected
-configuration, package and VM gates from the shared path policy. Review and
-verification of the current revision remain required before merge; this
-checkpoint does not claim delivery. Next tracks remain capability admission,
-real coding-agent acceptance, Debian/Ubuntu environments and the versioned
-CLI/UI host API; Research identity/transport and VPS preparation/installation
-follow that contract. Separate-kernel acceptance still needs usable KVM.
+2026-10-13: [PR #151](https://github.com/timfewi/tentaflake/pull/151) merged lighter
+CI. Automatic PR/push runs keep static/unit checks; explicit dispatch selects
+affected configuration, package and VM gates. The fast gate passed with 122
+Rust tests and 28 routing regressions; automatic and explicit GitHub runs passed
+at `20e0273`. This is workflow evidence, not runtime acceptance.
+
+Next: capability admission [#116](https://github.com/timfewi/tentaflake/issues/116),
+real coding-agent acceptance [#136](https://github.com/timfewi/tentaflake/issues/136),
+and the versioned CLI/UI environment API [#152](https://github.com/timfewi/tentaflake/issues/152).
+Generic model/Research capabilities still fail closed; no dynamic host API is
+implemented. The separate UI has provisional fixtures only. Its API handoff
+must cover ownership, exact grants, policy-bound plans, durable idempotency,
+workspace/file operations and reconnectable streams before claiming backend support.
+
+Research work is tracked in [environment admission #8](https://github.com/timfewi/tentaflake-research/issues/8)
+and [guest transport #9](https://github.com/timfewi/tentaflake-research/issues/9).
+Strict guests have a distinct [backend track #153](https://github.com/timfewi/tentaflake/issues/153)
+and remain unavailable until usable KVM and actual guest acceptance exist.
+Private deployment configuration and its operational evidence stay with the
+host owner. No host deployment or live runtime acceptance is claimed here.
 
 Completed: #115 common runtime/catalog in [PR #139](https://github.com/timfewi/tentaflake/pull/139)
 and #135 installed-host onboarding in [PR #140](https://github.com/timfewi/tentaflake/pull/140),
@@ -109,13 +121,34 @@ Research preparation/suite and full flake/host gates; 21 real-Git routing
 regressions preserve shared/unknown coverage. Next: publish this worker PR and
 merge only its exact head after green CI. #113 remains open until delivery.
 
+## Initial environment delivery
+
+1. Common admission, one working CLI environment and the authoritative API
+   schema/fixtures in Tentaflake. Review Codex/Claude Code protocol and runtime
+   compatibility; keep unsupported candidates disabled.
+2. A separate UI consumer and a bounded single-owner host pilot, initially two
+   active environments within aggregate host/Research reserves. Pin reviewed
+   Debian/Ubuntu images and tools. Package/Git acquisition has separate policy;
+   Research is not a package proxy and read-only non-root containers do not
+   promise arbitrary root setup.
+3. Separate-kernel acceptance after KVM is available. A labelled container pilot
+   does not complete that track. Multiple users and company features come later.
+
+Nix owns host ceilings; environment creation within them must not rebuild the
+host. Acceptance includes the real agent/terminal/model/Research workflow,
+host/peer/egress denial, quotas, ownership, revocation, idle expiry, recovery and
+explicit workspace retention/deletion. Record source, fixture and live-host
+evidence separately. Reuse management #106/#108, health #112, readiness #109/#114
+and Research egress #141; company-console #129 must not block this initial UI.
+
+
 ## Product direction
 
 The immediate priority is an agent-agnostic isolated runtime. An operator should
 be able to add an agent through a small validated definition, without modifying
 Tentaflake's security code or implementing an employee-profile compiler. Hermes,
-ZeroClaw, OpenCode, Codex and Pi are possible workloads, not separate security
-architectures. Naming an agent here does not establish current support.
+ZeroClaw, OpenCode, Codex, Claude Code and Pi are possible workloads, not
+separate security architectures. Naming an agent here does not establish current support.
 
 Tentaflake should let individuals and companies operate AI employees that can
 take any freely described professional role: legal work, marketing, research,
@@ -461,8 +494,10 @@ Acceptance:
 Implement capability-specific admission for the proposed runtime mode without
 weakening existing containment, broker, credential, quota or Research controls.
 Accept one pinned coding agent end to end, then a second independently configured
-agent through the same runtime. OpenCode is the first candidate; choose the
-second from Codex or Pi after verifying artifact, model and session compatibility.
+agent through the same runtime. Review Codex and Claude Code as the candidates
+for the initial environment UI, verifying pinned artifacts, model protocols,
+authentication, streaming and session compatibility. OpenCode/Pi remain
+alternatives requiring an explicit scope decision after that review.
 Unsupported candidates remain unaccepted instead of weakening the boundary.
 
 Exercise interactive attach, native file/shell/Git/test tools, bounded writable
@@ -630,9 +665,11 @@ recovery/backup foundations rather than replacing them unnecessarily.
 
 Combine organization, employees, personalities, tasks, processes, integrations,
 approvals, budgets and operational status in one private multi-user application.
-Use a Rust backend with server-generated pages and minimal JavaScript as the
-initial implementation. Use private HTTPS/OIDC, protected sessions and CSRF
-checks; keep public webhook ingress separate.
+Keep the UI as a separate client of the versioned host API in #152. Its initial
+single-owner environment builder, file explorer and terminal precede this
+company milestone. Reuse the same server-side authorization for CLI and UI.
+Use private HTTPS/OIDC, protected sessions and CSRF checks; keep public webhook
+ingress separate.
 
 Permissions apply equally to CLI/API/UI. Provide scoped task actions, employee
 start/stop, connection management and explicit approval review. Permanent host
@@ -736,7 +773,8 @@ remains a separate maintainer action.
 Deliver M01's runtime contract (#115) before its installed-host onboarding (#135).
 Next implement capability admission (#116) and accept M02's first coding
 reference and then its second (#136), sharing the same containment.
-Only then begin M03's employee compiler and organization layer. Additional
+Deliver the environment API/CLI (#152), separate UI and bounded host pilot
+before M03's employee compiler and organization layer. Additional
 runtime presets can follow this path independently of the company feature set.
 
 Each issue is a bounded change with requirement, artifact, proportionate checks,
@@ -755,7 +793,8 @@ does not by itself provide a durable multi-day executor.
 
 Later evaluations include finer-grained information-flow
 tracking, cross-runtime conversation migration, multi-host operation, shared
-multi-company hosting, arbitrary desktop GUI automation and a separately tested
-kernel boundary for `strict`. They are not initial delivery commitments. Generic
+multi-company hosting and arbitrary desktop GUI automation. They are not initial
+delivery commitments. The separately tested kernel boundary for `strict` is
+tracked in #153 after KVM availability, outside the container pilot. Generic
 business integrations and open-ended professional roles are part of the target
 product; no finite connector list claims support for every program or operation.

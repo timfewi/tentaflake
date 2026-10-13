@@ -238,9 +238,10 @@ and reviewed by the operator; its catalog entry selects no image.
 
 <!-- runtime-catalog:end -->
 
-OpenCode and Goose are the next investigations. Codex, Claude Code, Aider, Pi
-and OpenHands remain candidates. No adapter files or support claims are added
-for them.
+Codex and Claude Code are the next compatibility investigations for the initial
+environment UI. OpenCode, Goose, Aider, Pi and OpenHands remain alternatives.
+No adapter files or support claims are added for these candidates; see
+[coding-agent acceptance](roadmap.md#m02--coding-agent-acceptance-and-policy-enforcement).
 
 Primary OpenClaw sources read through the isolated Research service:
 
