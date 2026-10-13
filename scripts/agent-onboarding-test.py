@@ -59,6 +59,28 @@ def main():
         run("agent", "import", path, success=False)
         assert destination.read_bytes() == before
 
+        # A supported capability request may be imported while stopped without
+        # granting its host service or accepting startup readiness.
+        research = json.loads(json.dumps(generic))
+        research["agents"][0]["name"] = "new-research"
+        research["agents"][0]["definition"]["capabilities"] = ["research"]
+        path = candidate(research)
+        plan = json.loads(run("agent", "plan", path, "--json").stdout)
+        assert plan["valid"] and not plan["imported"]
+        assert plan["activation"] == "explicit-host-update-required"
+        assert plan["instances"][0]["container"] == "generic-new-research"
+        assert plan["instances"][0]["requiresHostUpdate"]
+        assert destination.read_bytes() == before
+        imported = json.loads(run("agent", "import", path, "--json").stdout)
+        assert imported["valid"] and imported["imported"]
+        assert imported["activation"] == "explicit-host-update-required"
+        combined = json.loads(destination.read_bytes())
+        assert combined["agents"] == preset["agents"] + generic["agents"] + research["agents"]
+        definition = combined["agents"][-1]["definition"]
+        assert definition["capabilities"] == ["research"]
+        assert definition["lifecycle"] == "stopped"
+        before = destination.read_bytes()
+
         # Source-only Nix instances are checked even if absent from active TSV.
         existing = json.loads(run("agent", "template", "hermes", "generic-nix").stdout)
         denied = json.loads(run("agent", "plan", candidate(existing), "--json", success=False).stdout)
@@ -72,7 +94,8 @@ def main():
             {"schemaVersion": 1, "agents": [{"adapter": "hermes", "name": "unsafe", "autoStart": False,
                                               "settings": {"API_KEY": "credential-private-sentinel"}}]},
         ]
-        for change in ({"image": "example.invalid/agent:latest"}, {"capabilities": ["research"]},
+        for change in ({"image": "example.invalid/agent:latest"}, {"capabilities": ["internet"]},
+                       {"lifecycle": "service"},
                        {"ownership": {"uid": 0, "gid": 10000}}, {"volumes": ["/home:/host:rw"]}):
             item = json.loads(json.dumps(generic))
             item["agents"][0]["name"] = "invalid-coding"
@@ -111,7 +134,7 @@ def main():
         assert "changed during validation" in result.stderr
         assert destination.read_bytes() == manual
         assert not (flake / "agents.json.pending").exists()
-        print("PASS: installed preset/generic plan, import, redaction, refusals, lock and conflict recovery")
+        print("PASS: installed preset/generic/Research stopped plan and import, redaction, refusals, lock and conflict recovery")
 
 
 if __name__ == "__main__":
