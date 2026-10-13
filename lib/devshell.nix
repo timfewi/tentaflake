@@ -122,6 +122,7 @@ in
 pkgs.mkShell {
   packages = with pkgs; [
     just
+    gitMinimal
     nixfmt
     statix
     deadnix

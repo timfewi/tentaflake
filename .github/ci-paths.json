@@ -7,6 +7,14 @@
     "paths": ["images/**", "scripts/test_image_catalog.py"],
     "checks": ["static"]
   },
+  "flake-evaluation": {
+    "paths": ["scripts/eval_flake.py", "scripts/test_eval_flake.py"],
+    "checks": ["evaluate", "selection", "static"]
+  },
+  "formatter-test": {
+    "paths": ["scripts/test_format_check.py"],
+    "checks": ["static"]
+  },
   "research": {
     "paths": [
       "modules/research.nix",
