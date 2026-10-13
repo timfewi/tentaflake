@@ -716,6 +716,19 @@
                 machine.succeed(f"test $(stat -c %u:%g {source}) = 65534:65534")
         machine.succeed("systemctl daemon-reload; systemctl start docker-generic-offline.service")
         machine.wait_for_unit("docker-generic-offline.service")
+        # The Docker unit becomes active when its client starts, before the
+        # daemon finishes creating and starting the gVisor container.
+        try:
+            machine.wait_until_succeeds(
+                "running=$(timeout 5s docker inspect --format '{{.State.Running}}' generic-offline) "
+                '&& test "$running" = true',
+                timeout=30,
+            )
+        except Exception:
+            print(machine.execute(
+                "timeout 5s journalctl --no-pager -n 60 -u docker-generic-offline.service"
+            )[1])
+            raise
         observed = json.loads(machine.succeed("docker inspect generic-offline"))[0]
         assert observed["State"]["Running"], observed["State"]
         assert observed["Image"] == image_id, observed["Image"]
