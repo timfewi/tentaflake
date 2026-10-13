@@ -27,7 +27,8 @@ agent onboarding on installed hosts, before employee-profile and company
 features. This is planned work; the current support matrix below still applies.
 
 The shared Rust admission core can [explain a recorded startup decision](docs/10-security-profiles.md#shared-admission-core)
-and persist conservative resource claims. Live collection, mandatory startup
+and persist conservative runtime and volume claims, including storage for
+never-started environments. Live collection, mandatory startup
 integration and the host API service are still under development.
 
 Discover presets with `tentaflake runtimes --json`. A digest-pinned image and

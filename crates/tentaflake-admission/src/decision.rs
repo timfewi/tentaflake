@@ -28,14 +28,14 @@ fn active_resources(resources: Resources) -> bool {
         && resources.state_bytes >= MIN_STORAGE_BYTES
 }
 
-fn reason(reasons: &mut Vec<Reason>, code: ReasonCode, subject: &str) {
+pub(crate) fn reason(reasons: &mut Vec<Reason>, code: ReasonCode, subject: &str) {
     reasons.push(Reason {
         code,
         subject: subject.to_owned(),
     });
 }
 
-fn normalize(reasons: &mut Vec<Reason>) {
+pub(crate) fn normalize(reasons: &mut Vec<Reason>) {
     reasons.sort();
     reasons.dedup();
 }
@@ -89,6 +89,7 @@ pub fn validate_reservations(snapshot: &ReservationSnapshot) -> Vec<Reason> {
             reason(&mut reasons, ReasonCode::InvalidReservation, "resources");
         }
     }
+    storage_decision::validate_allocations(&snapshot.storage, &mut reasons);
     normalize(&mut reasons);
     reasons
 }
@@ -112,11 +113,14 @@ fn capability_kind(capability: Capability) -> EvidenceKind {
     }
 }
 
-fn authority_shape(snapshot: &AdmissionSnapshot, request: &AdmissionRequest) -> Vec<Reason> {
+pub(crate) fn authority_shape(
+    schema_version: u32,
+    policy: &HostPolicy,
+    instance: &Instance,
+    request: &AdmissionRequest,
+) -> Vec<Reason> {
     let mut reasons = Vec::new();
-    let policy = &snapshot.policy;
-    let instance = &snapshot.instance;
-    if snapshot.schema_version != SCHEMA_VERSION || request.schema_version != SCHEMA_VERSION {
+    if schema_version != SCHEMA_VERSION || request.schema_version != SCHEMA_VERSION {
         reason(
             &mut reasons,
             ReasonCode::UnsupportedVersion,
@@ -169,9 +173,8 @@ fn authority_shape(snapshot: &AdmissionSnapshot, request: &AdmissionRequest) -> 
     reasons
 }
 
-fn check_shape(snapshot: &AdmissionSnapshot) -> Vec<Reason> {
-    let mut reasons = validate_reservations(&snapshot.reservations);
-    let policy = &snapshot.policy;
+pub(crate) fn check_policy(policy: &HostPolicy) -> Vec<Reason> {
+    let mut reasons = Vec::new();
     if !active_resources(policy.capacity)
         || !active_resources(policy.per_instance)
         || policy.host_reserve.memory_swap_bytes < policy.host_reserve.memory_bytes
@@ -183,6 +186,13 @@ fn check_shape(snapshot: &AdmissionSnapshot) -> Vec<Reason> {
     {
         reason(&mut reasons, ReasonCode::InvalidPolicy, "resources");
     }
+    reasons
+}
+
+fn check_shape(snapshot: &AdmissionSnapshot) -> Vec<Reason> {
+    let mut reasons = validate_reservations(&snapshot.reservations);
+    reasons.extend(check_policy(&snapshot.policy));
+    storage_decision::validate_requirements(&snapshot.instance, true, &mut reasons);
     if !active_resources(snapshot.instance.resources) {
         reason(&mut reasons, ReasonCode::InvalidInstance, "resources");
     }
@@ -245,7 +255,12 @@ pub fn authorize(
     request: &AdmissionRequest,
     now_unix_seconds: u64,
 ) -> Vec<Reason> {
-    let mut reasons = authority_shape(snapshot, request);
+    let mut reasons = authority_shape(
+        snapshot.schema_version,
+        &snapshot.policy,
+        &snapshot.instance,
+        request,
+    );
     if !reasons.is_empty() {
         normalize(&mut reasons);
         return reasons;
@@ -361,7 +376,14 @@ fn check_resources(snapshot: &AdmissionSnapshot, reasons: &mut Vec<Reason>) {
             reason(reasons, ReasonCode::InstanceLimit, name);
         }
     }
-    let mut total = policy.host_reserve.checked_add(policy.research_reserve);
+    let mut total = policy
+        .host_reserve
+        .checked_add(policy.research_reserve)
+        .and_then(|sum| {
+            sum.checked_add(storage_decision::allocated_resources(
+                &snapshot.reservations.storage,
+            )?)
+        });
     let mut active = 1_u64;
     let mut replacing = false;
     for reservation in &snapshot.reservations.entries {
@@ -373,11 +395,6 @@ fn check_resources(snapshot: &AdmissionSnapshot, reasons: &mut Vec<Reason>) {
                 && reservation.owner_id == instance.owner_id
             {
                 replacing = true;
-                if instance.resources.workspace_bytes < reservation.resources.workspace_bytes
-                    || instance.resources.state_bytes < reservation.resources.state_bytes
-                {
-                    reason(reasons, ReasonCode::RetainedStorageShrink, "storage");
-                }
                 continue;
             }
             reason(reasons, ReasonCode::ReservationConflict, "instance");
@@ -385,7 +402,7 @@ fn check_resources(snapshot: &AdmissionSnapshot, reasons: &mut Vec<Reason>) {
         if reservation.state != ReservationState::Retained {
             active += 1;
         }
-        total = total.and_then(|sum| sum.checked_add(reservation.resources));
+        total = total.and_then(|sum| sum.checked_add(reservation.resources.compute()));
     }
     if snapshot.reservations.entries.len() >= MAX_RESERVATIONS && !replacing {
         reason(reasons, ReasonCode::LedgerCapacity, "entries");
@@ -393,7 +410,7 @@ fn check_resources(snapshot: &AdmissionSnapshot, reasons: &mut Vec<Reason>) {
     if active > u64::from(policy.max_active) {
         reason(reasons, ReasonCode::ActiveLimit, "maxActive");
     }
-    match total.and_then(|sum| sum.checked_add(instance.resources)) {
+    match total.and_then(|sum| sum.checked_add(instance.resources.compute())) {
         None => reason(reasons, ReasonCode::ResourceOverflow, "aggregate"),
         Some(total) => {
             for ((name, used), (_, capacity)) in
@@ -404,6 +421,31 @@ fn check_resources(snapshot: &AdmissionSnapshot, reasons: &mut Vec<Reason>) {
                 }
             }
         }
+    }
+    storage_decision::check_start_storage(instance, &snapshot.reservations.storage, reasons);
+}
+
+pub(crate) fn check_expected(
+    policy: &HostPolicy,
+    instance: &Instance,
+    reservations: &ReservationSnapshot,
+    request: &AdmissionRequest,
+    reasons: &mut Vec<Reason>,
+) {
+    if request.expected.policy != policy.revision {
+        reason(reasons, ReasonCode::StalePolicy, "expected.policy");
+    }
+    if request.expected.instance != instance.revision || request.instance_id != instance.id {
+        reason(reasons, ReasonCode::StaleInstance, "expected.instance");
+    }
+    if request.expected.ledger != reservations.revision {
+        reason(reasons, ReasonCode::StaleLedger, "expected.ledger");
+    }
+    if reservations.generation != policy.generation {
+        reason(reasons, ReasonCode::GenerationMismatch, "host");
+    }
+    if !reservations.complete {
+        reason(reasons, ReasonCode::LedgerIncomplete, "ledger");
     }
 }
 
@@ -421,22 +463,15 @@ pub fn decide(
     }
     let policy = &snapshot.policy;
     let instance = &snapshot.instance;
-    if request.expected.policy != policy.revision {
-        reason(&mut reasons, ReasonCode::StalePolicy, "expected.policy");
-    }
-    if request.expected.instance != instance.revision || request.instance_id != instance.id {
-        reason(&mut reasons, ReasonCode::StaleInstance, "expected.instance");
-    }
-    if request.expected.ledger != snapshot.reservations.revision {
-        reason(&mut reasons, ReasonCode::StaleLedger, "expected.ledger");
-    }
-    if snapshot.reservations.generation != policy.generation
-        || snapshot.readiness.generation != policy.generation
-    {
+    check_expected(
+        policy,
+        instance,
+        &snapshot.reservations,
+        request,
+        &mut reasons,
+    );
+    if snapshot.readiness.generation != policy.generation {
         reason(&mut reasons, ReasonCode::GenerationMismatch, "host");
-    }
-    if !snapshot.reservations.complete {
-        reason(&mut reasons, ReasonCode::LedgerIncomplete, "ledger");
     }
     if instance.isolation != Isolation::Container {
         reason(
@@ -797,6 +832,12 @@ mod tests {
         for dimension in [4, 5] {
             let mut record = fixture();
             let retained = peer(&record, "retained-peer", ReservationState::Retained);
+            for mut allocation in record.snapshot.reservations.storage.clone() {
+                allocation.id = format!("peer-{}", allocation.id);
+                allocation.binding.as_mut().unwrap().instance_id = retained.instance_id.clone();
+                allocation.binding.as_mut().unwrap().owner_id = retained.owner_id.clone();
+                record.snapshot.reservations.storage.push(allocation);
+            }
             let total = record
                 .snapshot
                 .policy
@@ -820,7 +861,7 @@ mod tests {
     }
 
     #[test]
-    fn restart_reuses_owned_retained_capacity_without_shrinking_it() {
+    fn restart_charges_allocations_once_and_keeps_historical_resources_descriptive() {
         let mut record = fixture();
         let mut retained = decision(&record).reservation.unwrap();
         retained.state = ReservationState::Retained;
@@ -841,9 +882,116 @@ mod tests {
         record.snapshot.reservations.entries[0]
             .resources
             .workspace_bytes += 1;
-        denied(&record, ReasonCode::RetainedStorageShrink);
+        assert!(
+            decision(&record).allowed,
+            "historical storage is not another allocation"
+        );
         record.snapshot.reservations.entries[0].owner_id = "another-owner".into();
         denied(&record, ReasonCode::ReservationConflict);
+    }
+
+    #[test]
+    fn orphan_and_never_started_allocations_still_consume_capacity() {
+        for state in [StorageState::Present, StorageState::Unknown] {
+            for orphan in [false, true] {
+                let mut record = fixture();
+                let mut allocation = record.snapshot.reservations.storage[0].clone();
+                allocation.id = "never-started-volume".into();
+                allocation.state = state;
+                allocation.binding = if orphan {
+                    None
+                } else {
+                    Some(StorageBinding {
+                        instance_id: "never-started".into(),
+                        owner_id: "previous-owner".into(),
+                        revision: "previous-binding".into(),
+                    })
+                };
+                let base = record
+                    .snapshot
+                    .policy
+                    .host_reserve
+                    .checked_add(record.snapshot.policy.research_reserve)
+                    .unwrap()
+                    .checked_add(record.snapshot.instance.resources)
+                    .unwrap();
+                record.snapshot.policy.capacity = base;
+                record.snapshot.reservations.storage.push(allocation);
+                assert!(record.snapshot.reservations.entries.is_empty());
+                denied(&record, ReasonCode::ResourceExhausted);
+                record.snapshot.policy.capacity.workspace_bytes +=
+                    record.snapshot.instance.resources.workspace_bytes;
+                assert!(
+                    decision(&record).allowed,
+                    "unrelated uncertain storage stays charged"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn startup_requires_exact_present_owned_allocations() {
+        let mut record = fixture();
+        record.snapshot.reservations.storage.pop();
+        denied(&record, ReasonCode::MissingStorage);
+        let mut record = fixture();
+        record.snapshot.reservations.storage[0].state = StorageState::Unknown;
+        denied(&record, ReasonCode::StorageUnknown);
+        for mutation in 0..5 {
+            let mut record = fixture();
+            let allocation = &mut record.snapshot.reservations.storage[0];
+            match mutation {
+                0 => allocation.binding = None,
+                1 => allocation.binding.as_mut().unwrap().owner_id = "previous-owner".into(),
+                2 => allocation.binding.as_mut().unwrap().revision = "previous-path-binding".into(),
+                3 => allocation.bytes += 1,
+                4 => allocation.kind = StorageKind::State,
+                _ => unreachable!(),
+            }
+            denied(&record, ReasonCode::StorageConflict);
+        }
+        let mut record = fixture();
+        record.snapshot.instance.resources.workspace_bytes -= 1;
+        denied(&record, ReasonCode::StorageConflict);
+        let mut record = fixture();
+        record.snapshot.instance.storage.pop();
+        denied(&record, ReasonCode::InvalidStorage);
+    }
+
+    #[test]
+    fn command_revision_change_preserves_independently_bound_storage() {
+        let mut record = fixture();
+        let revision = "updated-command-revision";
+        record.snapshot.instance.revision = revision.into();
+        record.request.expected.instance = revision.into();
+        for evidence in &mut record.snapshot.readiness.evidence {
+            evidence.instance_revision = revision.into();
+        }
+        assert!(decision(&record).allowed);
+    }
+
+    #[test]
+    fn malformed_duplicate_storage_never_becomes_complete_inventory() {
+        let mut record = fixture();
+        record
+            .snapshot
+            .reservations
+            .storage
+            .push(record.snapshot.reservations.storage[0].clone());
+        denied(&record, ReasonCode::DuplicateStorage);
+        let mut record = fixture();
+        record.snapshot.reservations.storage[0].bytes = 0;
+        denied(&record, ReasonCode::InvalidStorage);
+        let mut record = fixture();
+        record.snapshot.instance.storage[1] = record.snapshot.instance.storage[0].clone();
+        denied(&record, ReasonCode::DuplicateStorage);
+        let mut record = fixture();
+        record.snapshot.reservations.storage[0]
+            .binding
+            .as_mut()
+            .unwrap()
+            .revision = "x".repeat(129);
+        denied(&record, ReasonCode::InvalidStorage);
     }
 
     #[test]

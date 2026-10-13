@@ -8,12 +8,17 @@
 
 mod decision;
 pub mod ledger;
+mod storage_decision;
 
 pub use decision::{authorize, decide, validate_reservations};
 use serde::{Deserialize, Serialize};
+pub use storage_decision::{authorize_storage, decide_storage};
 
-pub const SCHEMA_VERSION: u32 = 1;
+/// Version two accounts persistent volumes independently of startup receipts.
+/// Version-one ledgers require explicit migration; never reinterpret them empty.
+pub const SCHEMA_VERSION: u32 = 2;
 pub const MAX_RESERVATIONS: usize = 4096;
+pub const MAX_STORAGE_ALLOCATIONS: usize = 2 * MAX_RESERVATIONS;
 pub const MAX_GRANTS: usize = 4096;
 pub const MIN_STORAGE_BYTES: u64 = 128 * 1024 * 1024;
 
@@ -49,6 +54,15 @@ impl Resources {
             workspace_bytes: self.workspace_bytes,
             state_bytes: self.state_bytes,
             ..Self::default()
+        }
+    }
+
+    /// Compute charged by a runtime receipt; allocation rows alone charge disk.
+    pub fn compute(self) -> Self {
+        Self {
+            workspace_bytes: 0,
+            state_bytes: 0,
+            ..self
         }
     }
 }
@@ -103,6 +117,63 @@ pub struct Instance {
     pub isolation: Isolation,
     pub resources: Resources,
     pub requested_capabilities: Vec<Capability>,
+    /// Host-owned fixed backing slots. Startup requires both kinds; storage-only
+    /// provisioning also supports legacy workspace-only definitions.
+    pub storage: Vec<StorageRequirement>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq, PartialOrd, Ord)]
+#[serde(rename_all = "kebab-case")]
+pub enum StorageKind {
+    Workspace,
+    State,
+}
+
+impl StorageKind {
+    pub fn bytes(self, resources: Resources) -> u64 {
+        match self {
+            Self::Workspace => resources.workspace_bytes,
+            Self::State => resources.state_bytes,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct StorageRequirement {
+    /// Stable host-generated identity of the canonical image backing slot.
+    pub id: String,
+    pub kind: StorageKind,
+    /// Hash of image path, mount path and UID/GID, independent of command revision.
+    pub binding_revision: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct StorageBinding {
+    pub instance_id: String,
+    pub owner_id: String,
+    pub revision: String,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum StorageState {
+    /// Provisioning may have happened. The entire allocation remains charged.
+    Unknown,
+    /// A trusted collector confirmed the image and any recorded owner binding.
+    Present,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct StorageAllocation {
+    pub id: String,
+    pub kind: StorageKind,
+    pub bytes: u64,
+    /// None identifies retained orphan storage, never implicitly adoptable.
+    pub binding: Option<StorageBinding>,
+    pub state: StorageState,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -199,6 +270,8 @@ pub struct Reservation {
     pub owner_id: String,
     pub instance_revision: String,
     pub state: ReservationState,
+    /// Original requested resources; storage fields are historical descriptions.
+    /// Only compute() contributes to capacity; allocation rows own disk charges.
     pub resources: Resources,
 }
 
@@ -208,8 +281,13 @@ pub struct ReservationSnapshot {
     pub revision: u64,
     /// Established explicitly for a genuine new ledger; never reset on restart.
     pub generation: String,
+    /// Trusted inventory completeness, including all managed volume creators;
+    /// merely reading a ledger or missing directory cannot establish this.
     pub complete: bool,
     pub entries: Vec<Reservation>,
+    /// Every retained or possibly provisioned volume, including never-started
+    /// instances and orphans. These rows alone own persistent-storage accounting.
+    pub storage: Vec<StorageAllocation>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -220,6 +298,32 @@ pub struct AdmissionSnapshot {
     pub instance: Instance,
     pub readiness: ReadinessSnapshot,
     pub reservations: ReservationSnapshot,
+}
+
+/// Storage provisioning has no runtime/capability readiness prerequisite. The
+/// host still authenticates this closed policy/instance/inventory snapshot.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct StorageAdmissionSnapshot {
+    pub schema_version: u32,
+    pub policy: HostPolicy,
+    pub instance: Instance,
+    pub reservations: ReservationSnapshot,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct StorageRequest {
+    pub request: AdmissionRequest,
+    pub allocation_id: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct StorageDecision {
+    pub allowed: bool,
+    pub reasons: Vec<Reason>,
+    pub allocation: Option<StorageAllocation>,
 }
 
 /// Offline replay envelope, not a trusted live probe or an HTTP request.
@@ -252,7 +356,11 @@ pub enum ReasonCode {
     LedgerIncomplete,
     UnknownReservation,
     ReservationConflict,
-    RetainedStorageShrink,
+    InvalidStorage,
+    DuplicateStorage,
+    MissingStorage,
+    StorageConflict,
+    StorageUnknown,
     InvalidEvidence,
     DuplicateEvidence,
     MissingEvidence,

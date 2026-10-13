@@ -38,6 +38,9 @@ relevant source and guide. Avoid loading unrelated references.
   authority. Preserve checked aggregate accounting, exact grants and generation
   binding. Only a new synced ledger claim yields a dispatch permit; retain its
   lock through handoff and preserve unknown outcomes and stopped storage.
+  Charge volumes independently of runtime receipts, including never-started and
+  orphan images. Complete inventory and fenced creators precede authority;
+  existing allocations never permit implicit recreation, resize or rebinding.
 - Generate support facts with `python3 scripts/runtime-catalog-docs.py`;
   catalog declarations and source fixtures never prove vendor acceptance.
   Generic definitions reject extra authority and preserve current startup gates.

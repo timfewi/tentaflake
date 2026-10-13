@@ -107,8 +107,9 @@ workspace ownership migration with Docker and Podman runtime tests.
 host lifecycle callers. It checks exact owner/capability grants, revisions,
 fresh live prerequisite evidence, service generations, per-instance limits and
 aggregate CPU, memory, combined memory-plus-swap, PIDs, workspace and state.
-Host and Research reserves count against capacity. Unknown reservations block
-admission; stopped instances retain their storage charge. Unsupported guest-kernel
+Host and Research reserves count against capacity. Unknown runtime reservations
+block startup; independent volume allocations retain storage charges for stopped,
+never-started and removed instances. Unsupported guest-kernel
 isolation is denied. This library does not collect evidence or enforce containment.
 
 An offline operator command re-evaluates a recorded decision:
@@ -119,7 +120,7 @@ tentaflake admission explain crates/tentaflake-admission/tests/recorded-start.js
 
 The input is a regular JSON file of at most 4 MiB containing
 `nowUnixSeconds`, `snapshot` and `request`. The snapshot and request use the
-versioned, closed Rust types in `src/lib.rs`; this internal diagnostic format
+versioned, closed Rust types in `src/lib.rs` (currently schema version 2); this internal diagnostic format
 is separate from the [HTTP contract](19-host-api.md). Output is a JSON decision;
 exit codes are 0 for allowed, 1 for denied and 2 for invalid input. `--hide`
 redacts reservation identity. Recorded time and evidence are caller-supplied;
@@ -127,7 +128,9 @@ this command neither verifies them nor starts, reserves or reconciles anything.
 The checked-in example is synthetic evidence.
 
 The library ledger creates private state only through explicit initialization
-of a new directory. Ordinary opens refuse missing, corrupt or unsafe state.
+of a new directory with an explicitly complete storage inventory. Ordinary opens
+refuse missing, corrupt or unsafe state; version-1 state requires an explicit
+migration and is never interpreted as empty.
 A nonblocking exclusive lock serializes decisions, and a durable unknown
 reservation precedes any new dispatch permit. The in-memory permit retains
 that lock through the launch handoff. An identical operation key returns the
@@ -137,6 +140,17 @@ releases compute but retains workspace and private-state capacity; it does not
 delete data. Receipt and byte limits refuse additional work rather than evicting
 recovery records. Initialization must account for pre-existing workloads before
 the ledger can be treated as complete.
+
+Storage allocations are separate from runtime receipts so each volume is charged
+once, including orphaned and uncertain images. Startup requires exact owned,
+present workspace and state allocations. A storage-only claim also supports
+legacy workspace-only quotas without requiring model or Research access. Its
+new durable unknown allocation yields the only image-creation permit, under the
+same ledger lock. Existing receipts only allow verification; a missing previously
+recorded image cannot be recreated. Resize, rebinding, deletion and inventory
+recovery require separate explicit operations. The host must scan every managed
+backing location, fence all volume creators and verify and sync the final image
+before recording it present; the library does not perform those filesystem steps.
 
 The policy, readiness snapshot and ledger share a durable host authority epoch;
 boot and service generations are separate live evidence. Callers authenticate
