@@ -250,6 +250,22 @@ impl Ledger {
         authority: PublishedAuthority,
         inventory: StorageInventory,
     ) -> Result<Self, LedgerError> {
+        let name = path
+            .file_name()
+            .ok_or(LedgerError::Invalid("directory path"))?;
+        let parent = open_directory(
+            path.parent()
+                .ok_or(LedgerError::Invalid("directory parent"))?,
+        )?;
+        Self::initialize_in(parent, name, authority, inventory)
+    }
+
+    fn initialize_in(
+        parent: File,
+        name: &OsStr,
+        authority: PublishedAuthority,
+        inventory: StorageInventory,
+    ) -> Result<Self, LedgerError> {
         if !inventory.complete {
             return Err(LedgerError::Invalid("incomplete storage inventory"));
         }
@@ -273,13 +289,6 @@ impl Ledger {
         // Validate before creating any ledger path. Existing over-budget rows
         // remain truthful inventory; budget enforcement belongs to admission.
         state.validate()?;
-        let name = path
-            .file_name()
-            .ok_or(LedgerError::Invalid("directory path"))?;
-        let parent = open_directory(
-            path.parent()
-                .ok_or(LedgerError::Invalid("directory parent"))?,
-        )?;
         let encoded_name = cstring(name)?;
         if unsafe { libc::mkdirat(parent.as_raw_fd(), encoded_name.as_ptr(), 0o700) } != 0 {
             return Err(io::Error::last_os_error().into());
@@ -296,9 +305,11 @@ impl Ledger {
 
     /// Missing, malformed or incomplete state is an error, never an empty ledger.
     pub fn open(path: &Path) -> Result<Self, LedgerError> {
-        let ledger = Self {
-            directory: open_directory(path)?,
-        };
+        Self::open_in(open_directory(path)?)
+    }
+
+    fn open_in(directory: File) -> Result<Self, LedgerError> {
+        let ledger = Self { directory };
         ledger.validate_directory()?;
         let _lock = ledger.lock(false)?;
         ledger.read()?;
@@ -1168,15 +1179,18 @@ fn open_directory(path: &Path) -> Result<File, LedgerError> {
     if !path.is_absolute() {
         return Err(LedgerError::Invalid("directory path must be absolute"));
     }
-    let mut directory = open_at(
+    let directory = open_at(
         libc::AT_FDCWD,
         OsStr::new("/"),
         libc::O_RDONLY | libc::O_DIRECTORY,
     )?;
+    walk_directory(directory, path.strip_prefix("/").unwrap())
+}
+
+fn walk_directory(mut directory: File, relative: &Path) -> Result<File, LedgerError> {
     trusted_directory(&directory)?;
-    for component in path.components() {
+    for component in relative.components() {
         match component {
-            Component::RootDir => {}
             Component::Normal(name) => {
                 directory = open_at(
                     directory.as_raw_fd(),
@@ -1245,7 +1259,24 @@ mod tests {
         }
 
         fn ledger_with(&self, inventory: StorageInventory) -> Ledger {
-            Ledger::initialize(&self.path(), authority("policy-1"), inventory).unwrap()
+            self.initialize("ledger", inventory).unwrap()
+        }
+
+        fn initialize(
+            &self,
+            name: &str,
+            inventory: StorageInventory,
+        ) -> Result<Ledger, LedgerError> {
+            Ledger::initialize_in(
+                fixture_directory(&self.0, "")?,
+                OsStr::new(name),
+                authority("policy-1"),
+                inventory,
+            )
+        }
+
+        fn open(&self, name: &str) -> Result<Ledger, LedgerError> {
+            Ledger::open_in(fixture_directory(&self.0, name)?)
         }
 
         fn child(&self, mode: &str) {
@@ -1256,7 +1287,7 @@ mod tests {
                     "--ignored",
                     "--nocapture",
                 ])
-                .env("TENTAFLAKE_LEDGER_TEST_PATH", self.path())
+                .env("TENTAFLAKE_LEDGER_TEST_ROOT", &self.0)
                 .env("TENTAFLAKE_LEDGER_TEST_MODE", mode)
                 .output()
                 .unwrap();
@@ -1267,6 +1298,18 @@ mod tests {
                 String::from_utf8_lossy(&output.stderr)
             );
         }
+    }
+
+    fn fixture_directory(root: &Path, relative: &str) -> Result<File, LedgerError> {
+        // The Nix build namespace can map / to an unowned overflow UID. Anchor
+        // filesystem tests at their explicit private directory, then exercise
+        // exactly the production traversal and ownership checks beneath it.
+        let directory = open_at(
+            libc::AT_FDCWD,
+            root.as_os_str(),
+            libc::O_RDONLY | libc::O_DIRECTORY,
+        )?;
+        walk_directory(directory, Path::new(relative))
     }
 
     impl Drop for Fixture {
@@ -1464,26 +1507,27 @@ mod tests {
     #[test]
     #[ignore = "subprocess fixture; invoked by filesystem tests"]
     fn subprocess_entry() {
-        let path = PathBuf::from(std::env::var_os("TENTAFLAKE_LEDGER_TEST_PATH").unwrap());
+        let root = PathBuf::from(std::env::var_os("TENTAFLAKE_LEDGER_TEST_ROOT").unwrap());
+        let open = || Ledger::open_in(fixture_directory(&root, "ledger")?);
         match std::env::var("TENTAFLAKE_LEDGER_TEST_MODE")
             .unwrap()
             .as_str()
         {
-            "busy" => assert!(matches!(Ledger::open(&path), Err(LedgerError::Busy))),
+            "busy" => assert!(matches!(open(), Err(LedgerError::Busy))),
             "crash" => {
-                let ledger = Ledger::open(&path).unwrap();
+                let ledger = open().unwrap();
                 let _permit = claim(&ledger, "a");
                 // No Rust destructor runs. The OS releases flock; the durable
                 // uncertain reservation must survive and prohibit redispatch.
                 std::process::exit(0);
             }
             "storage-crash" => {
-                let ledger = Ledger::open(&path).unwrap();
+                let ledger = open().unwrap();
                 let _permit = reserve(&ledger, "a");
                 std::process::exit(0);
             }
             "publication-crash" => {
-                let ledger = Ledger::open(&path).unwrap();
+                let ledger = open().unwrap();
                 let request = publication(&ledger, "publish-2", "policy-2");
                 assert!(matches!(
                     ledger.begin_publication(&request).unwrap(),
@@ -1492,7 +1536,7 @@ mod tests {
                 std::process::exit(0);
             }
             "storage-exhausted" => {
-                let ledger = Ledger::open(&path).unwrap();
+                let ledger = open().unwrap();
                 let (snapshot, request) = storage_context("b", ledger.snapshot().unwrap().revision);
                 let StorageClaimOutcome::Denied(decision) =
                     ledger.reserve_storage(&request, |_| Ok(snapshot)).unwrap()
@@ -1507,7 +1551,7 @@ mod tests {
                 );
             }
             mode @ ("write-failure" | "storage-write-failure" | "publication-write-failure") => {
-                let ledger = Ledger::open(&path).unwrap();
+                let ledger = open().unwrap();
                 let limit = libc::rlimit {
                     rlim_cur: 64,
                     rlim_max: 64,
@@ -1563,7 +1607,7 @@ mod tests {
         let receipt = permit.complete(Observation::Running).unwrap();
         assert_eq!(receipt.claimed_revision, 2);
         assert_eq!(receipt.updated_revision, 3);
-        let reopened = Ledger::open(&fixture.path()).unwrap();
+        let reopened = fixture.open("ledger").unwrap();
         assert_eq!(
             reopened.snapshot().unwrap().entries[0].state,
             ReservationState::Active
@@ -1792,7 +1836,7 @@ mod tests {
             panic!("new exact slots should not resize or release historical allocations");
         };
         permit.complete(Observation::Running).unwrap();
-        let current = Ledger::open(&fixture.path()).unwrap().snapshot().unwrap();
+        let current = fixture.open("ledger").unwrap().snapshot().unwrap();
         assert_eq!(current.entries[0].resources, resources(1));
         assert_eq!(current.storage, expected_storage);
         assert_eq!(
@@ -1943,11 +1987,7 @@ mod tests {
             StorageClaimOutcome::Denied(_)
         ));
         assert_eq!(
-            Ledger::open(&fixture.path())
-                .unwrap()
-                .snapshot()
-                .unwrap()
-                .storage,
+            fixture.open("ledger").unwrap().snapshot().unwrap().storage,
             expected
         );
     }
@@ -1958,14 +1998,14 @@ mod tests {
         let mut incomplete = inventory(&[]);
         incomplete.complete = false;
         assert!(matches!(
-            Ledger::initialize(&fixture.path(), authority("policy-1"), incomplete),
+            fixture.initialize("ledger", incomplete),
             Err(LedgerError::Invalid(_))
         ));
         assert!(!fixture.path().exists());
         let mut duplicate = inventory(&["a"]);
         duplicate.allocations.push(duplicate.allocations[0].clone());
         assert!(matches!(
-            Ledger::initialize(&fixture.path(), authority("policy-1"), duplicate),
+            fixture.initialize("ledger", duplicate),
             Err(LedgerError::Invalid(_))
         ));
         assert!(!fixture.path().exists());
@@ -2052,7 +2092,7 @@ mod tests {
         let provision = reserve(&ledger, "b").receipt().clone();
         let start = claim(&ledger, "a").receipt().clone();
         fixture.child("publication-crash");
-        let ledger = Ledger::open(&fixture.path()).unwrap();
+        let ledger = fixture.open("ledger").unwrap();
         let status = ledger.publication_status().unwrap();
         let pending = status.pending.unwrap();
         assert_eq!(status.published, authority("policy-1"));
@@ -2266,7 +2306,7 @@ mod tests {
             Err(LedgerError::StaleAuthority)
         ));
         assert_eq!(fs::read(fixture.path().join(STATE)).unwrap(), before);
-        let ledger = Ledger::open(&fixture.path()).unwrap();
+        let ledger = fixture.open("ledger").unwrap();
         assert!(ledger.publication_status().unwrap().pending.is_some());
         let cancelled = ledger
             .cancel_publication("publish-2", 2, |receipt, _| {
@@ -2454,14 +2494,14 @@ mod tests {
         state.published = authority("policy-3");
         fs::write(&path, serde_json::to_vec(&state).unwrap()).unwrap();
         assert!(matches!(
-            Ledger::open(&fixture.path()),
+            fixture.open("ledger"),
             Err(LedgerError::Invalid(_))
         ));
         let mut state: State = serde_json::from_slice(&bytes).unwrap();
         state.publications[0].request.candidate.generation = "other-epoch".into();
         fs::write(&path, serde_json::to_vec(&state).unwrap()).unwrap();
         assert!(matches!(
-            Ledger::open(&fixture.path()),
+            fixture.open("ledger"),
             Err(LedgerError::Invalid(_))
         ));
         let mut state: State = serde_json::from_slice(&bytes).unwrap();
@@ -2470,7 +2510,7 @@ mod tests {
             .resize(MAX_PUBLICATIONS + 1, state.publications[0].clone());
         fs::write(&path, serde_json::to_vec(&state).unwrap()).unwrap();
         assert!(matches!(
-            Ledger::open(&fixture.path()),
+            fixture.open("ledger"),
             Err(LedgerError::Invalid(_))
         ));
         fs::write(&path, bytes).unwrap();
@@ -2493,7 +2533,7 @@ mod tests {
         old["generation"] = serde_json::json!("authority-1");
         let old = serde_json::to_vec(&old).unwrap();
         fs::write(&path, &old).unwrap();
-        assert!(Ledger::open(&fixture.path()).is_err());
+        assert!(fixture.open("ledger").is_err());
         assert_eq!(fs::read(&path).unwrap(), old);
         fs::write(&path, b"{\"schemaVersion\":1}").unwrap();
         assert!(matches!(ledger.snapshot(), Err(LedgerError::Invalid(_))));
@@ -2506,10 +2546,8 @@ mod tests {
             .unwrap();
         assert!(matches!(ledger.snapshot(), Err(LedgerError::Full)));
         fs::remove_file(path).unwrap();
-        assert!(Ledger::open(&fixture.path()).is_err());
-        assert!(
-            Ledger::initialize(&fixture.path(), authority("policy-1"), inventory(&[])).is_err()
-        );
+        assert!(fixture.open("ledger").is_err());
+        assert!(fixture.initialize("ledger", inventory(&[])).is_err());
     }
 
     #[test]
@@ -2531,12 +2569,54 @@ mod tests {
         fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
         let alias = fixture.0.join("alias");
         symlink(fixture.path(), &alias).unwrap();
-        assert!(Ledger::open(&alias).is_err());
+        assert!(fixture.open("alias").is_err());
         fs::set_permissions(fixture.path(), fs::Permissions::from_mode(0o755)).unwrap();
         assert!(matches!(
-            Ledger::open(&fixture.path()),
+            fixture.open("ledger"),
             Err(LedgerError::Invalid(_))
         ));
+    }
+
+    #[test]
+    fn public_api_still_checks_absolute_ancestry() {
+        let fixture = Fixture::new();
+        let _ledger = fixture.ledger();
+        assert!(Ledger::open(Path::new("ledger")).is_err());
+        let public_path = fixture.0.join("public-ledger");
+        let root_uid = fs::metadata("/").unwrap().uid();
+        if root_uid != 0 && root_uid != unsafe { libc::geteuid() } {
+            // In the actual Nix sandbox / belongs to an unmapped UID.
+            // A fixture anchor must not make the public API accept it.
+            assert!(matches!(
+                Ledger::open(&fixture.path()),
+                Err(LedgerError::Invalid("untrusted directory ancestry"))
+            ));
+            assert!(matches!(
+                Ledger::initialize(&public_path, authority("policy-1"), inventory(&[])),
+                Err(LedgerError::Invalid("untrusted directory ancestry"))
+            ));
+            assert!(!public_path.exists());
+        } else {
+            Ledger::initialize(&public_path, authority("policy-1"), inventory(&[])).unwrap();
+            assert!(Ledger::open(&public_path).is_ok());
+        }
+    }
+
+    #[test]
+    fn anchored_traversal_checks_descendants_and_rejects_escape() {
+        let fixture = Fixture::new();
+        let child = fixture.0.join("child");
+        DirBuilder::new().mode(0o700).create(&child).unwrap();
+        assert!(fixture_directory(&fixture.0, "child").is_ok());
+        fs::set_permissions(&child, fs::Permissions::from_mode(0o777)).unwrap();
+        assert!(matches!(
+            fixture_directory(&fixture.0, "child"),
+            Err(LedgerError::Invalid("untrusted directory ancestry"))
+        ));
+        fs::set_permissions(&child, fs::Permissions::from_mode(0o700)).unwrap();
+        for escape in ["..", "child/../ledger", "/"] {
+            assert!(fixture_directory(&fixture.0, escape).is_err());
+        }
     }
 
     #[test]
@@ -2545,15 +2625,11 @@ mod tests {
         let _ledger = fixture.ledger();
         fs::set_permissions(&fixture.0, fs::Permissions::from_mode(0o777)).unwrap();
         assert!(matches!(
-            Ledger::open(&fixture.path()),
+            fixture.open("ledger"),
             Err(LedgerError::Invalid(_))
         ));
         assert!(matches!(
-            Ledger::initialize(
-                &fixture.0.join("second"),
-                authority("policy-1"),
-                inventory(&[])
-            ),
+            fixture.initialize("second", inventory(&[])),
             Err(LedgerError::Invalid(_))
         ));
         assert!(!fixture.0.join("second").exists());
@@ -2562,12 +2638,12 @@ mod tests {
             let directory = File::open(&fixture.0).unwrap();
             assert_eq!(unsafe { libc::fchown(directory.as_raw_fd(), 65534, !0) }, 0);
             assert!(matches!(
-                Ledger::open(&fixture.path()),
+                fixture.open("ledger"),
                 Err(LedgerError::Invalid(_))
             ));
             assert_eq!(unsafe { libc::fchown(directory.as_raw_fd(), 0, !0) }, 0);
         }
-        assert!(Ledger::open(&fixture.path()).is_ok());
+        assert!(fixture.open("ledger").is_ok());
     }
 
     #[test]

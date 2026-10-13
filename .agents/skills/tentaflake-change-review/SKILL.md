@@ -1,7 +1,7 @@
 ---
 name: tentaflake-change-review
 description: Review a Tentaflake change for a concrete requirement, proportionate verification, synchronized docs and a complete PR.
-version: 1.1.1
+version: 1.1.2
 ---
 
 # Tentaflake change review
@@ -33,6 +33,13 @@ evidence for the current revision. A skipped build is not runtime acceptance.
 See [build boundaries](../../../docs/17-builds.md) for affected workflow dispatch.
 Full `just ci`/`just e2e`, VM, ISO and system builds are larger workloads.
 Evaluation does not prove runtime behavior or authorize activation.
+
+For filesystem ownership tests, obtain the focused Nix package test result as
+well as Cargo evidence. A real sandbox mapped `/` to an unowned overflow UID;
+host Cargo tests passed while the package tests failed. Anchor private fixtures
+at checked directory descriptors, retain descendant ownership/mode checks, and
+independently assert that the public absolute-path API still refuses foreign
+root ownership. Never relax production ownership policy to fit a sandbox.
 
 - Keep the template generic and secret-free; deployment policy belongs in forks.
 - Preserve identified consumers and state. Document intentional API changes and
