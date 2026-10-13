@@ -73,6 +73,12 @@
       ];
       environment.etc."tentaflake/stale-admission.json".source =
         pkgs.writeText "tentaflake-stale-admission.json" config.tentaflake.admissionManifest.text;
+      # A genuine installed generation, changing capacity without resizing or
+      # rebinding any image. The base generation keeps its overbudget fixture.
+      specialisation.publication.configuration.tentaflake.security.admission.capacity = {
+        workspaceBytes = lib.mkForce 268435456;
+        stateBytes = lib.mkForce 268435456;
+      };
 
       tentaflake = {
         hostName = "storage-host";
@@ -298,6 +304,125 @@
         start_storage_workspace()
         stop_storage_units()
         assert storage.succeed("docker ps --all --quiet").strip() == ""
+
+    base_system = storage.succeed("readlink -f /run/current-system").strip()
+    candidate_system = storage.succeed("readlink -f " + shlex.quote(base_system + "/specialisation/publication")).strip()
+    candidate_plan = storage.succeed("readlink -f " + shlex.quote(candidate_system + "/etc/tentaflake/admission.json")).strip()
+    candidate_manifest = json.loads(storage.succeed("cat " + shlex.quote(candidate_plan)))
+    assert candidate_manifest["policy"]["generation"] == storage_manifest["policy"]["generation"]
+    assert candidate_manifest["policy"]["revision"] != storage_manifest["policy"]["revision"]
+    assert candidate_manifest["instances"] == storage_manifest["instances"]
+    assert [volume["spec"] for volume in candidate_manifest["volumes"]] == [volume["spec"] for volume in storage_manifest["volumes"]]
+
+    def publication(action, *arguments, success=True):
+        command = shlex.join(["tentaflake", "admission", "publication", action, *map(str, arguments)])
+        if not success:
+            return storage.fail(command)
+        return json.loads(storage.succeed(command))
+
+    def install_storage_generation(system, plan):
+        # NixOS may try wanted quota units during activation. Pending must refuse
+        # those starts; exit 4 is accepted only for these expected failed units.
+        code, output = storage.execute(shlex.quote(system + "/bin/switch-to-configuration") + " test")
+        assert code in (0, 4), (code, output)
+        failed = storage.succeed("systemctl list-units --state=failed --no-legend --plain").splitlines()
+        failed_names = {line.split()[0] for line in failed if line.strip()}
+        assert failed_names.issubset(set(storage_units)), (failed_names, output)
+        assert code == 0 or failed_names, output
+        assert storage.succeed("readlink -f /run/current-system").strip() == system
+        assert storage.succeed("readlink -f /etc/tentaflake/admission.json").strip() == plan
+        storage.succeed("systemctl daemon-reload")
+        stop_storage_units()
+        for unit in storage_units:
+            assert plan in storage.succeed("systemctl show --value --property=ExecStart " + shlex.quote(unit))
+
+    with subtest("publication requires quiescence and retains Pending until exact installation"):
+        stable = publication("status")
+        assert stable["published"]["manifestPath"] == storage_plan and stable["pending"] is None
+        start_storage_workspace()
+        publication("begin", candidate_plan, "publish-capacity", stable["ledgerRevision"], success=False)
+        assert publication("status") == stable
+        stop_storage_units()
+        publication("begin", candidate_plan, "publish-capacity", stable["ledgerRevision"] - 1, success=False)
+        assert publication("status") == stable
+        begun = publication("begin", candidate_plan, "publish-capacity", stable["ledgerRevision"])
+        assert begun["outcome"] == "pending"
+        pending = publication("status")
+        assert pending["pending"] == begun and pending["published"] == stable["published"]
+        assert pending["ledgerRevision"] == stable["ledgerRevision"] + 1
+        assert publication("begin", candidate_plan, "publish-capacity", stable["ledgerRevision"]) == begun
+        publication("finish", "publish-capacity", stable["ledgerRevision"], success=False)
+        publication("finish", "publish-capacity", pending["ledgerRevision"], success=False)
+        assert publication("status") == pending
+        storage.fail("systemctl start " + shlex.quote(storage_workspace["units"]["owner"]))
+        stop_storage_units()
+        assert publication("status") == pending
+        assert storage_snapshot()["storage"] == charged["storage"]
+        install_storage_generation(candidate_system, candidate_plan)
+        assert publication("status") == pending
+        finished = publication("finish", "publish-capacity", pending["ledgerRevision"])
+        assert finished["outcome"] == "published"
+        published = publication("status")
+        assert published["pending"] is None and published["published"]["manifestPath"] == candidate_plan
+        assert published["ledgerRevision"] == pending["ledgerRevision"] + 1
+        assert publication("finish", "publish-capacity", pending["ledgerRevision"]) == finished
+        assert publication("begin", candidate_plan, "publish-capacity", stable["ledgerRevision"]) == finished
+        assert publication("status") == published
+        for volume in (storage_state, storage_workspace):
+            storage.fail("findmnt --mountpoint " + shlex.quote(volume["spec"]["mountPath"]))
+        start_storage_workspace()
+        for volume in (storage_state, storage_workspace):
+            assert image_identity(volume) == identities[volume["spec"]["allocationId"]]
+            assert storage.succeed("cat " + shlex.quote(volume["spec"]["mountPath"] + "/marker")).strip() == "persistent"
+        stop_storage_units()
+        assert storage_snapshot()["storage"] == charged["storage"]
+
+    with subtest("publication cancellation requires the old generation restored"):
+        begun = publication("begin", storage_plan, "rollback-capacity", published["ledgerRevision"])
+        pending = publication("status")
+        assert pending["pending"] == begun
+        install_storage_generation(base_system, storage_plan)
+        publication("cancel", "rollback-capacity", pending["ledgerRevision"], success=False)
+        assert publication("status") == pending
+        install_storage_generation(candidate_system, candidate_plan)
+        publication("cancel", "rollback-capacity", pending["ledgerRevision"] - 1, success=False)
+        cancelled = publication("cancel", "rollback-capacity", pending["ledgerRevision"])
+        assert cancelled["outcome"] == "cancelled"
+        restored = publication("status")
+        assert restored["pending"] is None and restored["published"] == published["published"]
+        assert publication("cancel", "rollback-capacity", pending["ledgerRevision"]) == cancelled
+        publication("finish", "rollback-capacity", pending["ledgerRevision"], success=False)
+        assert publication("status") == restored
+        for volume in (storage_state, storage_workspace):
+            storage.fail("findmnt --mountpoint " + shlex.quote(volume["spec"]["mountPath"]))
+        start_storage_workspace()
+        for volume in (storage_state, storage_workspace):
+            assert image_identity(volume) == identities[volume["spec"]["allocationId"]]
+        stop_storage_units()
+
+    with subtest("a real failed creation retains Unknown and prevents publication begin"):
+        # This slot now fits the increased capacity. Its immutable create helper
+        # must refuse existing target data after the guarded durable claim.
+        unused_state = storage_volumes["state:generic-overbudget"]
+        obstacle = unused_state["spec"]["mountPath"] + "/publication-obstacle"
+        storage.succeed("printf preserved > " + shlex.quote(obstacle))
+        try:
+            storage.fail("systemctl start " + shlex.quote(unused_state["units"]["owner"]))
+            stop_storage_units()
+            allocations = [receipt["allocation"] for receipt in storage_snapshot()["storage"]]
+            unknown = [allocation for allocation in allocations if allocation["id"] == unused_state["spec"]["allocationId"]]
+            assert len(unknown) == 1 and unknown[0]["state"] == "unknown", allocations
+            assert unknown[0]["bytes"] == unused_state["spec"]["bytes"]
+            assert_storage_absent(unused_state)
+            assert storage.succeed("cat " + shlex.quote(obstacle)).strip() == "preserved"
+            uncertain = publication("status")
+            uncertain_ledger = storage_snapshot()
+            error = publication("begin", storage_plan, "unknown-refused", uncertain["ledgerRevision"], success=False)
+            assert "publication requires retained runtime claims and Present storage; recover uncertain state before beginning" in error
+            assert publication("status") == uncertain and uncertain["pending"] is None
+            assert storage_snapshot() == uncertain_ledger
+        finally:
+            storage.succeed("rm -- " + shlex.quote(obstacle))
     storage.shutdown()
   '';
 }

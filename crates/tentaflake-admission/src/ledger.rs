@@ -320,6 +320,19 @@ impl Ledger {
         })
     }
 
+    /// Historical receipt only; lookup never resumes installation or dispatch.
+    pub fn publication_receipt(
+        &self,
+        operation_id: &str,
+    ) -> Result<Option<PublicationReceipt>, LedgerError> {
+        let _lock = self.lock(false)?;
+        Ok(self
+            .read()?
+            .publications
+            .into_iter()
+            .find(|receipt| receipt.request.operation_id == operation_id))
+    }
+
     /// Begin an authenticated host publication, not an agent-owned operation.
     /// Persist Pending before stopping/draining/installing outside the lock.
     /// Reopening or retrying never cancels a transition or repeats that work.
@@ -2219,6 +2232,26 @@ mod tests {
             panic!("historical retry")
         };
         assert_eq!(historical, finished);
+        let reopened = Ledger::open(&fixture.path()).unwrap();
+        assert_eq!(
+            reopened.publication_receipt("publish-2").unwrap(),
+            Some(finished)
+        );
+        assert!(
+            reopened
+                .publication_receipt("never-begun")
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(
+            reopened
+                .publication_status()
+                .unwrap()
+                .pending
+                .unwrap()
+                .request,
+            second
+        );
         assert!(matches!(
             ledger.finish_publication("publish-2", begun.updated_revision + 1, |_, _| panic!(
                 "changed retry"

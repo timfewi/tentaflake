@@ -11,6 +11,9 @@ const MAX_SNAPSHOT_BYTES: u64 = 4 * 1024 * 1024;
 
 pub(crate) fn run(args: &[String], mode: OutputMode) -> Result<u8, String> {
     match args {
+        [command, rest @ ..] if command == "publication" => {
+            return crate::admission_publication::run(rest, mode);
+        }
         [command, file] if command == "bootstrap" => {
             return crate::admission_runtime::bootstrap(Path::new(file));
         }

@@ -106,8 +106,24 @@ passes, including exact stopped Research requests and unsupported capability
 refusal. Replacement CI is pending. Keep dependent PRs open until their
 relevant runtime checks pass at the reviewed revision.
 
-Next: complete storage verification, then host policy-publication orchestration,
-aggregate OCI startup/stop accounting, live capability collectors and the
+Storage runtime is prepared in draft [PR #164](https://github.com/timfewi/tentaflake/pull/164).
+The next slice adds root-only `admission publication status|begin|finish|cancel`.
+Begin requires stopped workloads and certain retained claims before durable
+Pending. Installation remains an explicit operator action. Finish/cancel inspect
+the desired installed plan and both generations' complete unit/path inventory
+under the host fence and ledger lock. Historical retries return receipts without
+reopening candidate artifacts or repeating observations. No charges are released.
+The existing storage VM now includes a genuine NixOS specialisation, activation,
+rollback/cancel, retained-image checks and a real Unknown-claim refusal.
+
+Publication verification: `just fast` passed, followed by focused CLI Clippy and
+publication tests after the final retry change. The integration VM derivation
+and its rendered Python script validate; the VM has not run. Independent source
+reviews found no further blocker. Changed owners are the CLI publication/host
+observer, the ledger receipt query, the storage VM and their operator guidance.
+
+Next: complete storage/publication runtime verification, then automated host
+installation, aggregate OCI startup/stop accounting, live capability collectors and the
 authenticated dynamic host API. Pinned image acquisition, the first real coding
 agent, strict guest-kernel execution and the private VPS deployment remain in
 scope. Publication APIs still require trusted drain/install/fence proof; library

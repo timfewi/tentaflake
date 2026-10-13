@@ -186,10 +186,51 @@ tentaflake admission storage-recover "$(readlink -f /etc/tentaflake/admission.js
 
 Recovery only records a verified existing image as Present. It never recreates,
 resizes, deletes, rebinds or releases storage. Preserve partial files for explicit
-repair. Changing the admission manifest currently blocks new starts until host
-publication orchestration is implemented; never reset existing authority as a
-workaround. This storage path does not yet account for aggregate OCI compute or
+repair. A changed admission manifest blocks new starts until explicitly
+published; never reset existing authority as a workaround. This storage path
+does not yet account for aggregate OCI compute or
 establish model, Research, strict-kernel or vendor acceptance.
+
+### Changing the published host plan
+
+The root-only publication commands support an explicit maintenance window.
+They never build or activate a NixOS configuration, stop workloads, change
+storage bindings or release charges. Build and review the candidate configuration
+first; its generated immutable admission plan must keep the same authority epoch.
+
+1. Stop all Docker workloads and quota services, detach loop devices, and resolve
+   uncertain ledger claims. Begin requires every storage row Present and runtime
+   claim Retained. Keep the original configuration available for recovery.
+2. Run `tentaflake admission publication status` and record `ledgerRevision` and
+   the original published plan. Run
+   `tentaflake admission publication begin <candidate-store-plan> <operation-id> <ledgerRevision>`.
+   The receipt records Pending before installation. New quota starts remain
+   blocked, including restarts under the original configuration.
+3. Explicitly install the reviewed candidate configuration and reload systemd.
+   Keep quota services and Docker workloads stopped. Removed quota services,
+   legacy prepare services and native mount units from either plan must remain
+   masked and drained; an absent or uninspectable unit is not accepted as proof.
+4. Read the current status and run
+   `tentaflake admission publication finish <operation-id> <ledgerRevision>`.
+   Finish verifies the exact installed candidate, stopped guarded services,
+   both plans' unit and mount-path inventories, idle Docker and detached loops
+   while holding the host fence. Only then can guarded starts use the new plan.
+
+An interrupted installation or failed observation leaves Pending intact. To
+abandon the change, explicitly restore the original configuration and unit masks,
+reload systemd, keep workloads stopped, then run
+`tentaflake admission publication cancel <operation-id> <ledgerRevision>` using
+the current status revision. Cancel requires the original plan installed and
+checks both plans' mutators; it never performs rollback itself. Do not delete the
+ledger, rotate its epoch or infer cancellation from an exit code or timeout.
+
+For an identical retry, keep the original arguments, including the revision used
+for that command. A terminal receipt is historical: retries do not reinstall,
+drain, reobserve or acquire new authority. Reusing an operation ID with another
+candidate or revision conflicts. Status and receipts are JSON; `--hide` redacts
+operation and authority identifiers. Publication retains every storage charge,
+including allocations removed from the candidate. Lower limits can therefore
+refuse later starts without discarding existing accounting.
 
 ## Existing workspace migration
 

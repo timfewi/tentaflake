@@ -19,7 +19,7 @@ use tentaflake_admission::{
     StorageAdmissionSnapshot, StorageAllocation, StorageRequest, StorageState,
 };
 
-const LEDGER: &str = "/var/lib/tentaflake-admission";
+pub(crate) const LEDGER: &str = "/var/lib/tentaflake-admission";
 const INSTALLED: &str = "/etc/tentaflake/admission.json";
 const MAX_OBSERVATION: usize = 1024 * 1024;
 
@@ -38,7 +38,7 @@ impl Action {
     }
 }
 
-fn require_root() -> Result<(), String> {
+pub(crate) fn require_root() -> Result<(), String> {
     if unsafe { libc::geteuid() } != 0 {
         return Err("host admission requires root".into());
     }
@@ -52,7 +52,7 @@ fn require_root() -> Result<(), String> {
     Ok(())
 }
 
-fn installed(path: &Path) -> Result<(), String> {
+pub(crate) fn installed(path: &Path) -> Result<(), String> {
     for parent in ["/etc", "/etc/tentaflake"] {
         let metadata =
             fs::symlink_metadata(parent).map_err(|_| "cannot inspect installed plan directory")?;
@@ -84,7 +84,7 @@ fn installed(path: &Path) -> Result<(), String> {
     Ok(())
 }
 
-fn authority(plan: &HostPlan, path: &Path) -> PublishedAuthority {
+pub(crate) fn authority(plan: &HostPlan, path: &Path) -> PublishedAuthority {
     PublishedAuthority {
         generation: plan.policy.generation.clone(),
         revision: plan.policy.revision.clone(),
@@ -359,40 +359,63 @@ fn stopped(observed: &UnitObservation) -> bool {
         })
 }
 
-fn offline_units(plan: &HostPlan, path: &Path) -> Result<(), String> {
-    let mut expected = BTreeSet::new();
-    for volume in &plan.volumes {
-        let owner = admission_systemd::load_unit(&plan.tools.busctl, &volume.units.owner)?;
-        if !guarded_unit(&owner, plan, path, volume) || !stopped(&owner) {
+fn quota_unit_names(plan: &HostPlan, other: Option<&HostPlan>) -> BTreeSet<String> {
+    plan.volumes
+        .iter()
+        .chain(other.into_iter().flat_map(|plan| &plan.volumes))
+        .flat_map(|volume| {
+            [
+                &volume.units.owner,
+                &volume.units.prepare,
+                &volume.units.mount,
+            ]
+        })
+        .cloned()
+        .collect()
+}
+
+fn offline_quota_unit(
+    observed: &UnitObservation,
+    plan: &HostPlan,
+    path: &Path,
+) -> Result<(), String> {
+    if let Some(volume) = plan
+        .volumes
+        .iter()
+        .find(|volume| volume.units.owner == observed.id)
+    {
+        // The same owner name can exist in both generations. Only the desired
+        // plan's exact commands may remain loaded after installation/reload.
+        if !guarded_unit(observed, plan, path, volume) || !stopped(observed) {
             return Err(
                 "quota supervisors must be stopped with the exact guarded plan loaded".into(),
             );
         }
-        expected.insert(volume.units.owner.as_str());
-        expected.insert(volume.units.prepare.as_str());
-        for name in [&volume.units.prepare, &volume.units.mount] {
-            let observed = admission_systemd::load_unit(&plan.tools.busctl, name)?;
-            if observed.load_state != "masked" || !stopped(&observed) {
-                return Err(
-                    "legacy quota prepare and mount units must be masked and drained".into(),
-                );
-            }
-        }
+    } else if observed.load_state != "masked" || !stopped(observed) {
+        return Err("legacy or removed quota units must be masked and drained".into());
     }
-    for name in admission_systemd::list_quota_units(&plan.tools.busctl)? {
-        if !expected.contains(name.as_str()) {
-            let observed = admission_systemd::load_unit(&plan.tools.busctl, &name)?;
-            if observed.load_state != "masked" || !stopped(&observed) {
-                return Err("an undeclared legacy quota unit remains available; explicit migration is required".into());
-            }
-        }
+    Ok(())
+}
+
+/// Observe the desired installed plan and fence remnants of either generation.
+/// Callers hold the outer fence; these observations never stop or mask units.
+pub(crate) fn offline_units(
+    plan: &HostPlan,
+    path: &Path,
+    other: Option<&HostPlan>,
+) -> Result<(), String> {
+    let mut names = quota_unit_names(plan, other);
+    names.extend(admission_systemd::list_quota_units(&plan.tools.busctl)?);
+    for name in names {
+        let observed = admission_systemd::load_unit(&plan.tools.busctl, &name)?;
+        offline_quota_unit(&observed, plan, path)?;
     }
     // Removed definitions can leave a native mount job whose prepare dependency
     // already completed. Inspect all available mount units, including unloaded
     // files, rather than inferring their absence from the new plan.
     for name in admission_systemd::list_mount_units(&plan.tools.busctl)? {
         let observed = admission_systemd::load_unit(&plan.tools.busctl, &name)?;
-        maintenance_mount(&observed, plan)?;
+        maintenance_mount(&observed, plan, other)?;
     }
     Ok(())
 }
@@ -401,7 +424,11 @@ fn overlaps(left: &Path, right: &Path) -> bool {
     left.starts_with(right) || right.starts_with(left)
 }
 
-fn maintenance_mount(observed: &UnitObservation, plan: &HostPlan) -> Result<(), String> {
+fn maintenance_mount(
+    observed: &UnitObservation,
+    plan: &HostPlan,
+    other: Option<&HostPlan>,
+) -> Result<(), String> {
     if observed.load_state == "masked" && stopped(observed) {
         return Ok(());
     }
@@ -426,11 +453,13 @@ fn maintenance_mount(observed: &UnitObservation, plan: &HostPlan) -> Result<(), 
             || plan
                 .volumes
                 .iter()
+                .chain(other.into_iter().flat_map(|plan| &plan.volumes))
                 .any(|volume| overlaps(target, &volume.spec.mount_path))))
         || (active
             && plan
                 .volumes
                 .iter()
+                .chain(other.into_iter().flat_map(|plan| &plan.volumes))
                 .any(|volume| target.starts_with(&volume.spec.mount_path)))
     {
         return Err("a native mount can cover managed storage during maintenance".into());
@@ -492,7 +521,7 @@ fn no_backing_loops(bytes: &[u8]) -> Result<(), String> {
     Ok(())
 }
 
-fn offline_workloads(plan: &HostPlan) -> Result<(), String> {
+pub(crate) fn offline_workloads(plan: &HostPlan) -> Result<(), String> {
     // First bootstrap is a maintenance operation. Do not stop an unrelated
     // workload or infer that an uninspectable daemon means no containers.
     if !observe(
@@ -535,7 +564,7 @@ pub(crate) fn bootstrap(path: &Path) -> Result<u8, String> {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
         _ => return Err("bootstrap requires a genuinely absent ledger; never delete an existing ledger to retry".into()),
     }
-    offline_units(&plan, path)?;
+    offline_units(&plan, path, None)?;
     offline_workloads(&plan)?;
     ensure_backing_roots()?;
     let mut inventory = scan_inventory(&specs(&plan))?;
@@ -553,7 +582,7 @@ pub(crate) fn bootstrap(path: &Path) -> Result<u8, String> {
         }
     }
     installed(path)?;
-    offline_units(&plan, path)?;
+    offline_units(&plan, path, None)?;
     offline_workloads(&plan)?;
     // Only this fenced path may assert completeness. Diagnostic inventory never
     // supplies this flag, and callers cannot submit an inventory JSON file.
@@ -570,7 +599,7 @@ pub(crate) fn recover(path: &Path, id: &str) -> Result<u8, String> {
     let volume = volume(&plan, id)?;
     let _fence = admission_fence::exclusive()?;
     installed(path)?;
-    offline_units(&plan, path)?;
+    offline_units(&plan, path, None)?;
     offline_workloads(&plan)?;
     let ledger = Ledger::open(Path::new(LEDGER)).map_err(|_| "admission ledger unavailable")?;
     let snapshot = ledger
@@ -764,6 +793,120 @@ mod tests {
         assert!(!stopped(&unit));
     }
 
+    fn stopped_fixture() -> (HostPlan, UnitObservation) {
+        let (plan, mut unit) = fixture();
+        unit.active_state = "inactive".into();
+        unit.sub_state = "dead".into();
+        unit.job = UnitJob {
+            id: 0,
+            path: "/".into(),
+        };
+        let service = unit.service.as_mut().unwrap();
+        service.main_pid = 0;
+        service.control_pid = 0;
+        service.control_group.clear();
+        (plan, unit)
+    }
+
+    #[test]
+    fn publication_shared_owner_requires_only_the_desired_generation_commands() {
+        let (old, mut unit) = stopped_fixture();
+        let (desired, _) = fixture();
+        let old_path = Path::new("/nix/store/00000000000000000000000000000000-plan");
+        let desired_path = Path::new("/nix/store/00000000000000000000000000000000-candidate");
+        assert!(offline_quota_unit(&unit, &old, old_path).is_ok());
+        assert!(offline_quota_unit(&unit, &desired, desired_path).is_err());
+        let service = unit.service.as_mut().unwrap();
+        service.exec_start[0].argv[3] = desired_path.to_string_lossy().into_owned();
+        // Reloading only one command does not establish the desired lifecycle.
+        assert!(offline_quota_unit(&unit, &desired, desired_path).is_err());
+        unit.service.as_mut().unwrap().exec_stop[0].argv[3] =
+            desired_path.to_string_lossy().into_owned();
+        assert!(offline_quota_unit(&unit, &desired, desired_path).is_ok());
+        assert!(offline_quota_unit(&unit, &old, old_path).is_err());
+        assert_eq!(
+            quota_unit_names(&desired, Some(&old)),
+            quota_unit_names(&desired, None)
+        );
+        unit.need_daemon_reload = true;
+        assert!(offline_quota_unit(&unit, &desired, desired_path).is_err());
+    }
+
+    #[test]
+    fn publication_removed_units_require_masks_and_complete_drain() {
+        let (old, unit) = stopped_fixture();
+        let (mut desired, _) = fixture();
+        desired.volumes.remove(0);
+        let path = Path::new("/nix/store/00000000000000000000000000000000-plan");
+        let names = quota_unit_names(&desired, Some(&old));
+        let removed = &old.volumes[0].units;
+        for name in [&removed.owner, &removed.prepare, &removed.mount] {
+            assert!(names.contains(name));
+            let mut removed_unit = unit.clone();
+            removed_unit.id = name.clone();
+            // An idle legacy definition can be started again until masked.
+            assert!(offline_quota_unit(&removed_unit, &desired, path).is_err());
+            removed_unit.load_state = "masked".into();
+            assert!(offline_quota_unit(&removed_unit, &desired, path).is_ok());
+            for mutate in [
+                |unit: &mut UnitObservation| unit.load_state = "not-found".into(),
+                |unit: &mut UnitObservation| unit.job.id = 9,
+                |unit: &mut UnitObservation| unit.active_state = "deactivating".into(),
+                |unit: &mut UnitObservation| unit.need_daemon_reload = true,
+                |unit: &mut UnitObservation| unit.service.as_mut().unwrap().main_pid = 41,
+                |unit: &mut UnitObservation| unit.service.as_mut().unwrap().control_pid = 42,
+                |unit: &mut UnitObservation| {
+                    unit.service.as_mut().unwrap().control_group =
+                        "/system.slice/remaining.service".into()
+                },
+            ] {
+                let mut changed = removed_unit.clone();
+                mutate(&mut changed);
+                assert!(offline_quota_unit(&changed, &desired, path).is_err());
+            }
+        }
+    }
+
+    #[test]
+    fn publication_mount_inventory_covers_removed_and_desired_paths() {
+        let (old, mut unit) = stopped_fixture();
+        let (mut desired, _) = fixture();
+        for volume in &mut desired.volumes {
+            volume.spec.mount_path =
+                Path::new("/var/lib/replacement").join(&volume.spec.allocation_id);
+        }
+        unit.id = "fixture.mount".into();
+        unit.service = None;
+        unit.mount = Some(crate::admission_systemd::MountObservation {
+            what: "tmpfs".into(),
+            where_path: old.volumes[0]
+                .spec
+                .mount_path
+                .to_string_lossy()
+                .into_owned(),
+            filesystem_type: "tmpfs".into(),
+        });
+        for (active_state, sub_state) in [("active", "mounted"), ("inactive", "dead")] {
+            unit.active_state = active_state.into();
+            unit.sub_state = sub_state.into();
+            // The former mount is outside the new plan, but still part of the
+            // transition's protected paths even when no old unit file remains.
+            assert!(maintenance_mount(&unit, &desired, None).is_ok());
+            assert!(maintenance_mount(&unit, &desired, Some(&old)).is_err());
+        }
+        unit.mount.as_mut().unwrap().where_path = desired.volumes[0]
+            .spec
+            .mount_path
+            .to_string_lossy()
+            .into_owned();
+        assert!(maintenance_mount(&unit, &desired, Some(&old)).is_err());
+        unit.load_state = "masked".into();
+        unit.mount = None;
+        assert!(maintenance_mount(&unit, &desired, Some(&old)).is_ok());
+        unit.job.id = 9;
+        assert!(maintenance_mount(&unit, &desired, Some(&old)).is_err());
+    }
+
     #[test]
     fn bootstrap_loop_inventory_fails_closed_for_orphans_deleted_images_and_malformed_data() {
         assert!(no_backing_loops(br#"{"loopdevices":[]}"#).is_ok());
@@ -805,7 +948,7 @@ mod tests {
             where_path: "/run".into(),
             filesystem_type: "tmpfs".into(),
         });
-        assert!(maintenance_mount(&unit, &plan).is_ok());
+        assert!(maintenance_mount(&unit, &plan, None).is_ok());
         for mutate in [
             |unit: &mut UnitObservation| unit.job.id = 5,
             |unit: &mut UnitObservation| unit.active_state = "activating".into(),
@@ -829,15 +972,15 @@ mod tests {
         ] {
             let mut changed = unit.clone();
             mutate(&mut changed);
-            assert!(maintenance_mount(&changed, &plan).is_err());
+            assert!(maintenance_mount(&changed, &plan, None).is_err());
         }
         unit.mount.as_mut().unwrap().where_path = plan.volumes[0]
             .spec
             .mount_path
             .to_string_lossy()
             .into_owned();
-        assert!(maintenance_mount(&unit, &plan).is_err());
+        assert!(maintenance_mount(&unit, &plan, None).is_err());
         unit.mount.as_mut().unwrap().where_path = "/".into();
-        assert!(maintenance_mount(&unit, &plan).is_ok());
+        assert!(maintenance_mount(&unit, &plan, None).is_ok());
     }
 }

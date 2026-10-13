@@ -138,8 +138,12 @@ are already published or require access to another repository for public checks.
   the exact systemd invocation, host mount namespace and inherited exclusive
   fence through helper lifetimes. Full logical image charges plus explicit
   headroom must fit current shared-pool free bytes before new creation; this
-  reserves no physical extents. OCI aggregate gating and host publication
-  orchestration remain unfinished. See `docs/14-workspace-quota.md`.
+  reserves no physical extents. Explicit publication begin requires stopped
+  workloads, Retained compute and Present storage before persisting Pending.
+  Finish/cancel observe both plans' unit/path union under the fence; identical
+  terminal retries return history without repeating observations or installation.
+  Installation remains an explicit operator action. OCI aggregate gating and
+  automated host orchestration remain unfinished. See `docs/14-workspace-quota.md`.
 - CLI help is configuration-free; management commands require generated
   host configuration and inventory.
 - `api/v1/openapi.json` owns the host API wire contract; clients consume its

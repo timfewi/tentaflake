@@ -168,8 +168,11 @@ runtime reservations, Present storage, the exact installed candidate and a
 trusted callback proving both plans' mutators are fenced. Explicit
 `cancel_publication` requires the original plan restored with the same fence.
 Failed observations leave Pending; restart does not cancel it or discard Unknown
-charges. Terminal retries return receipts without replaying callbacks. These are library
-transitions: the host still has to implement draining, installation and fencing.
+charges. Terminal retries return receipts without replaying callbacks. The
+root-only [operator publication protocol](14-workspace-quota.md#changing-the-published-host-plan)
+implements the live installation and mutator observations. It requires an
+already stopped host before beginning; configuration installation remains an
+explicit operator action, with Pending retained across failures.
 
 `with_present_storage` holds the same lock through a current-authority check and
 a bounded verification/ownership callback on an existing Present allocation.
@@ -194,8 +197,8 @@ managed backing images and an idle Docker backend before importing inventory.
 The root-only
 [`admission inventory` diagnostic](14-workspace-quota.md#read-only-admission-inventory)
 always reports `complete: false`; its output cannot bootstrap the ledger.
-Mandatory OCI startup/stop accounting, live capability collectors, policy
-publication orchestration and the HTTP service remain unfinished. Existing
+Mandatory OCI startup/stop accounting, live capability collectors, automated
+configuration installation and the HTTP service remain unfinished. Existing
 generic units retain their declarative capability/quota
 gates. A successful core decision or inventory scan does not establish runtime
 isolation, upstream model authorization or vendor acceptance.

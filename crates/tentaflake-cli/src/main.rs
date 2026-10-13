@@ -16,6 +16,7 @@ mod admission;
 mod admission_evidence;
 mod admission_fence;
 mod admission_host;
+mod admission_publication;
 mod admission_runtime;
 mod admission_storage;
 mod admission_systemd;
@@ -2780,6 +2781,9 @@ fn print_help() {
            tentaflake admission inventory <generated-store-plan> [--hide]\n\
            tentaflake admission bootstrap <generated-store-plan>\n\
            tentaflake admission storage-recover <generated-store-plan> <allocation-id>\n\
+           tentaflake admission publication status [--hide]\n\
+           tentaflake admission publication begin <candidate-store-plan> <operation-id> <expected-ledger-revision>\n\
+           tentaflake admission publication finish|cancel <operation-id> <expected-ledger-revision>\n\
            tentaflake agent template <preset> <name> [--image <digest-reference> -- <command>...]\n\
            tentaflake agent validate|plan|import <file> [--json] [--hide]\n\
            tentaflake [status] [--hide] [--json]\n\

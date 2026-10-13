@@ -49,7 +49,10 @@ relevant source and guide. Avoid loading unrelated references.
   host mount namespace; preserve the inherited exclusive fence through helpers.
   Only stopped-host bootstrap establishes complete inventory. Root diagnostics
   remain incomplete/Unknown. Physical headroom is an admission-time shared-pool
-  check, not an extent reservation. OCI gating/publication remain unfinished.
+  check, not an extent reservation. Publication begin requires stopped workloads
+  and certain retained claims; finish/cancel inspect both plans' mutators under
+  the fence. Keep installation explicit and terminal retries historical.
+  OCI gating and automatic installation remain unfinished.
 - Base images select reviewed platform manifests, separate from native presets.
   Preserve raw metadata bytes and run `just image-catalog`. Acquisition is separate
   from Research; digest chains do not prove signatures or runtime acceptance.
