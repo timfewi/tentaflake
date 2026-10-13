@@ -29,6 +29,8 @@ features. This is planned work; the current support matrix below still applies.
 Discover presets with `tentaflake runtimes --json`. A digest-pinned image and
 command can use the [common isolated workload definition](docs/agent-adapters.md#generic-isolated-workload)
 without a new adapter; generic startup remains gated pending capability admission.
+The [base-image catalog](docs/20-base-images.md) selects reviewed Debian 13 and
+Ubuntu 26.04 LTS platform pins. Metadata checks do not establish runtime acceptance.
 
 ## Current scope
 

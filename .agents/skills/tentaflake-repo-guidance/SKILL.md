@@ -1,7 +1,7 @@
 ---
 name: tentaflake-repo-guidance
 description: Locate the owning source, guide and checks before changing Tentaflake modules, adapters, CLI or installer.
-version: 2.6.4
+version: 2.6.5
 ---
 
 # Tentaflake repository guidance
@@ -13,6 +13,7 @@ relevant source and guide. Avoid loading unrelated references.
 |---|---|---|
 | Host options and exports | `modules/options.nix`, `modules/default.nix`, `flake.nix` | [Quickstart](../../../docs/01-quickstart.md) |
 | Builders and contracts | `adapters/catalog.json`, `adapters/`, `lib/mkAgent.nix`, `lib/runtimeContract.nix` | [Adapters](../../../docs/agent-adapters.md) |
+| Base-image pins | `images/catalog.json`, `lib/baseImages.nix`, `scripts/test_image_catalog.py` | [Base images](../../../docs/20-base-images.md) |
 | Declarative input, onboarding and inventory | `configuration.nix`, `lib/agentsFromData.nix`, `lib/agentPlan.nix`, CLI onboarding | [Configuration](../../../docs/08-agent-cli.md) |
 | CLI and diagnostics | `crates/tentaflake-cli/`, `modules/shell.nix`, `modules/security.nix` | [CLI](../../../docs/06-shell.md) |
 | Private management | `modules/management.nix`, `modules/tailscale.nix`, versioned security manifest | [Management](../../../docs/11-tailscale-management.md) |
@@ -33,6 +34,9 @@ relevant source and guide. Avoid loading unrelated references.
   belong in forks. Settings, JSON and seed paths are Nix-store inputs.
 - Host API clients consume the shared schema. Run `just api-contract`; fixture
   validity does not establish backend availability, authority or live acceptance.
+- Base images select reviewed platform manifests, separate from native presets.
+  Preserve raw metadata bytes and run `just image-catalog`. Acquisition is separate
+  from Research; digest chains do not prove signatures or runtime acceptance.
 - Generate support facts with `python3 scripts/runtime-catalog-docs.py`;
   catalog declarations and source fixtures never prove vendor acceptance.
   Generic definitions reject extra authority and preserve current startup gates.

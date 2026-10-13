@@ -3,6 +3,10 @@
     "paths": ["api/**", "scripts/test_api_contract.py"],
     "checks": ["static"]
   },
+  "base-image-catalog": {
+    "paths": ["images/**", "scripts/test_image_catalog.py"],
+    "checks": ["static"]
+  },
   "research": {
     "paths": [
       "modules/research.nix",

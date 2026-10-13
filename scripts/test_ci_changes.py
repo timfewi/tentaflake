@@ -62,6 +62,12 @@ class CiSelection(unittest.TestCase):
         self.write("scripts/test_api_contract.py")
         self.assertEqual(select(self.base, self.commit(), self.repository), {"static"})
 
+    def test_base_image_metadata_changes_need_no_acquisition_or_vm(self):
+        self.write("images/catalog.json", "{}\n")
+        self.write("images/evidence/debian-13/index.json", "{}\n")
+        self.write("scripts/test_image_catalog.py")
+        self.assertEqual(select(self.base, self.commit(), self.repository), {"static"})
+
     def test_runtime_and_research_changes_select_only_their_suite(self):
         for name, expected in (("crates/tentaflake-worker/src/main.rs", {"runtime"}),
                                ("installer/installer.sh", {"runtime"}),
