@@ -51,7 +51,8 @@ pub fn scan_inventory(specs: &[VolumeSpec]) -> Result<StorageInventory, String> 
     if unsafe { libc::geteuid() } != 0 {
         return Err("quota inventory requires root".into());
     }
-    scan_at(specs, Path::new(VOLUME_ROOT), 0, false)
+    let root = Path::new(VOLUME_ROOT);
+    scan_at(specs, root, 0, || open_root(root, 0))
 }
 
 fn valid_slot_name(name: &str) -> bool {
@@ -154,50 +155,54 @@ fn metadata(file: &File) -> Result<Metadata, String> {
         .map_err(|_| "cannot inspect quota inventory entry".into())
 }
 
-fn protected_directory(
-    file: &File,
-    owner_uid: u32,
-    ancestor: bool,
-    fixture: bool,
-) -> Result<Metadata, String> {
+fn protected_directory(file: &File, owner_uid: u32) -> Result<Metadata, String> {
     let meta = metadata(file)?;
-    // Only private fixtures may traverse the root-owned sticky temporary root.
-    let sticky_fixture = fixture && ancestor && meta.uid() == 0 && meta.mode() & 0o1000 != 0;
-    if !meta.is_dir()
-        || (meta.uid() != owner_uid && !(ancestor && meta.uid() == 0))
-        || (meta.mode() & 0o022 != 0 && !sticky_fixture)
-    {
+    if !meta.is_dir() || meta.uid() != owner_uid || meta.mode() & 0o022 != 0 {
         return Err("unprotected quota directory ancestry".into());
     }
     Ok(meta)
 }
 
-fn open_root(root: &Path, owner_uid: u32, fixture: bool) -> Result<File, String> {
+/// The caller chooses the authority anchor; every descriptor, including that
+/// anchor, must satisfy the same ownership and mode checks. Production anchors
+/// at `/`; filesystem fixtures can instead supply their own private directory.
+pub(crate) fn open_relative(
+    anchor: &File,
+    relative: &Path,
+    owner_uid: u32,
+) -> Result<File, String> {
+    protected_directory(anchor, owner_uid)?;
+    let mut directory = anchor
+        .try_clone()
+        .map_err(|_| "cannot duplicate quota directory anchor")?;
+    for component in relative.components() {
+        let Component::Normal(name) = component else {
+            return Err("invalid quota root components".into());
+        };
+        directory = open_at(
+            directory.as_raw_fd(),
+            name,
+            libc::O_RDONLY | libc::O_DIRECTORY,
+        )?;
+        protected_directory(&directory, owner_uid)?;
+    }
+    Ok(directory)
+}
+
+pub(crate) fn open_root(root: &Path, owner_uid: u32) -> Result<File, String> {
     if !root.is_absolute() {
         return Err("quota root must be absolute".into());
     }
-    let mut directory = open_at(
+    let anchor = open_at(
         libc::AT_FDCWD,
         OsStr::new("/"),
         libc::O_RDONLY | libc::O_DIRECTORY,
     )?;
-    protected_directory(&directory, owner_uid, true, fixture)?;
-    for component in root.components() {
-        match component {
-            Component::RootDir => {}
-            Component::Normal(name) => {
-                directory = open_at(
-                    directory.as_raw_fd(),
-                    name,
-                    libc::O_RDONLY | libc::O_DIRECTORY,
-                )?;
-                protected_directory(&directory, owner_uid, true, fixture)?;
-            }
-            _ => return Err("invalid quota root components".into()),
-        }
-    }
-    protected_directory(&directory, owner_uid, false, fixture)?;
-    Ok(directory)
+    open_relative(
+        &anchor,
+        root.strip_prefix("/").map_err(|_| "invalid quota root")?,
+        owner_uid,
+    )
 }
 
 fn stamp(meta: &Metadata) -> [u64; 11] {
@@ -287,11 +292,11 @@ fn scan_at(
     specs: &[VolumeSpec],
     root: &Path,
     owner_uid: u32,
-    fixture: bool,
+    reopen_root: impl Fn() -> Result<File, String>,
 ) -> Result<StorageInventory, String> {
     let specs = declared_slots(specs, root)?;
-    let directory = open_root(root, owner_uid, fixture)?;
-    let before = metadata(&directory)?;
+    let directory = reopen_root()?;
+    let before = protected_directory(&directory, owner_uid)?;
     let mut directories = vec![ScannedDirectory {
         file: directory,
         before,
@@ -323,7 +328,7 @@ fn scan_at(
                     &name,
                     libc::O_RDONLY | libc::O_DIRECTORY,
                 )?;
-                let before = protected_directory(&file, owner_uid, false, fixture)?;
+                let before = protected_directory(&file, owner_uid)?;
                 directories.push(ScannedDirectory {
                     file,
                     before,
@@ -380,7 +385,7 @@ fn scan_at(
         }
     }
     // Also detect replacement of the fixed root while its original FD was held.
-    if stamp(&directories[0].before) != stamp(&metadata(&open_root(root, owner_uid, fixture)?)?) {
+    if stamp(&directories[0].before) != stamp(&protected_directory(&reopen_root()?, owner_uid)?) {
         return Err("quota inventory root changed".into());
     }
     Ok(StorageInventory {
@@ -392,30 +397,48 @@ fn scan_at(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::cell::Cell;
     use std::fs::{self, DirBuilder, OpenOptions};
     use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt, symlink};
     use std::sync::atomic::{AtomicU64, Ordering};
 
-    struct Fixture(PathBuf);
+    struct Fixture {
+        root: PathBuf,
+        anchor_path: PathBuf,
+        anchor: File,
+    }
 
     impl Fixture {
         fn new() -> Self {
             static SEQUENCE: AtomicU64 = AtomicU64::new(0);
-            let root = std::env::temp_dir().join(format!(
+            let anchor_path = std::env::temp_dir().join(format!(
                 "tentaflake-quota-inventory-{}-{}",
                 std::process::id(),
                 SEQUENCE.fetch_add(1, Ordering::Relaxed)
             ));
+            DirBuilder::new().mode(0o700).create(&anchor_path).unwrap();
+            let anchor = open_at(
+                libc::AT_FDCWD,
+                anchor_path.as_os_str(),
+                libc::O_RDONLY | libc::O_DIRECTORY,
+            )
+            .unwrap();
+            protected_directory(&anchor, unsafe { libc::geteuid() }).unwrap();
+            let root = anchor_path.join("volumes");
             DirBuilder::new().mode(0o700).create(&root).unwrap();
-            Self(root)
+            Self {
+                root,
+                anchor_path,
+                anchor,
+            }
         }
 
         fn image(&self, kind: StorageKind, name: &str, bytes: u64) -> PathBuf {
-            let path = image_path(&self.0, kind, name);
-            if kind == StorageKind::State && !self.0.join("state").exists() {
+            let path = image_path(&self.root, kind, name);
+            if kind == StorageKind::State && !self.root.join("state").exists() {
                 DirBuilder::new()
                     .mode(0o700)
-                    .create(self.0.join("state"))
+                    .create(self.root.join("state"))
                     .unwrap();
             }
             let file = OpenOptions::new()
@@ -434,7 +457,7 @@ mod tests {
                 owner_id: "host-root".into(),
                 allocation_id: slot_id(kind, name),
                 kind,
-                image_path: image_path(&self.0, kind, name),
+                image_path: image_path(&self.root, kind, name),
                 mount_path: PathBuf::from(format!("/var/lib/{name}/{kind:?}")),
                 bytes: MIN_STORAGE_BYTES,
                 owner_uid: 1000,
@@ -444,13 +467,29 @@ mod tests {
         }
 
         fn scan(&self, specs: &[VolumeSpec]) -> Result<StorageInventory, String> {
-            scan_at(specs, &self.0, unsafe { libc::geteuid() }, true)
+            self.scan_path(specs, &self.root, unsafe { libc::geteuid() })
+        }
+
+        fn open(&self, root: &Path, owner_uid: u32) -> Result<File, String> {
+            let relative = root
+                .strip_prefix(&self.anchor_path)
+                .map_err(|_| "quota fixture path is outside its anchor")?;
+            open_relative(&self.anchor, relative, owner_uid)
+        }
+
+        fn scan_path(
+            &self,
+            specs: &[VolumeSpec],
+            root: &Path,
+            owner_uid: u32,
+        ) -> Result<StorageInventory, String> {
+            scan_at(specs, root, owner_uid, || self.open(root, owner_uid))
         }
     }
 
     impl Drop for Fixture {
         fn drop(&mut self) {
-            fs::remove_dir_all(&self.0).unwrap();
+            fs::remove_dir_all(&self.anchor_path).unwrap();
         }
     }
 
@@ -510,44 +549,136 @@ mod tests {
     fn requires_existing_protected_root_and_ancestors() {
         let fixture = Fixture::new();
         let uid = unsafe { libc::geteuid() };
-        assert!(scan_at(&[], &fixture.0.join("absent"), uid, true).is_err());
+        assert!(
+            fixture
+                .scan_path(&[], &fixture.root.join("absent"), uid)
+                .is_err()
+        );
         DirBuilder::new()
             .mode(0o700)
-            .create(fixture.0.join("child"))
+            .create(fixture.root.join("child"))
             .unwrap();
-        fs::set_permissions(&fixture.0, fs::Permissions::from_mode(0o777)).unwrap();
-        assert!(scan_at(&[], &fixture.0.join("child"), uid, true).is_err());
-        fs::set_permissions(&fixture.0, fs::Permissions::from_mode(0o700)).unwrap();
-        assert!(scan_at(&[], &fixture.0, uid.wrapping_add(1), true).is_err());
-        symlink(fixture.0.join("child"), fixture.0.join("alias")).unwrap();
-        assert!(scan_at(&[], &fixture.0.join("alias"), uid, true).is_err());
+        fs::set_permissions(&fixture.root, fs::Permissions::from_mode(0o777)).unwrap();
+        assert!(
+            fixture
+                .scan_path(&[], &fixture.root.join("child"), uid)
+                .is_err()
+        );
+        fs::set_permissions(&fixture.root, fs::Permissions::from_mode(0o700)).unwrap();
+        assert!(
+            fixture
+                .scan_path(&[], &fixture.root, uid.wrapping_add(1))
+                .is_err()
+        );
+        symlink(fixture.root.join("child"), fixture.root.join("alias")).unwrap();
+        assert!(
+            fixture
+                .scan_path(&[], &fixture.root.join("alias"), uid)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn requires_protected_anchor_without_sticky_directory_exception() {
+        let fixture = Fixture::new();
+        for mode in [0o777, 0o1777] {
+            fs::set_permissions(&fixture.anchor_path, fs::Permissions::from_mode(mode)).unwrap();
+            assert_eq!(
+                fixture.scan(&[]).err().as_deref(),
+                Some("unprotected quota directory ancestry")
+            );
+        }
+        fs::set_permissions(&fixture.anchor_path, fs::Permissions::from_mode(0o700)).unwrap();
+        assert!(fixture.scan(&[]).is_ok());
+    }
+
+    #[test]
+    fn relative_traversal_refuses_escape_and_non_directory_anchors() {
+        let fixture = Fixture::new();
+        let uid = unsafe { libc::geteuid() };
+        assert!(open_relative(&fixture.anchor, Path::new("volumes"), uid).is_ok());
+        for path in ["/volumes", "../volumes", "volumes/../volumes", "./volumes"] {
+            assert!(
+                open_relative(&fixture.anchor, Path::new(path), uid).is_err(),
+                "accepted relative path {path}"
+            );
+        }
+        let image = fixture.image(StorageKind::Workspace, "agent-a", 1);
+        let file = File::open(image).unwrap();
+        assert!(open_relative(&file, Path::new(""), uid).is_err());
+    }
+
+    #[test]
+    fn absolute_traversal_keeps_production_root_policy() {
+        let root = fs::metadata("/").unwrap();
+        let result = open_root(Path::new("/"), 0);
+        if root.uid() == 0 && root.mode() & 0o022 == 0 {
+            assert!(result.is_ok());
+        } else {
+            assert_eq!(
+                result.err().as_deref(),
+                Some("unprotected quota directory ancestry")
+            );
+        }
+        assert!(open_root(Path::new("relative"), 0).is_err());
+    }
+
+    #[test]
+    fn final_reopen_refuses_replaced_root_or_symlink() {
+        for replace_with_symlink in [false, true] {
+            let fixture = Fixture::new();
+            let uid = unsafe { libc::geteuid() };
+            let opens = Cell::new(0);
+            let result = scan_at(&[], &fixture.root, uid, || {
+                opens.set(opens.get() + 1);
+                if opens.get() == 2 {
+                    let previous = fixture.anchor_path.join("previous-volumes");
+                    fs::rename(&fixture.root, &previous).unwrap();
+                    if replace_with_symlink {
+                        symlink(previous, &fixture.root).unwrap();
+                    } else {
+                        DirBuilder::new().mode(0o700).create(&fixture.root).unwrap();
+                    }
+                }
+                fixture.open(&fixture.root, uid)
+            });
+            assert_eq!(opens.get(), 2);
+            if replace_with_symlink {
+                assert!(result.is_err());
+            } else {
+                assert_eq!(
+                    result.err().as_deref(),
+                    Some("quota inventory root changed")
+                );
+            }
+        }
     }
 
     #[test]
     fn refuses_partial_unknown_and_nonregular_entries() {
         for name in ["agent-a.img.new", "notes", "bad_name.img", "UPPER.img"] {
             let fixture = Fixture::new();
-            fs::write(fixture.0.join(name), b"x").unwrap();
+            fs::write(fixture.root.join(name), b"x").unwrap();
             assert!(fixture.scan(&[]).is_err(), "accepted {name}");
         }
         let fixture = Fixture::new();
         DirBuilder::new()
             .mode(0o700)
-            .create(fixture.0.join("nested"))
+            .create(fixture.root.join("nested"))
             .unwrap();
         assert!(fixture.scan(&[]).is_err());
-        fs::remove_dir(fixture.0.join("nested")).unwrap();
-        symlink("missing", fixture.0.join("agent-a.img")).unwrap();
+        fs::remove_dir(fixture.root.join("nested")).unwrap();
+        symlink("missing", fixture.root.join("agent-a.img")).unwrap();
         assert!(fixture.scan(&[]).is_err());
-        fs::remove_file(fixture.0.join("agent-a.img")).unwrap();
-        symlink("missing", fixture.0.join("state")).unwrap();
+        fs::remove_file(fixture.root.join("agent-a.img")).unwrap();
+        symlink("missing", fixture.root.join("state")).unwrap();
         assert!(fixture.scan(&[]).is_err());
     }
 
     #[test]
     fn refuses_fifo_and_directory_images_without_reading_them() {
         let fixture = Fixture::new();
-        let fifo = fixture.0.join("agent-a.img");
+        let fifo = fixture.root.join("agent-a.img");
         let name = CString::new(fifo.as_os_str().as_bytes()).unwrap();
         assert_eq!(unsafe { libc::mkfifo(name.as_ptr(), 0o600) }, 0);
         assert!(fixture.scan(&[]).is_err());
@@ -560,7 +691,11 @@ mod tests {
     fn refuses_unprotected_state_directory() {
         let fixture = Fixture::new();
         fixture.image(StorageKind::State, "agent-a", 1);
-        fs::set_permissions(fixture.0.join("state"), fs::Permissions::from_mode(0o777)).unwrap();
+        fs::set_permissions(
+            fixture.root.join("state"),
+            fs::Permissions::from_mode(0o777),
+        )
+        .unwrap();
         assert!(fixture.scan(&[]).is_err());
     }
 
@@ -578,7 +713,7 @@ mod tests {
         fs::set_permissions(&image, fs::Permissions::from_mode(0o640)).unwrap();
         assert!(fixture.scan(&[]).is_err());
         fs::set_permissions(&image, fs::Permissions::from_mode(0o600)).unwrap();
-        fs::hard_link(&image, fixture.0.join("agent-b.img")).unwrap();
+        fs::hard_link(&image, fixture.root.join("agent-b.img")).unwrap();
         assert!(fixture.scan(&[]).is_err());
     }
 
@@ -592,7 +727,7 @@ mod tests {
             match change {
                 0 => spec.kind = StorageKind::State,
                 1 => spec.allocation_id = "workspace:other".into(),
-                2 => spec.image_path = fixture.0.join("../agent-a.img"),
+                2 => spec.image_path = fixture.root.join("../agent-a.img"),
                 3 => spec.owner_id = "bad owner".into(),
                 4 => spec.binding_revision = "x".repeat(129),
                 5 => spec.bytes = MIN_STORAGE_BYTES - 1,
@@ -663,6 +798,6 @@ mod tests {
             .unwrap();
         assert!(inventory.complete);
         assert!(inventory.allocations.is_empty());
-        assert_eq!(fs::read_dir(&fixture.0).unwrap().count(), 0);
+        assert_eq!(fs::read_dir(&fixture.root).unwrap().count(), 0);
     }
 }
