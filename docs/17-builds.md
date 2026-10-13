@@ -105,6 +105,8 @@ The routing regression runs directly on every runner without Nix setup;
 `checks.*.ci-vm-selection` also packages it for the full local flake gate.
 Documentation starts no Nix installation. Fast checks use the pinned binary
 cache for contributor tools; only explicit builds upload a GitHub Nix cache.
+Optional cache setup has a three-minute timeout; setup failure does not skip
+or fail the subsequent build and runtime checks.
 A Rust-only dispatch
 does not build the separate Research service. Worker-module dispatch uses the
 same focused package/runtime gates; the Research fixture enables no workers.

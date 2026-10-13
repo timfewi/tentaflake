@@ -49,8 +49,11 @@ overwritten: review it before removing it. The running host remains unchanged.
 names, paths, image references and failure details. Nix source diagnostics are
 not printed because source excerpts may contain private operator data. Plans
 report source validation and pending vendor evidence, not live readiness or
-vendor acceptance. OpenClaw remains a non-runnable scaffold. Unsupported generic
-model/Research capabilities are refused; current secure startup gates still apply.
+vendor acceptance. OpenClaw remains a non-runnable scaffold. Stopped generic
+definitions may request model, Research or worker capabilities before their host
+services are configured. Import preserves those requests without granting them;
+automatic and manual starts still require each requested service and both quotas.
+Unsupported capabilities and imports requesting service activation are refused.
 
 Review and track `agents.json` before an explicit host update. Git-backed flakes
 only evaluate tracked files, including source-only `my-agents.nix` instances:
