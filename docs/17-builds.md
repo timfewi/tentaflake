@@ -6,6 +6,11 @@ It does not prepare Research closures, evaluate configurations/generated flakes,
 or build Nix packages, images, systems or VMs. Loading the pinned development
 environment can still realize contributor tools.
 
+CI and the fast gate run `just formatter-test`: `just fmt-check` uses pinned
+`nixfmt --check` on Git-selected regular Nix files, then real tracked/untracked
+fixtures verify refusal leaves their bytes unchanged. `just fmt` remains
+the formatting command; treefmt's `--ci` writes changes before reporting failure.
+
 Use `just eval` explicitly for read-only flake evaluation, including focused
 adapter evaluation and the required non-VM Research closure preparation.
 

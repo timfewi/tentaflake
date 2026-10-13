@@ -14,11 +14,11 @@ alias list := default
 # ── The gates ────────────────────────────────────────────────
 
 # Full local gate: source checks, all flake checks and the installer ISO
-ci: fmt-check lint shellcheck rust ci-policy api-contract check generated-flake iso-installer
+ci: formatter-test lint shellcheck rust ci-policy api-contract check generated-flake iso-installer
     @echo "==> all green"
 
 # Fast source checks; evaluation and all Nix package/runtime builds are explicit
-fast: fmt-check lint shellcheck rust ci-policy api-contract
+fast: formatter-test lint shellcheck rust ci-policy api-contract
 
 # Validate the versioned host API and all offline contract exchanges
 api-contract:
@@ -68,9 +68,13 @@ build:
 fmt:
     nix fmt -- --tree-root .
 
-# Format check only — fails if anything is unformatted (CI mode)
+# Read-only check of tracked and non-ignored untracked regular Nix files
 fmt-check:
-    nix fmt -- --tree-root . --ci
+    git ls-files -z --cached --others --exclude-standard -- '*.nix' | while IFS= read -r -d '' file; do if [[ -f "$file" && ! -L "$file" ]]; then nixfmt --check "./$file"; fi; done
+
+# Prove the actual formatter gate fails without rewriting its own fixture
+formatter-test: fmt-check
+    python3 scripts/test_format_check.py
 
 # Nix lint: statix (anti-patterns) + deadnix (dead bindings)
 lint:

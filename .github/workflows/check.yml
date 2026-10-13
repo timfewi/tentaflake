@@ -79,7 +79,7 @@ jobs:
       # again costs more than these source checks; cache only explicit builds.
       - name: nix fmt check
         if: needs.changes.outputs.static == 'true'
-        run: nix fmt -- --ci
+        run: nix develop --command just formatter-test
 
       - name: Nix lint
         if: needs.changes.outputs.static == 'true'

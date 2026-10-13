@@ -7,6 +7,10 @@
     "paths": ["scripts/eval_flake.py", "scripts/test_eval_flake.py"],
     "checks": ["evaluate", "selection", "static"]
   },
+  "formatter-test": {
+    "paths": ["scripts/test_format_check.py"],
+    "checks": ["static"]
+  },
   "research": {
     "paths": [
       "modules/research.nix",

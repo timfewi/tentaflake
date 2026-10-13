@@ -51,12 +51,16 @@ cargo test --workspace
 Nix and shell:
 
 ```bash
-nix fmt -- --ci
+just fmt-check
 statix check .
 deadnix --fail .
 shellcheck installer/*.sh scripts/*.sh
 just ci-policy
 ```
+
+`just fmt-check` uses pinned `nixfmt --check` on tracked and non-ignored
+untracked regular Nix files. It leaves source bytes unchanged; `just fmt`
+applies formatting. Treefmt's `--ci` reports changes after writing them.
 
 Installer image when its path changes:
 

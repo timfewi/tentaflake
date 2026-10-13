@@ -51,6 +51,8 @@ VGs before mutation and preserve unrelated swap, VGs and encrypted mappings.
 ## Conventions
 
 - Nix: `nix fmt` (nixfmt), 2-space indent
+- Read-only formatting gate: `just fmt-check` uses pinned `nixfmt --check`.
+  Treefmt's `--ci` can rewrite files before failing; keep it out of check commands.
 - Rust: `cargo fmt`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace`
 - Commits: Conventional Commits (`feat:`, `fix:`, `docs:`)
 - DCO: every non-merge PR commit needs `Signed-off-by:`; use `git commit -s`

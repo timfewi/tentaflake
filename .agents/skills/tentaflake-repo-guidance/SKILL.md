@@ -1,7 +1,7 @@
 ---
 name: tentaflake-repo-guidance
 description: Locate the owning source, guide and checks before changing Tentaflake modules, adapters, CLI or installer.
-version: 2.6.5
+version: 2.6.6
 ---
 
 # Tentaflake repository guidance
@@ -88,6 +88,7 @@ relevant source and guide. Avoid loading unrelated references.
 Start with `just fast` for static/unit checks; `just list` lists recipes. Recipes
 load pinned tools; direct Cargo/lint commands need `nix develop`. Configuration
 evaluation (`just eval`), generated flakes and builds are explicit gates.
+Use `just fmt-check` for read-only formatting checks; treefmt's `--ci` can rewrite files.
 `.github/ci-paths.json` selects fast PR/push checks and affected dispatch builds
 from the same rules. Unknown paths/history select all fast checks automatically
 and the full inventory on dispatch. Before merging, obtain relevant build/runtime

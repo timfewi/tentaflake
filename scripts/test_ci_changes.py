@@ -62,6 +62,12 @@ class CiSelection(unittest.TestCase):
         self.write("scripts/test_api_contract.py")
         self.assertEqual(select(self.base, self.commit(), self.repository), {"static"})
 
+    def test_real_formatter_regression_stays_in_the_static_gate(self):
+        self.write("scripts/test_format_check.py")
+        affected = select(self.base, self.commit(), self.repository)
+        self.assertEqual(affected, {"static"})
+        self.assertFalse(execution(affected, "full")["builds"])
+
     def test_evaluator_changes_preserve_explicit_evaluation_without_automatic_builds(self):
         self.write("scripts/eval_flake.py")
         self.write("scripts/test_eval_flake.py")
