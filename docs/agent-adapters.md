@@ -1,7 +1,7 @@
 # Agent adapters
 
 Status: common schema-v1 OCI definitions and preset discovery are available.
-Generic workloads remain stopped pending capability-specific admission. OpenClaw
+Generic workloads require policies for their requested capabilities. OpenClaw
 remains a stopped scaffold; vendor runtime acceptance is separate.
 
 The requirement is one discoverable adapter per integrated runtime, a common
@@ -87,14 +87,17 @@ directory. That destination must be `/workspace` or a
 normalized child. Non-root ownership defaults to 10000:10000. Resource fields
 inherit host security limits; allowed overrides are `memory`, `memorySwap`,
 `cpus`, `nofile`, `pidsLimit`, `tmpfsSize` and `runTmpfsSize`. Values must be
-positive. Host administrators remain responsible for appropriate aggregate bounds.
+positive and no greater than the corresponding host limits. Host administrators
+remain responsible for appropriate aggregate bounds.
 
-An optional [private state quota](14-workspace-quota.md) uses the same managed
+A required [private state quota](14-workspace-quota.md) uses the same managed
 Btrfs mechanism as the workspace, with `state.path` matching the adapter's
 `stateStorage`. For this generic instance the path is
 `/var/lib/generic-coding/state`; legacy runtimes retain their existing state
 roots. Quota activation and existing-data migration remain explicit operator
-operations. A quota does not make a stopped workload operational.
+operations. Workspace and state must match the instance paths and UID/GID.
+Both quotas are required for generic startup, including a manual start.
+Private state quotas remain optional for legacy adapters.
 
 Unknown versions/fields, root ownership, unpinned images, extra mounts,
 environment/credential inputs, malformed commands and unsupported capabilities
@@ -106,12 +109,24 @@ automatic vendor routing is claimed.
 
 The workload uses the existing host-selected Docker/Podman backend, gVisor,
 read-only root, no-new-privileges, dropped capabilities, bounded resources and
-`network=none`. It exposes no host/other-agent socket or model credentials.
-Generic model and Research hooks are not yet accepted. `lifecycle = "service"`
-or forcing `autoStart` still fails current broker/worker/quota/Research gates;
-capability-specific admission is tracked in #116. `dev` is unavailable for the
-new generic contract. After an explicitly authorized host update, an operator
-may manually start an intentionally stopped offline workload and attach with
+`network=none` unless `model` is requested and its exact LLM broker is enabled.
+That grant supplies only the dedicated broker network and runtime virtual
+`OPENAI_API_KEY`/`OPENAI_BASE_URL`; real provider credentials stay on the host.
+The legacy fetch broker is forbidden. An explicit `research` request receives
+only its isolated read-only relay and client closure. Configure the workload's
+local stdio MCP integration to execute `$TENTAFLAKE_RESEARCH_COMMAND` with
+`--socket "$TENTAFLAKE_RESEARCH_SOCKET"`. These non-secret environment values
+identify the projected client; native tool registration remains image-owned.
+
+Host model, Research or worker declarations without a corresponding request
+are rejected. Missing grants may be planned while stopped, but both automatic
+and manual startup refuse missing requested services or either quota. An offline
+workload needs neither model, Research nor worker declarations. Legacy adapters
+retain their established mandatory gates. Declarations and ordered unit startup
+do not prove service health, VPN readiness or successful vendor calls; live
+admission and recovery remain tracked in #116. `dev` is unavailable for the
+generic contract. After an explicitly authorized host update, an operator
+may start an admitted workload and attach with
 `tentaflake shell generic-NAME` or `tentaflake exec generic-NAME -- ...`.
 These source fixtures do not establish vendor support or live isolation evidence.
 
@@ -207,7 +222,7 @@ host runtime files, never settings or environment values in the Nix store.
 `researchClient.nix` projects only the shared pinned client closure and exact
 per-agent read-only relay socket. Upstream settings are adapter hooks. Research
 validation requires an explicit registered adapter with accepted capability,
-rather than trusting an OCI name prefix. Hermes disables native web/browser
+or a generic instance explicitly requesting Research. Hermes disables native web/browser
 toolsets and accepts only local stdio MCP additions. ZeroClaw disables its
 native web tools and replaces its MCP list with the isolated stdio server.
 Remote additions, legacy fetch, missing read-only mounts and other-agent sockets

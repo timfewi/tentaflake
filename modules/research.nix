@@ -63,7 +63,12 @@ in
         assertion =
           builtins.hasAttr name containers
           && registered
-          && adapters.${instance.adapter}.research.supported
+          && (
+            if instance.adapter == "generic" then
+              lib.elem "research" instance.requestedCapabilities
+            else
+              adapters.${instance.adapter}.research.supported
+          )
           && !(lib.attrByPath [ name "fetch" "enable" ] false config.tentaflake.broker.agents);
         message = "Research agent ${name} must be a declared registered adapter with Research capability and disable its legacy fetch broker.";
       }

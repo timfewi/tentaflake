@@ -223,11 +223,14 @@
       },
       "lifecycle": "service",
       "model": {
-        "protocols": [],
+        "protocols": [
+          "openai-chat-completions",
+          "openai-responses"
+        ],
         "streaming": "unknown"
       },
       "research": {
-        "supported": false
+        "supported": true
       },
       "execution": {
         "interface": "worker-queue-v1",
@@ -237,7 +240,9 @@
         "files",
         "shell",
         "terminal",
-        "worker"
+        "worker",
+        "model",
+        "research"
       ],
       "evidence": {
         "fixture": "source-regression",

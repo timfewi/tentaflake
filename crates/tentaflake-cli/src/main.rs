@@ -22,6 +22,7 @@ const MAX_CONTROLLER_NANO_CPUS: u64 = 1024 * 1_000_000_000;
 const LIVE_INSPECTION_TIMEOUT: Duration = Duration::from_secs(5);
 const MAX_LIVE_INSPECTION_OUTPUT_BYTES: usize = 8 * 1024 * 1024;
 const MAX_PARALLEL_BROKER_HEALTH_PROBES: usize = 16;
+const MAX_CAPABILITY_DECLARATION_BYTES: usize = 4096;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct Config {
@@ -79,6 +80,27 @@ struct DeclaredLiveResources {
     nproc: u64,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum RequestedCapability {
+    Files,
+    Shell,
+    Terminal,
+    Model,
+    Research,
+    Worker,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct DeclaredCapabilities {
+    schema_version: u8,
+    requested: Vec<RequestedCapability>,
+    research: bool,
+    state_quota: bool,
+    require_state_quota: bool,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct SecurityAgent {
     name: String,
@@ -110,6 +132,7 @@ struct SecurityAgent {
     declared_tmpfs: Option<BTreeMap<String, u64>>,
     declared_ports_absent: Option<bool>,
     declared_live_resources: Option<DeclaredLiveResources>,
+    declared_capabilities: Option<DeclaredCapabilities>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -462,7 +485,7 @@ fn security_doctor(config: &Config, mode: OutputMode) -> Result<u8, String> {
 fn parse_security_state(text: &str) -> Result<SecurityState, String> {
     let mut state = None;
     let mut agents = Vec::new();
-    let mut versioned = false;
+    let mut version = None;
     let mut record_seen = false;
     let mut management = None;
     for (index, line) in text.lines().enumerate() {
@@ -474,20 +497,20 @@ fn parse_security_state(text: &str) -> Result<SecurityState, String> {
             if record_seen {
                 return Err("security manifest header must be first and unique".into());
             }
-            if fields.len() != 2 || fields[1] != "2" {
+            if fields.len() != 2 || !matches!(fields[1], "2" | "3") {
                 return Err("unsupported security manifest version".into());
             }
-            versioned = true;
+            version = Some(if fields[1] == "3" { 3 } else { 2 });
             record_seen = true;
             continue;
         }
         record_seen = true;
         match fields.first().copied() {
-            Some("host") if fields.len() == if versioned { 8 } else { 9 } => {
+            Some("host") if fields.len() == if version.is_some() { 8 } else { 9 } => {
                 if state.is_some() {
                     return Err("security manifest contains multiple host records".into());
                 }
-                let apparmor_index = if versioned {
+                let apparmor_index = if version.is_some() {
                     4
                 } else {
                     // Old manifests provide no typed management contract. Validate
@@ -509,7 +532,7 @@ fn parse_security_state(text: &str) -> Result<SecurityState, String> {
                     agents: Vec::new(),
                 });
             }
-            Some("management") if versioned && fields.len() == 5 => {
+            Some("management") if version.is_some() && fields.len() == 5 => {
                 if management.is_some() {
                     return Err("security manifest contains multiple management records".into());
                 }
@@ -529,55 +552,65 @@ fn parse_security_state(text: &str) -> Result<SecurityState, String> {
                     ssh_policy,
                 });
             }
-            Some("agent") if (25..=30).contains(&fields.len()) => agents.push(SecurityAgent {
-                name: fields[1].into(),
-                profile: fields[2].into(),
-                network_isolated: parse_bool(fields[3], index + 1)?,
-                ports_private: parse_bool(fields[4], index + 1)?,
-                unprivileged: parse_bool(fields[5], index + 1)?,
-                non_root: parse_bool(fields[6], index + 1)?,
-                capabilities_empty: parse_bool(fields[7], index + 1)?,
-                no_new_privileges: parse_bool(fields[8], index + 1)?,
-                read_only_root: parse_bool(fields[9], index + 1)?,
-                mounts_safe: parse_bool(fields[10], index + 1)?,
-                runsc: parse_bool(fields[11], index + 1)?,
-                resources_limited: parse_bool(fields[12], index + 1)?,
-                image_pinned: parse_bool(fields[13], index + 1)?,
-                env_files_absent: parse_bool(fields[14], index + 1)?,
-                disposable_worker: parse_bool(fields[15], index + 1)?,
-                workspace_quota: parse_bool(fields[16], index + 1)?,
-                seccomp_confined: parse_bool(fields[17], index + 1)?,
-                apparmor_confined: parse_bool(fields[18], index + 1)?,
-                provenance_gate_configured: parse_bool(fields[19], index + 1)?,
-                brokered_egress: parse_bool(fields[20], index + 1)?,
-                llm_broker_enabled: parse_bool(fields[21], index + 1)?,
-                llm_broker_endpoint: parse_optional_socket(fields[22], index + 1)?,
-                fetch_broker_enabled: parse_bool(fields[23], index + 1)?,
-                fetch_broker_endpoint: parse_optional_socket(fields[24], index + 1)?,
-                broker_network: fields
-                    .get(25)
-                    .map_or(Ok(None), |value| parse_optional_network(value, index + 1))?,
-                declared_mounts: fields
-                    .get(26)
-                    .map(|value| parse_declared_mounts(value, index + 1))
-                    .transpose()?
-                    .flatten(),
-                declared_tmpfs: fields
-                    .get(27)
-                    .map(|value| parse_declared_tmpfs(value, index + 1))
-                    .transpose()?
-                    .flatten(),
-                declared_ports_absent: fields
-                    .get(28)
-                    .map(|value| parse_optional_bool(value, index + 1))
-                    .transpose()?
-                    .flatten(),
-                declared_live_resources: fields
-                    .get(29)
-                    .map(|value| parse_declared_live_resources(value, index + 1))
-                    .transpose()?
-                    .flatten(),
-            }),
+            Some("agent")
+                if (version == Some(3) && fields.len() == 31)
+                    || (version != Some(3) && (25..=30).contains(&fields.len())) =>
+            {
+                agents.push(SecurityAgent {
+                    name: fields[1].into(),
+                    profile: fields[2].into(),
+                    network_isolated: parse_bool(fields[3], index + 1)?,
+                    ports_private: parse_bool(fields[4], index + 1)?,
+                    unprivileged: parse_bool(fields[5], index + 1)?,
+                    non_root: parse_bool(fields[6], index + 1)?,
+                    capabilities_empty: parse_bool(fields[7], index + 1)?,
+                    no_new_privileges: parse_bool(fields[8], index + 1)?,
+                    read_only_root: parse_bool(fields[9], index + 1)?,
+                    mounts_safe: parse_bool(fields[10], index + 1)?,
+                    runsc: parse_bool(fields[11], index + 1)?,
+                    resources_limited: parse_bool(fields[12], index + 1)?,
+                    image_pinned: parse_bool(fields[13], index + 1)?,
+                    env_files_absent: parse_bool(fields[14], index + 1)?,
+                    disposable_worker: parse_bool(fields[15], index + 1)?,
+                    workspace_quota: parse_bool(fields[16], index + 1)?,
+                    seccomp_confined: parse_bool(fields[17], index + 1)?,
+                    apparmor_confined: parse_bool(fields[18], index + 1)?,
+                    provenance_gate_configured: parse_bool(fields[19], index + 1)?,
+                    brokered_egress: parse_bool(fields[20], index + 1)?,
+                    llm_broker_enabled: parse_bool(fields[21], index + 1)?,
+                    llm_broker_endpoint: parse_optional_socket(fields[22], index + 1)?,
+                    fetch_broker_enabled: parse_bool(fields[23], index + 1)?,
+                    fetch_broker_endpoint: parse_optional_socket(fields[24], index + 1)?,
+                    broker_network: fields
+                        .get(25)
+                        .map_or(Ok(None), |value| parse_optional_network(value, index + 1))?,
+                    declared_mounts: fields
+                        .get(26)
+                        .map(|value| parse_declared_mounts(value, index + 1))
+                        .transpose()?
+                        .flatten(),
+                    declared_tmpfs: fields
+                        .get(27)
+                        .map(|value| parse_declared_tmpfs(value, index + 1))
+                        .transpose()?
+                        .flatten(),
+                    declared_ports_absent: fields
+                        .get(28)
+                        .map(|value| parse_optional_bool(value, index + 1))
+                        .transpose()?
+                        .flatten(),
+                    declared_live_resources: fields
+                        .get(29)
+                        .map(|value| parse_declared_live_resources(value, index + 1))
+                        .transpose()?
+                        .flatten(),
+                    declared_capabilities: fields
+                        .get(30)
+                        .map(|value| parse_declared_capabilities(value, index + 1))
+                        .transpose()?
+                        .flatten(),
+                });
+            }
             _ => {
                 return Err(format!(
                     "invalid security manifest record on line {}",
@@ -598,6 +631,31 @@ fn parse_bool(value: &str, line: usize) -> Result<bool, String> {
         "false" => Ok(false),
         _ => Err(format!("invalid boolean on security manifest line {line}")),
     }
+}
+
+fn parse_declared_capabilities(
+    value: &str,
+    line: usize,
+) -> Result<Option<DeclaredCapabilities>, String> {
+    if value == "-" {
+        return Ok(None);
+    }
+    let invalid = || format!("invalid capability declaration on security manifest line {line}");
+    if value.len() > MAX_CAPABILITY_DECLARATION_BYTES {
+        return Err(invalid());
+    }
+    let declared: DeclaredCapabilities = serde_json::from_str(value).map_err(|_| invalid())?;
+    if declared.schema_version != 1
+        || declared.requested.len() > 6
+        || declared
+            .requested
+            .iter()
+            .enumerate()
+            .any(|(index, capability)| declared.requested[..index].contains(capability))
+    {
+        return Err(invalid());
+    }
+    Ok(Some(declared))
 }
 
 fn parse_optional_bool(value: &str, line: usize) -> Result<Option<bool>, String> {
@@ -783,7 +841,15 @@ fn security_findings(state: &SecurityState) -> Vec<Finding> {
             "disable tentaflake.ssh or document and restrict the exceptional SSH path",
         ));
     }
-    if !state.broker_configured && state.profile != "dev" {
+    // Explicit per-instance declarations are checked below. A host may mix
+    // model clients with intentionally offline capsules; neither requires every
+    // container to join a broker network. Old manifests retain the warning.
+    let unknown_broker_requirements = state.agents.is_empty()
+        || state
+            .agents
+            .iter()
+            .any(|agent| agent.declared_capabilities.is_none());
+    if !state.broker_configured && state.profile != "dev" && unknown_broker_requirements {
         findings.push(host_finding(
             "TFSEC-013",
             "warning",
@@ -973,15 +1039,62 @@ fn security_findings(state: &SecurityState) -> Vec<Finding> {
             "move provider and infrastructure credentials to the broker",
         );
         if state.profile != "dev" {
+            let worker_required = agent
+                .declared_capabilities
+                .as_ref()
+                .is_none_or(|declared| declared.requested.contains(&RequestedCapability::Worker));
             check_agent(
                 &mut findings,
-                agent.disposable_worker,
+                !worker_required || agent.disposable_worker,
                 "TFSEC-020",
                 "high",
                 agent,
-                "agent has no disposable tool-worker boundary for untrusted code",
+                "agent has no configured disposable tool-worker policy",
                 "enable tentaflake.worker.agents.<container> and route shell, build, and foreign-code jobs through its inbox",
             );
+            if let Some(declared) = &agent.declared_capabilities {
+                let model_requested = declared.requested.contains(&RequestedCapability::Model);
+                let research_requested =
+                    declared.requested.contains(&RequestedCapability::Research);
+                check_agent(
+                    &mut findings,
+                    !model_requested || agent.llm_broker_enabled,
+                    "TFSEC-040",
+                    "high",
+                    agent,
+                    "agent requests model access without a configured LLM broker",
+                    "configure the exact instance LLM policy; verify broker readiness separately",
+                );
+                check_agent(
+                    &mut findings,
+                    !research_requested || declared.research,
+                    "TFSEC-041",
+                    "high",
+                    agent,
+                    "agent requests Research without a configured isolated relay",
+                    "configure the exact instance Research relay; verify service readiness separately",
+                );
+                check_agent(
+                    &mut findings,
+                    !declared.require_state_quota || declared.state_quota,
+                    "TFSEC-042",
+                    "high",
+                    agent,
+                    "agent requires a private state quota without a configured managed ceiling",
+                    "configure the exact instance state quota after explicitly migrating existing state",
+                );
+                check_agent(
+                    &mut findings,
+                    (!agent.llm_broker_enabled || model_requested)
+                        && (!declared.research || research_requested)
+                        && (!agent.disposable_worker || worker_required),
+                    "TFSEC-043",
+                    "critical",
+                    agent,
+                    "agent has a configured model, Research or worker grant it did not request",
+                    "remove the unrequested grant or explicitly review and update the instance definition",
+                );
+            }
             check_agent(
                 &mut findings,
                 agent.workspace_quota,
@@ -2816,6 +2929,208 @@ mod tests {
         assert_eq!(findings[0].severity, "warning");
     }
 
+    fn capability_manifest(declaration: &str) -> String {
+        format!(
+            concat!(
+                "manifest\t3\nhost\tbalanced\tfalse\tfalse\ttrue\ttrue\ttrue\t36\n",
+                "management\ttailscale\ttrue\ttrue\ttailnet-policy\n",
+                "agent\tgeneric-fixture\tbalanced\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\tfalse\ttrue\ttrue\ttrue\ttrue\tfalse\tfalse\t-\tfalse\t-",
+                "\t-\t-\t-\t-\t-\t{}\n"
+            ),
+            declaration
+        )
+    }
+
+    fn offline_capability_declaration() -> serde_json::Value {
+        serde_json::json!({
+            "schemaVersion": 1,
+            "requested": ["files", "shell", "terminal"],
+            "research": false,
+            "stateQuota": true,
+            "requireStateQuota": true,
+        })
+    }
+
+    #[test]
+    fn explicit_offline_capabilities_do_not_require_broker_or_worker() {
+        let state = parse_security_state(&capability_manifest(
+            &offline_capability_declaration().to_string(),
+        ))
+        .unwrap();
+        assert!(security_findings(&state).is_empty());
+        assert!(state.agents[0].declared_capabilities.is_some());
+        // Desired-state capability metadata supplies no live OCI evidence.
+        assert_eq!(
+            live_container_security_from_manifest(&state.agents[0], None, "docker", Some("none")),
+            LiveContainerState::Unknown
+        );
+    }
+
+    #[test]
+    fn explicit_requested_capabilities_report_missing_grants_and_state_quota() {
+        let mut declaration = offline_capability_declaration();
+        declaration["requested"] = serde_json::json!(["model", "research", "worker"]);
+        declaration["stateQuota"] = serde_json::json!(false);
+        let mut state =
+            parse_security_state(&capability_manifest(&declaration.to_string())).unwrap();
+        let ids: Vec<_> = security_findings(&state)
+            .iter()
+            .map(|finding| finding.id)
+            .collect();
+        assert_eq!(ids, ["TFSEC-020", "TFSEC-040", "TFSEC-041", "TFSEC-042"]);
+
+        let agent = &mut state.agents[0];
+        agent.disposable_worker = true;
+        agent.brokered_egress = true;
+        agent.llm_broker_enabled = true;
+        agent.llm_broker_endpoint = Some("10.203.10.1:7810".parse().unwrap());
+        let declared = agent.declared_capabilities.as_mut().unwrap();
+        declared.research = true;
+        declared.state_quota = true;
+        assert!(security_findings(&state).is_empty());
+    }
+
+    #[test]
+    fn explicit_capabilities_reject_each_unrequested_grant() {
+        let state = parse_security_state(&capability_manifest(
+            &offline_capability_declaration().to_string(),
+        ))
+        .unwrap();
+        for grant in [
+            RequestedCapability::Model,
+            RequestedCapability::Research,
+            RequestedCapability::Worker,
+        ] {
+            let mut granted = state.clone();
+            let agent = &mut granted.agents[0];
+            match grant {
+                RequestedCapability::Model => {
+                    agent.brokered_egress = true;
+                    agent.llm_broker_enabled = true;
+                    agent.llm_broker_endpoint = Some("10.203.10.1:7810".parse().unwrap());
+                }
+                RequestedCapability::Research => {
+                    agent.declared_capabilities.as_mut().unwrap().research = true;
+                }
+                RequestedCapability::Worker => agent.disposable_worker = true,
+                _ => unreachable!(),
+            }
+            let findings = security_findings(&granted);
+            assert_eq!(findings.len(), 1, "{grant:?}: {findings:?}");
+            assert_eq!(findings[0].id, "TFSEC-043");
+            assert_eq!(findings[0].severity, "critical");
+        }
+    }
+
+    #[test]
+    fn explicit_mixed_offline_and_model_instances_need_no_host_broker_warning() {
+        let mut state = parse_security_state(&capability_manifest(
+            &offline_capability_declaration().to_string(),
+        ))
+        .unwrap();
+        let mut model = state.agents[0].clone();
+        model.name = "generic-model".into();
+        model.brokered_egress = true;
+        model.llm_broker_enabled = true;
+        model.llm_broker_endpoint = Some("10.203.10.1:7810".parse().unwrap());
+        model
+            .declared_capabilities
+            .as_mut()
+            .unwrap()
+            .requested
+            .push(RequestedCapability::Model);
+        state.agents.push(model);
+        assert!(security_findings(&state).is_empty());
+
+        state.agents[1].declared_capabilities = None;
+        let ids: Vec<_> = security_findings(&state)
+            .iter()
+            .map(|finding| finding.id)
+            .collect();
+        assert_eq!(ids, ["TFSEC-013", "TFSEC-020"]);
+    }
+
+    #[test]
+    fn missing_capability_evidence_preserves_legacy_findings() {
+        let current = capability_manifest("-");
+        let version_two = current
+            .replace("manifest\t3", "manifest\t2")
+            .trim_end_matches("\t-\n")
+            .to_owned()
+            + "\n";
+        let legacy = version_two
+            .replace("manifest\t2\n", "")
+            .replace(
+                "host\tbalanced\tfalse\tfalse\ttrue\ttrue\ttrue\t36",
+                "host\tbalanced\tfalse\tfalse\ttrue\ttrue\ttrue\ttrue\t36",
+            )
+            .replace("management\ttailscale\ttrue\ttrue\ttailnet-policy\n", "");
+        for manifest in [&current, &version_two, &legacy] {
+            let state = parse_security_state(manifest).unwrap();
+            assert!(state.agents[0].declared_capabilities.is_none());
+            let ids: Vec<_> = security_findings(&state)
+                .iter()
+                .map(|finding| finding.id)
+                .filter(|id| *id != "TFSEC-038")
+                .collect();
+            assert_eq!(ids, ["TFSEC-013", "TFSEC-020"]);
+        }
+    }
+
+    #[test]
+    fn legacy_instance_state_quota_remains_optional_when_declared() {
+        let mut declaration = offline_capability_declaration();
+        declaration["stateQuota"] = serde_json::json!(false);
+        declaration["requireStateQuota"] = serde_json::json!(false);
+        let state = parse_security_state(&capability_manifest(&declaration.to_string())).unwrap();
+        assert!(security_findings(&state).is_empty());
+    }
+
+    #[test]
+    fn capability_manifest_versions_require_their_exact_record_shape() {
+        let current = capability_manifest(&offline_capability_declaration().to_string());
+        assert!(parse_security_state(&current.replace("manifest\t3", "manifest\t2")).is_err());
+        assert!(parse_security_state(&current.replace("manifest\t3\n", "")).is_err());
+        let absent = capability_manifest("-");
+        assert!(parse_security_state(absent.trim_end_matches("\t-\n")).is_err());
+    }
+
+    #[test]
+    fn capability_declarations_are_closed_typed_unique_and_bounded() {
+        let valid = offline_capability_declaration().to_string();
+        let mut missing = offline_capability_declaration();
+        missing.as_object_mut().unwrap().remove("stateQuota");
+        for invalid in [
+            "null".into(),
+            "[]".into(),
+            "{}".into(),
+            valid.replace("\"schemaVersion\":1", "\"schemaVersion\":2"),
+            valid.replace("\"schemaVersion\":1", "\"schemaVersion\":1.0"),
+            valid.replace("\"research\":false", "\"research\":\"false\""),
+            missing.to_string(),
+            valid.replace("\"shell\"", "\"private-fixture-value\""),
+            valid.replace("\"shell\"", "\"files\""),
+            valid.replace("\"shell\"", "1"),
+            valid.replacen('{', "{\"private-fixture-value\":false,", 1),
+            valid.replacen('{', "{\"schemaVersion\":1,", 1),
+            valid.replacen('{', "{\"research\":true,", 1),
+            format!("{valid}{}", " ".repeat(MAX_CAPABILITY_DECLARATION_BYTES)),
+        ] {
+            let error = parse_declared_capabilities(&invalid, 7).unwrap_err();
+            assert_eq!(
+                error,
+                "invalid capability declaration on security manifest line 7"
+            );
+            assert!(!error.contains("private-fixture-value"));
+        }
+        let at_limit = format!(
+            "{valid}{}",
+            " ".repeat(MAX_CAPABILITY_DECLARATION_BYTES - valid.len())
+        );
+        assert!(parse_declared_capabilities(&at_limit, 7).unwrap().is_some());
+        assert!(parse_declared_capabilities("-", 7).unwrap().is_none());
+    }
+
     #[test]
     fn security_findings_have_stable_ids_for_unsafe_fixture() {
         let state = parse_security_state(
@@ -3014,7 +3329,7 @@ mod tests {
         for manifest in [
             "manifest\tprivate-fixture-value\n",
             "manifest\t1\n",
-            "manifest\t3\n",
+            "manifest\t4\n",
             "manifest\t2\tprivate-fixture-value\n",
             "manifest\t2\nmanifest\t2\n",
             "host\tbalanced\tfalse\ttrue\ttrue\ttrue\ttrue\ttrue\t36\nmanifest\t2\n",

@@ -21,6 +21,29 @@ let
       uid = field lib.types.ints.unsigned;
       gid = field lib.types.ints.unsigned;
       runnable = field lib.types.bool;
+      requestedCapabilities = lib.mkOption {
+        type = lib.types.listOf (
+          lib.types.enum [
+            "files"
+            "shell"
+            "terminal"
+            "model"
+            "research"
+            "worker"
+          ]
+        );
+        default = [
+          "model"
+          "research"
+          "worker"
+        ];
+        description = "Instance capability requests. Existing adapters retain their established mandatory broker, Research and worker gates.";
+      };
+      requireStateQuota = lib.mkOption {
+        type = lib.types.bool;
+        default = false;
+        description = "Whether the runtime also requires a fixed-size private state filesystem before starting.";
+      };
     };
   };
 in

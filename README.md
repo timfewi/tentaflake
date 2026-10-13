@@ -28,7 +28,8 @@ features. This is planned work; the current support matrix below still applies.
 
 Discover presets with `tentaflake runtimes --json`. A digest-pinned image and
 command can use the [common isolated workload definition](docs/agent-adapters.md#generic-isolated-workload)
-without a new adapter; generic startup remains gated pending capability admission.
+without a new adapter; generic startup requires matching requested capabilities
+and fixed-size workspace and private-state storage.
 
 ## Current scope
 
@@ -38,9 +39,9 @@ without a new adapter; generic startup remains gated pending capability admissio
 | Adapter registry and Hermes/ZeroClaw builders | Core |
 | Rust `tentaflake` CLI | Core |
 | Rust LLM/fetch policy broker | Core, opt-in per agent |
-| `secure-research-tool` web research | Pinned public service; required for balanced auto-start |
-| Disposable no-egress tool worker | Core; required for balanced auto-start |
-| Fixed-size persistent workspace and optional private state | Core; workspace required for balanced auto-start |
+| `secure-research-tool` web research | Pinned public service; explicit generic grant, required for legacy balanced auto-start |
+| Disposable no-egress tool worker | Core; explicit generic grant, required for legacy balanced auto-start |
+| Fixed-size persistent workspace and private state | Core; generic startup requires both, legacy private state remains optional |
 | Cosign image start gate | Core, opt-in per agent |
 | Encrypted Restic backup including selected state/workspace quota mounts | Core, opt-in |
 | Installer ISO | Core |
@@ -151,13 +152,16 @@ broker endpoints. Research agents use only the LLM broker on that network;
 web access goes through the separate Unix-socket relay. `autoStart = false`
 keeps the controller stopped at boot; activating the host can still create
 declared workers and workspace filesystems.
-Setting `autoStart = true` under `balanced` is accepted only after the exact
+For legacy adapters, `autoStart = true` under `balanced` is accepted only after the exact
 container also has an enabled LLM broker, disposable worker, fixed-size
 workspace quota, and research relay. Web access uses the pinned public
 [tentaflake-research](https://github.com/timfewi/tentaflake-research) service;
 native web tools and the legacy fetch broker are disabled for research agents.
 See [configuration and verification](docs/16-research.md). This prevents an
 incomplete 24/7 declaration from silently starting with missing policy boundaries.
+Generic workloads instead require each requested model/Research/worker grant
+and both workspace and private-state quotas, including for manual startup.
+Unrequested grants and resource overrides above host ceilings are rejected.
 
 Research VPN readiness uses the pinned module's existing
 `services.secureResearch.vpnObserver` options. The observer stays disabled by

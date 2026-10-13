@@ -3,7 +3,7 @@
 NixOS flake template for running isolated AI agents on a single machine.
 See `docs/agent-adapters.md` for current support. The planned common runtime and
 simple installed-host onboarding in `docs/roadmap.md` precede employee/company
-features; planned capability admission does not relax current startup gates.
+features; live admission and vendor acceptance remain separate requirements.
 
 ## Build & Test
 
@@ -91,7 +91,7 @@ are already published or require access to another repository for public checks.
 - `tentaflake.management` owns the private transport and SSH policy contract;
   `tailscale.enable` remains an alias for existing consumers. Balanced requires
   read-only configured capabilities and still rejects public OpenSSH. Manifest
-  v2 declarations do not prove enrollment or remote grants; legacy/incomplete
+  declarations do not prove enrollment or remote grants; legacy/incomplete
   management evidence stays unknown. Alternative transports require review.
 - `modules/` — reusable NixOS modules, including security, brokered egress,
   image-provenance gates, disposable workers, workspace quotas, encrypted
@@ -101,7 +101,8 @@ are already published or require access to another repository for public checks.
   configuration-free `tentaflake runtimes`, and generated adapter docs. Run
   `python3 scripts/runtime-catalog-docs.py` after catalog changes. Generic
   definitions use `lib/runtimeContract.nix` and the shared `containerSecurity`
-  builder; no model/Research acceptance or startup-gate relaxation is implied.
+  builder. Generic instances request exact model/Research/worker grants and
+  require both quotas for automatic and manual starts; legacy gates remain.
 - `adapters/` — lazy runtime registry and schema-v1 contracts; `lib/mkAgent.nix`
   selects one adapter. Legacy wrappers preserve their APIs and state. OpenClaw
   is a stopped scaffold without an OCI artifact; never advertise operational
@@ -128,7 +129,7 @@ are already published or require access to another repository for public checks.
   explicitly. Versions come from the root Cargo workspace; descriptions from
   crate manifests. Derive worker image references from the image metadata.
   Shared container identities live in `lib/constants.nix`.
-- A balanced agent with `autoStart = true` requires its exact LLM broker, worker,
+- A legacy balanced agent with `autoStart = true` requires its exact LLM broker, worker,
   workspace-quota, and research relay declarations; stopped scaffolds remain `network=none`.
 - Brokers retry with `RestartMode=direct` so temporary failures preserve the
   controller process. Explicit broker stops must still stop `Requires` controllers.

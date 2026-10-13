@@ -129,6 +129,9 @@ let
       memorySwap = "512m";
       cpus = "0.5";
       pidsLimit = 64;
+      nofile = 128;
+      tmpfsSize = "32m";
+      runTmpfsSize = "16m";
     };
   };
   generic = eval [
@@ -139,6 +142,109 @@ let
     })
   ];
   genericContainer = generic.virtualisation.oci-containers.containers.generic-coding;
+  genericEval =
+    changes: extra:
+    eval [
+      (builders.mkAgent {
+        adapter = "generic";
+        name = "coding";
+        definition = definition // changes;
+      })
+      extra
+    ];
+  genericQuota = {
+    enable = true;
+    workspace = "/var/lib/generic-coding/workspace";
+    ownerUid = 10000;
+    ownerGid = 10000;
+    sizeMiB = 128;
+    state = {
+      path = "/var/lib/generic-coding/state";
+      sizeMiB = 128;
+    };
+  };
+  genericStorage.tentaflake.workspaceQuota.agents.generic-coding = genericQuota;
+  genericOffline = genericEval { lifecycle = "service"; } genericStorage;
+  genericMissing = genericEval {
+    capabilities = [
+      "model"
+      "research"
+      "worker"
+    ];
+  } { };
+  genericMissingStarted = genericEval {
+    lifecycle = "service";
+    capabilities = [
+      "model"
+      "research"
+      "worker"
+    ];
+  } { };
+  genericWorker = {
+    enable = true;
+    workspace = "/var/lib/generic-coding/workspace";
+    containerUid = 10000;
+    containerGid = 10000;
+  };
+  genericWorkerPolicy = lib.recursiveUpdate genericStorage {
+    tentaflake.worker.agents.generic-coding = genericWorker;
+  };
+  genericWithWorker = genericEval {
+    lifecycle = "service";
+    capabilities = [ "worker" ];
+  } genericWorkerPolicy;
+  genericModelPolicy = lib.recursiveUpdate genericStorage {
+    tentaflake.networking.enable = lib.mkForce true;
+    tentaflake.broker.agents.generic-coding = {
+      enable = true;
+      networkName = "tf-generic-coding";
+      subnet = "10.203.42.0/30";
+      gateway = "10.203.42.1";
+      llm = {
+        enable = true;
+        providerCredentialFile = "/run/credentials/fixture-provider";
+        upstreamBaseUrl = "https://api.example.invalid/v1/";
+        allowedModels = [
+          {
+            name = "fixture-model";
+            inputMicrousdPerMillion = 1;
+            outputMicrousdPerMillion = 1;
+          }
+        ];
+      };
+    };
+  };
+  genericWithModel = genericEval {
+    lifecycle = "service";
+    capabilities = [ "model" ];
+  } genericModelPolicy;
+  genericModelContainer = genericWithModel.virtualisation.oci-containers.containers.generic-coding;
+  exceedsHost = {
+    memory = "3g";
+    memorySwap = "3g";
+    cpus = "2.00001";
+    pidsLimit = 513;
+    nofile = 4097;
+    tmpfsSize = "257m";
+    runTmpfsSize = "65m";
+  };
+  excessiveResources = eval (
+    lib.mapAttrsToList (
+      key: value:
+      builders.mkAgent {
+        adapter = "generic";
+        name = "ceiling-${lib.toLower key}";
+        definition = definition // {
+          resources =
+            definition.resources
+            // {
+              ${key} = value;
+            }
+            // lib.optionalAttrs (key == "memory") { memorySwap = value; };
+        };
+      }
+    ) exceedsHost
+  );
   nestedSources =
     access:
     (import ../lib/containerSecurity.nix { inherit lib; }).apply {
@@ -200,6 +306,7 @@ let
     { tentaflake.security.profile = lib.mkForce "dev"; }
   ];
 in
+assert import ./runtime-resources.nix { inherit lib; };
 assert lib.all
   (
     access:
@@ -228,6 +335,41 @@ assert lib.elem "--runtime=runsc" genericContainer.extraOptions;
 assert lib.elem "--memory=512m" genericContainer.extraOptions;
 assert lib.elem "--pids-limit=64" genericContainer.extraOptions;
 assert
+  let
+    line = lib.findFirst (lib.hasPrefix "agent\tgeneric-coding\t") "" (
+      lib.splitString "\n" generic.environment.etc."tentaflake/security.tsv".text
+    );
+    fields = lib.splitString "\t" line;
+  in
+  builtins.length fields == 31
+  &&
+    builtins.fromJSON (lib.elemAt fields 30) == {
+      schemaVersion = 1;
+      requested = [
+        "files"
+        "shell"
+        "terminal"
+      ];
+      research = false;
+      stateQuota = false;
+      requireStateQuota = true;
+    }
+  &&
+    builtins.fromJSON (lib.elemAt fields 29) == {
+      memoryBytes = 512 * 1024 * 1024;
+      memorySwapBytes = 512 * 1024 * 1024;
+      nanoCpus = 500000000;
+      pidsLimit = 64;
+      nofile = 128;
+      nproc = 64;
+    }
+  &&
+    builtins.fromJSON (lib.elemAt fields 27) == {
+      "/run" = 16 * 1024 * 1024;
+      "/tmp" = 32 * 1024 * 1024;
+      "/var/tmp" = 32 * 1024 * 1024;
+    };
+assert
   genericContainer.volumes == [
     "/var/lib/generic-coding/state:/state:rw"
     "/var/lib/generic-coding/workspace:/workspace:rw"
@@ -243,8 +385,104 @@ assert
     "--runtime"
     "runsc"
   ];
-assert lib.any (lib.hasInfix "requires an enabled broker") (failures genericStarted);
-assert lib.any (lib.hasInfix "requires its isolated Research relay") (failures genericStarted);
+assert lib.any (lib.hasInfix "workspace quota") (failures genericStarted);
+assert lib.any (lib.hasInfix "private state quota") (failures genericStarted);
+assert !(lib.any (lib.hasInfix "requires an enabled broker") (failures genericStarted));
+assert !(lib.any (lib.hasInfix "requires its isolated Research relay") (failures genericStarted));
+assert failures genericOffline == [ ];
+assert genericOffline.virtualisation.oci-containers.containers.generic-coding.autoStart;
+assert genericOffline.virtualisation.oci-containers.containers.generic-coding.networks == [ ];
+assert
+  genericOffline.virtualisation.oci-containers.containers.generic-coding.environmentFiles == [ ];
+assert
+  !(lib.hasInfix "Generic runtime admission refused:" genericOffline.systemd.services.docker-generic-coding.preStart);
+assert genericOffline.tentaflake.agentInstances.generic-coding.requireStateQuota;
+assert
+  generic.tentaflake.agentInstances.generic-coding.requestedCapabilities == [
+    "files"
+    "shell"
+    "terminal"
+  ];
+assert generic.tentaflake.security.resources.pidsLimit == 512;
+assert lib.hasInfix "Generic runtime admission refused: missing workspace-quota, state-quota."
+  generic.systemd.services.docker-generic-coding.preStart;
+assert failures genericMissing == [ ];
+assert lib.hasInfix
+  "Generic runtime admission refused: missing model, research, worker, workspace-quota, state-quota."
+  genericMissing.systemd.services.docker-generic-coding.preStart;
+assert lib.all (fragment: lib.any (lib.hasInfix fragment) (failures genericMissingStarted)) [
+  "requires an enabled broker"
+  "requires its isolated Research relay"
+  "requires an enabled disposable worker"
+  "workspace quota"
+  "private state quota"
+];
+assert failures genericWithWorker == [ ];
+assert lib.elem
+  "/var/lib/tentaflake-worker-generic-coding/results:/run/tentaflake-worker/results:ro"
+  genericWithWorker.virtualisation.oci-containers.containers.generic-coding.volumes;
+assert lib.any (lib.hasInfix "generic worker declarations must match") (
+  failures (genericEval { } genericWorkerPolicy)
+);
+assert lib.all
+  (
+    mismatch:
+    lib.any (lib.hasInfix "generic worker declarations must match") (
+      failures (
+        genericEval { capabilities = [ "worker" ]; } (
+          lib.recursiveUpdate genericWorkerPolicy {
+            tentaflake.worker.agents.generic-coding = mismatch;
+          }
+        )
+      )
+    )
+  )
+  [
+    { workspace = "/var/lib/other/workspace"; }
+    { containerUid = 10001; }
+    { containerGid = 10001; }
+  ];
+assert lib.all
+  (
+    mismatch:
+    lib.any (lib.hasInfix "quota must match") (
+      failures (
+        genericEval { } {
+          tentaflake.workspaceQuota.agents.generic-coding = genericQuota // mismatch;
+        }
+      )
+    )
+  )
+  [
+    { workspace = "/var/lib/other/workspace"; }
+    { ownerUid = 10001; }
+    { ownerGid = 10001; }
+    {
+      state = {
+        path = "/var/lib/other/state";
+        sizeMiB = 128;
+      };
+    }
+  ];
+assert failures genericWithModel == [ ];
+assert genericModelContainer.networks == [ "tf-generic-coding" ];
+assert !(lib.elem "--network=none" genericModelContainer.extraOptions);
+assert
+  genericModelContainer.environmentFiles == [ "/run/tentaflake-broker/generic-coding/agent.env" ];
+assert lib.any (lib.hasInfix "generic model broker must match") (
+  failures (genericEval { } genericModelPolicy)
+);
+assert
+  lib.length (
+    lib.filter (lib.hasInfix "host security resource ceilings") (failures excessiveResources)
+  ) == builtins.length (builtins.attrNames exceedsHost);
+assert lib.any (lib.hasInfix "effective memorySwap") (
+  failures (
+    genericEval {
+      resources.memorySwap = "256m";
+    } { }
+  )
+);
 assert lib.all (bad: rejects (runtimeContract (definition // bad))) [
   { schemaVersion = 2; }
   { image = "example.invalid/agent:latest"; }
@@ -276,7 +514,7 @@ assert lib.all (bad: rejects (runtimeContract (definition // bad))) [
   { resources.pidsLimit = null; }
   { resources.devices = [ "/dev/kvm" ]; }
   { lifecycle = "unmanaged"; }
-  { capabilities = [ "research" ]; }
+  { capabilities = [ "internet" ]; }
   {
     capabilities = [
       "shell"
@@ -430,4 +668,7 @@ assert rejects
       image = "example.invalid/runtime:latest";
     })
   ]).virtualisation.oci-containers.containers.hermes-mutable.image;
-import ./agent-state-quota.nix { inherit pkgs eval builders; }
+(import ./agent-state-quota.nix { inherit pkgs eval builders; })
+// {
+  deniedStartScript = genericMissing.systemd.services.docker-generic-coding.preStart;
+}

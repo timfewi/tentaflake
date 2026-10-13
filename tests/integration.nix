@@ -6,10 +6,9 @@
 #   - the dynamic status banner renders,
 #   - a declared agent produces its systemd unit, system user, and state dir.
 #
-# Agents are declared with `autoStart = false` so the VM never tries to pull
-# a container image over the (sandboxed, offline) network — we assert each
-# unit is *defined*, not that the container is running. A second agent from a
-# different runtime (ZeroClaw) proves the multi-runtime discovery path.
+# Vendor agents stay stopped so the VM never pulls their images. Generic
+# runtime probes reuse the existing local test image and exercise real startup
+# admission, isolation and resources; image acquisition/provenance is excluded.
 #
 # Run just this check:
 #   nix build .#checks.x86_64-linux.vm-integration -L
@@ -27,6 +26,35 @@
       { pkgs, ... }:
       let
         brokerPackage = pkgs.callPackage ../pkgs/tentaflake-broker { };
+        builders = self.lib.${pkgs.stdenv.hostPlatform.system};
+        genericImage = "fixture.invalid/tentaflake-network-test@sha256:0000000000000000000000000000000000000000000000000000000000000000";
+        genericDefinition = {
+          schemaVersion = 1;
+          image = genericImage;
+          command = [
+            "sleep"
+            "infinity"
+          ];
+          ownership = {
+            uid = 65534;
+            gid = 65534;
+          };
+          lifecycle = "stopped";
+          capabilities = [
+            "files"
+            "shell"
+            "terminal"
+          ];
+          resources = {
+            memory = "256m";
+            memorySwap = "256m";
+            cpus = "0.5";
+            nofile = 128;
+            pidsLimit = 128;
+            tmpfsSize = "8m";
+            runTmpfsSize = "8m";
+          };
+        };
         networkTestImage = pkgs.dockerTools.buildLayeredImage {
           name = "tentaflake-network-test";
           tag = "latest";
@@ -61,6 +89,18 @@
           (mkZeroClawAgent {
             name = "assistant";
             autoStart = false;
+          })
+          (builders.mkAgent {
+            adapter = "generic";
+            name = "offline";
+            definition = genericDefinition;
+          })
+          (builders.mkAgent {
+            adapter = "generic";
+            name = "missing-model";
+            definition = genericDefinition // {
+              capabilities = [ "model" ];
+            };
           })
         ];
 
@@ -108,6 +148,7 @@
         environment = {
           etc = {
             "tentaflake/network-test-image".source = networkTestImage;
+            "tentaflake/generic-test-image-reference".text = genericImage;
             "tentaflake/llm-upstream.py".source = ./fixtures/llm-upstream.py;
             "tentaflake/installer-disk-library".source = ../installer/disk.sh;
           };
@@ -191,6 +232,28 @@
             };
           };
           workspaceQuota.agents = {
+            generic-offline = {
+              enable = true;
+              workspace = "/var/lib/generic-offline/workspace";
+              sizeMiB = 128;
+              ownerUid = 65534;
+              ownerGid = 65534;
+              state = {
+                path = "/var/lib/generic-offline/state";
+                sizeMiB = 128;
+              };
+            };
+            generic-missing-model = {
+              enable = true;
+              workspace = "/var/lib/generic-missing-model/workspace";
+              sizeMiB = 128;
+              ownerUid = 65534;
+              ownerGid = 65534;
+              state = {
+                path = "/var/lib/generic-missing-model/state";
+                sizeMiB = 128;
+              };
+            };
             hermes-test = {
               enable = true;
               workspace = "/var/lib/hermes-test/workspace";
@@ -283,6 +346,7 @@
   testScript = ''
     import shlex
     import json
+    import re
 
     # runsc's sandbox helpers share the container PID cgroup. A limit of 16
     # can reject the sandbox bootstrap before the workload starts, so keep
@@ -309,7 +373,9 @@
         fields = ["agent", name, "balanced"] + ["true"] * 17
         fields += ["true", "false", "-", "true", endpoint, network,
                    "[]", json.dumps(tmpfs), "true", json.dumps(resources)]
-        manifest = "manifest\t2\nhost\tbalanced\tfalse\ttrue\ttrue\ttrue\tfalse\t36\n"
+        # This unmanaged live-inspect probe has no adapter capability declaration.
+        fields += ["-"]
+        manifest = "manifest\t3\nhost\tbalanced\tfalse\ttrue\ttrue\ttrue\tfalse\t36\n"
         manifest += "management\ttailscale\ttrue\ttrue\ttailnet-policy\n"
         manifest += "\t".join(fields) + "\n"
         config = (f"backend={backend}\nflake_dir=/fixture\nhost_name=fixture\n"
@@ -475,13 +541,14 @@
         assert code == 1, report
         assert json.loads(report)["unknown_agents"] == ["agent-1"], report
 
-    with subtest("security doctor accepts the fail-closed balanced capsule"):
-        report = machine.succeed("tentaflake doctor --security --json")
-        machine.succeed(
-            "tentaflake doctor --security --json | "
-            "jq -e '.profile == \"balanced\" and "
-            "([.findings[].id] | index(\"TFSEC-013\")) != null'"
-        )
+    with subtest("security doctor reports exact missing grants for stopped capsules"):
+        status, report = machine.execute("tentaflake doctor --security --json")
+        assert status == 1, report
+        posture = json.loads(report)
+        assert posture["profile"] == "balanced", posture
+        findings = {finding["id"] for finding in posture["findings"]}
+        assert {"TFSEC-040", "TFSEC-041"} <= findings, report
+        assert "TFSEC-013" not in findings, report
         assert "TFSEC-002" not in report, report
         assert "TFSEC-011" not in report, report
 
@@ -614,6 +681,108 @@
                 machine.succeed(f"rm -f {path}/over-quota")
         machine.succeed("test -d /var/lib/hermes-test/skills; test -d /var/lib/hermes-test/cron")
         machine.succeed("test -d /var/lib/zeroclaw-assistant/.zeroclaw/data")
+
+    with subtest("generic startup admits only its exact requested capabilities"):
+        machine.succeed("docker load < /etc/tentaflake/network-test-image")
+        image_id = machine.succeed(
+            "docker image inspect --format '{{.Id}}' tentaflake-network-test:latest"
+        ).strip()
+        assert re.fullmatch(r"sha256:[0-9a-f]{64}", image_id), image_id
+        placeholder = machine.succeed("cat /etc/tentaflake/generic-test-image-reference").strip()
+        assert re.fullmatch(r"fixture[.]invalid/tentaflake-network-test@sha256:0{64}", placeholder)
+        names = ["generic-offline", "generic-missing-model"]
+        for name in names:
+            # VM-only acquisition substitution: the local archive has no registry
+            # RepoDigest. Change exactly its image argument to the loaded immutable
+            # config digest. Keep generated flags, preStart and dependencies intact;
+            # this exercises runtime admission, not image provenance or pulling.
+            unit = f"docker-{name}.service"
+            text = machine.succeed(f"systemctl cat {unit}")
+            start = next(line.removeprefix("ExecStart=").split()[0]
+                         for line in text.splitlines() if line.startswith("ExecStart="))
+            script = machine.succeed("cat " + shlex.quote(start))
+            assert script.count(placeholder) == 1, script
+            replacement = f"/run/{name}-fixture-start"
+            machine.succeed(f"printf %s {shlex.quote(script.replace(placeholder, image_id))} > {replacement}")
+            machine.succeed(f"chmod 0700 {replacement}; mkdir -p /run/systemd/system/{unit}.d")
+            override = f"[Service]\nExecStart=\nExecStart={replacement}\n"
+            machine.succeed(f"printf %s {shlex.quote(override)} > /run/systemd/system/{unit}.d/fixture-image.conf")
+            for kind, directory in [("state", "state"), ("workspace", "workspace")]:
+                machine.wait_for_unit(f"tentaflake-{kind}-quota-{name}.service")
+                source = f"/var/lib/{name}/{directory}"
+                machine.succeed(f"findmnt --mountpoint {source} -n -o FSTYPE | grep -Fx btrfs")
+                machine.succeed(f"test $(stat -c %u:%g {source}) = 65534:65534")
+        machine.succeed("systemctl daemon-reload; systemctl start docker-generic-offline.service")
+        machine.wait_for_unit("docker-generic-offline.service")
+        observed = json.loads(machine.succeed("docker inspect generic-offline"))[0]
+        assert observed["State"]["Running"], observed["State"]
+        assert observed["Image"] == image_id, observed["Image"]
+        host = observed["HostConfig"]
+        assert host["Runtime"] == "runsc", host
+        assert host["NetworkMode"] == "none", host
+        assert set(observed["NetworkSettings"]["Networks"]) <= {"none"}, observed["NetworkSettings"]
+        assert host["ReadonlyRootfs"] and not host["Privileged"], host
+        assert observed["Config"]["User"] == "65534:65534", observed["Config"]
+        resources = dict(memoryBytes=268435456, memorySwapBytes=268435456,
+                         nanoCpus=500000000, pidsLimit=128, nofile=128, nproc=128)
+        for key, expected in [("Memory", 268435456), ("MemorySwap", 268435456),
+                              ("NanoCpus", 500000000), ("PidsLimit", 128)]:
+            assert host[key] == expected, (key, host[key])
+        assert {limit["Name"]: (limit["Soft"], limit["Hard"]) for limit in host["Ulimits"]} == {
+            "nofile": (128, 128), "nproc": (128, 128)
+        }, host["Ulimits"]
+        assert set(host["Tmpfs"]) == {"/tmp", "/run", "/var/tmp"}, host["Tmpfs"]
+        for options in host["Tmpfs"].values():
+            assert set(options.split(",")) == {"rw", "nosuid", "nodev", "noexec", "size=8m"}, options
+        mounts = {mount["Destination"]: (mount["Source"], mount["RW"])
+                  for mount in observed["Mounts"] if mount["Type"] == "bind"}
+        assert mounts == {
+            "/state": ("/var/lib/generic-offline/state", True),
+            "/workspace": ("/var/lib/generic-offline/workspace", True),
+        }, mounts
+        environment = {entry.split("=", 1)[0] for entry in observed["Config"]["Env"]}
+        assert not environment.intersection({
+            "OPENAI_API_KEY", "OPENAI_BASE_URL", "TENTAFLAKE_BROKER_TOKEN",
+            "TENTAFLAKE_LLM_BASE_URL", "TENTAFLAKE_RESEARCH_COMMAND", "TENTAFLAKE_RESEARCH_SOCKET",
+        }), environment
+        machine.succeed(
+            "docker exec generic-offline sh -c " + shlex.quote(
+                "test $(id -u) = 65534 && test $(pwd) = /workspace && "
+                "test ! -e /run/tentaflake-research && test ! -e /run/tentaflake-worker && "
+                "test ! -e /run/docker.sock && "
+                "printf state-ok > /state/probe && printf workspace-ok > /workspace/probe"
+            )
+        )
+        machine.succeed("test $(cat /var/lib/generic-offline/state/probe) = state-ok")
+        machine.succeed("test $(cat /var/lib/generic-offline/workspace/probe) = workspace-ok")
+        machine.fail("docker exec generic-offline curl --connect-timeout 1 --max-time 2 --fail --silent http://10.203.30.1:7811/healthz")
+        record = next(line.split("\t") for line in machine.succeed("cat /etc/tentaflake/security.tsv").splitlines()
+                      if line.startswith("agent\tgeneric-offline\t"))
+        assert json.loads(record[29]) == resources, record
+        assert json.loads(record[27]) == {path: 8388608 for path in ("/run", "/tmp", "/var/tmp")}, record
+        assert json.loads(record[30]) == {
+            "schemaVersion": 1, "requested": ["files", "shell", "terminal"],
+            "research": False, "stateQuota": True, "requireStateQuota": True,
+        }, record
+        for unit in ["tentaflake-broker-llm-generic-offline.service",
+                     "tentaflake-research-generic-offline.socket", "tentaflake-worker-generic-offline.path"]:
+            assert machine.succeed(f"systemctl show -p LoadState --value {unit}").strip() == "not-found", unit
+        machine.succeed("systemctl stop docker-generic-offline.service")
+        before_refusal = int(machine.succeed("date +%s").strip())
+        machine.fail("systemctl start docker-generic-missing-model.service")
+        journal = machine.succeed("journalctl --no-pager -b -u docker-generic-missing-model.service")
+        assert "Generic runtime admission refused: missing model." in journal, journal
+        machine.succeed("systemctl stop docker-generic-missing-model.service; systemctl reset-failed docker-generic-missing-model.service")
+        machine.fail("docker inspect generic-missing-model")
+        after_refusal = int(machine.succeed("date +%s").strip()) + 1
+        creations = machine.succeed(
+            f"docker events --since {before_refusal} --until {after_refusal} "
+            "--filter type=container --filter event=create --filter container=generic-missing-model"
+        ).strip()
+        assert creations == "", f"refused start reached container creation: {creations}"
+        for name in names:
+            machine.succeed(f"rm /run/{name}-fixture-start /run/systemd/system/docker-{name}.service.d/fixture-image.conf")
+        machine.succeed("systemctl daemon-reload")
 
     with subtest("stopping private state ownership stops its dependent controller"):
         machine.succeed("systemctl start quota-controller-probe.service")
@@ -1447,6 +1616,7 @@
         )
 
     with subtest("security doctor reports an intentionally unsafe fixture"):
+        # Keep this incomplete v2 fixture as legacy-manifest compatibility evidence.
         machine.succeed(
             "cat > /tmp/tentaflake-unsafe.tsv <<'EOF'\n"
             "manifest\t2\n"

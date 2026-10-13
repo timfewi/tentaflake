@@ -162,6 +162,7 @@
               ];
               quotaPrepare = pkgs.writeText "state-quota-prepare" tests.prepareScript;
               quotaOwner = pkgs.writeText "state-quota-owner" tests.ownerScript;
+              deniedStart = pkgs.writeText "generic-admission-refusal" tests.deniedStartScript;
               src = lib.fileset.toSource {
                 root = ./.;
                 fileset = lib.fileset.unions [
@@ -175,6 +176,10 @@
             ''
               python3 "$src/scripts/runtime-catalog-docs.py" --check --root "$src"
               python3 "$src/scripts/state-quota-test.py" "$quotaPrepare" "$quotaOwner"
+              status=0
+              bash "$deniedStart" > admission.log 2>&1 || status=$?
+              test "$status" -eq 1
+              grep -Fx 'Generic runtime admission refused: missing model, research, worker, workspace-quota, state-quota.' admission.log
               touch "$out"
             '';
         module-evaluation = import ./tests/module-eval.nix {

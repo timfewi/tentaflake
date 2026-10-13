@@ -14,7 +14,9 @@ automatically started balanced controller must declare its matching quota;
 evaluation fails until the path and numeric owner match the runtime builder.
 
 Private state is opt-in through `state`; omitting it preserves existing state
-and workspace behavior. It bounds sessions and caches written to the adapter's
+and workspace behavior for legacy adapters. Generic workloads require both
+workspace and private-state quotas before automatic or manual startup; stopped
+definitions may be planned without either. It bounds sessions and caches written to the adapter's
 state mount. Broker/worker audit, backups, other host paths and aggregate sparse
 image allocation still require host free-space monitoring. This change does not
 relax startup admission or establish acceptance of a new agent runtime.

@@ -8,119 +8,20 @@ let
   cfg = config.tentaflake.security;
   secure = cfg.profile != "dev";
   bool = value: if value then "true" else "false";
-  maxMemoryBytes = 1024 * 1024 * 1024 * 1024;
-  maxTmpfsBytes = 64 * 1024 * 1024 * 1024;
-  maxCpus = 1024;
-  sizeComponents =
-    value:
-    let
-      matched = builtins.match "^([1-9][0-9]*)([kKmMgGtT]?)$" value;
-      factors = {
-        "" = 1;
-        k = 1024;
-        m = 1024 * 1024;
-        g = 1024 * 1024 * 1024;
-        t = 1024 * 1024 * 1024 * 1024;
-      };
-    in
-    if matched == null || builtins.stringLength (lib.head matched) > 13 then
-      null
-    else
-      {
-        amount = builtins.fromJSON (lib.head matched);
-        factor = factors.${lib.toLower (lib.elemAt matched 1)};
-      };
-  validSize =
-    maximum: value:
-    let
-      components = sizeComponents value;
-    in
-    components != null && components.amount <= maximum / components.factor;
-  sizeBytes =
-    maximum: value:
-    let
-      components = sizeComponents value;
-    in
-    if components == null || components.amount > maximum / components.factor then
-      0
-    else
-      components.amount * components.factor;
-  digitValues = {
-    "0" = 0;
-    "1" = 1;
-    "2" = 2;
-    "3" = 3;
-    "4" = 4;
-    "5" = 5;
-    "6" = 6;
-    "7" = 7;
-    "8" = 8;
-    "9" = 9;
-  };
-  digitsToInt =
-    value:
-    lib.foldl' (total: digit: total * 10 + digitValues.${digit}) 0 (lib.stringToCharacters value);
-  cpuComponents =
-    value:
-    let
-      matched = builtins.match "^([0-9]+)([.]([0-9]+))?$" value;
-      fraction = if matched == null || lib.elemAt matched 2 == null then "" else lib.elemAt matched 2;
-    in
-    if
-      matched == null
-      || builtins.stringLength (lib.head matched) > 4
-      || builtins.stringLength fraction > 5
-    then
-      null
-    else
-      {
-        whole = digitsToInt (lib.head matched);
-        inherit fraction;
-      };
-  cpuNano =
-    value:
-    let
-      components = cpuComponents value;
-      fractionLength = if components == null then 0 else builtins.stringLength components.fraction;
-      fractionFactor = lib.foldl' (total: _: total * 10) 1 (lib.replicate (9 - fractionLength) null);
-    in
-    if components == null then
-      0
-    else
-      components.whole * 1000000000 + digitsToInt components.fraction * fractionFactor;
-  validCpus =
-    value:
-    let
-      nano = cpuNano value;
-    in
-    builtins.stringLength value <= 16
-    && builtins.match "^([1-9][0-9]*([.][0-9]+)?|0[.][0-9]*[1-9][0-9]*)$" value != null
-    && nano > 0
-    && nano <= maxCpus * 1000000000;
+  inherit (import ../lib/resourceLimits.nix { inherit lib; })
+    maxMemoryBytes
+    maxTmpfsBytes
+    validSize
+    sizeBytes
+    validCpus
+    validResource
+    ociResources
+    ociTmpfs
+    ;
   allOptions = container: (container.extraOptions or [ ]) ++ (container.preRunExtraOptions or [ ]);
   hasOption =
     prefix: container:
     lib.any (option: option == prefix || lib.hasPrefix "${prefix}=" option) (allOptions container);
-  optionValue =
-    prefix: container:
-    let
-      values = lib.filter (lib.hasPrefix prefix) (allOptions container);
-    in
-    if builtins.length values == 1 then lib.removePrefix prefix (lib.head values) else null;
-  positiveOptionInt =
-    prefix: container:
-    let
-      value = optionValue prefix container;
-      parsed =
-        if value != null && builtins.match "^[1-9][0-9]*$" value != null then
-          builtins.tryEval (builtins.fromJSON value)
-        else
-          {
-            success = false;
-            value = 0;
-          };
-    in
-    if parsed.success && parsed.value > 0 then parsed.value else 0;
   pathWithin = root: path: path == root || lib.hasPrefix "${root}/" path;
   dangerousMountRoots = [
     "/"
@@ -194,37 +95,25 @@ let
           config.security.apparmor.enable && !hasOption "--security-opt=apparmor=unconfined" container;
       provenancePolicy = lib.attrByPath [ name ] null config.tentaflake.imageProvenance.agents;
       provenanceGateConfigured = provenancePolicy != null && provenancePolicy.enable;
-      declaredPidsLimit = positiveOptionInt "--pids-limit=" container;
+      liveResources = ociResources (allOptions container);
+      liveTmpfs = ociTmpfs (allOptions container);
       declaredMounts = if secure then builtins.toJSON (container.volumes or [ ]) else "-";
-      declaredTmpfs =
-        if secure then
-          builtins.toJSON {
-            "/run" = sizeBytes maxTmpfsBytes cfg.resources.runTmpfsSize;
-            "/tmp" = sizeBytes maxTmpfsBytes cfg.resources.tmpfsSize;
-            "/var/tmp" = sizeBytes maxTmpfsBytes cfg.resources.tmpfsSize;
-          }
-        else
-          "-";
+      declaredTmpfs = if secure && liveTmpfs != null then builtins.toJSON liveTmpfs else "-";
       declaredPortsAbsent = if secure then bool ((container.ports or [ ]) == [ ]) else "-";
       declaredLiveResources =
-        if
-          secure
-          && resourcesComplete container
-          && declaredPidsLimit > 0
-          && validSize maxMemoryBytes cfg.resources.memory
-          && validSize maxMemoryBytes cfg.resources.memorySwap
-          && validCpus cfg.resources.cpus
-        then
-          builtins.toJSON {
-            memoryBytes = sizeBytes maxMemoryBytes cfg.resources.memory;
-            memorySwapBytes = sizeBytes maxMemoryBytes cfg.resources.memorySwap;
-            nanoCpus = cpuNano cfg.resources.cpus;
-            pidsLimit = declaredPidsLimit;
-            nofile = cfg.resources.nofile;
-            nproc = declaredPidsLimit;
-          }
+        if secure && liveResources != null then builtins.toJSON liveResources else "-";
+      instance = config.tentaflake.agentInstances.${name} or null;
+      declaredCapabilities =
+        if instance == null then
+          "-"
         else
-          "-";
+          builtins.toJSON {
+            schemaVersion = 1;
+            requested = instance.requestedCapabilities;
+            research = builtins.hasAttr name (lib.attrByPath [ "tentaflake" "research" "agents" ] { } config);
+            stateQuota = quotaEnabled && quota.state != null;
+            inherit (instance) requireStateQuota;
+          };
       fields = [
         "agent"
         name
@@ -258,12 +147,13 @@ let
         declaredTmpfs
         declaredPortsAbsent
         declaredLiveResources
+        declaredCapabilities
       ];
     in
     lib.concatStringsSep "\t" fields;
   securityManifest = lib.concatStringsSep "\n" (
     [
-      "manifest\t2"
+      "manifest\t3"
       (lib.concatStringsSep "\t" [
         "host"
         cfg.profile
@@ -328,6 +218,11 @@ in
         default = 4096;
         description = "Per-agent open-file ulimit.";
       };
+      pidsLimit = lib.mkOption {
+        type = lib.types.ints.positive;
+        default = 512;
+        description = "Maximum process count for a generic workload, including threads.";
+      };
       tmpfsSize = lib.mkOption {
         type = lib.types.str;
         default = "256m";
@@ -391,6 +286,11 @@ in
         {
           assertion = validCpus cfg.resources.cpus;
           message = "tentaflake: secure cpus must be a positive decimal no greater than 1024 with at most five fractional digits.";
+        }
+        {
+          assertion =
+            validResource "nofile" cfg.resources.nofile && validResource "pidsLimit" cfg.resources.pidsLimit;
+          message = "tentaflake: secure file and process limits must be positive integers no greater than 4294967294.";
         }
         {
           assertion =

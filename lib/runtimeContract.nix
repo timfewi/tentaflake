@@ -33,21 +33,7 @@ let
     "runTmpfsSize"
   ] (raw.resources or { });
   positive = n: builtins.isInt n && n > 0 && n <= 4294967294;
-  size = n: builtins.isString n && builtins.match "[1-9][0-9]*[bkmgBKMG]?" n != null;
-  validResource =
-    key: value:
-    if
-      lib.elem key [
-        "nofile"
-        "pidsLimit"
-      ]
-    then
-      positive value
-    else if key == "cpus" then
-      builtins.isString value
-      && builtins.match "([1-9][0-9]*([.][0-9]+)?|0[.][0-9]*[1-9][0-9]*)" value != null
-    else
-      size value;
+  inherit (import ./resourceLimits.nix { inherit lib; }) validResource maxMemoryBytes sizeBytes;
   command = raw.command or [ ];
   capabilities =
     raw.capabilities or [
@@ -78,6 +64,12 @@ then
 else if !lib.all (key: validResource key resources.${key}) (builtins.attrNames resources) then
   fail "resources must contain positive bounded OCI limits."
 else if
+  resources ? memory
+  && resources ? memorySwap
+  && sizeBytes maxMemoryBytes resources.memorySwap < sizeBytes maxMemoryBytes resources.memory
+then
+  fail "resources.memorySwap must be greater than or equal to resources.memory."
+else if
   !lib.elem lifecycle [
     "stopped"
     "service"
@@ -92,12 +84,14 @@ else if
       "files"
       "shell"
       "terminal"
+      "model"
+      "research"
       "worker"
     ]
   ) capabilities
   || lib.unique capabilities != capabilities
 then
-  fail "unsupported or duplicate capabilities; generic model/Research hooks are not accepted yet."
+  fail "unsupported or duplicate capabilities."
 else
   {
     schemaVersion = 1;

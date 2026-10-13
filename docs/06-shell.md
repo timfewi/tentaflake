@@ -70,7 +70,7 @@ high findings return non-zero. JSON output is CI-friendly. The desired-state che
 covers the declared profile, capsule flags, mounts, images, credential files,
 OpenSSH, AppArmor, Docker-group membership, backup declaration, workspace
 quota, missing broker, and the declared private management/SSH capabilities.
-Manifest v2 carries a separate typed management record; unversioned legacy or
+Manifest v3 retains the separate typed management record introduced in v2; unversioned legacy or
 incomplete records report `TFSEC-038` unknown management evidence. Configured
 capabilities do not prove enrollment or effective remote grants. It also
 inspects root-disk pressure, the last

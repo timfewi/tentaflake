@@ -3,6 +3,10 @@
 let
   inherit (pkgs) lib;
   builders = import ../lib { inherit pkgs lib; };
+  genericNames = [
+    "generic-research"
+    "generic-ungranted"
+  ];
   image = pkgs.dockerTools.buildLayeredImage {
     name = "tentaflake-research-fixture";
     tag = "test";
@@ -29,8 +33,26 @@ let
     else:
         connection.close()
         raise AssertionError("capsule had direct public IP access")
+    if len(sys.argv) == 2:
+        command = os.environ["TENTAFLAKE_RESEARCH_COMMAND"]
+        research_socket = os.environ["TENTAFLAKE_RESEARCH_SOCKET"]
+        assert research_socket == "/run/tentaflake-research/socket"
+        assert os.access(command, os.X_OK), "projected Research command is unavailable"
+        assert not os.path.exists("/run/tentaflake-broker")
+        for peer in ["hermes-research", "zeroclaw-research", "generic-ungranted"]:
+            assert not os.path.exists("/run/tentaflake-research/" + peer)
+    elif sys.argv[2] == "ungranted":
+        assert "TENTAFLAKE_RESEARCH_COMMAND" not in os.environ
+        assert "TENTAFLAKE_RESEARCH_SOCKET" not in os.environ
+        assert not os.path.exists("/run/tentaflake-research")
+        assert not os.path.exists("/run/tentaflake-broker")
+        print("ungranted generic capsule has no Research discovery, socket or direct IP")
+        sys.exit(0)
+    else:
+        command = sys.argv[2]
+        research_socket = "/run/tentaflake-research/socket"
     child = subprocess.Popen(
-        [sys.argv[2], "--socket", "/run/tentaflake-research/socket"],
+        [command, "--socket", research_socket],
         stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True,
     )
     def send(message):
@@ -97,7 +119,21 @@ pkgs.testers.runNixOSTest {
           http_request.enabled = true;
         };
       })
-    ];
+    ]
+    ++ map (
+      name:
+      builders.mkAgent {
+        adapter = "generic";
+        name = lib.removePrefix "generic-" name;
+        definition = {
+          schemaVersion = 1;
+          image = builders.constants.hermesImage;
+          command = [ "/bin/python3" ];
+          lifecycle = "stopped";
+          capabilities = lib.optional (name == "generic-research") "research";
+        };
+      }
+    ) genericNames;
     virtualisation = {
       memorySize = 2048;
       docker.enable = true;
@@ -112,6 +148,7 @@ pkgs.testers.runNixOSTest {
       research.agents = {
         hermes-research.uid = 62101;
         zeroclaw-research.uid = 62102;
+        generic-research.uid = 62103;
       };
     };
     services.secureResearch = {
@@ -126,13 +163,38 @@ pkgs.testers.runNixOSTest {
       etc = {
         "research-fixture-image".source = image;
         "research-fixture-mounts.json".text = builtins.toJSON (
-          lib.genAttrs [ "hermes-research" "zeroclaw-research" ] (
+          lib.genAttrs
+            (
+              [
+                "hermes-research"
+                "zeroclaw-research"
+              ]
+              ++ genericNames
+            )
+            (
+              name:
+              (import ../lib/researchClient.nix {
+                inherit config lib pkgs;
+                containerName = name;
+                settings = null;
+              }).volumes
+            )
+        );
+        "research-fixture-generic.json".text = builtins.toJSON (
+          lib.genAttrs genericNames (
             name:
-            (import ../lib/researchClient.nix {
-              inherit config lib pkgs;
-              containerName = name;
-              settings = null;
-            }).volumes
+            let
+              container = config.virtualisation.oci-containers.containers.${name};
+            in
+            {
+              inherit (container)
+                environment
+                environmentFiles
+                networks
+                extraOptions
+                ;
+              inherit (config.tentaflake.agentInstances.${name}) requestedCapabilities;
+            }
           )
         );
         "research-fixture-configs.json".text = builtins.toJSON (
@@ -159,6 +221,7 @@ pkgs.testers.runNixOSTest {
     machine.wait_for_unit("docker.service")
     machine.succeed("docker load < /etc/research-fixture-image")
     mounts = json.loads(machine.succeed("cat /etc/research-fixture-mounts.json"))
+    generic = json.loads(machine.succeed("cat /etc/research-fixture-generic.json"))
     sources = json.loads(machine.succeed("cat /etc/research-fixture-configs.json"))
     policies = {}
     for name, path in sources.items():
@@ -170,15 +233,39 @@ pkgs.testers.runNixOSTest {
     for tool in ["browser", "web_search", "web_fetch", "http_request"]:
         assert policies["zeroclaw-research"][tool]["enabled"] is False
     assert policies["zeroclaw-research"]["mcp"]["servers"][0]["name"] == "secure-research-tool"
-    for name, uid in [("hermes-research", 10000), ("zeroclaw-research", 65534)]:
-        machine.wait_for_unit(f"tentaflake-research-{name}.socket")
-        client = policies[name]["mcp_servers"]["secure-research-tool"]["command"] if name.startswith("hermes-") else policies[name]["mcp"]["servers"][0]["command"]
+    # Project the generated discovery and exact grants into the existing fixture
+    # image. This does not start a generated generic unit or accept a vendor image.
+    for name, uid in [("hermes-research", 10000), ("zeroclaw-research", 65534),
+                      ("generic-research", 10000), ("generic-ungranted", 10000)]:
+        granted = name != "generic-ungranted"
+        if granted:
+            machine.wait_for_unit(f"tentaflake-research-{name}.socket")
         argv = ["docker", "run", "--rm", "--runtime=runsc", "--network=none", "--read-only", "--user", f"{uid}:{uid}",
                 "--cap-drop=ALL", "--security-opt=no-new-privileges:true", "--security-opt=apparmor=docker-default",
                 "--pids-limit=128", "--memory=256m", "--tmpfs=/run:rw,nosuid,nodev,noexec,size=16m"]
+        if name in generic:
+            declaration = generic[name]
+            assert declaration["requestedCapabilities"] == (["research"] if granted else [])
+            assert declaration["networks"] == [], "Research-only capsule gained a model network"
+            assert declaration["environmentFiles"] == [], "Research-only capsule gained model credentials"
+            assert "--network=none" in declaration["extraOptions"]
+            expected_environment = {"HOME", "TENTAFLAKE_RESEARCH_COMMAND", "TENTAFLAKE_RESEARCH_SOCKET"} if granted else {"HOME"}
+            assert set(declaration["environment"]) == expected_environment
+            expected_socket = [f"/run/tentaflake-research/{name}:/run/tentaflake-research:ro"] if granted else []
+            assert [mount for mount in mounts[name] if mount.startswith("/run/")] == expected_socket
+            assert all(mount.endswith(":ro") for mount in mounts[name])
+            if not granted:
+                assert mounts[name] == [], "ungranted generic capsule gained a client closure"
+                machine.fail("test -e /run/tentaflake-research/generic-ungranted/socket")
+            for key, value in declaration["environment"].items():
+                argv += ["--env", f"{key}={value}"]
+            client_arguments = [] if granted else ["ungranted"]
+        else:
+            client = policies[name]["mcp_servers"]["secure-research-tool"]["command"] if name.startswith("hermes-") else policies[name]["mcp"]["servers"][0]["command"]
+            client_arguments = [client]
         for mount in mounts[name] + ["${probe}:/research-probe.py:ro"]:
             argv += ["--volume", mount]
-        argv += ["tentaflake-research-fixture:test", "/bin/python3", "/research-probe.py", str(uid), client]
+        argv += ["tentaflake-research-fixture:test", "/bin/python3", "/research-probe.py", str(uid)] + client_arguments
         machine.succeed(shlex.join(argv))
   '';
 }
