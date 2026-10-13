@@ -96,7 +96,7 @@ lists the available recipes:
 
 ```bash
 just fast                # static checks and unit tests
-just eval                # configuration evaluation with Research closure preparation
+just eval                # sequential flake evaluation with Research closure preparation
 just generated-flake     # validate the installer-generated flake
 just e2e                 # complete automated local gate
 just e2e-devcontainer    # rebuild and smoke-test the locked Dev Container
