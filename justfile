@@ -32,6 +32,7 @@ image-catalog:
 ci-policy:
     python3 scripts/test_ci_changes.py
     python3 scripts/test_eval_flake.py
+    python3 scripts/test_eval_flake_nix.py
     actionlint .github/workflows/*.yml
 
 # Materialize exact research closures before read-only flake evaluation

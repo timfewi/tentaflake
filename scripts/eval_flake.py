@@ -83,7 +83,8 @@ def evaluation_plan(inventory):
 def evaluate(repository):
     # A Git input retains ordinary tracked-source filtering, including dirty
     # tracked edits. Never snapshot the checkout with path: (ignored state leaks).
-    source = "git+" + repository.as_uri()
+    # CI checks out one commit; explicitly allow missing history/revCount.
+    source = "git+" + repository.as_uri() + "?shallow=1"
     with tempfile.TemporaryDirectory(prefix="tentaflake-eval-") as directory:
         work = Path(directory)
         (work / "flake.nix").write_text(PROJECTION.replace("@SOURCE@", json.dumps(source)))
