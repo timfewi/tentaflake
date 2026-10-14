@@ -151,9 +151,6 @@ fn observe_unit(busctl: &Path, name: &str, method: &str) -> Result<UnitObservati
         &read_bus(busctl, &arguments, deadline, MAX_RESPONSE_BYTES)?,
         name,
     )?;
-    if !matches!(observed.load_state.as_str(), "loaded" | "masked") {
-        return Err("systemd unit metadata is unavailable".into());
-    }
     let service = if name.ends_with(".service") {
         let mut service_arguments = vec![
             "get-property",
@@ -404,6 +401,11 @@ fn parse_unit(bytes: &[u8], name: &str) -> Result<UnitObservation, String> {
         || (job_id != 0 && job_path != format!("/org/freedesktop/systemd1/job/{job_id}"))
     {
         return Err("invalid or mismatched systemd unit properties".into());
+    }
+    if !matches!(load_state.as_str(), "loaded" | "masked") {
+        return Err(format!(
+            "systemd unit metadata is unavailable: {id} has LoadState={load_state}"
+        ));
     }
     Ok(UnitObservation {
         id,
@@ -816,6 +818,29 @@ mod tests {
         ] {
             assert!(parse_unit(changed.as_bytes(), "dbus-broker.service").is_err());
         }
+    }
+
+    #[test]
+    fn unavailable_unit_diagnostic_preserves_refusal_and_validates_identity() {
+        for state in ["stub", "not-found", "bad-setting", "error", "merged"] {
+            let response = UNIT.replace("\"loaded\"", &format!("\"{state}\""));
+            assert_eq!(
+                parse_unit(response.as_bytes(), "dbus-broker.service").unwrap_err(),
+                format!(
+                    "systemd unit metadata is unavailable: dbus-broker.service has LoadState={state}"
+                )
+            );
+            // Do not echo an alias or unvalidated response content in diagnostics.
+            assert_eq!(
+                parse_unit(response.as_bytes(), "other.service").unwrap_err(),
+                "invalid or mismatched systemd unit properties"
+            );
+        }
+        let invalid = UNIT.replace("\"loaded\"", "\"PRIVATE RESPONSE DATA\"");
+        assert_eq!(
+            parse_unit(invalid.as_bytes(), "dbus-broker.service").unwrap_err(),
+            "invalid or mismatched systemd unit properties"
+        );
     }
 
     #[test]
