@@ -44,8 +44,9 @@ Current integration work:
   work still need their relevant runtime gates and final public pin integration.
   Exact requested capabilities and live evidence remain prerequisites; neither
   a configured endpoint nor a declaration grants access.
-- **Reference coding agent, PR #168:** pinned native package and image evidence
-  exist. An actual model turn, tool use, file change and lifecycle acceptance are
+- **Reference coding agent, merged PR #168:** native Codex 0.162.1 package,
+  immutable image descriptor and seven wrapper regressions pass at `51a8f49`.
+  Main merge `919d270` preserves the reviewed pins and package/image artifacts. An actual model turn, tool use, file change and lifecycle acceptance are
   still required (#136).
 - **Worker safety/maintenance, PRs #169/#170:** bounded artifact transport and
   exact CID handling precede shared admission fencing. Guarded image loading

@@ -114,6 +114,12 @@ are already published or require access to another repository for public checks.
   `just image-catalog` checks the saved metadata offline. Preserve raw evidence
   bytes. Acquisition stays separate from Research, and metadata review proves
   no signature or runtime acceptance. See `docs/20-base-images.md`.
+- `images/codex/` owns the pinned native reference package/image and entrypoint,
+  separately from the preset catalog. Preserve upstream layout and notices;
+  tokens stay in the runtime environment. `just codex-reference` checks wrapper
+  behavior; explicit `checks.*.codex-reference` builds its image/descriptor.
+  Native initialization/config checks pass in an isolated fixture; actual
+  admitted capsule, tool/session/provider acceptance remains pending.
 - `adapters/catalog.json` owns versioned preset/capability/evidence facts for Nix,
   configuration-free `tentaflake runtimes`, and generated adapter docs. Run
   `python3 scripts/runtime-catalog-docs.py` after catalog changes. Generic

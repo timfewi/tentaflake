@@ -17,6 +17,10 @@ adapter evaluation and the required non-VM Research closure preparation.
 the closed Rust loader. Its read-only fixture copy drops Nix dependency context
 to avoid building the referenced tools/images; production plans retain it.
 `just local-image` checks bounded archive parsing without loading Docker images.
+`just codex-reference` checks the native reference wrapper's non-secret
+configuration and private paths without executing Codex. Its package/image
+builds are explicit; the image descriptor gate establishes packaging, not
+native tool, session or provider acceptance.
 
 CI and `just eval` use `scripts/eval_flake.py` after that preparation. It discovers
 the full output/check inventory without evaluating derivations, then runs
@@ -110,6 +114,7 @@ comparison adds the affected expensive gates below to its fast checks.
 | Installer Nix | Static | Configuration evaluation, generated installed flake and host build | Runtime |
 | Research module/client/fixture or research-only input pin | Static | Research closures, configuration evaluation and generated installed flake | Research |
 | Dev Container inputs | Static | Dev Container package | None |
+| Codex reference image/wrapper | Static wrapper regressions | Pinned package, image and local descriptor | None |
 | Generated-flake script or module-evaluation fixture | Static | Corresponding generated-flake or configuration gate | None |
 | Onboarding validator/fixture | Static | Installed preset/generic CLI fixture | None |
 | Operator onboarding CLI module | Static and CLI crate | CLI package, source-boundary and installed fixture | None |

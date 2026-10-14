@@ -69,6 +69,21 @@ class CiSelection(unittest.TestCase):
         self.write("scripts/test_image_catalog.py")
         self.assertEqual(select(self.base, self.commit(), self.repository), {"static"})
 
+    def test_codex_reference_builds_only_in_explicit_workload(self):
+        self.write("images/codex/default.nix", "{}\n")
+        self.write("scripts/test_codex_reference.py")
+        affected = select(self.base, self.commit(), self.repository)
+        self.assertEqual(affected, {"codex", "static"})
+        automatic = execution(affected, "fast")
+        self.assertTrue(automatic["static"])
+        self.assertFalse(automatic["codex"])
+        self.assertFalse(automatic["builds"])
+        explicit = execution(affected, "full")
+        self.assertTrue(explicit["codex"])
+        self.assertTrue(explicit["builds"])
+        self.assertFalse(explicit["runtime"])
+        self.assertFalse(explicit["research"])
+
     def test_real_formatter_regression_stays_in_the_static_gate(self):
         self.write("scripts/test_format_check.py")
         affected = select(self.base, self.commit(), self.repository)

@@ -85,6 +85,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   installed admission plan, with runtime-only operator/CLI credentials and
   durable single-use login history. Dynamic environment operations remain
   unsupported; the optional service grants no resource authority.
+- Experimental native Codex 0.162.1 reference image using the complete pinned
+  upstream package, persistent private state and a capsule-private app-server.
+  The wrapper selects an explicit broker model without writing credentials or
+  replacing user configuration; native runtime/provider acceptance is separate.
 - Experimental aggregate Docker admission for offline Generic workloads, with
   durable host/daemon/supervisor/image intent, exact container-ID binding before
   start, conservative uncertain outcomes and storage retention on stop. Local
