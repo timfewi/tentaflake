@@ -13,7 +13,9 @@ let
     import re
     import secrets
     import signal
+    import socket
     import stat
+    import struct
     import subprocess
     import sys
     import time
@@ -118,6 +120,22 @@ let
         subprocess.run(["nsenter", f"--mount=/proc/{frontend}/ns/mnt", "setpriv",
                         "--reuid", str(account.pw_uid), "--regid", str(account.pw_gid), "--clear-groups",
                         "python3", "-c", code, *denied_paths], check=True, timeout=10)
+        # Root can reach this socket but is not its authorized frontend peer.
+        # A valid discovery frame must be refused before any response bytes.
+        assert os.geteuid() == 0, "wrong-peer probe must run as root"
+        frame = json.dumps({"schemaVersion": 1, "method": "GET", "target": "/api/meta",
+                            "headers": [["host", list(HOST.encode("ascii"))],
+                                        ["origin", list(ORIGIN.encode("ascii"))]], "body": []}).encode()
+        assert 0 < len(frame) <= 1024, "wrong-peer frame bound"
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as channel:
+            channel.settimeout(5)
+            channel.connect("/run/tentaflake-api-owner.sock")
+            try:
+                channel.sendall(struct.pack("!I", len(frame)) + frame)
+                assert channel.recv(1) == b"", "owner answered an unauthorized peer"
+            except (ConnectionResetError, BrokenPipeError):
+                pass
+        request("GET", "/api/meta", 200)
 
     def live_cookie():
         saved = json.loads(STATE.read_text())
