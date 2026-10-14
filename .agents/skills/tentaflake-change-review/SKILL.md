@@ -1,7 +1,7 @@
 ---
 name: tentaflake-change-review
 description: Review a Tentaflake change for a concrete requirement, proportionate verification, synchronized docs and a complete PR.
-version: 1.1.21
+version: 1.1.22
 ---
 
 # Tentaflake change review
@@ -118,6 +118,10 @@ findings and nonzero exit; healthy subsystem checks must retain that host postur
 After extracting service scripts into immutable helpers, migrate every inline-script
 assertion: verify the wrapper's selected path, then inspect or execute that helper
 in the build check. Do not add evaluation-time reads of helper derivations.
+Build-phase reads need context-bearing Nix paths. A Worker fixture decoded its
+paths from context-free JSON, so evaluation passed but sandboxed `jq` lacked the
+generated files. Read the original module artifacts in the builder and retain
+path-equality assertions against the decoded manifest.
 
 - Keep the template generic and secret-free; deployment policy belongs in forks.
 - Preserve identified consumers and state. Document intentional API changes and
