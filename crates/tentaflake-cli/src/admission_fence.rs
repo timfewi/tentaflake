@@ -370,7 +370,18 @@ mod tests {
         assert!(command.spawn().is_err());
         assert!(fixture.acquire().unwrap_err().contains("busy"));
         drop(command);
-        drop(fixture.acquire().unwrap());
+        // Other test threads can fork while this FD exists. Their inherited
+        // CLOEXEC copies legitimately survive until exec; a short bounded wait
+        // distinguishes that window from a leaked command-owned duplicate.
+        drop(
+            acquire(
+                &fixture.path(),
+                unsafe { libc::geteuid() },
+                Duration::from_secs(2),
+                || fixture.open_parent(),
+            )
+            .unwrap(),
+        );
     }
 
     #[test]
