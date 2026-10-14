@@ -72,12 +72,28 @@ let
       # Use prebuilt closures through the harness's read-only bind mount; an
       # overlay store has backing options outside the maintenance contract.
       writableStore = false;
+      fileSystems."/nix/store".options = [ "ro" ];
       oci-containers.backend = "docker";
       docker.enable = true;
       docker.daemon.settings."live-restore" = false;
       memorySize = 1536;
       diskSize = 2048;
     };
+    # Keep the immutable shared store available for the final shutdown binary.
+    # Runtime and persistent quota services retain their normal stop checks.
+    systemd.units =
+      lib.genAttrs
+        [
+          "nix-store.mount"
+          "nix-.ro\\x2dstore.mount"
+        ]
+        (_: {
+          overrideStrategy = "asDropin";
+          text = ''
+            [Unit]
+            DefaultDependencies=no
+          '';
+        });
     environment.systemPackages = [ pkgs.util-linux ];
     tentaflake = {
       hostName = "oci-host";
@@ -169,12 +185,34 @@ in
         receipts = [item for item in oci_snapshot()["receipts"] if item["request"]["instanceId"] == name]
         return max(receipts, key=lambda item: item["claimedRevision"])
 
-    def oci_stop_unit(unit, allow_failed=False):
-        oci.succeed("timeout 150s systemctl stop " + shlex.quote(unit))
-        state = oci.succeed("systemctl show --value --property=ActiveState " + shlex.quote(unit)).strip()
+    def oci_stop_unit(unit, allow_failed=False, node=oci):
+        node.succeed("timeout 150s systemctl stop " + shlex.quote(unit))
+        state = node.succeed("systemctl show --value --property=ActiveState " + shlex.quote(unit)).strip()
         assert state == "inactive" or (allow_failed and state == "failed"), (unit, state)
-        jobs = oci.succeed("systemctl list-jobs --no-legend --no-pager --full")
+        jobs = node.succeed("systemctl list-jobs --no-legend --no-pager --full")
         assert all(unit not in line.split() for line in jobs.splitlines()), jobs
+
+    def oci_prepare_unbootstrapped(node, manifest):
+        node.succeed("test ! -e /var/lib/tentaflake-admission")
+        for runtime in manifest["runtimes"].values():
+            oci_stop_unit(runtime["unit"], node=node)
+        for volume in manifest["volumes"]:
+            image = volume["spec"]["imagePath"]
+            node.succeed("test ! -e " + shlex.quote(image) + " && test ! -e " + shlex.quote(image + ".new"))
+            unit = volume["units"]["owner"]
+            failed = node.succeed("systemctl show --value --property=ActiveState " + shlex.quote(unit)).strip() == "failed"
+            if failed:
+                # Boot attempted this owner before the explicit ledger bootstrap.
+                invocation = node.succeed("systemctl show --value --property=InvocationID " + shlex.quote(unit)).strip()
+                assert len(invocation) == 32 and all(char in "0123456789abcdef" for char in invocation), (unit, invocation)
+                assert node.succeed("systemctl show --value --property=ExecMainStatus " + shlex.quote(unit)).strip() == "2", unit
+                diagnostic = node.succeed(shlex.join([
+                    "journalctl", "--no-pager", "-o", "cat", "-n", "20",
+                    "_SYSTEMD_INVOCATION_ID=" + invocation,
+                ]))
+                assert "tentaflake: admission ledger unavailable; explicit bootstrap or recovery required" in diagnostic.splitlines(), (unit, diagnostic)
+            oci_stop_unit(unit, allow_failed=failed, node=node)
+        node.succeed("test ! -e /var/lib/tentaflake-admission")
 
     def oci_start(name, succeeds=True):
         command = "timeout 320s systemctl start " + shlex.quote(oci_units[name])
@@ -265,11 +303,12 @@ in
         return receipt
 
     with subtest("explicit local image acquisition creates no runtime claim"):
-        for unit in list(oci_units.values()) + [item["units"]["owner"] for item in oci_volumes.values()]:
-            oci_stop_unit(unit)
-        oci.succeed("test ! -e /var/lib/tentaflake-admission")
+        oci_prepare_unbootstrapped(oci, oci_manifest)
+        daemon_info = json.loads(oci.succeed(oci_docker("info", "--format", "{{json .}}")))
+        assert daemon_info["Driver"] and all(row[0] != "driver-type" for row in daemon_info["DriverStatus"]), daemon_info["DriverStatus"]
         for name in oci_ids:
-            oci.fail(oci_command("runtime-start", name))
+            for action in ["runtime-start", "runtime-stop", "runtime-finish"]:
+                oci.fail(oci_command(action, name))
             oci.fail(oci_docker("container", "inspect", name))
         source = oci_manifest["runtimes"][oci_ids[0]]["image"]
         assert source["kind"] == "local-artifact"
@@ -378,8 +417,7 @@ in
 
     with subtest("an active supervisor crash across daemon generations retains its exact claim"):
         quota_units = [volume["units"]["owner"] for volume in crash_manifest["volumes"]]
-        oci_crash.succeed("timeout 150s systemctl stop " + shlex.join(list(crash_units.values()) + quota_units))
-        oci_crash.succeed("test ! -e /var/lib/tentaflake-admission")
+        oci_prepare_unbootstrapped(oci_crash, crash_manifest)
         oci_crash.succeed(crash_command("image-acquire", crash_ids[0]))
         oci_bootstrap(oci_crash, crash_plan)
         oci_crash.succeed("timeout 150s systemctl start " + shlex.join(quota_units))

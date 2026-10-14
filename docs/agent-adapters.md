@@ -162,8 +162,11 @@ systemctl start docker-generic-NAME.service
 systemctl stop docker-generic-NAME.service
 ```
 
-Acquisition loads the immutable archive and checks its exact local image ID;
+Acquisition requires the supported classic Docker image store, loads the immutable
+archive and checks its exact configuration digest and unchanged daemon identity;
 it creates no runtime claim. Registry acquisition is a separate operator step.
+The containerd image store's manifest IDs are unsupported; changing an existing
+store requires the explicit [operator migration boundary](14-workspace-quota.md#guarded-storage-lifecycle).
 The admission supervisor never pulls, loads or logs in while starting a capsule.
 The instance revision covers the final OCI configuration and image source.
 Before create, a durable claim records boot, Docker process and supervisor
@@ -174,7 +177,10 @@ the ledger records Active. Output is forwarded to the service journal.
 Normal stop uses the owned full ID, verifies the container stopped, removes that
 exact container and retains its storage charge. Name collisions, failed writes,
 interrupted mutations and ambiguous observations keep compute reserved as
-Unknown; repeating a request never authorizes another create. Foreign containers
+Unknown; repeating a request never authorizes another create. An authenticated
+systemd post-stop helper marks a crashed invocation Unknown without changing its
+container ID or releasing resources; it cannot modify an older invocation after
+a refused restart. Foreign containers
 are never removed by name. Automatic recovery from these uncertain claims is
 not implemented. This first lifecycle slice targets offline Generic workloads;
 external capability collectors and vendor acceptance remain separate work.
