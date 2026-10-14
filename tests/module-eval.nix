@@ -683,6 +683,7 @@ let
       {
         tentaflake.security.admission = {
           authorityEpoch = "worker-module-fixture";
+          physicalSpaceHeadroomBytes = 67108864;
           capacity = {
             memoryBytes = 4294967296;
             memorySwapBytes = 4294967296;
