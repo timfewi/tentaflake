@@ -1,7 +1,7 @@
 ---
 name: tentaflake-repo-guidance
 description: Locate the owning source, guide and checks before changing Tentaflake modules, adapters, CLI or installer.
-version: 2.6.8
+version: 2.6.9
 ---
 
 # Tentaflake repository guidance
@@ -21,6 +21,7 @@ relevant source and guide. Avoid loading unrelated references.
 | LLM broker and streaming | `modules/broker.nix`, `crates/tentaflake-broker/` | [Broker](../../../docs/12-brokered-egress.md) |
 | Research projection | `modules/research.nix`, `lib/researchClient.nix`, adapter hooks | [Research](../../../docs/16-research.md) |
 | Host API contract | `api/v1/openapi.json`, fixtures, `scripts/test_api_contract.py` | [Host API](../../../docs/19-host-api.md) |
+| Private API service and client | `crates/tentaflake-cli/src/api/`, `modules/api.nix` | [Host API](../../../docs/19-host-api.md) |
 | Offline execution | `modules/worker.nix`, `crates/tentaflake-worker/` | [Worker](../../../docs/13-disposable-worker.md) |
 | Workspace/state limits | `modules/workspace-quota.nix`, adapter metadata, `modules/backup.nix` | [Quota](../../../docs/14-workspace-quota.md) |
 | Containment and provenance | `lib/containerSecurity.nix`, `lib/pinnedImage.nix`, `modules/image-provenance.nix` | [Security](../../../docs/10-security-profiles.md) |
@@ -35,6 +36,8 @@ relevant source and guide. Avoid loading unrelated references.
   belong in forks. Settings, JSON and seed paths are Nix-store inputs.
 - Host API clients consume the shared schema. Run `just api-contract`; fixture
   validity does not establish backend availability, authority or live acceptance.
+  Capability ceilings report published policy after reserves; they do not prove
+  currently free resources or grant an action. Keep unsupported features disabled.
 - Admission snapshots are host-owned inputs; offline explanation grants no
   authority. Preserve checked aggregate accounting, exact grants and generation
   binding. Only a new synced ledger claim yields a dispatch permit; retain its

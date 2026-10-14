@@ -164,7 +164,12 @@ are already published or require access to another repository for public checks.
   never grants resource authority. Durable consumed-token fingerprints share
   the admission ledger and survive restart/publication. Keep HTTP work charged
   until blocking tasks finish, including after connection cancellation. Discovery
-  and sessions are implemented; remaining contract operations stay unsupported.
+  and sessions are implemented; capacity reporting exposes published ceilings,
+  never free resources, grants or live readiness. Remaining resource operations
+  stay unsupported.
+  The HTTPS client uses protected caller-owned bearer files and the same wire
+  contract. Preserve exact mutation keys/body bytes and explicit recovery;
+  never automatically retry mutations, follow redirects or print remote errors.
 - `api/v1/openapi.json` owns the host API wire contract; clients consume its
   schema and offline fixtures. Run `just api-contract` for local-only schema
   validation. Fixtures do not establish a working backend or host authority.

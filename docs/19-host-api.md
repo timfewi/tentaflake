@@ -1,8 +1,9 @@
 # Host environment API v1
 
 Status: authoritative contract for [#152](https://github.com/timfewi/tentaflake/issues/152),
-with an experimental discovery/session service. Dynamic environments and the
-matching CLI lifecycle remain unimplemented. Schema validation, unit tests and
+with experimental discovery, sessions, published capacity reporting and an HTTPS
+CLI client. Dynamic environment lifecycle remains unimplemented on the host.
+Schema validation, unit tests and
 fixtures do not establish vendor, guest, private HTTPS relay or live-host
 acceptance. Existing installed-host `agent plan`/`agent import` commands retain
 their documented stopped configuration-file behavior.
@@ -47,11 +48,17 @@ root ownership, private permissions, a single regular-file link and protected,
 unchanged ancestry. It rejects Nix-store credential paths and equal operator/bearer
 contents. Secrets do not appear in service arguments, responses or logs.
 
-The implemented routes are `GET /api/meta` and `GET/POST/DELETE /api/v1/session`. Discovery
+The implemented routes are `GET /api/meta`, `GET/POST/DELETE /api/v1/session` and
+authenticated `GET /api/v1/capabilities`. Discovery
 reports an implemented backend because this service handles real requests; it
 does not assert that environment features exist. Sessions currently return an
-empty grant list. Other authenticated operations, including capabilities and
-environment lists, return `unsupported`; the real UI remains blocked on those
+empty grant list. Capabilities report the installed policy's ceilings after host
+and Research reserves, bounded by per-instance limits. These are declarations,
+not currently free capacity or live admission. Fractional ceilings that cannot
+fit the integer request protocol report zero. Resource actions remain disabled
+and both isolation choices explicitly lack API runtime acceptance. Other
+authenticated operations, including catalog and environment lists, return
+`unsupported`; the real UI remains blocked on those
 implementations. Bearer authentication uses its independently configured file;
 cookie logout does not revoke that operator-managed credential.
 Public OIDC negotiation routes also return `unsupported`; no provider or redirect
@@ -75,6 +82,45 @@ No request-body, credential or authenticated-resource access log is emitted.
 The VM fixture generates its own guest-only credentials and tests real HTTP
 requests and restart refusal; successful execution of that fixture is a separate
 acceptance gate. It does not prove the consumer's HTTPS relay configuration.
+
+## HTTPS CLI client
+
+The configuration-free `tentaflake api` client uses an explicit HTTPS origin
+without a trailing slash. It verifies TLS certificates, follows no redirects,
+uses no environment proxy and never automatically retries requests. Credentials
+come only from a protected runtime file owned by the calling user, mode `0400`
+or `0600`, with safe root/user-owned parent directories. Symlinks, hard links,
+Nix-store paths and inline token arguments are refused.
+
+```bash
+tentaflake api --origin https://host.example.invalid meta
+tentaflake api --origin https://host.example.invalid \
+  --bearer-file "$XDG_RUNTIME_DIR/tentaflake/cli-bearer" session
+tentaflake api --origin https://host.example.invalid \
+  --bearer-file "$XDG_RUNTIME_DIR/tentaflake/cli-bearer" capabilities
+```
+
+The client also provides `environments`, `environment ID`, `plan FILE`,
+`create FILE`, `start ID`, `stop ID`, `operation ID` and `recover`. These commands
+use the v1 contract; the current authentication service still refuses the
+unimplemented resource routes. JSON request files preserve their exact bytes.
+Creation and lifecycle mutations require an explicit `--epoch` from the session
+and a UUID `--key`; start/stop also require the unquoted `--revision` of the
+environment. The client sends a quoted `If-Match` header itself. It does not
+generate new intent keys after a failure.
+
+Successful JSON goes to stdout. Environment lists remain arrays; a returned
+`Next-Cursor` is JSON-quoted on stderr and can be passed with `--cursor` to obtain
+the next page. `--limit` accepts 1–500. `--json` is accepted; `--hide` is refused
+because API JSON is not a redacted diagnostic format. Remote error messages and
+credentials are not printed.
+
+A failed mutation may already have been accepted. Use `recover --epoch E
+--key UUID --method POST --target /api/v1/environments` (or the exact lifecycle
+target), with the same origin and bearer file, to query its durable outcome.
+An authoritative current-epoch `absent` response alone permits the same intent
+to be retried. `found` returns its operation; `unknown` requires reconciliation.
+The client validates this distinction but never performs the retry itself.
 
 ## Transport, identity and authority
 

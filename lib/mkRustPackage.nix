@@ -24,7 +24,11 @@ rustPlatform.buildRustPackage {
         (lib.fileset.fileFilter (file: file.name == "Cargo.toml") ../crates)
         crate
       ]
-      ++ lib.optional (pname == "tentaflake-cli") ../adapters/catalog.json
+      ++ lib.optionals (pname == "tentaflake-cli") [
+        ../adapters/catalog.json
+        # TLS client regressions consume the authoritative wire exchanges.
+        ../api/v1/fixtures.json
+      ]
       ++ lib.optional (lib.elem pname [
         "tentaflake-cli"
         "tentaflake-worker"

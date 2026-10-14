@@ -1,3 +1,4 @@
+use super::MAX_BODY;
 use super::config::Config;
 use super::session::{AuthContext, AuthError, Authenticated, Clock, RequestKind, Sessions};
 use bytes::Bytes;
@@ -21,7 +22,6 @@ use tentaflake_admission::ledger::{Ledger, LedgerError, PublishedAuthority};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::Semaphore;
 
-const MAX_BODY: usize = 32 * 1024;
 const MAX_CONNECTIONS: usize = 32;
 type Reply = Response<Full<Bytes>>;
 
@@ -38,6 +38,7 @@ struct Current {
     policy: String,
     binding: String,
     epoch: String,
+    host_policy: tentaflake_admission::HostPolicy,
 }
 
 impl Current {
@@ -182,6 +183,7 @@ impl Api {
             epoch: revision(authority.generation.as_bytes()),
             authority,
             binding,
+            host_policy: plan.policy,
         })
     }
 
@@ -280,6 +282,12 @@ impl Api {
                 );
                 return Ok(reply);
             }
+        }
+        if path == "/api/v1/capabilities" && request.method == Method::GET {
+            return Ok(json_reply(
+                StatusCode::OK,
+                super::capabilities::project(&current.host_policy, current.revisions())?,
+            ));
         }
         // A valid login is not capability, resource or runtime acceptance.
         // Remaining v1 operations stay unavailable until their real owner lands.

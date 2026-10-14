@@ -39,8 +39,10 @@ binds durable claims to exact container identities and supports separately
 acquired local Nix images. Runtime acceptance, external capability collectors,
 automated installation and the host API service remain under development.
 The opt-in [experimental HTTP service](docs/19-host-api.md#experimental-authentication-service)
-implements discovery and operator sessions; dynamic environment operations remain
+implements discovery, operator sessions and published capacity reporting; dynamic environment operations remain
 unsupported while their admission and lifecycle integration is developed.
+The matching `tentaflake api --origin …` client uses protected bearer files and
+explicit operation recovery without automatic mutation retries.
 
 Discover presets with `tentaflake runtimes --json`. A digest-pinned image and
 command can use the [common isolated workload definition](docs/agent-adapters.md#generic-isolated-workload)
@@ -56,7 +58,7 @@ Ubuntu 26.04 LTS platform pins. Metadata checks do not establish runtime accepta
 | Installed NixOS host | Core |
 | Adapter registry and Hermes/ZeroClaw builders | Core |
 | Rust `tentaflake` CLI | Core |
-| Private HTTP host API | Experimental discovery/sessions, opt-in; environment operations unsupported |
+| Private HTTP host API | Experimental discovery/sessions/capacity, opt-in; environment operations unsupported |
 | Rust LLM/fetch policy broker | Core, opt-in per agent |
 | `secure-research-tool` web research | Pinned public service; explicit generic grant, required for legacy balanced auto-start |
 | Disposable no-egress tool worker | Core; explicit generic grant, required for legacy balanced auto-start |

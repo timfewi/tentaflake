@@ -2797,6 +2797,12 @@ fn print_help() {
            tentaflake help|--help|-h\n\
            tentaflake runtimes [--json]\n\
            tentaflake api serve <generated-store-config> <generated-store-plan>\n\
+           tentaflake api --origin https://HOST [--bearer-file FILE] <command>\n\
+             meta|session|capabilities|environments [--cursor C --limit N]\n\
+             environment ID|plan FILE|operation ID\n\
+             create FILE --epoch E --key UUID\n\
+             start|stop ID --epoch E --key UUID --revision R\n\
+             recover --epoch E --key UUID --method POST --target /api/v1/...\n\
            tentaflake admission explain <snapshot-file> [--hide]\n\
            tentaflake admission inventory <generated-store-plan> [--hide]\n\
            tentaflake admission bootstrap <generated-store-plan>\n\

@@ -35,12 +35,13 @@ Current integration work:
   supervisor/daemon/CID ownership, durable Unknown claims and explicit stopped
   bootstrap/publication. Run `38513151502` passed the storage/publication
   assertions, then failed initial OCI fixture cleanup on a quota owner that had
-  correctly refused the missing ledger. Commit `ace90b4` checks that exact
-  invocation's refusal before accepting its retained failed state. Only the
-  immutable read-only VM store receives lazy unmounting after normal shutdown;
-  persistent quota shutdown checks remain strict. Focused no-build projections,
-  rendered Python and cleanup regressions pass. Replacement runtime evidence
-  and the previously unreached Research VM remain required.
+  correctly refused the missing ledger. The fixture now validates that exact
+  invocation and lazily unmounts only its immutable read-only shared store after
+  normal shutdown. Run `38520514416` then exposed a quota-owner start-limit after
+  repeated intentional refusals. Commit `4156c23` proves fresh CLI refusals and
+  clears only those counters after stopped/no-job evidence. Focused lint,
+  no-build rendering and helper replay pass. Replacement run `38524860586` is
+  pending; runtime and previously unreached Research VM evidence remain required.
 - **Model/Research integration:** PR #167 and the upstream Research readiness
   work still need their relevant runtime gates and final public pin integration.
   Exact requested capabilities and live evidence remain prerequisites; neither
@@ -56,24 +57,31 @@ Current integration work:
   163 tests respectively. No-build projections and the generated plan passed.
   The #170 Broker disconnect-test cleanup fix `b22d10a` passed 19 streaming tests
   and automatic CI. Relevant integration VM evidence remains pending.
-- **Host API, #152, `feat/host-api`:** implementing the HTTP service inside the
+- **Host API, #152, draft PR #171:** implementing the HTTP service inside the
   existing CLI, bound to the installed/published immutable host plan. Runtime
   credentials, exact private origin, bounded cookie/bearer sessions and durable
-  single-use login fingerprints have been implemented locally. Admission's 104
-  tests and 15 focused API tests pass, with Clippy and formatting. Real loopback
-  HTTP tests cover discovery, refusal bounds and cancellation accounting; the
-  optional Nix service passes its focused no-build projection. The complete fast
-  gate passes 372 Rust tests plus static/helper checks; final origin and public
-  OIDC refusal regressions pass the focused gate. The actual offline CLI Nix
-  package passes 268 tests after merging the reviewed #166 fixture repairs.
+  single-use login fingerprints are implemented, with protected HTTPS CLI access
+  and published capacity reporting. Real loopback HTTP tests cover discovery,
+  refusal bounds and cancellation accounting. Eleven real-TLS/client regressions
+  cover trust, pagination, credentials and mutation non-replay; the shared
+  credential reader retains separate server/client ancestry checks. The complete
+  fast gate passes 387 Rust tests plus static/helper checks, and the actual
+  offline CLI Nix package passes 282 tests. Dependencies reuse reviewed locks.
   Storage/base/candidate projections select that tested package and the same API
-  configuration; the 2322-line VM driver and 138-line HTTP helper compile.
+  configuration; the 155-line HTTP helper and 2360-line VM driver compile with
+  Worker, authentication and published-capacity assertions.
   Guest HTTP authentication and private HTTPS relay acceptance remain pending.
-  Only authentication is being connected; resource operations remain explicitly
+  Sessions still grant no resource actions; resource operations remain explicitly
   unsupported until their actual lifecycle owner exists.
 
-Resume here: finish and review the API authentication/service integration, then
-add ledger-owned operation receipts, exact grants and dynamic environments to
+The next local branch, `feat/host-environments`, adds ledger-owned operations and
+stopped-create transactions. This work is in progress and has no runtime
+acceptance yet. Actual helper integration and explicit queued-abort/absent-image
+recovery are required before enabling creation; Unknown charges cannot be dropped
+or recreated implicitly.
+
+Resume here: verify the ledger transaction slice, then connect its receipts,
+exact grants and dynamic environments to
 that same admission/runtime owner. Creation must stay within installed policy
 without rebuilding the host. Follow with workspace/files/streams and the matching
 CLI, then actual client and coding-agent acceptance. Preserve private v3 ledger

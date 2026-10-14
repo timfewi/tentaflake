@@ -46,6 +46,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   budget reservation or upstream dispatch, omit session IDs from audit logs,
   and keep arbitrary client headers excluded. Clients still own ID propagation.
 ### Added
+- Add a private HTTPS API client with protected file-backed bearer credentials,
+  exact mutation keys/revisions and explicit operation recovery; requests are
+  never automatically retried or redirected.
+- Expose authenticated host API capacity ceilings from the published admission
+  policy, including host and Research reserves, without granting resource actions.
 - Add an experimental private HTTP discovery/session service bound to the
   installed admission plan, with runtime-only operator/CLI credentials and
   durable single-use login history. Dynamic environment operations remain

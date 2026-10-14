@@ -1,5 +1,6 @@
 //! Private-origin authentication. Grants remain the server's live authority;
 //! only consumed operator-token fingerprints belong in the durable ledger.
+use super::credential::{self, runtime_path, secret_shape};
 use hyper::http::{HeaderMap, Uri};
 use ring::{
     digest, hmac,
@@ -7,19 +8,14 @@ use ring::{
 };
 use serde::Deserialize;
 use std::collections::BTreeMap;
-use std::fs::{File, Metadata};
-use std::io::Read;
-use std::os::fd::AsRawFd;
-use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
-use tentaflake_admission::protected_path::{open_at, open_root};
+use tentaflake_admission::protected_path::open_root;
 
 const COOKIE: &str = "__Host-tentaflake-session";
 pub(crate) const EXPIRED_COOKIE: &str =
     "__Host-tentaflake-session=; Secure; HttpOnly; SameSite=Strict; Path=/; Max-Age=0";
 const MAX_SESSIONS: usize = 256;
-const MAX_SECRET: usize = 4096;
 const IDLE: Duration = Duration::from_secs(15 * 60);
 const ABSOLUTE: Duration = Duration::from_secs(8 * 60 * 60);
 const LOGIN_WINDOW: Duration = Duration::from_secs(60);
@@ -563,10 +559,6 @@ fn credentials(headers: &HeaderMap) -> Result<Credentials<'_>, AuthError> {
     Ok(Credentials { cookie, bearer })
 }
 
-fn secret_shape(secret: &[u8]) -> bool {
-    (32..=MAX_SECRET).contains(&secret.len()) && secret.iter().all(u8::is_ascii_graphic)
-}
-
 fn opaque(value: &str) -> bool {
     value.len() == 64
         && value
@@ -606,100 +598,29 @@ fn hex(bytes: &[u8]) -> String {
         .collect()
 }
 
-fn runtime_path(path: &Path) -> bool {
-    path.to_str().is_some_and(|value| {
-        value.starts_with('/')
-            && value.len() <= 4096
-            && !path.starts_with("/nix/store")
-            && value.bytes().all(|b| b.is_ascii_graphic())
-            && value
-                .split('/')
-                .skip(1)
-                .all(|part| !part.is_empty() && part != "." && part != "..")
-    })
-}
-
-fn secret_metadata(file: &File, owner: u32) -> Result<Metadata, AuthError> {
-    let metadata = file.metadata().map_err(|_| AuthError::Unavailable)?;
-    if !metadata.is_file()
-        || metadata.uid() != owner
-        || metadata.nlink() != 1
-        || !matches!(metadata.mode() & 0o7777, 0o400 | 0o600)
-        || !(32..=MAX_SECRET as u64 + 1).contains(&metadata.len())
-    {
-        return Err(AuthError::Unavailable);
-    }
-    Ok(metadata)
-}
-
-fn same_file(left: &Metadata, right: &Metadata) -> bool {
-    left.dev() == right.dev()
-        && left.ino() == right.ino()
-        && left.len() == right.len()
-        && left.mtime() == right.mtime()
-        && left.mtime_nsec() == right.mtime_nsec()
-        && left.ctime() == right.ctime()
-        && left.ctime_nsec() == right.ctime_nsec()
-}
-
 fn read_secret(path: &Path) -> Result<Vec<u8>, AuthError> {
     if !runtime_path(path) {
         return Err(AuthError::Unavailable);
     }
     let parent = path.parent().ok_or(AuthError::Unavailable)?;
-    let reopen = || open_root(parent, 0).map_err(|_| AuthError::Unavailable);
-    let directory = reopen()?;
-    read_secret_at(
+    let reopen = || open_root(parent, 0).map_err(|_| credential::Error);
+    let directory = reopen().map_err(|_| AuthError::Unavailable)?;
+    credential::read_at(
         &directory,
         path.file_name().ok_or(AuthError::Unavailable)?,
         0,
         reopen,
     )
-}
-
-fn read_secret_at(
-    directory: &File,
-    name: &std::ffi::OsStr,
-    owner: u32,
-    reopen: impl FnOnce() -> Result<File, AuthError>,
-) -> Result<Vec<u8>, AuthError> {
-    let file =
-        open_at(directory.as_raw_fd(), name, libc::O_RDONLY).map_err(|_| AuthError::Unavailable)?;
-    let before = secret_metadata(&file, owner)?;
-    let mut bytes = Vec::new();
-    (&file)
-        .take(MAX_SECRET as u64 + 2)
-        .read_to_end(&mut bytes)
-        .map_err(|_| AuthError::Unavailable)?;
-    let current_directory = reopen()?;
-    let old = directory.metadata().map_err(|_| AuthError::Unavailable)?;
-    let current = current_directory
-        .metadata()
-        .map_err(|_| AuthError::Unavailable)?;
-    if old.dev() != current.dev() || old.ino() != current.ino() {
-        return Err(AuthError::Unavailable);
-    }
-    let named = open_at(current_directory.as_raw_fd(), name, libc::O_PATH)
-        .map_err(|_| AuthError::Unavailable)?;
-    if !same_file(&before, &secret_metadata(&file, owner)?)
-        || !same_file(&before, &secret_metadata(&named, owner)?)
-    {
-        return Err(AuthError::Unavailable);
-    }
-    if bytes.last() == Some(&b'\n') {
-        bytes.pop();
-    }
-    if !secret_shape(&bytes) {
-        return Err(AuthError::Unavailable);
-    }
-    Ok(bytes)
+    .map_err(|_| AuthError::Unavailable)
 }
 
 #[cfg(test)]
 mod tests {
+    use super::credential::MAX_SECRET;
     use super::*;
     use hyper::http::HeaderValue;
     use std::cell::Cell;
+    use std::fs::File;
     use std::fs::{self, DirBuilder};
     use std::os::unix::fs::{DirBuilderExt, PermissionsExt, symlink};
     use std::sync::atomic::{AtomicU64, Ordering};
@@ -1257,12 +1178,13 @@ mod tests {
             Self { path, directory }
         }
         fn read(&self) -> Result<Vec<u8>, AuthError> {
-            read_secret_at(
+            credential::read_at(
                 &self.directory,
                 "secret".as_ref(),
                 unsafe { libc::geteuid() },
-                || File::open(&self.path).map_err(|_| AuthError::Unavailable),
+                || File::open(&self.path).map_err(|_| credential::Error),
             )
+            .map_err(|_| AuthError::Unavailable)
         }
     }
     impl Drop for SecretFixture {

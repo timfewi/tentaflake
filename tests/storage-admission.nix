@@ -88,6 +88,7 @@ let
                         "auth": {"methods": ["operator-token"]}, "backend": "implemented"}, "minimal discovery"
         request("GET", "/api/meta", 403, extra={"Host": "other.example.invalid"})
         request("GET", "/api/v1/session", 401)
+        request("GET", "/api/v1/capabilities", 401)
         login = {"method": "operator-token", "secret": OPERATOR.read_text()}
         request("POST", "/api/v1/session", 403, login, {"Origin": "https://other.example.invalid"})
         request("POST", "/api/v1/session", 403, login, {"Host": "other.example.invalid"})
@@ -121,7 +122,23 @@ let
         assert authenticated["user"] == session["user"] and authenticated["grants"] == [], "independent CLI identity"
         request("GET", "/api/v1/session", 400, extra={**cookie, **bearer})
         request("GET", "/api/v1/session", 401, extra={"Authorization": "Bearer " + OPERATOR.read_text()})
-        for path in ["/api/v1/capabilities", "/api/v1/environments"]:
+        capabilities, _ = request("GET", "/api/v1/capabilities", 200, extra=cookie)
+        assert capabilities["revisions"] == session["revisions"], "capability authority differs from session"
+        assert capabilities["features"] == {}, "declaration must not enable resource actions"
+        assert all(not option["availability"]["available"] and option["evidence"] == []
+                   for option in capabilities["isolation"]), "declaration must not invent runtime acceptance"
+        plan = json.loads(pathlib.Path("/etc/tentaflake/admission.json").read_text())
+        policy = plan["policy"]
+        assert capabilities["limits"]["maxActiveEnvironments"] == min(1024, policy["maxActive"]), "published active bound"
+        for field, resource, unit, minimum, maximum in [("cpu", "nanoCpus", 1000000000, 1, 1024),
+                ("memoryMiB", "memoryBytes", 1048576, 128, 1048576),
+                ("storageMiB", "workspaceBytes", 1048576, 128, 1048576)]:
+            budget = policy["capacity"][resource] - policy["hostReserve"][resource] - policy["researchReserve"][resource]
+            upper = min(maximum, min(budget, policy["perInstance"][resource]) // unit)
+            assert capabilities["limits"][field]["max"] == (upper if upper >= minimum else 0), "published resource bound"
+        same, _ = request("GET", "/api/v1/capabilities", 200, extra=bearer)
+        assert same == capabilities, "cookie and bearer capability authority differs"
+        for path in ["/api/v1/environments"]:
             result, _ = request("GET", path, 501, extra=cookie)
             assert result["error"]["code"] == "unsupported", "unimplemented operation must refuse"
         result, cleared = request("DELETE", "/api/v1/session", 204,
