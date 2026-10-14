@@ -271,6 +271,8 @@ pkgs.testers.runNixOSTest {
         };
       }
     ) genericNames;
+    # Prebuilt-only guest: Nix registration would mutate the read-only store.
+    nix.enable = false;
     virtualisation = {
       memorySize = 2048;
       cores = 2;

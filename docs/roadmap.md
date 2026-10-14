@@ -217,11 +217,15 @@ has passed its own fast checks but still awaits its serialized package CI/merge;
 the downstream input remains at `91ce540`, so no usable live Research admission
 or lifecycle/real-VPN VM acceptance is claimed. Next: prepare and evaluate the
 Research projections, integrate the reviewed upstream pin, then exercise the
-actual start path. The existing Research VM uses a read-only store and includes
-owned Generic start, lease/relay/backend refusals, exact-CID stop and generation renewal. Scoped Nix
-lint and the rendered Python script/helper syntax checks pass; node configuration
-evaluation and execution remain pending. Its dummy interface and observation
-producer establish no real VPN or provider acceptance.
+actual start path. Parent guest-Nix fixture repair `b6acfca` is integrated at
+`27e3032`; the Research VM also disables guest Nix with its read-only store.
+It includes owned Generic start, lease/relay/backend refusals, exact-CID stop
+and generation renewal. Scoped Nix lint/format and the actual node/testScript
+projection pass with IFD disabled: guest Nix is off, the store is read-only and
+closure registration is absent. Rendered Python compiles. Full test-derivation
+evaluation remains blocked by an unbuilt Research closure-info input; no build
+or VM ran. Its dummy interface and observation producer establish no real VPN
+or provider acceptance.
 
 The native Codex reference is independently tracked in [PR #168](https://github.com/timfewi/tentaflake/pull/168)
 and pins the official Linux x86_64 `0.162.1` full package. Artifact acquisition
