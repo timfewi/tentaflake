@@ -14,6 +14,7 @@ use std::time::{Duration, Instant, SystemTime};
 const RUNTIME_CATALOG: &str = include_str!("../../../adapters/catalog.json");
 mod admission;
 mod admission_bootstrap;
+mod admission_creation;
 mod admission_evidence;
 mod admission_host;
 mod admission_oci;

@@ -43,8 +43,10 @@ Current integration work:
   no-build rendering and helper replay pass. Replacement run `38524860586`
   passed the original VM and all storage/publication assertions, then timed out
   during storage-VM shutdown: the early store unmount removed the shutdown
-  executable. A narrow fixture correction is being prepared; OCI/crash and
-  Research VM evidence remain outstanding.
+  executable. Commit `5248ac3` keeps only both immutable harness-store mounts
+  available through final shutdown; focused checks and source review pass.
+  Replacement run `38536113968` is pending; OCI/crash and Research VM evidence
+  remain outstanding.
 - **Model/Research integration:** PR #167 and the upstream Research readiness
   work still need their relevant runtime gates and final public pin integration.
   Exact requested capabilities and live evidence remain prerequisites; neither
@@ -85,24 +87,33 @@ fences unresolved work. Operator abort releases only proven-absent slots, preser
 history and keeps stopped images charged. Installed templates bind the original
 reviewed catalog and share the static quota-helper implementation; bootstrap and
 publication retain their authority closures through official Nix registration.
-`just fast` passes **419 Rust tests** plus static/helper gates; the actual offline
-Nix CLI package passes **314 tests**, including all 126 admission tests. Three
+The internal bounded creator reconstructs exact original bindings, counts its
+reserved pair once and executes helpers only for a new claim. It requires empty
+Docker/loop/dynamic-mount inventories; historical claims perform no work.
+`just fast` passes **430 Rust tests** plus static/helper gates; the actual offline
+Nix CLI package passes **325 tests**, including all 126 admission tests. Three
 intentional subprocess helpers are ignored in each full test inventory. All 20
 static helper paths are unchanged; actual rendered dynamic-helper tests pass
 argument refusals, Btrfs creation/verification and sibling-slot isolation. Offline
-no-build fixture evaluation and the 2397-line rendered VM driver pass. Actual
+no-build fixture evaluation and the 2400-line rendered VM driver pass. Actual
 daemon/GC registration and runtime acceptance remain unverified; HTTP creation
 still returns `501`.
 New code reads old v3 files; older binaries reject the new field once written.
 
-Resume here: connect the verified receipts, exact grants and dynamic environments
-to that same admission/runtime owner, including the actual supervisor, retained
-template reconstruction and trusted abort/absence collectors before enabling creation.
-It must stay within installed policy
-without rebuilding the host. Follow with workspace/files/streams and the matching
+Resume here: implement trusted abort/absence and recovery collectors, include all
+retained dynamic units/paths in maintenance, and obtain actual supervised-creation
+VM evidence. Only then connect HTTP planning/queueing and exact grants. Keep
+creation within installed policy without rebuilding the host. Follow with
+workspace/files/streams and the matching
 CLI, then actual client and coding-agent acceptance. Preserve private v3 ledger
 history; consumed login tokens and uncertain resource claims must never become
 fresh retries through restart, pruning or publication.
+
+Initial recovery should require a changed boot for claimed work; the receipt
+does not record an old cgroup. Successful recovery also requires both native
+storage receipts already Present, proving owner initialization finished. A valid
+Btrfs image alone cannot prove that step. Incomplete images may only remain
+charged during abort; recovery must never rerun ownership or creation helpers.
 
 Remaining Worker requirements include exact grants, aggregate private storage
 and compute, daemon-generation job recovery and exact results-mount validation.

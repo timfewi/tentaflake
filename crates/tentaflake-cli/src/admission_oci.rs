@@ -673,24 +673,6 @@ pub(crate) fn acquire(path: &Path, id: &str) -> Result<u8, String> {
 fn invocation_hex(value: &[u8; 16]) -> String {
     value.iter().map(|byte| format!("{byte:02x}")).collect()
 }
-fn process_start(pid: u32) -> Result<u64, String> {
-    let metadata =
-        fs::metadata(format!("/proc/{pid}")).map_err(|_| "runtime process disappeared")?;
-    if pid == 0 || metadata.uid() != 0 {
-        return Err("runtime process is not root-owned".into());
-    }
-    let stat = fs::read_to_string(format!("/proc/{pid}/stat"))
-        .map_err(|_| "runtime process identity unavailable")?;
-    if stat.len() > 4096 {
-        return Err("runtime process identity exceeds its bound".into());
-    }
-    // comm may itself contain ')' and spaces; fields after its last ')' are fixed.
-    stat.rsplit_once(')')
-        .and_then(|(_, tail)| tail.split_whitespace().nth(19))
-        .and_then(|s| s.parse::<u64>().ok())
-        .filter(|n| *n > 0)
-        .ok_or_else(|| "invalid runtime process identity".into())
-}
 fn exec_is(exec: &[ExecCommand], plan: &HostPlan, path: &Path, id: &str, action: &str) -> bool {
     exec.len() == 1
         && !exec[0].ignore_failure
@@ -772,7 +754,7 @@ fn caller(
         start_time_ticks: if main_pid == 0 {
             0
         } else {
-            process_start(main_pid)?
+            admission_systemd::process_start(main_pid)?
         },
     })
 }
@@ -792,7 +774,7 @@ pub(crate) fn daemon(plan: &HostPlan) -> Result<(String, DaemonIdentity), String
     {
         return Err("Docker launch prerequisites unavailable".into());
     }
-    let start_time_ticks = process_start(service.main_pid)?;
+    let start_time_ticks = admission_systemd::process_start(service.main_pid)?;
     let info = docker_json(plan, &["info", "--format", "{{json .}}"])?;
     if info
         .get("Runtimes")
@@ -808,7 +790,7 @@ pub(crate) fn daemon(plan: &HostPlan) -> Result<(String, DaemonIdentity), String
         .ok_or("Docker daemon identity unavailable")?
         .to_owned();
     if admission_systemd::inspect_unit(&plan.tools.busctl, "docker.service")? != unit
-        || process_start(service.main_pid)? != start_time_ticks
+        || admission_systemd::process_start(service.main_pid)? != start_time_ticks
     {
         return Err("Docker daemon changed during observation".into());
     }
@@ -1519,7 +1501,8 @@ fn stop_runtime(
                 }
                 if main_pid != 0
                     && fs::metadata(format!("/proc/{main_pid}")).is_ok()
-                    && process_start(main_pid)? != dispatch.intent.supervisor.start_time_ticks
+                    && admission_systemd::process_start(main_pid)?
+                        != dispatch.intent.supervisor.start_time_ticks
                 {
                     return Err("runtime process generation changed before stop".into());
                 }

@@ -106,7 +106,7 @@ both slots absent; claimed work additionally binds the fenced original superviso
 Missing staging, mount, loop and writer evidence refuses the whole abort. Durable
 release markers preserve all original IDs and history; nothing authorizes their
 reuse or recreation. Exact terminal retries perform no observation or mutation.
-Actual helpers and trusted absence/fence collectors are still required before
+Trusted absence/fence collectors and runtime acceptance are still required before
 enabling public creation. These are library guarantees and collector obligations,
 not evidence of a working HTTP create or VM lifecycle.
 
@@ -122,7 +122,15 @@ manifest retains its original image catalog; updating today's catalog must not
 invalidate historical cleanup. Source commands, environment and paths remain
 private, and new filesystems do not copy source state or seed services.
 The shared quota helpers accept only server-generated slot IDs for dynamic paths.
-This installed policy and helper projection does not enable HTTP creation.
+The internal `tentaflake-environment-create@` oneshot service reconstructs exact
+bindings from the retained template and claims one accepted operation before
+running those helpers. Direct CLI calls cannot impersonate its invocation. Both
+volumes are already charged, so the physical-space check counts the retained pair
+once. Initial execution requires an empty Docker inventory, no attached loops
+and no dynamic mounts. Each sibling volume is created, mounted, initialized,
+unmounted and verified; failures preserve Unknown and all remaining charges.
+Historical claims return without helper execution. This internal owner does not
+enable HTTP queueing, recovery or general concurrent environment lifecycle.
 
 ## HTTPS CLI client
 

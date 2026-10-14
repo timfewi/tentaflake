@@ -5,9 +5,30 @@ use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 use std::collections::BTreeSet;
+use std::fs;
+use std::os::unix::fs::MetadataExt;
 use std::path::Path;
 use std::process::Command;
 use std::time::{Duration, Instant};
+
+pub(crate) fn process_start(pid: u32) -> Result<u64, String> {
+    let metadata =
+        fs::metadata(format!("/proc/{pid}")).map_err(|_| "runtime process disappeared")?;
+    if pid == 0 || metadata.uid() != 0 {
+        return Err("runtime process is not root-owned".into());
+    }
+    let stat = fs::read_to_string(format!("/proc/{pid}/stat"))
+        .map_err(|_| "runtime process identity unavailable")?;
+    if stat.len() > 4096 {
+        return Err("runtime process identity exceeds its bound".into());
+    }
+    // comm may itself contain ')' and spaces; fields after its last ')' are fixed.
+    stat.rsplit_once(')')
+        .and_then(|(_, tail)| tail.split_whitespace().nth(19))
+        .and_then(|s| s.parse::<u64>().ok())
+        .filter(|n| *n > 0)
+        .ok_or_else(|| "invalid runtime process identity".into())
+}
 
 const MAX_RESPONSE_BYTES: usize = 64 * 1024;
 const MAX_LIST_BYTES: usize = 512 * 1024;

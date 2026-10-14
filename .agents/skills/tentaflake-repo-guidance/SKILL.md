@@ -1,7 +1,7 @@
 ---
 name: tentaflake-repo-guidance
 description: Locate the owning source, guide and checks before changing Tentaflake modules, adapters, CLI or installer.
-version: 2.6.12
+version: 2.6.13
 ---
 
 # Tentaflake repository guidance
@@ -23,7 +23,7 @@ relevant source and guide. Avoid loading unrelated references.
 | Host API contract | `api/v1/openapi.json`, fixtures, `scripts/test_api_contract.py` | [Host API](../../../docs/19-host-api.md) |
 | Private API service and client | `crates/tentaflake-cli/src/api/`, `modules/api.nix` | [Host API](../../../docs/19-host-api.md) |
 | Dynamic environment ledger transactions | `crates/tentaflake-admission/src/ledger/api.rs` | [Host API](../../../docs/19-host-api.md#private-ledger-foundation) |
-| Creation templates and authority retention | CLI `admission_template.rs`, `admission_retention.rs`, `modules/admission.nix` | [Host API](../../../docs/19-host-api.md), [Quota](../../../docs/14-workspace-quota.md) |
+| Creation supervision, templates and authority retention | CLI `admission_creation.rs`, `admission_template.rs`, `admission_retention.rs`, `modules/admission.nix` | [Host API](../../../docs/19-host-api.md), [Quota](../../../docs/14-workspace-quota.md) |
 | Offline execution | `modules/worker.nix`, `crates/tentaflake-worker/` | [Worker](../../../docs/13-disposable-worker.md) |
 | Workspace/state limits | `modules/workspace-quota.nix`, `lib/quotaHelpers.nix`, adapter metadata, `modules/backup.nix` | [Quota](../../../docs/14-workspace-quota.md) |
 | Containment and provenance | `lib/containerSecurity.nix`, `lib/pinnedImage.nix`, `modules/image-provenance.nix` | [Security](../../../docs/10-security-profiles.md) |

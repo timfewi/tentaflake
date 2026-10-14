@@ -11,6 +11,9 @@ const MAX_SNAPSHOT_BYTES: u64 = 4 * 1024 * 1024;
 
 pub(crate) fn run(args: &[String], mode: OutputMode) -> Result<u8, String> {
     match args {
+        [command, file, operation] if command == "create-execute" => {
+            return crate::admission_creation::execute(Path::new(file), operation);
+        }
         [command, file, action, rest @ ..] if command == "worker-run" => {
             return crate::admission_worker::run(Path::new(file), action, rest);
         }

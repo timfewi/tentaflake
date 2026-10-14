@@ -67,14 +67,31 @@ pub fn ensure_backing_roots() -> Result<(), String> {
     ensure_roots_at(Path::new(VOLUME_ROOT), 0, |path| open_root(path, 0))
 }
 
-/// Call under the ledger guard, against its exact retained snapshot, only for
-/// an absent allocation. Every retained byte stays charged, including missing,
-/// orphaned and Unknown images. Unrelated host writes can consume space after
-/// this observation; no allocated blocks or shared extents receive credit.
+/// New slots add their full charge; reserved slots must already have exact
+/// Unknown bindings. Neither mode permits an existing final or staging image.
+#[derive(Clone, Copy)]
+pub enum CreationTargets<'a> {
+    New(&'a [VolumeSpec]),
+    Reserved(&'a [VolumeSpec]),
+}
+
+impl<'a> CreationTargets<'a> {
+    fn specs(self) -> &'a [VolumeSpec] {
+        match self {
+            Self::New(specs) | Self::Reserved(specs) => specs,
+        }
+    }
+}
+
+/// Call once for every slot in the transaction, under the outer creator fence
+/// and ledger guard against its exact retained snapshot. Every retained byte
+/// stays charged, including missing, orphaned and Unknown images. Unrelated
+/// host writes can consume space after this observation; no allocated blocks
+/// or shared extents receive credit. This inspection grants no creation permit.
 pub fn check_creation_space(
     specs: &[VolumeSpec],
     retained: &[StorageAllocation],
-    new: &VolumeSpec,
+    targets: CreationTargets<'_>,
     headroom: u64,
 ) -> Result<(), String> {
     if unsafe { libc::geteuid() } != 0 {
@@ -83,7 +100,7 @@ pub fn check_creation_space(
     check_creation_at(
         specs,
         retained,
-        new,
+        targets,
         headroom,
         Path::new(VOLUME_ROOT),
         0,
@@ -523,23 +540,64 @@ fn scan_at(
 
 fn required_creation_bytes(
     retained: &[StorageAllocation],
-    new_bytes: u64,
+    targets: CreationTargets<'_>,
     headroom: u64,
 ) -> Result<u64, String> {
-    if retained.len() >= MAX_STORAGE_ALLOCATIONS || new_bytes == 0 {
+    let specs = targets.specs();
+    let new_count = match targets {
+        CreationTargets::New(_) => specs.len(),
+        CreationTargets::Reserved(_) => 0,
+    };
+    if specs.is_empty() || specs.len() > 2 || retained.len() > MAX_STORAGE_ALLOCATIONS - new_count {
         return Err("invalid quota creation charge".into());
     }
-    let mut ids = BTreeSet::new();
-    let mut total = new_bytes
-        .checked_add(headroom)
-        .ok_or("quota backing charge overflow")?;
+    let mut allocations = BTreeMap::new();
+    let mut total = headroom;
     for allocation in retained {
-        if allocation.bytes == 0 || !identifier(&allocation.id) || !ids.insert(&allocation.id) {
+        if allocation.bytes == 0
+            || !identifier(&allocation.id)
+            || allocations
+                .insert(allocation.id.as_str(), allocation)
+                .is_some()
+        {
             return Err("invalid retained quota allocation".into());
         }
         total = total
             .checked_add(allocation.bytes)
             .ok_or("quota backing charge overflow")?;
+    }
+    let mut ids = BTreeSet::new();
+    for spec in specs {
+        if spec.bytes == 0 || !identifier(&spec.allocation_id) || !ids.insert(&spec.allocation_id) {
+            return Err("invalid or duplicate quota creation target".into());
+        }
+        match targets {
+            CreationTargets::New(_) => {
+                if allocations.contains_key(spec.allocation_id.as_str()) {
+                    return Err("new quota target already has a retained allocation".into());
+                }
+                total = total
+                    .checked_add(spec.bytes)
+                    .ok_or("quota backing charge overflow")?;
+            }
+            CreationTargets::Reserved(_) => {
+                if !allocations
+                    .get(spec.allocation_id.as_str())
+                    .is_some_and(|allocation| {
+                        allocation.state == StorageState::Unknown
+                            && allocation.kind == spec.kind
+                            && allocation.bytes == spec.bytes
+                            && allocation.binding.as_ref().is_some_and(|binding| {
+                                binding.instance_id == spec.instance_id
+                                    && binding.owner_id == spec.owner_id
+                                    && binding.revision == spec.binding_revision
+                            })
+                    })
+                {
+                    return Err("reserved quota target lacks its exact Unknown binding".into());
+                }
+            }
+        }
     }
     Ok(total)
 }
@@ -568,14 +626,21 @@ fn backing_available(directory: &File) -> Result<u64, String> {
 fn check_creation_at(
     specs: &[VolumeSpec],
     retained: &[StorageAllocation],
-    new: &VolumeSpec,
+    targets: CreationTargets<'_>,
     headroom: u64,
     root: &Path,
     owner_uid: u32,
     reopen_root: impl Fn() -> Result<File, String>,
 ) -> Result<(), String> {
-    let required = required_creation_bytes(retained, new.bytes, headroom)?;
-    let directory = creation_pool(specs, retained, new, root, owner_uid, reopen_root)?;
+    let (directory, required) = creation_pool(
+        specs,
+        retained,
+        targets,
+        headroom,
+        root,
+        owner_uid,
+        reopen_root,
+    )?;
     if backing_available(&directory)? < required {
         return Err("insufficient backing headroom for all retained and new quota bytes".into());
     }
@@ -585,18 +650,20 @@ fn check_creation_at(
 fn creation_pool(
     specs: &[VolumeSpec],
     retained: &[StorageAllocation],
-    new: &VolumeSpec,
+    targets: CreationTargets<'_>,
+    headroom: u64,
     root: &Path,
     owner_uid: u32,
     reopen_root: impl Fn() -> Result<File, String>,
-) -> Result<File, String> {
+) -> Result<(File, u64), String> {
+    let required = required_creation_bytes(retained, targets, headroom)?;
     let declared = declared_slots(specs, root)?;
-    if declared.get(&new.allocation_id).copied() != Some(new)
-        || retained
-            .iter()
-            .any(|allocation| allocation.id == new.allocation_id)
+    if targets
+        .specs()
+        .iter()
+        .any(|target| declared.get(&target.allocation_id).copied() != Some(target))
     {
-        return Err("creation requires one exact declared, unallocated quota slot".into());
+        return Err("creation requires exact declared quota targets".into());
     }
     let mut directories = scan_pool(owner_uid, false, reopen_root)?;
     if directories.len() != 2 {
@@ -607,6 +674,13 @@ fn creation_pool(
         .map(|allocation| (allocation.id.as_str(), allocation))
         .collect();
     for (id, kind, meta) in observed_slots(&directories) {
+        if targets
+            .specs()
+            .iter()
+            .any(|target| target.allocation_id == id)
+        {
+            return Err("quota creation target already has a final image".into());
+        }
         if !retained
             .get(id.as_str())
             .is_some_and(|allocation| allocation.kind == kind && allocation.bytes == meta.len())
@@ -614,7 +688,7 @@ fn creation_pool(
             return Err("actual quota image is not represented by its retained allocation".into());
         }
     }
-    Ok(directories.remove(0).file)
+    Ok((directories.remove(0).file, required))
 }
 
 #[cfg(test)]
@@ -721,10 +795,21 @@ mod tests {
             retained: &[StorageAllocation],
             new: &VolumeSpec,
         ) -> Result<File, String> {
+            self.target_pool(retained, CreationTargets::New(std::slice::from_ref(new)), 0)
+                .map(|(directory, _)| directory)
+        }
+
+        fn target_pool(
+            &self,
+            retained: &[StorageAllocation],
+            targets: CreationTargets<'_>,
+            headroom: u64,
+        ) -> Result<(File, u64), String> {
             creation_pool(
-                std::slice::from_ref(new),
+                targets.specs(),
                 retained,
-                new,
+                targets,
+                headroom,
                 &self.root,
                 unsafe { libc::geteuid() },
                 || self.open(&self.root, unsafe { libc::geteuid() }),
@@ -735,6 +820,20 @@ mod tests {
     impl Drop for Fixture {
         fn drop(&mut self) {
             fs::remove_dir_all(&self.anchor_path).unwrap();
+        }
+    }
+
+    fn reserved(spec: &VolumeSpec) -> StorageAllocation {
+        StorageAllocation {
+            id: spec.allocation_id.clone(),
+            kind: spec.kind,
+            bytes: spec.bytes,
+            binding: Some(StorageBinding {
+                instance_id: spec.instance_id.clone(),
+                owner_id: spec.owner_id.clone(),
+                revision: spec.binding_revision.clone(),
+            }),
+            state: StorageState::Unknown,
         }
     }
 
@@ -1119,14 +1218,19 @@ mod tests {
         fixture.image(StorageKind::State, "orphan", 11);
         let mut retained = fixture.scan(&[]).unwrap().allocations;
         retained[0].state = StorageState::Present;
-        assert_eq!(required_creation_bytes(&retained, 13, 17).unwrap(), 48);
-        assert!(required_creation_bytes(&retained, u64::MAX, 1).is_err());
+        let new = fixture.spec(StorageKind::Workspace, "new");
+        let targets = CreationTargets::New(std::slice::from_ref(&new));
+        assert_eq!(
+            required_creation_bytes(&retained, targets, 17).unwrap(),
+            MIN_STORAGE_BYTES + 35
+        );
+        assert!(required_creation_bytes(&retained, targets, u64::MAX).is_err());
         retained[0].bytes = u64::MAX;
-        assert!(required_creation_bytes(&retained, 1, 0).is_err());
+        assert!(required_creation_bytes(&retained, targets, 0).is_err());
         retained[0].bytes = 0;
-        assert!(required_creation_bytes(&retained, 1, 0).is_err());
+        assert!(required_creation_bytes(&retained, targets, 0).is_err());
         retained[0] = retained[1].clone();
-        assert!(required_creation_bytes(&retained, 1, 0).is_err());
+        assert!(required_creation_bytes(&retained, targets, 0).is_err());
         assert_eq!(available_bytes(7, 4096).unwrap(), 28672);
         assert_eq!(available_bytes(0, 4096).unwrap(), 0);
         assert!(available_bytes(u64::MAX, 4096).is_err());
@@ -1147,7 +1251,12 @@ mod tests {
         fs::remove_file(image_path(&fixture.root, StorageKind::State, "orphan")).unwrap();
         assert!(fixture.creation_pool(&retained, &new).is_ok());
         assert_eq!(
-            required_creation_bytes(&retained, new.bytes, 19).unwrap(),
+            required_creation_bytes(
+                &retained,
+                CreationTargets::New(std::slice::from_ref(&new)),
+                19
+            )
+            .unwrap(),
             3 * MIN_STORAGE_BYTES + 19,
         );
         retained
@@ -1182,7 +1291,8 @@ mod tests {
             creation_pool(
                 std::slice::from_ref(&new),
                 &[],
-                &changed,
+                CreationTargets::New(std::slice::from_ref(&changed)),
+                0,
                 &fixture.root,
                 unsafe { libc::geteuid() },
                 || fixture.open(&fixture.root, unsafe { libc::geteuid() }),
@@ -1199,6 +1309,201 @@ mod tests {
         assert!(fixture.creation_pool(&[], &new).is_err());
         assert!(fixture.creation_pool(&[retained], &new).is_err());
         assert_eq!(fs::metadata(&new.image_path).unwrap().len(), new.bytes);
+    }
+
+    #[test]
+    fn new_pair_and_reserved_pair_charge_the_same_complete_pool_once() {
+        let fixture = Fixture::new();
+        fixture.initialize();
+        let orphan = fixture.image(StorageKind::Workspace, "orphan", 19);
+        let retained = fixture.scan(&[]).unwrap().allocations;
+        let targets = [
+            fixture.spec(StorageKind::Workspace, "new"),
+            fixture.spec(StorageKind::State, "new"),
+        ];
+        let (_, fresh_charge) = fixture
+            .target_pool(&retained, CreationTargets::New(&targets), 23)
+            .unwrap();
+        assert_eq!(fresh_charge, 2 * MIN_STORAGE_BYTES + 42);
+        let mut queued = retained.clone();
+        queued.extend(targets.iter().map(reserved));
+        let (_, queued_charge) = fixture
+            .target_pool(&queued, CreationTargets::Reserved(&targets), 23)
+            .unwrap();
+        assert_eq!(queued_charge, fresh_charge);
+        assert!(
+            fixture
+                .target_pool(&queued, CreationTargets::New(&targets), 23)
+                .is_err()
+        );
+        // A real orphan cannot be hidden by otherwise exact target reservations.
+        assert!(
+            fixture
+                .target_pool(&queued[1..], CreationTargets::Reserved(&targets), 23)
+                .is_err()
+        );
+        fs::remove_file(orphan).unwrap();
+        assert_eq!(
+            fixture
+                .target_pool(&queued, CreationTargets::Reserved(&targets), 23)
+                .unwrap()
+                .1,
+            fresh_charge
+        );
+        assert!(
+            required_creation_bytes(&queued, CreationTargets::Reserved(&targets), u64::MAX)
+                .is_err()
+        );
+        assert!(targets.iter().all(|target| !target.image_path.exists()));
+    }
+
+    #[test]
+    fn reserved_creation_requires_exact_unique_unknown_bindings() {
+        let fixture = Fixture::new();
+        fixture.initialize();
+        let targets = [
+            fixture.spec(StorageKind::Workspace, "new"),
+            fixture.spec(StorageKind::State, "new"),
+        ];
+        let rows: Vec<_> = targets.iter().map(reserved).collect();
+        assert!(
+            fixture
+                .target_pool(&rows, CreationTargets::Reserved(&targets), 0)
+                .is_ok()
+        );
+        for case in 0..10 {
+            let mut invalid = rows.clone();
+            match case {
+                0 => {
+                    invalid.pop();
+                }
+                1 => invalid[0].state = StorageState::Present,
+                2 => invalid[0].kind = StorageKind::State,
+                3 => invalid[0].bytes += 1,
+                4 => invalid[0].binding = None,
+                5 => invalid[0].binding.as_mut().unwrap().instance_id = "other".into(),
+                6 => invalid[0].binding.as_mut().unwrap().owner_id = "other".into(),
+                7 => invalid[0].binding.as_mut().unwrap().revision = "other".into(),
+                8 => invalid.push(invalid[0].clone()),
+                9 => invalid[0].id = "workspace:other".into(),
+                _ => unreachable!(),
+            }
+            assert!(
+                fixture
+                    .target_pool(&invalid, CreationTargets::Reserved(&targets), 0)
+                    .is_err(),
+                "case {case}"
+            );
+        }
+        for targets in [CreationTargets::New(&[]), CreationTargets::Reserved(&[])] {
+            assert!(fixture.target_pool(&rows, targets, 0).is_err());
+        }
+        let duplicates = [targets[0].clone(), targets[0].clone()];
+        assert!(
+            fixture
+                .target_pool(&[], CreationTargets::New(&duplicates), 0)
+                .is_err()
+        );
+        assert!(
+            fixture
+                .target_pool(&rows, CreationTargets::Reserved(&duplicates), 0)
+                .is_err()
+        );
+        let mut altered = targets.clone();
+        altered[0].owner_uid += 1;
+        assert!(
+            creation_pool(
+                &targets,
+                &rows,
+                CreationTargets::Reserved(&altered),
+                0,
+                &fixture.root,
+                unsafe { libc::geteuid() },
+                || fixture.open(&fixture.root, unsafe { libc::geteuid() })
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn reserved_targets_refuse_final_and_staging_images_without_touching_them() {
+        let fixture = Fixture::new();
+        fixture.initialize();
+        let targets = [
+            fixture.spec(StorageKind::Workspace, "new"),
+            fixture.spec(StorageKind::State, "new"),
+        ];
+        let rows: Vec<_> = targets.iter().map(reserved).collect();
+        for target in &targets {
+            let path = fixture.image(target.kind, "new", target.bytes);
+            let before = fs::metadata(&path).unwrap();
+            assert!(
+                fixture
+                    .target_pool(&rows, CreationTargets::Reserved(&targets), 0)
+                    .is_err()
+            );
+            assert!(image_unchanged(
+                &before,
+                &fs::metadata(&path).unwrap(),
+                true
+            ));
+            let staging = path.with_extension("img.new");
+            fs::write(&staging, b"partial").unwrap();
+            assert!(
+                fixture
+                    .target_pool(&rows, CreationTargets::Reserved(&targets), 0)
+                    .is_err()
+            );
+            fs::remove_file(&path).unwrap();
+            assert!(
+                fixture
+                    .target_pool(&rows, CreationTargets::Reserved(&targets), 0)
+                    .is_err()
+            );
+            assert_eq!(fs::read(&staging).unwrap(), b"partial");
+            assert!(!path.exists());
+            fs::remove_file(staging).unwrap();
+        }
+        assert!(
+            fixture
+                .target_pool(&rows, CreationTargets::Reserved(&targets), 0)
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn creation_counts_only_new_slots_against_the_inventory_limit() {
+        let fixture = Fixture::new();
+        let targets = [
+            fixture.spec(StorageKind::Workspace, "new"),
+            fixture.spec(StorageKind::State, "new"),
+        ];
+        let mut rows: Vec<_> = (0..MAX_STORAGE_ALLOCATIONS - 2)
+            .map(|index| StorageAllocation {
+                id: format!("workspace:old-{index}"),
+                kind: StorageKind::Workspace,
+                bytes: 1,
+                binding: None,
+                state: StorageState::Unknown,
+            })
+            .collect();
+        let expected = (MAX_STORAGE_ALLOCATIONS - 2) as u64 + 2 * MIN_STORAGE_BYTES;
+        assert_eq!(
+            required_creation_bytes(&rows, CreationTargets::New(&targets), 0).unwrap(),
+            expected
+        );
+        rows.extend(targets.iter().map(reserved));
+        assert_eq!(
+            required_creation_bytes(&rows, CreationTargets::Reserved(&targets), 0).unwrap(),
+            expected
+        );
+        let other = fixture.spec(StorageKind::Workspace, "other");
+        assert!(
+            required_creation_bytes(&rows, CreationTargets::New(std::slice::from_ref(&other)), 0)
+                .is_err()
+        );
+        rows.push(reserved(&other));
+        assert!(required_creation_bytes(&rows, CreationTargets::Reserved(&targets), 0).is_err());
     }
 
     #[test]
@@ -1264,7 +1569,7 @@ mod tests {
             check_creation_at(
                 std::slice::from_ref(&new),
                 &[],
-                &new,
+                CreationTargets::New(std::slice::from_ref(&new)),
                 u64::MAX - new.bytes,
                 &fixture.root,
                 unsafe { libc::geteuid() },

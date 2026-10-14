@@ -83,6 +83,10 @@ let
       ++ extra
     );
   configured = fixture { } [ ];
+  withoutTemplates = fixture { } [
+    { tentaflake.security.admission.creationTemplates = lib.mkForce { }; }
+  ];
+  supervisor = configured.systemd.services."tentaflake-environment-create@";
   plan = builtins.fromJSON (
     builtins.unsafeDiscardStringContext configured.tentaflake.admissionManifest.text
   );
@@ -108,6 +112,23 @@ let
   };
 in
 assert lib.all (entry: entry.assertion) configured.assertions;
+assert supervisor.wantedBy == [ ];
+assert (supervisor.serviceConfig.User or "root") == "root";
+assert supervisor.serviceConfig.Type == "oneshot";
+assert !supervisor.serviceConfig.RemainAfterExit;
+assert supervisor.serviceConfig.KillMode == "control-group";
+assert supervisor.serviceConfig.Restart == "no";
+assert supervisor.serviceConfig.TimeoutStartSec == 300;
+assert supervisor.serviceConfig.TimeoutStopSec == 120;
+assert
+  supervisor.serviceConfig.ExecStart == lib.escapeShellArgs [
+    plan.tools.cli
+    "admission"
+    "create-execute"
+    (toString configured.tentaflake.admissionManifest)
+    "%i"
+  ];
+assert !(withoutTemplates.systemd.services ? "tentaflake-environment-create@");
 assert projected.sourceInstance == template.sourceInstance;
 assert projected.sourceRevision == plan.instances.generic-template-source.revision;
 assert

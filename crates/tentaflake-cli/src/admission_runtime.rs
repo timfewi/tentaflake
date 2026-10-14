@@ -2,7 +2,7 @@
 //! mutate images; an exclusive inherited fence also covers surviving helpers.
 use crate::admission_host::{HostPlan, Volume, load_plan, store_path};
 use crate::admission_storage::{
-    VolumeSpec, check_creation_space, ensure_backing_roots, scan_inventory,
+    CreationTargets, VolumeSpec, check_creation_space, ensure_backing_roots, scan_inventory,
 };
 use crate::admission_systemd::{self, ExecCommand, UnitObservation};
 use serde::Deserialize;
@@ -329,7 +329,7 @@ pub(crate) fn lifecycle(path: &Path, id: &str, start: bool) -> Result<u8, String
                 check_creation_space(
                     &specs(&plan),
                     &snapshot.storage,
-                    &volume.spec,
+                    CreationTargets::New(std::slice::from_ref(&volume.spec)),
                     plan.physical_space_headroom_bytes,
                 )?;
                 Ok(context)

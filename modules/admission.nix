@@ -432,6 +432,25 @@ in
         }
       )
       // {
+        "tentaflake-environment-create@" = lib.mkIf (creationTemplates != { }) {
+          description = "Provision one admitted stopped environment";
+          serviceConfig = {
+            Type = "oneshot";
+            RemainAfterExit = false;
+            Restart = "no";
+            KillMode = "control-group";
+            TimeoutStartSec = 300;
+            TimeoutStopSec = 120;
+            UMask = "0077";
+            ExecStart = lib.escapeShellArgs [
+              manifest.tools.cli
+              "admission"
+              "create-execute"
+              (toString config.tentaflake.admissionManifest)
+              "%i"
+            ];
+          };
+        };
         # NixOS defines this service even when its timer is disabled. Mask it
         # so bootstrap can prove it cannot mutate the stopped runtime inventory.
         docker-prune.enable = lib.mkForce false;

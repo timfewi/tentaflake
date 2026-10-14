@@ -54,6 +54,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Public creation remains unsupported pending actual lifecycle/recovery collectors.
 - Project opt-in offline creation templates with their original reviewed catalog
   and shared dynamic quota helpers; private source settings remain host-owned.
+- Reconstruct exact dynamic storage bindings and supervise accepted creation
+  through one bounded systemd invocation. Reserved pairs count once against
+  physical headroom; failed helpers keep Unknown and historical claims never replay.
 - Retain bootstrap and publication manifests through official Nix GC-root
   registration before recording their authority; preserve roots after uncertain
   outcomes and refuse conflicting entries without replacement.
