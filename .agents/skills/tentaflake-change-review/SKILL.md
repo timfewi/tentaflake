@@ -1,7 +1,7 @@
 ---
 name: tentaflake-change-review
 description: Review a Tentaflake change for a concrete requirement, proportionate verification, synchronized docs and a complete PR.
-version: 1.1.23
+version: 1.1.24
 ---
 
 # Tentaflake change review
@@ -77,6 +77,10 @@ independently assert that the public absolute-path API still refuses foreign
 root ownership. Never relax production ownership policy to fit a sandbox.
 Use a process-wide counter for concurrent fixture names; PID plus a nanosecond
 clock reading alone collided in parallel CI diagnostics tests.
+Serialize executable fixture writes with every subprocess spawn in the same
+test process. CI reported `Text file busy`: a reproduced inherited writable FD
+kept an executable busy after the parent's close. Unique paths and CLOEXEC alone
+do not close that fork window; preserve strict outcomes instead of retrying them.
 Replace immutable directory fixtures within the same parent: an unprivileged
 cross-parent rename needs write access to the moved directory and failed before
 the identity assertion. Do not chmod away the identity being tested.

@@ -2,15 +2,21 @@ use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 use std::process::{Command, Output};
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 static NEXT_FIXTURE: AtomicU64 = AtomicU64::new(0);
+// A parallel fork can inherit another fixture's writable script FD until exec,
+// even with CLOEXEC and after fs::write closes the parent's FD (ETXTBSY). Keep
+// every fixture write and child lifetime inside this test-local boundary.
+static FIXTURE_PROCESS: Mutex<()> = Mutex::new(());
 
 struct Fixture(PathBuf);
 
 impl Fixture {
     fn new() -> Self {
+        let _process = FIXTURE_PROCESS.lock().unwrap();
         let root = std::env::temp_dir().join(format!(
             "tentaflake-diagnostics-{}-{}-{}",
             std::process::id(),
@@ -68,6 +74,7 @@ exit "$FIXTURE_DISK_EXIT""#,
     }
 
     fn run(&self, command: &str, json: bool, hide: bool, changes: &[(&str, &str)]) -> Output {
+        let _process = FIXTURE_PROCESS.lock().unwrap();
         let mut child = Command::new(env!("CARGO_BIN_EXE_tentaflake"));
         child
             .env_clear()
