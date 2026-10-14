@@ -171,9 +171,16 @@ passes formatting, lint, workspace Rust and the declared helper/contract checks.
 Parent mount-inventory repair `674c3b2` is integrated at `cb5f3c8`; pinned formatting,
 CLI all-target Clippy and 94 focused admission tests pass for this merge.
 Next: obtain remote VM evidence.
-Provider/vendor acceptance remains
-separate. Optional workers also need their dispatcher migrated
-into maintenance fencing.
+Provider/vendor acceptance remains separate.
+
+Optional Worker requests currently fail closed in owned OCI admission.
+The root oneshot/file-queue dispatcher lacks a mutation-free readiness probe.
+Introduce its collector together with immutable-image/exact-CID dispatch,
+the common maintenance fence and worker launcher inventory for bootstrap and
+publication. Replace the Worker read-only-mount validation skip with exact
+results-mount validation before enabling grants. Private worker data and
+retention are outside admitted workspace/state volumes; worker compute still
+relies on explicit host reserves.
 
 `feat/research-admission` now projects the final Research process/relay contract
 and connects it to Generic grants, owned service dependencies and the OCI
@@ -204,8 +211,9 @@ lint and the rendered Python script/helper syntax checks pass; node configuratio
 evaluation and execution remain pending. Its dummy interface and observation
 producer establish no real VPN or provider acceptance.
 
-The native Codex reference now pins the official Linux x86_64 `0.162.1` full
-package. Artifact acquisition verified its fixed SHA-256; the Nix package gate
+The native Codex reference is independently tracked in [PR #168](https://github.com/timfewi/tentaflake/pull/168)
+and pins the official Linux x86_64 `0.162.1` full package. Artifact acquisition
+verified its fixed SHA-256; the Nix package gate
 preserves and checks the package layout and included content hashes. The image
 and its local descriptor build successfully. `just fast` passes 337 Rust tests,
 seven wrapper regressions, 36 routing tests and the declared static/helper gates.
