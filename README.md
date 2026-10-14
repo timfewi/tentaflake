@@ -56,6 +56,7 @@ Ubuntu 26.04 LTS platform pins. Metadata checks do not establish runtime accepta
 | Installed NixOS host | Core |
 | Adapter registry and Hermes/ZeroClaw builders | Core |
 | Rust `tentaflake` CLI | Core |
+| Private HTTP host API | Experimental discovery/sessions, opt-in; environment operations unsupported |
 | Rust LLM/fetch policy broker | Core, opt-in per agent |
 | `secure-research-tool` web research | Pinned public service; explicit generic grant, required for legacy balanced auto-start |
 | Disposable no-egress tool worker | Core; explicit generic grant, required for legacy balanced auto-start |

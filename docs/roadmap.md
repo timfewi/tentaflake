@@ -64,8 +64,11 @@ Current integration work:
   HTTP tests cover discovery, refusal bounds and cancellation accounting; the
   optional Nix service passes its focused no-build projection. The complete fast
   gate passes 372 Rust tests plus static/helper checks; final origin and public
-  OIDC refusal regressions pass the focused gate. CLI package and guest HTTP
-  authentication acceptance remain the next gates.
+  OIDC refusal regressions pass the focused gate. The actual offline CLI Nix
+  package passes 268 tests after merging the reviewed #166 fixture repairs.
+  Storage/base/candidate projections select that tested package and the same API
+  configuration; the 2322-line VM driver and 138-line HTTP helper compile.
+  Guest HTTP authentication and private HTTPS relay acceptance remain pending.
   Only authentication is being connected; resource operations remain explicitly
   unsupported until their actual lifecycle owner exists.
 
