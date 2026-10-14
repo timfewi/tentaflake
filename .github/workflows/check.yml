@@ -34,6 +34,7 @@ jobs:
       broker: ${{ steps.filter.outputs.broker }}
       worker: ${{ steps.filter.outputs.worker }}
       devcontainer: ${{ steps.filter.outputs.devcontainer }}
+      codex: ${{ steps.filter.outputs.codex }}
       selection: ${{ steps.filter.outputs.selection }}
       static: ${{ steps.filter.outputs.static }}
     steps:
@@ -112,6 +113,10 @@ jobs:
         if: needs.changes.outputs.static == 'true'
         run: nix develop --command python3 scripts/test_describe_docker_archive.py
 
+      - name: Codex reference configuration
+        if: needs.changes.outputs.static == 'true'
+        run: nix develop --command python3 scripts/test_codex_reference.py
+
       - name: Rust lint and unit tests
         if: needs.changes.outputs.rust == 'true'
         env:
@@ -185,6 +190,7 @@ jobs:
         env:
           CHECK_EVALUATE: ${{ needs.changes.outputs.evaluate }}
           CHECK_DEVCONTAINER: ${{ needs.changes.outputs.devcontainer }}
+          CHECK_CODEX: ${{ needs.changes.outputs.codex }}
           CHECK_CLI: ${{ needs.changes.outputs.cli }}
           CHECK_BROKER: ${{ needs.changes.outputs.broker }}
           CHECK_WORKER: ${{ needs.changes.outputs.worker }}
@@ -192,6 +198,9 @@ jobs:
           selected_checks=()
           if [[ "$CHECK_DEVCONTAINER" == true ]]; then
             selected_checks+=(.#checks.x86_64-linux.devcontainer-cli)
+          fi
+          if [[ "$CHECK_CODEX" == true ]]; then
+            selected_checks+=(.#checks.x86_64-linux.codex-reference)
           fi
           if [[ "$CHECK_EVALUATE" == true ]]; then
             selected_checks+=(.#checks.x86_64-linux.image-pinning .#checks.x86_64-linux.agent-adapters)

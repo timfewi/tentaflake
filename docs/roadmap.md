@@ -204,6 +204,20 @@ lint and the rendered Python script/helper syntax checks pass; node configuratio
 evaluation and execution remain pending. Its dummy interface and observation
 producer establish no real VPN or provider acceptance.
 
+The native Codex reference now pins the official Linux x86_64 `0.162.1` full
+package. Artifact acquisition verified its fixed SHA-256; the Nix package gate
+preserves and checks the package layout and included content hashes. The image
+and its local descriptor build successfully. `just fast` passes 337 Rust tests,
+seven wrapper regressions, 36 routing tests and the declared static/helper gates.
+An isolated native smoke checks the packaged wrapper, WebSocket/Unix initialization,
+effective model/provider config and strict unknown-field refusal; the original
+config file remains intact. It exposes only the exact image closure and scratch
+directories, with test credentials and no external network. Native optional plugin
+sync attempts are denied. The operator's Generic definition must request Model
+admission and its grant. The image keeps persistent `/state/.codex`; its virtual
+token remains in the environment. Actual admitted
+capsule, tool/session and provider acceptance remain pending.
+
 The [base-image catalog](20-base-images.md) adds Debian 13 and Ubuntu 26.04 LTS
 platform manifest selection with an offline metadata validator. The 2026-10-13
 registry collection verified 12 raw metadata files (45,878 bytes). Formatting,
