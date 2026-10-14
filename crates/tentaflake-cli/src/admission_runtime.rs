@@ -435,6 +435,15 @@ fn maintenance_mount(
     plan: &HostPlan,
     other: Option<&HostPlan>,
 ) -> Result<(), String> {
+    validate_maintenance_mount(observed, plan, other)
+        .map_err(|error| format!("{error}: {}", observed.mount_context()))
+}
+
+fn validate_maintenance_mount(
+    observed: &UnitObservation,
+    plan: &HostPlan,
+    other: Option<&HostPlan>,
+) -> Result<(), String> {
     if observed.load_state == "masked" && stopped(observed) {
         return Ok(());
     }
@@ -449,6 +458,11 @@ fn maintenance_mount(
         return Err("mount inventory is unavailable, queued or transitioning".into());
     }
     let mount = observed.mount.as_ref().ok_or("missing mount observation")?;
+    // Overlay's actual lower/upper/work paths live in options, not What. Even
+    // an absolute directory in What cannot prove its backing independent.
+    if mount.filesystem_type == "overlay" {
+        return Err("overlay native mounts are unsupported during maintenance".into());
+    }
     let target = Path::new(&mount.where_path);
     let active = observed.active_state == "active";
     // Stable ordinary ancestors (/, /var, /var/lib, the backing filesystem)
@@ -489,6 +503,7 @@ fn pseudo_filesystem(kind: &str) -> bool {
         kind,
         "tmpfs"
             | "devtmpfs"
+            | "devpts"
             | "proc"
             | "sysfs"
             | "securityfs"
@@ -967,6 +982,41 @@ mod tests {
             filesystem_type: "tmpfs".into(),
         });
         assert!(maintenance_mount(&unit, &plan, None).is_ok());
+        let mut pts = unit.clone();
+        pts.id = "dev-pts.mount".into();
+        let mount = pts.mount.as_mut().unwrap();
+        mount.what = "devpts".into();
+        mount.where_path = "/dev/pts".into();
+        mount.filesystem_type = "devpts".into();
+        assert!(maintenance_mount(&pts, &plan, None).is_ok());
+        for source in ["overlay", "/"] {
+            let mut overlay = unit.clone();
+            let mount = overlay.mount.as_mut().unwrap();
+            mount.what = source.into();
+            mount.filesystem_type = "overlay".into();
+            assert!(
+                maintenance_mount(&overlay, &plan, None)
+                    .unwrap_err()
+                    .starts_with("overlay native mounts are unsupported")
+            );
+        }
+        for kind in ["nfs", "cifs", "fuse.sshfs", "unknown"] {
+            let mut unsupported = unit.clone();
+            let mount = unsupported.mount.as_mut().unwrap();
+            mount.what = "scheme://private-credential@host/path".into();
+            mount.filesystem_type = kind.into();
+            assert_eq!(
+                maintenance_mount(&unsupported, &plan, None).unwrap_err(),
+                format!(
+                    "native mount source cannot be proven independent of backing images: unit=run.mount, type={kind}, source=other"
+                )
+            );
+        }
+        // Ordinary directory bind sources remain available.
+        let mut bind = unit.clone();
+        bind.mount.as_mut().unwrap().what = "/".into();
+        bind.mount.as_mut().unwrap().filesystem_type = "none".into();
+        assert!(maintenance_mount(&bind, &plan, None).is_ok());
         for mutate in [
             |unit: &mut UnitObservation| unit.job.id = 5,
             |unit: &mut UnitObservation| unit.active_state = "activating".into(),
