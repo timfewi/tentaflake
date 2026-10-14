@@ -20,13 +20,16 @@ evaluation), #161 (reviewed Debian/Ubuntu metadata) and #163 (bounded optional
 cache setup) are merged. Automatic PR/push checks remain separate from explicit
 configuration, package and VM gates.
 
-PRs #156–#159 retain their implementation boundaries below. Complete run
-`38478204372` passed evaluation, non-VM builds and the repaired onboarding gate,
-then exposed a test race between an active Docker client unit and a running
-container. The bounded Running wait preserves every capability/security
-assertion. Replacement run `38483033310` tests capability head `33c435f` against
-main `01340a9`, including the previously unreached Research VM. Dependent PRs
-remain open until their relevant runtime gates pass.
+PRs #156–#158 are merged. Full run `38489147597` passed configuration,
+package, installed-flake, runtime VM and Research VM gates on capability head
+`0bca488`; the dependent CLI/package inputs retain their passing focused evidence.
+Main is `1abddbc`. Combined storage/publication/OCI PR #166 contains the reviewed
+#159/#164/#165 commits. Full run `38492331687` on `b50e279` exposed stale
+inline-helper assertions before runtime tests. The repair binds wrappers to the
+exported helpers and checks their actual guard content; its focused helper gate
+passes. Replacement full run `38494405219` tests `c05f5e4` against `1abddbc`.
+Component PRs remain open until inclusion is accepted; their superseded bootstrap
+paths must not be merged separately.
 
 Actual Nix CLI package builds for #157–#159 and draft #164/#165 now pass after
 anchoring filesystem fixtures at explicitly owned directory descriptors. The
@@ -46,15 +49,10 @@ recovery and native-writer file conflicts. These are contract/source checks only
 The separately owned UI still needs generated types and transport migration;
 the host service, matching CLI and live interaction acceptance remain next.
 
-Generic declarative model/Research/worker admission now covers exact requests,
-both storage quotas, resource ceilings and v3 diagnostics. Local `just fast`
-passes 130 Rust tests and 29 routing regressions; the adapter policy/helper check
-also passes, including generated manual-start refusal. Broader module evaluation
-requires an uncached Research client closure; no local dependency rebuild was
-started. Added generic startup and Research projection VM regressions await CI.
-The explicit gate exposed a VM-fixture import recursion; focused evaluation
-reproduced it and passes after making the import independent of node `pkgs`.
-The full runtime/build gate is being rerun for that fix.
+Generic declarative model/Research/worker admission covers exact requests,
+both storage quotas, resource ceilings and v3 diagnostics. Its full remote gate,
+including generic startup and Research projection VM regressions, now passes.
+Live collectors and actual provider acceptance remain separate work below.
 
 The next shared-core slice adds `crates/tentaflake-admission`: exact typed
 decisions, checked aggregate reservations including host/Research reserves,
@@ -148,6 +146,30 @@ neither node has run. Owners are the CLI OCI/bootstrap supervisors, admission
 module, image contract/helper and storage/OCI VM fixtures. The next step is the
 full remote runtime gate after the predecessor PRs; it must pass before merge.
 External capability collectors and automatic Unknown recovery remain unfinished.
+
+`feat/model-admission`, based on combined runtime PR #166, now connects the
+authenticated broker `/readyz`, exact process/listener and protected environment
+collector, dedicated Docker network and independent per-agent nftables boundary.
+The latter fixes earlier rules running after broader NixOS accepts. New model
+grants and descriptors are revision-bound; Docker receives the virtual-key file
+through an open descriptor, and exact-CID stop works without a ready broker.
+Readiness failures propagate even when source generations match. No upstream
+request or model budget mutation is part of readiness.
+
+Broker formatting, Clippy and 40 tests pass, including its actual offline Nix
+package. CLI formatting and Clippy pass; its actual offline Nix package passes
+75 core, 147 CLI and 9 integration tests, including the final authenticated probe,
+timeout and model-only immutable-mount regressions.
+Both generated offline and model plans pass the real closed Rust loader. Scoped
+Nix lint/format checks pass; full module assertions remain unverified locally
+because their Research closure is unavailable. The model fixture now extends
+the existing OCI node; its no-build evaluation and rendered Python compile pass.
+Its explicit local-mock broker package also passes all 40 tests. `just fast`
+passes formatting, lint, workspace Rust and the declared helper/contract checks.
+Next: integrate the parent assertion repair and obtain remote VM evidence.
+Provider/vendor acceptance remains
+separate. Research follows; optional workers also need their dispatcher migrated
+into maintenance fencing.
 
 The [base-image catalog](20-base-images.md) adds Debian 13 and Ubuntu 26.04 LTS
 platform manifest selection with an offline metadata validator. The 2026-10-13

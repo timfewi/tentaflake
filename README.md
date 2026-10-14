@@ -36,8 +36,10 @@ explicit [stopped-host publication protocol](docs/14-workspace-quota.md#changing
 when installing another configuration. The experimental
 [OCI admission supervisor](docs/agent-adapters.md#local-images-and-host-admission)
 binds durable claims to exact container identities and supports separately
-acquired local Nix images. Runtime acceptance, external capability collectors,
-automated installation and the host API service remain under development.
+acquired local Nix images. Model startup checks the authenticated local broker,
+owned network and firewall boundary. Runtime/provider acceptance, Research and
+worker collectors, automated installation and the host API service remain under
+development.
 
 Discover presets with `tentaflake runtimes --json`. A digest-pinned image and
 command can use the [common isolated workload definition](docs/agent-adapters.md#generic-isolated-workload)

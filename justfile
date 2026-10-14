@@ -32,10 +32,13 @@ image-catalog:
 local-image:
     python3 scripts/test_describe_docker_archive.py
 
-# Check the generated Nix runtime plan through the real closed Rust loader
+# Check offline and model Nix runtime plans through the real closed Rust loader
 # This explicit evaluator gate strips dependencies only from its read-only copy.
 admission-plan:
-    TENTAFLAKE_TEST_ADMISSION_PLAN="$(nix eval --raw --no-write-lock-file --option allow-import-from-derivation false .#checks.x86_64-linux.agent-adapters.admissionPlan --apply 'plan: builtins.toFile "tentaflake-schema-fixture.json" (builtins.unsafeDiscardStringContext plan.text)')" cargo test -p tentaflake-cli --locked admission_host::tests::generated_nix_plan_matches_closed_host_schema -- --ignored --exact
+    for projection in admissionPlan modelAdmissionPlan; do \
+        admission_plan_path="$(nix eval --raw --no-write-lock-file --option allow-import-from-derivation false ".#checks.x86_64-linux.agent-adapters.$projection" --apply 'plan: builtins.toFile "tentaflake-schema-fixture.json" (builtins.unsafeDiscardStringContext plan.text)')"; \
+        TENTAFLAKE_TEST_ADMISSION_PLAN="$admission_plan_path" cargo test -p tentaflake-cli --locked admission_host::tests::generated_nix_plan_matches_closed_host_schema -- --ignored --exact; \
+    done
 
 # Test routing with real Git histories and validate workflow syntax
 ci-policy:

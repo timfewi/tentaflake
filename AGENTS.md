@@ -147,8 +147,11 @@ are already published or require access to another repository for public checks.
   automatic restart. Persist exact boot/daemon/supervisor/image identity before
   create and the full CID before start; unknown outcomes retain charges without
   replay. Local `mkLocalImage` descriptors prove content identity, not registry
-  provenance. Real lifecycle VM evidence and external capability collectors
-  remain required. See `docs/agent-adapters.md` and `docs/14-workspace-quota.md`.
+  provenance. `admission_model` owns live process/listener, protected environment,
+  dedicated network and independent firewall evidence, bracketing authenticated
+  `/readyz`. Keep secrets out of receipts/argv and stop independent of broker
+  health. Research/worker collectors and real lifecycle VM evidence remain
+  required. See `docs/agent-adapters.md` and `docs/14-workspace-quota.md`.
 - CLI help is configuration-free; management commands require generated
   host configuration and inventory.
 - `api/v1/openapi.json` owns the host API wire contract; clients consume its

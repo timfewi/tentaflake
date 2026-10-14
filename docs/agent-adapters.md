@@ -176,8 +176,18 @@ exact container and retains its storage charge. Name collisions, failed writes,
 interrupted mutations and ambiguous observations keep compute reserved as
 Unknown; repeating a request never authorizes another create. Foreign containers
 are never removed by name. Automatic recovery from these uncertain claims is
-not implemented. This first lifecycle slice targets offline Generic workloads;
-external capability collectors and vendor acceptance remain separate work.
+not implemented.
+
+Model-enabled Generic startup additionally requires the declared broker's exact
+live process and authenticated `/readyz`, protected virtual-key environment,
+dedicated internal network and independent firewall table. A changed or unready
+dependency refuses dispatch even when its generation is unchanged. Docker receives
+the virtual-key environment through a retained file descriptor; credentials do
+not enter command arguments or admission receipts. Stopping an exact owned
+container does not require the broker to remain ready. These checks establish
+local transport prerequisites, not provider acceptance or available model budget.
+Research and worker collectors, vendor acceptance and automatic recovery remain
+separate work; missing capability evidence continues to refuse startup.
 
 ### OpenShell reuse decision
 

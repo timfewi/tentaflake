@@ -1,7 +1,7 @@
 ---
 name: tentaflake-change-review
 description: Review a Tentaflake change for a concrete requirement, proportionate verification, synchronized docs and a complete PR.
-version: 1.1.4
+version: 1.1.5
 ---
 
 # Tentaflake change review
@@ -23,6 +23,7 @@ Use for features, fixes and substantive reviews. Read `AGENTS.md` and
 | Ordinary source/configuration | Start with `just fast`, then focused assertions/tests |
 | Docs/skills | Inspect source claims, local links and frontmatter; run `just fast` |
 | Image validation | `nix build --no-link .#checks.x86_64-linux.image-pinning` |
+| Admission schema/projection | `just admission-plan` exercises generated offline and model plans through the actual loader |
 | Runtime/security | Identify affected host/Research VMs; run when explicitly authorized |
 | Installer | Focused disk/generated-flake checks; ISO/VM builds when explicitly authorized |
 
@@ -33,6 +34,11 @@ evidence for the current revision. A skipped build is not runtime acceptance.
 See [build boundaries](../../../docs/17-builds.md) for affected workflow dispatch.
 Full `just ci`/`just e2e`, VM, ISO and system builds are larger workloads.
 Evaluation does not prove runtime behavior or authorize activation.
+
+For broker firewall changes, inspect hook ordering and exercise unrelated open
+host ports and DNAT paths in the VM. Broker drops in NixOS's late allow chains
+were bypassed by earlier global accepts; matching rule text did not prove the
+boundary. Keep authenticated local readiness separate from provider acceptance.
 
 For filesystem ownership tests, obtain the focused Nix package test result as
 well as Cargo evidence. A real sandbox mapped `/` to an unowned overflow UID;

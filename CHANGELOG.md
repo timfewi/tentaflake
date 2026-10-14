@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 ### Fixed
+- Enforce broker bridge isolation before broader host INPUT and FORWARD accepts
+  using independent per-agent nftables tables.
 - Preserve completed worker results without redispatching stale requests, and
   retain complete inbox copies when legacy private pending state is damaged.
 - Identify the exact quota loop backing image inside systemd namespaces;
@@ -19,6 +21,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   budget reservation or upstream dispatch, omit session IDs from audit logs,
   and keep arbitrary client headers excluded. Clients still own ID propagation.
 ### Added
+- Live local Model admission for Generic workloads: authenticated broker readiness,
+  exact process/listener, private credential projection, network and firewall
+  evidence. Credentials pass to Docker through a retained descriptor; provider
+  acceptance and remaining model budget are separate checks.
 - Experimental aggregate Docker admission for offline Generic workloads, with
   durable host/daemon/supervisor/image intent, exact container-ID binding before
   start, conservative uncertain outcomes and storage retention on stop. Local

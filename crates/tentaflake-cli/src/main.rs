@@ -17,6 +17,7 @@ mod admission_bootstrap;
 mod admission_evidence;
 mod admission_fence;
 mod admission_host;
+mod admission_model;
 mod admission_oci;
 mod admission_publication;
 mod admission_runtime;
@@ -1811,6 +1812,22 @@ fn live_observed_security_drift(
             LiveContainerState::Secure
         }
         Some(network) if expected_network != "none" && network == expected_network => {
+            LiveContainerState::Secure
+        }
+        Some(network)
+            if backend == "docker"
+                && expected_network != "none"
+                && network.len() == 64
+                && network
+                    .bytes()
+                    .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+                && network_settings
+                    .and_then(|settings| settings.get("Networks"))
+                    .and_then(|networks| networks.get(expected_network))
+                    .and_then(|endpoint| endpoint.get("NetworkID"))
+                    .and_then(serde_json::Value::as_str)
+                    == Some(network) =>
+        {
             LiveContainerState::Secure
         }
         Some(_) => LiveContainerState::Unsafe,

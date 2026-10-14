@@ -53,6 +53,7 @@ let
         "podman"
       ];
       provenance = if provenance != null && provenance.enable then provenance else null;
+      model = config.tentaflake.broker.admissionModels.${name} or null;
     };
   runtimes = lib.genAttrs runtimeNames runtime;
   instance =
@@ -122,7 +123,17 @@ let
         workspaceBytes = 1024 * 1024 * 1024 * 1024;
         stateBytes = 1024 * 1024 * 1024 * 1024;
       };
-      grants = [ ];
+      grants = lib.concatMap (
+        name:
+        lib.optional
+          (runtimes.${name}.model != null && lib.elem "model" (instance name).requestedCapabilities)
+          {
+            instanceId = name;
+            ownerId = "host-root";
+            capability = "model";
+            expiresAt = null;
+          }
+      ) runtimeNames;
     };
     instances = lib.genAttrs instanceNames instance;
     inherit volumes runtimes;
@@ -135,6 +146,8 @@ let
       blkid = "${pkgs.util-linux}/bin/blkid";
       btrfs = "${pkgs.btrfs-progs}/bin/btrfs";
       docker = "${config.virtualisation.docker.package}/bin/docker";
+      nft = "${pkgs.nftables}/bin/nft";
+      ip = "${pkgs.iproute2}/bin/ip";
     };
   };
   manifest = plan // {
