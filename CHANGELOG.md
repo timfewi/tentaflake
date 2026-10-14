@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 ### Fixed
+- Keep guest Nix's store-mutating registration out of prebuilt, read-only
+  admission VM fixtures, including publication specialisations.
 - Handle kernel PTY mounts during admission maintenance, preserve refusal of
   unverified overlay backing, and report mount failures without raw sources.
 - Allow inert dependency-only mount entries during admission maintenance while
