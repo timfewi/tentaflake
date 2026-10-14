@@ -245,15 +245,15 @@ client termination proves no daemon cancellation. The configured Podman package
 supplies its declared gVisor runtime. Legacy migration and backup rollback
 review remain documented; no worker authority or backup sources change.
 
-The integration branch's fast gate passed 359 Rust tests and static/helper
-checks, plus scoped Nix lint/format, real Docker/Podman option projections with
-IFD disabled and compilation of the 2293-line rendered VM script. The standalone
-branch's fast gate is still pending. Worker package inputs are byte-identical
-to the tested feature: its actual offline Nix package
-passed 40 unit, three probe CLI and eight queue CLI tests. The package fixture
-uses supported 0750 result permissions because Nix forbids chmod setgid; the VM
-exercises the real tmpfiles layout. Standalone configuration and runtime
-verification remain pending. No local VM or system build ran for this split.
+The standalone fast gate passed 314 Rust tests and static/helper checks.
+Focused Docker/Podman projections with IFD disabled confirmed both backends
+use the tested Worker package, the configured Podman runtime and private
+tmpfiles layout; the 2136-line rendered VM script compiled. Byte-identical
+Worker package inputs passed an actual offline Nix package build with 40 unit,
+three probe CLI and eight queue CLI tests. Its fixtures use supported 0750
+result permissions because Nix forbids chmod setgid; the VM checks the real
+tmpfiles mode 2750. Real VM execution remains pending. No local VM or system
+build ran for this split.
 
 Optional Worker requests still fail closed in owned OCI admission. Next: bind
 the collector and worker launcher inventory to the common maintenance fence,
