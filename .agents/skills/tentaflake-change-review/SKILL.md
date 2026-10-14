@@ -1,7 +1,7 @@
 ---
 name: tentaflake-change-review
 description: Review a Tentaflake change for a concrete requirement, proportionate verification, synchronized docs and a complete PR.
-version: 1.1.14
+version: 1.1.15
 ---
 
 # Tentaflake change review
@@ -93,6 +93,9 @@ in the build check. Do not add evaluation-time reads of helper derivations.
   manifest/index IDs, while archive descriptors contain config IDs. Keep the
   supported classic-store setting explicit and verify live driver status; a
   successful load does not prove the descriptor ID is addressable.
+  Exercise abnormal supervisor exits: systemd 261 skips ExecStop after a failed
+  running main. Bind post-stop uncertainty to its exact invocation; never release
+  resources or modify another invocation because a cleanup helper ran.
 - Keep unaccepted runtimes described as unsupported/stopped.
 - Add relevant changes under `Unreleased` in `CHANGELOG.md`; preserve history.
 - When committing, use Conventional Commits and `git commit -s` for DCO.

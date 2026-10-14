@@ -33,14 +33,16 @@ Current integration work:
 
 - **OCI/storage/publication, PR #166:** complete effective specifications, exact
   supervisor/daemon/CID ownership, durable Unknown claims and explicit stopped
-  bootstrap/publication. Run `38536113968` passed storage/publication and normal
-  shutdown in 5 seconds, then failed OCI local image acquisition because Docker's
-  default containerd store reports manifest/index identities instead of the
-  required config digest. Commit `c9442ef` explicitly requires the classic image
-  store and verifies its live configuration without weakening exact identity.
-  Its 226 package tests, focused Rust/Nix checks, independent source review and
-  automatic CI pass; replacement full run `38542786276` is pending.
-  OCI/crash and Research VM acceptance remain outstanding.
+  bootstrap/publication. Commit `c9442ef` requires Docker's classic image store
+  and verifies its live configuration without weakening exact config identity.
+  Run `38542786276` passes acquisition, normal OCI start/stop, resource release,
+  create-conflict refusal, storage/publication and normal shutdown. Its crash
+  test fails after Docker restart and supervisor SIGKILL: systemd skips ExecStop,
+  leaving the receipt Active with its CID and full reservation retained.
+  Commit `fa3fad4` adds an authenticated, exact-invocation ExecStopPost path that
+  marks unfinished claims Unknown without Docker mutations or resource release.
+  Focused Rust/Nix gates and independent source reviews pass; the unchanged crash
+  assertion and Research VM still require a successful replacement run.
 - **Model/Research integration:** PR #167 and the upstream Research readiness
   work still need their relevant runtime gates and final public pin integration.
   Exact requested capabilities and live evidence remain prerequisites; neither
@@ -90,8 +92,9 @@ Claimed work requires a changed boot; successful recovery requires both native
 receipts already Present. Exact terminal retries skip original-template loads
 and live observations. Publication and Worker/native recovery prepare historical
 maintenance inventory outside their ledger callbacks, avoiding recursive locks.
-`just fast` passes **446 Rust tests** plus static/helper gates; the actual offline
-Nix CLI package passes **341 tests**, including all 130 admission tests. Four
+`just fast` passes **448 Rust tests** plus static/helper gates after integrating
+the OCI crash finalizer. The prior actual offline Nix CLI package at `475eaff`
+passed **341 tests**, including all 130 admission tests. Four
 intentional subprocess/VM helpers are ignored in each full test inventory. All 20
 static helper paths are unchanged; actual rendered dynamic-helper tests pass
 argument refusals, Btrfs creation/verification and sibling-slot isolation. The

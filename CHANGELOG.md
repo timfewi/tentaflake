@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 ### Fixed
+- Mark crashed OCI supervisors Unknown through an exact-invocation post-stop
+  hook, retaining container identity and resource charges without daemon mutation.
 - Fence Worker queue mutations and image loading with published host authority;
   retain uncertain image loads in the admission ledger and require explicit
   stopped-backend recovery. Include Worker watchers, loaders and retained job
