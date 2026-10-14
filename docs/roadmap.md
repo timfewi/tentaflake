@@ -159,8 +159,10 @@ API tests, including HTTP/Unix owner pagination through the real HTTPS client;
 all-target Clippy passes. The full fast gate passes 538 Rust tests, four intentional
 helpers ignored, plus static/helper checks. Security passes OSV for both lockfiles
 and scoped Semgrep with no findings. The existing creation VM now covers the
-generated owner/publication path; its evaluation and actual runtime acceptance
-remain pending. Planning and public creation remain `501`.
+generated owner/publication path. Its offline `nix flake check --no-build`
+projection with IFD disabled, focused API policy assertions, rendered driver and
+guest probe compilation pass. Actual package and VM acceptance remain pending.
+Planning and public creation remain `501`.
 
 The isolated operation-read slice implements both GET routes using original
 host/principal ownership and stored timestamps/revisions/results. Pending or
@@ -182,9 +184,8 @@ acceptance remains pending. Public resource mutations remain `501`; no creation
 or dispatch path is enabled.
 
 Resume here: obtain combined runtime acceptance for PR #176, then actual
-generated-owner/retained-ledger VM evidence for operation reads. The next API
-slice is the installed catalog with explicit default-deny read grants and
-revisions derived from its actual public metadata and effective grants. Follow
+generated-owner/retained-ledger VM evidence for operation reads and the installed
+catalog, preserving explicit read grants and content-bound revisions. Follow
 with server-bound planning/queueing and exact grants through the owner;
 the isolated HTTP process cannot run the host collectors. Keep
 creation within installed policy without rebuilding the host. Follow with
