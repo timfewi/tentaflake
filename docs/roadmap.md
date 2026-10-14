@@ -121,6 +121,10 @@ and rendered HTTP helper compile. Actual socket activation, credential namespace
 active-cookie revocation and owner-failure acceptance remain outstanding. HTTP
 resource operations remain `501`.
 
+An automatic diagnostics fixture returned an unexplained exit `2`; its retry at
+`32a66e0` and 50 focused parallel repeats passed. The assertions now retain
+bounded, redacted failure context without logging stdout or relaxing outcomes.
+
 Resume here: obtain actual owner and supervised creation/recovery VM evidence,
 including partial outcomes and historical retries. Only then connect HTTP
 planning/queueing and exact grants through the bounded host-namespace owner;
