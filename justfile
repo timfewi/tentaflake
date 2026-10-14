@@ -25,9 +25,11 @@ test:
     cargo test --workspace
     python3 scripts/test_image_catalog.py
 
-# Evaluate every flake output without building
+# Evaluate every flake output without building; force all shared constants,
+# which the lazy flake check would not touch
 eval:
     nix flake check --no-build
+    nix eval --json --file lib/constants.nix > /dev/null
 
 # Build the host system closure (explicit; not part of CI)
 build:
