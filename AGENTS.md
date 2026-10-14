@@ -247,6 +247,8 @@ are already published or require access to another repository for public checks.
 - Restic backups retain filesystem boundaries; selected managed quota mounts
   are separate sources and required mounts. Verify workspace restore as well
   as ordinary state when changing backup or quota behavior.
+  `lib/quotaHelpers.nix` owns the shared create/verify/owner/mount/unmount
+  implementation; keep its callers on the same validation and helper bodies.
   Optional `workspaceQuota.agents.<container>.state` must match adapter
   `stateStorage` and ownership. Initialize adapter directories only after the
   state mount; seeds/healing wait for quota ownership. Refuse symlink sources

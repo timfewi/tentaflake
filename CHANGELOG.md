@@ -88,6 +88,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   broker SSE transport still needs acceptance with that runtime. Default
   rejection probes retain the existing budget and credential boundaries.
 ### Changed
+- Share the existing quota helper implementation through `lib/quotaHelpers.nix`;
+  static callers retain their generated scripts and storage behavior.
 - Keep automatic PR/push CI to affected static/unit checks, with routing and
   whitespace checks on every run. Explicit workflow dispatch selects affected
   configuration, package and VM gates; `just fast` no longer evaluates
