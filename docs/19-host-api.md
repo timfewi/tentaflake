@@ -83,6 +83,32 @@ The VM fixture generates its own guest-only credentials and tests real HTTP
 requests and restart refusal; successful execution of that fixture is a separate
 acceptance gate. It does not prove the consumer's HTTPS relay configuration.
 
+## Private ledger foundation
+
+`tentaflake-admission::ledger::api` implements library transactions for stopped,
+offline environments; public creation still returns HTTP `501 unsupported`.
+The existing ledger atomically records the operation, exact issued action grants,
+environment/workspace identities and both native storage charges. Operation keys
+bind host, principal, epoch, method, canonical target and exact request digest.
+Request UUIDs, including nil, normalize to lowercase for storage and lookup;
+case differences do not create a second intent. Boot identities remain non-nil.
+Only a new durable supervisor claim, bound to boot, unit and invocation identity,
+returns a helper permit. Historical lookup or retry never redispatches work.
+Unrelated login consumption does not change resource or grant revisions.
+
+This slice accepts only nonexpiring installed creation and issued grants.
+Ordinary native runtime/storage entrypoints refuse these dynamic identities;
+publication refuses queued or unresolved work. Partial creation retains both
+charges. Explicit recovery can recognize exact existing, stopped images after
+helpers are fenced; it cannot recreate missing images or release allocations.
+Actual helper integration, queued-abort and absent-allocation reconciliation are
+required before enabling public creation. These are library guarantees and host
+collector obligations, not evidence of a working HTTP create or VM lifecycle.
+
+Existing private v3 ledgers without the new API field remain readable. Once a
+new writer persists that field, older binaries reject it; rollback must preserve
+the operation, grant and allocation history rather than remove the field.
+
 ## HTTPS CLI client
 
 The configuration-free `tentaflake api` client uses an explicit HTTPS origin

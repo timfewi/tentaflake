@@ -74,15 +74,21 @@ Current integration work:
   Sessions still grant no resource actions; resource operations remain explicitly
   unsupported until their actual lifecycle owner exists.
 
-The next local branch, `feat/host-environments`, adds ledger-owned operations and
-stopped-create transactions. This work is in progress and has no runtime
-acceptance yet. Actual helper integration and explicit queued-abort/absent-image
-recovery are required before enabling creation; Unknown charges cannot be dropped
-or recreated implicitly.
+`feat/host-environments` now has a private ledger foundation for scoped operations,
+exact nonexpiring grants and stopped creation: both native volume charges are
+atomic, only a new exact supervisor claim permits helpers, and partial outcomes
+retain charges. Native entrypoints refuse unlinked dynamic identities; publication
+fences unresolved work. `just fast` passes **400 Rust tests** plus the static and
+helper gates; the actual Nix CLI package passes **295 tests**, including all 117
+admission tests. Three intentional subprocess helpers are ignored in each full
+test inventory. Runtime acceptance remains unverified; HTTP creation still
+returns `501`. Existing-image
+recovery cannot replace required queued-abort/absent-allocation reconciliation.
+New code reads old v3 files; older binaries reject the new field once written.
 
-Resume here: verify the ledger transaction slice, then connect its receipts,
-exact grants and dynamic environments to
-that same admission/runtime owner. Creation must stay within installed policy
+Resume here: connect the verified receipts, exact grants and dynamic environments
+to that same admission/runtime owner, including actual helpers and explicit abort
+and absence recovery before enabling creation. It must stay within installed policy
 without rebuilding the host. Follow with workspace/files/streams and the matching
 CLI, then actual client and coding-agent acceptance. Preserve private v3 ledger
 history; consumed login tokens and uncertain resource claims must never become

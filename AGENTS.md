@@ -156,6 +156,13 @@ are already published or require access to another repository for public checks.
   replay. Local `mkLocalImage` descriptors prove content identity, not registry
   provenance. Real lifecycle VM evidence and external capability collectors
   remain required. See `docs/agent-adapters.md` and `docs/14-workspace-quota.md`.
+  Its private `ledger::api` foundation reserves workspace and state together,
+  then binds one supervisor claim before helpers run. Preserve exact scoped
+  operation identity, nonexpiring grants and stable resource/grant revisions.
+  Native entrypoints cannot bypass dynamic ownership; unresolved work fences
+  publication and keeps both charges. Recovery observes existing stopped images
+  only. Public create remains `501` until helper and queued-abort/absent-allocation
+  recovery integration; see `docs/19-host-api.md` for migration limits.
 - CLI help is configuration-free; management commands require generated
   host configuration and inventory.
 - `crates/tentaflake-cli/src/api` and `modules/api.nix` own the optional private

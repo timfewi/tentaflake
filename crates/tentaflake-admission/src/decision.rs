@@ -373,9 +373,11 @@ fn check_readiness(snapshot: &AdmissionSnapshot, now: u64, reasons: &mut Vec<Rea
     }
 }
 
-fn check_resources(snapshot: &AdmissionSnapshot, reasons: &mut Vec<Reason>) {
-    let policy = &snapshot.policy;
-    let instance = &snapshot.instance;
+pub(crate) fn check_instance_limits(
+    policy: &HostPolicy,
+    instance: &Instance,
+    reasons: &mut Vec<Reason>,
+) {
     for ((name, requested), (_, maximum)) in fields(instance.resources)
         .into_iter()
         .zip(fields(policy.per_instance))
@@ -384,6 +386,12 @@ fn check_resources(snapshot: &AdmissionSnapshot, reasons: &mut Vec<Reason>) {
             reason(reasons, ReasonCode::InstanceLimit, name);
         }
     }
+}
+
+fn check_resources(snapshot: &AdmissionSnapshot, reasons: &mut Vec<Reason>) {
+    let policy = &snapshot.policy;
+    let instance = &snapshot.instance;
+    check_instance_limits(policy, instance, reasons);
     let mut total = policy
         .host_reserve
         .checked_add(policy.research_reserve)

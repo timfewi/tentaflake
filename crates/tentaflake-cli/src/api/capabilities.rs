@@ -1,7 +1,7 @@
 //! Published ceilings are not admission, grants or live runtime evidence.
 use super::session::AuthError;
 use serde_json::{Value, json};
-use tentaflake_admission::HostPolicy;
+use tentaflake_admission::{HostPolicy, ledger::api::MAX_OPERATIONS};
 
 const MIB: u64 = 1024 * 1024;
 const CPU: u64 = 1_000_000_000;
@@ -62,7 +62,7 @@ pub(super) fn project(policy: &HostPolicy, revisions: Value) -> Result<Value, Au
             // routes. Those routes still refuse all access, including small requests.
             "maxEditBytes":super::MAX_BODY,"maxUploadBytes":super::MAX_BODY,
             "maxPageEntries":500,"maxStreamFrameBytes":65536,"maxStreamReplayBytes":1_048_576,
-            "maxTerminals":1,"maxTerminalIdleSeconds":900,"maxOperationRecords":4096,
+            "maxTerminals":1,"maxTerminalIdleSeconds":900,"maxOperationRecords":MAX_OPERATIONS,
             "reservedCpu":reserved_cpu,"reservedMemoryMiB":reserved_memory,
         },
     }))

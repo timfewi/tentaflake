@@ -28,6 +28,8 @@ use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Component, Path};
 
+pub mod api;
+
 pub const MAX_RECEIPTS: usize = MAX_RESERVATIONS;
 pub const MAX_LEDGER_BYTES: usize = 8 * 1024 * 1024;
 const LEDGER_SCHEMA_VERSION: u32 = 3;
@@ -294,6 +296,8 @@ struct State {
     worker_image_load: Option<WorkerImageLoadReceipt>,
     #[serde(default)]
     operator_logins: Vec<OperatorLoginReceipt>,
+    #[serde(default)]
+    api: Box<api::ApiState>,
 }
 
 impl Ledger {
@@ -333,6 +337,7 @@ impl Ledger {
             publications: Vec::new(),
             worker_image_load: None,
             operator_logins: Vec::new(),
+            api: Box::default(),
             storage: inventory
                 .allocations
                 .into_iter()
@@ -559,6 +564,9 @@ impl Ledger {
         let _lock = self.lock(false)?;
         let mut state = self.read()?;
         request.validate()?;
+        if state.api_operation_exists(&request.operation_id) {
+            return Err(LedgerError::Conflict);
+        }
         if let Some(receipt) = state
             .publications
             .iter()
@@ -583,6 +591,7 @@ impl Ledger {
             return Err(LedgerError::Conflict);
         }
         state.require_stable()?;
+        state.require_quiescent_api()?;
         if state.published != request.expected_authority {
             return Err(LedgerError::StaleAuthority);
         }
@@ -674,6 +683,7 @@ impl Ledger {
             return Err(LedgerError::StaleRevision);
         }
         state.require_known_image_load()?;
+        state.require_quiescent_api()?;
         let snapshot = state.snapshot();
         if snapshot
             .entries
@@ -718,6 +728,11 @@ impl Ledger {
     ) -> Result<ClaimOutcome<'_>, LedgerError> {
         let lock = self.lock(false)?;
         let mut state = self.read()?;
+        if state.dynamic_instance(&request.instance_id)
+            || state.api_operation_exists(&request.operation_id)
+        {
+            return Err(LedgerError::Conflict);
+        }
         let RuntimeContext {
             mut snapshot,
             now,
@@ -808,6 +823,12 @@ impl Ledger {
     ) -> Result<StorageClaimOutcome<'_>, LedgerError> {
         let lock = self.lock(false)?;
         let mut state = self.read()?;
+        if state.dynamic_instance(&request.request.instance_id)
+            || state.dynamic_allocation(&request.allocation_id)
+            || state.api_operation_exists(&request.request.operation_id)
+        {
+            return Err(LedgerError::Conflict);
+        }
         let mut snapshot = fresh_context(&state.published).map_err(|_| LedgerError::Context)?;
         state.check_policy(&snapshot.policy)?;
         snapshot.reservations = state.snapshot();
@@ -889,6 +910,11 @@ impl Ledger {
     ) -> Result<T, LedgerError> {
         let _lock = self.lock(false)?;
         let state = self.read()?;
+        if state.dynamic_instance(&request.request.instance_id)
+            || state.dynamic_allocation(&request.allocation_id)
+        {
+            return Err(LedgerError::Conflict);
+        }
         state.require_stable()?;
         if state.published != *authority {
             return Err(LedgerError::StaleAuthority);
@@ -922,6 +948,9 @@ impl Ledger {
     ) -> Result<StorageReceipt, LedgerError> {
         let _lock = self.lock(false)?;
         let mut state = self.read()?;
+        if state.dynamic_allocation(allocation_id) {
+            return Err(LedgerError::Conflict);
+        }
         if state.revision != expected_ledger_revision {
             return Err(LedgerError::StaleRevision);
         }
@@ -953,6 +982,9 @@ impl Ledger {
             .iter()
             .position(|receipt| receipt.request.operation_id == operation_id)
             .ok_or(LedgerError::Conflict)?;
+        if state.dynamic_instance(&state.receipts[index].request.instance_id) {
+            return Err(LedgerError::Conflict);
+        }
         if !state.current().values().any(|current| *current == index) {
             return Err(LedgerError::Conflict);
         }
@@ -1354,6 +1386,12 @@ impl State {
                     .iter()
                     .map(|receipt| receipt.consumed_revision),
             )
+            .chain(
+                self.api
+                    .operations
+                    .iter()
+                    .map(|operation| operation.updated_revision),
+            )
             .max()
             .unwrap_or(1);
         if latest_update != self.revision {
@@ -1552,6 +1590,7 @@ impl State {
             )
             .flatten()
             .collect();
+        self.validate_api(&mut revisions)?;
         let mut fingerprints = BTreeSet::new();
         let mut previous = 1;
         for receipt in &self.operator_logins {
@@ -1648,6 +1687,8 @@ mod tests {
     use std::path::PathBuf;
     use std::process::Command;
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    mod api_tests;
 
     struct Fixture(PathBuf);
 

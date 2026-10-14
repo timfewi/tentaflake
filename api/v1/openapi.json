@@ -1243,7 +1243,7 @@
       "get": {
         "operationId": "recoverOperation",
         "summary": "Recover one precisely scoped idempotency record",
-        "description": "Scope is host, authenticated principal, server mutation epoch, HTTP method, canonical target including semantic query and UUID. Do not accept an ownerId from the client. Return absent only after authoritative lookup of a complete healthy current-epoch ledger. Unavailable, corrupt, retired, pruned or ambiguous evidence returns unknown, never an empty list. Recover by exact key; do not infer success from current environment state. Retain minimal original-principal receipt authorization after resource deletion so reconciliation does not depend on the deleted resource grant. This never restores resource access or bypasses session/principal revocation.",
+        "description": "Scope is host, authenticated principal, server mutation epoch, HTTP method, canonical target including semantic query and UUID. Normalize UUID hexadecimal letters to lowercase for submission and recovery; changing their case never creates a new intent. Do not accept an ownerId from the client. Return absent only after authoritative lookup of a complete healthy current-epoch ledger. Unavailable, corrupt, retired, pruned or ambiguous evidence returns unknown, never an empty list. Recover by exact key; do not infer success from current environment state. Retain minimal original-principal receipt authorization after resource deletion so reconciliation does not depend on the deleted resource grant. This never restores resource access or bypasses session/principal revocation.",
         "responses": {
           "200": {
             "description": "Success",
@@ -2404,7 +2404,7 @@
           "type": "string",
           "format": "uuid"
         },
-        "description": "Fresh UUID per intent. Reuse exactly this key, epoch and request only after authoritative recovery; never generate a new key for an unknown outcome."
+        "description": "Fresh UUID per intent. Normalize UUID hexadecimal letters to lowercase for submission and recovery; changing their case never creates a new intent. Reuse exactly this key, epoch and request only after authoritative recovery; never generate a new key for an unknown outcome."
       },
       "IdempotencyEpoch": {
         "name": "Idempotency-Epoch",
