@@ -181,14 +181,13 @@ listeners, process roots/configuration and controller output directory around
 the new authenticated upstream readiness RPC. Exact controller generation,
 fresh response and lease expiry remain required before each dispatch step.
 The socket and partial-frame regression tests use real local Linux/Unix sockets.
-After correcting contradictory mount flags and accepted-socket pathname handling,
-126 focused admission tests and CLI all-target Clippy pass after the reviewed
-parent merge `7d74610`, including strict socket metadata and the final expiry
-check after daemon observations. Both generated offline/model plans pass the
-real Rust loader. Before that merge, `just fast` passed 334 Rust tests and
-the declared static/helper checks; the actual CLI Nix package passed 75 core,
-180 CLI and nine integration tests, including the new Linux socket observations.
-Nix formatting and scoped lint pass. Pinned client closure preparation passes
+Parent mount-source repair `674c3b2` is integrated at `4550fcb`; 127 focused
+admission tests and CLI all-target Clippy pass, preserving strict socket metadata
+and the final expiry check after daemon observations. Both generated offline/model
+plans pass the real Rust loader. Before the latest parent merge, `just fast`
+passed 337 Rust tests and the declared static/helper checks. The earlier CLI Nix
+package passed 75 core, 180 CLI and nine integration tests. Nix formatting and
+scoped lint pass. Pinned client closure preparation passes
 17 library, six curl and five transport tests. Full Research projection still
 requires the service package; its preflight selects that package, one closure
 helper and 17.9 MiB of substitutes. That gate remains in the remote queue.
@@ -198,8 +197,8 @@ has passed its own fast checks but still awaits its serialized package CI/merge;
 the downstream input remains at `91ce540`, so no usable live Research admission
 or lifecycle/real-VPN VM acceptance is claimed. Next: prepare and evaluate the
 Research projections, integrate the reviewed upstream pin, then exercise the
-actual start path. The existing Research VM now includes owned Generic start,
-lease/relay/backend refusals, exact-CID stop and generation renewal. Scoped Nix
+actual start path. The existing Research VM uses a read-only store and includes
+owned Generic start, lease/relay/backend refusals, exact-CID stop and generation renewal. Scoped Nix
 lint and the rendered Python script/helper syntax checks pass; node configuration
 evaluation and execution remain pending. Its dummy interface and observation
 producer establish no real VPN or provider acceptance.
