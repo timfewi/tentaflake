@@ -1,9 +1,9 @@
 # Host environment API v1
 
 Status: authoritative contract for [#152](https://github.com/timfewi/tentaflake/issues/152),
-with experimental discovery, sessions, published capacity reporting and an HTTPS
-CLI client. Dynamic environment lifecycle remains unimplemented on the host.
-Schema validation, unit tests and
+with experimental discovery, sessions, published capacity reporting,
+original-principal operation reads and an HTTPS CLI client. Dynamic environment
+lifecycle remains unavailable through HTTP. Schema validation, unit tests and
 fixtures do not establish vendor, guest, private HTTPS relay or live-host
 acceptance. Existing installed-host `agent plan`/`agent import` commands retain
 their documented stopped configuration-file behavior.
@@ -56,8 +56,8 @@ root ownership, private permissions, a single regular-file link and protected,
 unchanged ancestry. It rejects Nix-store credential paths and equal operator/bearer
 contents. Secrets do not appear in service arguments, responses or logs.
 
-The implemented routes are `GET /api/meta`, `GET/POST/DELETE /api/v1/session` and
-authenticated `GET /api/v1/capabilities`. Discovery
+The implemented routes are `GET /api/meta`, `GET/POST/DELETE /api/v1/session`,
+authenticated `GET /api/v1/capabilities` and both operation reads described below. Discovery
 reports an implemented backend because this service handles real requests; it
 does not assert that environment features exist. Sessions currently return an
 empty grant list. Capabilities report the installed policy's ceilings after host
@@ -99,6 +99,45 @@ requests, actual UID/filesystem boundaries, active-session revocation after rest
 and process death, and owner unavailability. Successful execution of that fixture
 is a separate acceptance gate, including the actual owner mount namespace and
 systemd lifetime coupling. It does not prove the consumer's HTTPS relay configuration.
+
+## Operation reads
+
+`GET /api/v1/operations/{id}` returns only a receipt belonging to the authenticated
+principal on this host; another principal's ID is indistinguishable from a missing
+ID (`404 not_found`). `GET /api/v1/operations` requires exactly four query fields:
+`idempotencyKey`, `mutationEpoch`, `method` and `target`. Decode the outer query
+once; preserve the canonical target, including its semantic query. Duplicate,
+unknown or malformed fields are refused. UUID key spelling is case insensitive.
+Neither route grants resource access or permits dispatch.
+
+The owner maps private creation receipts to the existing wire states: Queued to
+`queued`, Unknown to `unknown`, Succeeded to `succeeded`, and operator Aborted to
+`failed`. Aborted uses `unready` with a constant explanation that explicit operator
+recovery ended creation, storage may remain retained and replay is forbidden; its
+result is null. Unknown is not evidence that a job is running. Successful results
+contain only the stored environment/workspace IDs and their historical revisions.
+Timestamps and the operation revision come from the stored receipt; the ID route's
+strong ETag equals that revision. Empty steps mean no detailed step history was
+recorded. Private authority paths, supervisor identities, allocations and grants
+are never serialized. Session/catalog revision placeholders are not used to invent
+operation or resource revisions.
+
+Historical `found` remains readable during Pending publication and after epoch
+changes. Missing keys return `absent` only for the current epoch with no Pending
+publication, observed together under the ledger lock; otherwise they return
+`unknown`. An unavailable/stale installed authority or ledger returns `503`, never
+safe absence. Before returning, the owner rechecks its installed/published binding
+and active authentication. Unrelated logins do not change the receipt's ETag.
+
+The focused transport regressions use real HTTP, Unix framing, owner sessions and
+HTTPS CLI parsing with a test-only installed-state/receipt reader. Separate core
+regressions exercise real durable ledger and publication transitions. The existing
+creation VM additionally exercises its real retained ledger through
+the generated API owner and installed CLI, using guest-only credentials and an
+explicitly trusted local TLS relay. Its queued/Unknown/success/abort, Pending and
+post-publication history assertions are written but have not run; unit fixtures
+alone do not prove that deployment.
+Public planning, creation, start and stop remain `501 unsupported`.
 
 ## Private ledger foundation
 
@@ -187,12 +226,24 @@ come only from a protected runtime file owned by the calling user, mode `0400`
 or `0600`, with safe root/user-owned parent directories. Symlinks, hard links,
 Nix-store paths and inline token arguments are refused.
 
+For a self-hosted private CA, pass `--ca-file /absolute/protected/ca.pem` explicitly.
+This adds roots for that invocation while keeping the default trust roots and all
+certificate/hostname checks. It does not read proxy or CA environment overrides.
+The PEM file must contain 1–16 certificates within 64 KiB, be a single-link regular
+file owned by root or the invoking user, and have protected root/user-owned
+ancestry without symlinks or group/world writes. Public readability is allowed;
+private keys, other PEM objects and trailing non-certificate data are refused.
+There is no insecure-TLS switch or automatic trust fallback.
+
 ```bash
 tentaflake api --origin https://host.example.invalid meta
 tentaflake api --origin https://host.example.invalid \
   --bearer-file "$XDG_RUNTIME_DIR/tentaflake/cli-bearer" session
 tentaflake api --origin https://host.example.invalid \
   --bearer-file "$XDG_RUNTIME_DIR/tentaflake/cli-bearer" capabilities
+tentaflake api --origin https://host.example.invalid \
+  --ca-file "$XDG_RUNTIME_DIR/tentaflake/ca.pem" \
+  --bearer-file "$XDG_RUNTIME_DIR/tentaflake/cli-bearer" operation operation-id
 ```
 
 The client also provides `environments`, `environment ID`, `plan FILE`,

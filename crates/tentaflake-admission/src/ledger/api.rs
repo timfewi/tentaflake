@@ -499,6 +499,8 @@ impl State {
 }
 
 impl Ledger {
+    /// Historical receipts remain readable during publication. A missing key is
+    /// authoritative only in the current mutation epoch with no pending change.
     pub fn api_lookup(&self, context: &ApiContext, key: &ApiKey) -> Result<ApiLookup, LedgerError> {
         let _lock = self.lock(false)?;
         let state = self.read()?;
@@ -512,7 +514,7 @@ impl Ledger {
         {
             return Ok(ApiLookup::Found(Box::new(op.clone())));
         }
-        Ok(if key.epoch == context.epoch {
+        Ok(if key.epoch == context.epoch && state.pending().is_none() {
             ApiLookup::Absent
         } else {
             ApiLookup::Unknown

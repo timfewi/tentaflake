@@ -64,6 +64,7 @@ pub(crate) enum AuthError {
     RateLimited,
     Capacity,
     Unsupported,
+    NotFound,
     Unavailable,
 }
 
@@ -78,6 +79,7 @@ impl AuthError {
             Self::Origin => "forbidden",
             Self::RateLimited | Self::Capacity => "rate_limited",
             Self::Unsupported => "unsupported",
+            Self::NotFound => "not_found",
             Self::Unavailable => "unavailable",
         }
     }
@@ -89,6 +91,7 @@ impl AuthError {
             Self::Csrf | Self::Origin => 403,
             Self::RateLimited | Self::Capacity => 429,
             Self::Unsupported => 501,
+            Self::NotFound => 404,
             Self::Unavailable => 503,
         }
     }
@@ -176,6 +179,18 @@ pub(crate) struct Sessions {
 }
 
 impl Sessions {
+    #[cfg(test)]
+    pub(super) fn fixture_login(&mut self, current: AuthContext<'_>) -> NewSession {
+        let mut headers = HeaderMap::new();
+        headers.insert("host", self.authority.parse().unwrap());
+        headers.insert("origin", self.settings.origin.parse().unwrap());
+        headers.insert("content-type", "application/json".parse().unwrap());
+        let secret = b"synthetic-operation-login-0123456789";
+        self.login_with(&headers,
+            &serde_json::to_vec(&serde_json::json!({"method":"operator-token","secret":std::str::from_utf8(secret).unwrap()})).unwrap(),
+            current, Clock::now().unwrap(), |_| Ok(secret.to_vec()), |_| Ok(())).unwrap()
+    }
+
     pub(crate) fn new(settings: AuthSettings) -> Result<Self, AuthError> {
         let origin: Uri = settings.origin.parse().map_err(|_| AuthError::Invalid)?;
         let authority = origin.authority().ok_or(AuthError::Invalid)?;

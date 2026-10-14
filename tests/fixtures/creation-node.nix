@@ -1,4 +1,4 @@
-# Stopped creation and recovery only: no OCI image acquisition or agent start.
+# Stopped creation/recovery and actual owned receipt reads: no agent start.
 { self }:
 {
   config,
@@ -79,6 +79,28 @@ in
   };
   systemd = {
     services = {
+      tentaflake-api.wantedBy = lib.mkForce [ ];
+      creation-api-relay = {
+        description = "Guest-only private HTTPS relay for API acceptance";
+        after = [ "tentaflake-api.service" ];
+        requires = [ "tentaflake-api.service" ];
+        serviceConfig = {
+          ExecStart = "${pkgs.python3}/bin/python3 ${./creation-api.py} relay";
+          User = "root";
+          UMask = "0077";
+          NoNewPrivileges = true;
+          CapabilityBoundingSet = "";
+          PrivateTmp = true;
+          ProtectSystem = "strict";
+          ProtectHome = true;
+          RestrictAddressFamilies = [ "AF_INET" ];
+          InaccessiblePaths = [
+            "-/var/lib/tentaflake-admission"
+            "-/var/lib/tentaflake-admission.lock"
+            "-/run/credentials/tentaflake-api-owner.service"
+          ];
+        };
+      };
       register-nix-paths = {
         preStart = ''
           test -d /nix/store/.links && test ! -L /nix/store/.links
@@ -115,10 +137,23 @@ in
     (import ./creation-harness.nix { inherit pkgs; })
     pkgs.btrfs-progs
     pkgs.python3
+    pkgs.openssl
     pkgs.util-linux
   ];
 
+  networking.hosts."127.0.0.1" = [ "creation-api.example.invalid" ];
+
   tentaflake = {
+    api = {
+      enable = true;
+      host = "creation-fixture";
+      origin = "https://creation-api.example.invalid:18443";
+      principal = {
+        id = "creation-operator";
+        name = "Creation fixture operator";
+      };
+      cliBearerFile = "/run/tentaflake-creation-api/bearer";
+    };
     hostName = "creation-host";
     adminUser = "admin";
     boot.enable = false;
@@ -168,9 +203,10 @@ in
   assertions = [
     {
       assertion =
-        !config.tentaflake.api.enable
+        config.tentaflake.api.host == "creation-fixture"
+        && config.tentaflake.api.principal.id == "creation-operator"
         && !config.virtualisation.oci-containers.containers.${source}.autoStart;
-      message = "The creation fixture must not enable the HTTP service or start its source container.";
+      message = "The creation fixture API must match original receipt ownership and never start its source container.";
     }
   ];
   system.stateVersion = "26.05";

@@ -134,6 +134,24 @@ An automatic diagnostics fixture returned an unexplained exit `2`; its retry at
 `32a66e0` and 50 focused parallel repeats passed. The assertions now retain
 bounded, redacted failure context without logging stdout or relaxing outcomes.
 
+The isolated operation-read slice implements both GET routes using original
+host/principal ownership and stored timestamps/revisions/results. Pending or
+old-epoch missing keys remain Unknown; the owner rechecks auth/binding before
+returning. Operator-aborted creation maps to failed/unready without replay rights.
+The focused durable Pending-lookup test, 45 API tests and the actual CLI argument
+regression pass, together with all-target admission/CLI Clippy and 41 valid/38
+invalid public contract examples.
+These transport fixtures substitute installed-state/receipt reads; they do not
+prove a generated owner against the real host ledger. Before merging, exercise
+actual creation receipts through the generated owner and CLI on the existing
+creation node, including terminal history and Pending absence.
+That fixture uses guest-only TLS material and production `--ca-file`; protected
+CA file and real TLS positive/refusal tests pass without changing default trust.
+Scoped Nix lint, offline no-build/IFD-disabled node evaluation and the rendered
+3000-line driver compile pass. Actual generated-owner/retained-ledger VM
+acceptance remains pending. Public resource mutations remain `501`; no creation
+or dispatch path is enabled.
+
 Resume here: obtain actual owner and supervised creation/recovery VM evidence,
 including partial outcomes and historical retries. Only then connect HTTP
 planning/queueing and exact grants through the bounded host-namespace owner;

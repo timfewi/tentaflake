@@ -9,6 +9,7 @@ use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
+use tentaflake_admission::ledger::api::{ApiContext, ApiLookup};
 use tentaflake_admission::ledger::{Ledger, LedgerError, PublishedAuthority};
 use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::Semaphore;
@@ -19,8 +20,11 @@ pub(super) struct Api {
     plan: PathBuf,
     sessions: Mutex<Sessions>,
     work: Arc<Semaphore>,
+    #[cfg(test)]
+    fixture: Option<Arc<operation_tests::Fixture>>,
 }
 
+#[derive(Clone)]
 struct Current {
     authority: PublishedAuthority,
     policy: String,
@@ -56,6 +60,8 @@ pub(super) fn serve(configuration: &Path, plan: &Path) -> Result<(), String> {
         plan: plan.into(),
         sessions: Mutex::new(sessions),
         work: Arc::new(Semaphore::new(MAX_CONNECTIONS)),
+        #[cfg(test)]
+        fixture: None,
     });
     api.current()
         .map_err(|_| "host API requires its installed, published admission plan")?;
@@ -117,6 +123,10 @@ async fn connection(mut stream: UnixStream, api: Arc<Api>, peer_uid: u32) {
 
 impl Api {
     fn current(&self) -> Result<Current, AuthError> {
+        #[cfg(test)]
+        if let Some(fixture) = &self.fixture {
+            return fixture.current();
+        }
         crate::admission_runtime::installed(&self.plan).map_err(|_| AuthError::Unavailable)?;
         let plan =
             crate::admission_host::load_plan(&self.plan).map_err(|_| AuthError::Unavailable)?;
@@ -145,6 +155,28 @@ impl Api {
             binding,
             host_policy: plan.policy,
         })
+    }
+
+    fn operation(
+        &self,
+        current: &Current,
+        auth: &Authenticated,
+        read: &super::operations::Read,
+    ) -> Result<ApiLookup, AuthError> {
+        let context = ApiContext {
+            authority: current.authority.clone(),
+            host: self.config.host.clone(),
+            principal: auth.principal_id.clone(),
+            epoch: current.epoch.clone(),
+            now: Clock::now()?.unix_seconds,
+        };
+        #[cfg(test)]
+        if let Some(fixture) = &self.fixture {
+            return fixture.lookup(&context, read);
+        }
+        let ledger = Ledger::open(Path::new(crate::admission_runtime::LEDGER))
+            .map_err(|_| AuthError::Unavailable)?;
+        read.lookup(&ledger, &context)
     }
 
     fn handle(&self, request: hyper::http::request::Parts, body: &[u8], request_id: &str) -> Reply {
@@ -182,7 +214,12 @@ impl Api {
         {
             return Err(AuthError::Unsupported);
         }
-        if request.uri.query().is_some() {
+        let operation = if request.method == Method::GET {
+            super::operations::parse(path, request.uri.query())?
+        } else {
+            None
+        };
+        if request.uri.query().is_some() && operation.is_none() {
             return Err(AuthError::Invalid);
         }
         if request.method == Method::GET && path == "/api/meta" {
@@ -225,15 +262,26 @@ impl Api {
         }
         let kind = request_kind(&request.method, &request.headers);
         let auth = sessions.authenticate(&request.headers, kind, context, clock)?;
-        require_empty(body)?;
         if request.headers.contains_key("upgrade") {
             return Err(AuthError::Unsupported);
         }
+        if let Some(operation) = operation {
+            require_empty(body)?;
+            // Resolve only under the authenticated installed authority. Even a
+            // historical receipt must not cross a changed binding/session on
+            // the way out; failure is never converted to authoritative absence.
+            let outcome = self.operation(&current, &auth, &operation);
+            let fresh = self.current()?;
+            sessions.check_active(&auth, fresh.context(&self.config), Clock::now()?)?;
+            return operation.reply(outcome?);
+        }
         if path == "/api/v1/session" {
             if request.method == Method::GET {
+                require_empty(body)?;
                 return self.session_reply(&auth, &current);
             }
             if request.method == Method::DELETE {
+                require_empty(body)?;
                 sessions.logout(&auth)?;
                 let mut reply = response(StatusCode::NO_CONTENT, Bytes::new());
                 reply.headers_mut().insert(
@@ -244,6 +292,7 @@ impl Api {
             }
         }
         if path == "/api/v1/capabilities" && request.method == Method::GET {
+            require_empty(body)?;
             return Ok(json_reply(
                 StatusCode::OK,
                 super::capabilities::project(&current.host_policy, current.revisions())?,
@@ -293,7 +342,7 @@ fn revision(value: &[u8]) -> String {
     result
 }
 
-fn timestamp(seconds: u64) -> Result<String, AuthError> {
+pub(super) fn timestamp(seconds: u64) -> Result<String, AuthError> {
     let seconds: libc::time_t = seconds.try_into().map_err(|_| AuthError::Unavailable)?;
     let mut value = std::mem::MaybeUninit::<libc::tm>::uninit();
     if unsafe { libc::gmtime_r(&seconds, value.as_mut_ptr()) }.is_null() {
@@ -336,8 +385,13 @@ pub(super) fn fixture() -> Arc<Api> {
             .unwrap(),
         ),
         work: Arc::new(Semaphore::new(1)),
+        fixture: None,
     })
 }
+
+#[cfg(test)]
+#[path = "operation_tests.rs"]
+pub(super) mod operation_tests;
 
 #[cfg(test)]
 pub(super) async fn exchange(

@@ -208,10 +208,14 @@ are already published or require access to another repository for public checks.
   HTTP work charged until owner blocking tasks finish, including after connection
   cancellation. Discovery
   and sessions are implemented; capacity reporting exposes published ceilings,
-  never free resources, grants or live readiness. Remaining resource operations
-  stay unsupported.
+  never free resources, grants or live readiness. Operation reads return only the
+  original host/principal receipt and stored revisions. Pending/old-epoch missing
+  keys remain Unknown; recheck auth/binding after ledger reads. Never serialize
+  private authority or supervisor fields. Resource mutations stay unsupported.
   The HTTPS client uses protected caller-owned bearer files and the same wire
-  contract. Preserve exact mutation keys/body bytes and explicit recovery;
+  contract. Explicit `--ca-file` accepts bounded protected public CA material;
+  preserve default trust, certificate/hostname verification and credential rules.
+  Preserve exact mutation keys/body bytes and explicit recovery;
   never automatically retry mutations, follow redirects or print remote errors.
 - `api/v1/openapi.json` owns the host API wire contract; clients consume its
   schema and offline fixtures. Run `just api-contract` for local-only schema

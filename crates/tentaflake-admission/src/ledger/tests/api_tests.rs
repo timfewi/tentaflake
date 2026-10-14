@@ -203,6 +203,75 @@ fn stopped_creation_uses_native_storage_once_and_stable_resource_revisions() {
 }
 
 #[test]
+fn lookup_preserves_history_but_never_claims_absence_during_publication() {
+    let fixture = Fixture::new();
+    let ledger = fixture.ledger_with(inventory(&[]));
+    queue(&ledger);
+    let mut permit = claim(&ledger);
+    for kind in [StorageKind::Workspace, StorageKind::State] {
+        permit.provision(kind, |_| Ok(())).unwrap();
+    }
+    let completed = permit.complete(101).unwrap();
+    let mut absent = mutation().key;
+    absent.key = "00000000-0000-4000-8000-000000000002".into();
+    assert_eq!(
+        ledger.api_lookup(&api_context(), &absent).unwrap(),
+        ApiLookup::Absent
+    );
+
+    let request = publication(&ledger, "lookup-publication", "policy-2");
+    ledger.begin_publication(&request).unwrap();
+    let reopened = fixture.open("ledger").unwrap();
+    let pending_revision = reopened.snapshot().unwrap().revision;
+    assert_eq!(
+        reopened.api_lookup(&api_context(), &absent).unwrap(),
+        ApiLookup::Unknown
+    );
+    assert_eq!(
+        reopened
+            .api_lookup(&api_context(), &mutation().key)
+            .unwrap(),
+        ApiLookup::Found(Box::new(completed.clone()))
+    );
+    let mut next_epoch = api_context();
+    next_epoch.epoch = "mutation-2".into();
+    assert_eq!(
+        reopened.api_lookup(&next_epoch, &mutation().key).unwrap(),
+        ApiLookup::Found(Box::new(completed.clone()))
+    );
+    assert_eq!(
+        reopened.api_lookup(&next_epoch, &absent).unwrap(),
+        ApiLookup::Unknown
+    );
+    assert_eq!(reopened.snapshot().unwrap().revision, pending_revision);
+
+    reopened
+        .finish_publication("lookup-publication", pending_revision, |_, _| {
+            installed(&request.candidate)
+        })
+        .unwrap();
+    assert!(matches!(
+        reopened.api_lookup(&api_context(), &mutation().key),
+        Err(LedgerError::StaleAuthority)
+    ));
+    let mut published = api_context();
+    published.authority = request.candidate;
+    assert_eq!(
+        reopened.api_lookup(&published, &absent).unwrap(),
+        ApiLookup::Absent
+    );
+    published.epoch = "mutation-2".into();
+    assert_eq!(
+        reopened.api_lookup(&published, &absent).unwrap(),
+        ApiLookup::Unknown
+    );
+    assert_eq!(
+        reopened.api_lookup(&published, &mutation().key).unwrap(),
+        ApiLookup::Found(Box::new(completed))
+    );
+}
+
+#[test]
 fn partial_creation_retains_both_charges_and_recovery_never_recreates() {
     let fixture = Fixture::new();
     let ledger = fixture.ledger_with(inventory(&[]));

@@ -112,7 +112,7 @@ where
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use super::super::owner;
     use super::*;
     use serde_json::{Value, json};
@@ -134,7 +134,7 @@ mod tests {
         })
     }
 
-    async fn exchange(api: Arc<owner::Api>, request: Vec<u8>) -> String {
+    pub(in crate::api) async fn exchange(api: Arc<owner::Api>, request: Vec<u8>) -> String {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let client = client(listener.local_addr().unwrap(), request);
         let (stream, _) = listener.accept().await.unwrap();

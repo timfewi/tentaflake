@@ -19,11 +19,13 @@ use tentaflake_admission::protected_path::open_at;
 
 const MAX_RESPONSE: usize = 1024 * 1024;
 const CREDENTIAL_ERROR: &str = "cannot read protected current-user API bearer credential";
-const USAGE: &str = "usage: tentaflake api --origin https://HOST [--bearer-file FILE] meta|session|capabilities|environments [--cursor C --limit N]|environment ID|plan FILE|create FILE --epoch E --key UUID|start|stop ID --epoch E --key UUID --revision R|operation ID|recover --epoch E --key UUID --method POST|PUT|PATCH|DELETE --target /api/v1/...";
+const CA_ERROR: &str = "cannot read a protected valid API CA bundle";
+const USAGE: &str = "usage: tentaflake api --origin https://HOST [--bearer-file FILE] [--ca-file FILE] meta|session|capabilities|environments [--cursor C --limit N]|environment ID|plan FILE|create FILE --epoch E --key UUID|start|stop ID --epoch E --key UUID --revision R|operation ID|recover --epoch E --key UUID --method POST|PUT|PATCH|DELETE --target /api/v1/...";
 
 struct Command {
     origin: Url,
     bearer: Option<PathBuf>,
+    ca: Option<PathBuf>,
     request: Request,
 }
 
@@ -38,6 +40,9 @@ struct Request {
 
 enum ResponseKind {
     Object,
+    Operation {
+        id: String,
+    },
     List,
     Create,
     Lifecycle {
@@ -89,6 +94,7 @@ impl Command {
                 if ![
                     "--origin",
                     "--bearer-file",
+                    "--ca-file",
                     "--cursor",
                     "--limit",
                     "--epoch",
@@ -116,6 +122,13 @@ impl Command {
         }
         let origin = origin(options.remove("--origin").ok_or(USAGE)?)?;
         let bearer = options.remove("--bearer-file").map(PathBuf::from);
+        let ca = options.remove("--ca-file").map(PathBuf::from);
+        if ca
+            .as_ref()
+            .is_some_and(|path| !credential::absolute_path(path))
+        {
+            return Err("a normalized absolute --ca-file path is required".into());
+        }
         let mut request = Request {
             method: Method::GET,
             target: String::new(),
@@ -159,6 +172,11 @@ impl Command {
                     "operations"
                 };
                 request.target = format!("/api/v1/{collection}/{value}");
+                if positional[0] == "operation" {
+                    request.response = ResponseKind::Operation {
+                        id: (*value).into(),
+                    };
+                }
             }
             ["plan", file] | ["create", file] => {
                 request.method = Method::POST;
@@ -265,6 +283,7 @@ impl Command {
         Ok(Self {
             origin,
             bearer,
+            ca,
             request,
         })
     }
@@ -298,7 +317,7 @@ fn relative(url: &Url) -> String {
     }
 }
 
-fn uuid(value: &str) -> bool {
+pub(super) fn uuid(value: &str) -> bool {
     value.len() == 36
         && value.bytes().enumerate().all(|(i, b)| {
             if [8, 13, 18, 23].contains(&i) {
@@ -309,7 +328,7 @@ fn uuid(value: &str) -> bool {
         })
 }
 
-fn canonical_target(value: &str) -> bool {
+pub(super) fn canonical_target(value: &str) -> bool {
     if !value.starts_with("/api/v1/")
         || value.len() > 4096
         || !value.bytes().all(|b| b.is_ascii_graphic())
@@ -352,7 +371,11 @@ pub(super) fn run(args: &[String], mode: crate::OutputMode) -> Result<u8, String
         .as_ref()
         .map(|path| read_credential(path))
         .transpose()?;
-    let client = client_builder()
+    let mut builder = client_builder();
+    if let Some(path) = &command.ca {
+        builder = add_ca(builder, &read_ca(path)?)?;
+    }
+    let client = builder
         .build()
         .map_err(|_| "cannot initialize HTTPS API client")?;
     let result = execute(
@@ -536,6 +559,17 @@ fn validate_response(request: &Request, headers: &HeaderMap, value: &Value) -> R
     }
     match &request.response {
         ResponseKind::Object => {}
+        ResponseKind::Operation { id: expected } => {
+            let revision = value["revision"]
+                .as_str()
+                .filter(|value| id(value))
+                .ok_or_else(invalid)?;
+            if value["id"].as_str() != Some(expected.as_str())
+                || single_header(headers, "etag")? != format!("\"{revision}\"")
+            {
+                return Err(invalid());
+            }
+        }
         ResponseKind::List => {
             if !value
                 .as_array()
@@ -696,6 +730,62 @@ fn read_credential_at(anchor: &File, path: &Path, owner: u32) -> Result<Vec<u8>,
     .map_err(|_| CREDENTIAL_ERROR.into())
 }
 
+fn add_ca(mut builder: ClientBuilder, bytes: &[u8]) -> Result<ClientBuilder, String> {
+    if bytes.is_empty() || bytes.len() > credential::MAX_CA {
+        return Err(CA_ERROR.into());
+    }
+    let mut remaining = std::str::from_utf8(bytes).map_err(|_| CA_ERROR)?.trim();
+    let mut count = 0;
+    while !remaining.is_empty() {
+        let certificate = remaining
+            .strip_prefix("-----BEGIN CERTIFICATE-----")
+            .ok_or(CA_ERROR)?;
+        let (_, next) = certificate
+            .split_once("-----END CERTIFICATE-----")
+            .ok_or(CA_ERROR)?;
+        count += 1;
+        if count > 16 {
+            return Err(CA_ERROR.into());
+        }
+        remaining = next.trim();
+    }
+    let certificates = reqwest::Certificate::from_pem_bundle(bytes).map_err(|_| CA_ERROR)?;
+    if count == 0 || certificates.len() != count {
+        return Err(CA_ERROR.into());
+    }
+    for certificate in certificates {
+        builder = builder.add_root_certificate(certificate);
+    }
+    Ok(builder)
+}
+
+fn read_ca(path: &Path) -> Result<Vec<u8>, String> {
+    if !credential::absolute_path(path) {
+        return Err(CA_ERROR.into());
+    }
+    let root = open_at(
+        libc::AT_FDCWD,
+        OsStr::new("/"),
+        libc::O_RDONLY | libc::O_DIRECTORY,
+    )
+    .map_err(|_| CA_ERROR)?;
+    read_ca_at(
+        &root,
+        path.strip_prefix("/").map_err(|_| CA_ERROR)?,
+        unsafe { libc::geteuid() },
+    )
+}
+
+fn read_ca_at(anchor: &File, path: &Path, owner: u32) -> Result<Vec<u8>, String> {
+    let parent = path.parent().ok_or(CA_ERROR)?;
+    let name = path.file_name().ok_or(CA_ERROR)?;
+    let directory = protected_parent(anchor, parent, owner).map_err(|_| CA_ERROR)?;
+    credential::read_ca_at(&directory, name, owner, || {
+        protected_parent(anchor, parent, owner).map_err(|_| credential::Error)
+    })
+    .map_err(|_| CA_ERROR.into())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -711,6 +801,9 @@ mod tests {
     // These public, synthetic test keys authenticate only our temporary local
     // listener. The production client never installs this CA or skips TLS checks.
     const CA: &[u8] = include_bytes!("../../tests/fixtures/api-client/synthetic-ca.der");
+    const CA_PEM: &[u8] = include_bytes!("../../tests/fixtures/api-client/synthetic-ca.pem");
+    const NONISSUER_PEM: &[u8] =
+        include_bytes!("../../tests/fixtures/api-client/synthetic-nonissuer.pem");
     const CERT: &[u8] = include_bytes!("../../tests/fixtures/api-client/synthetic-localhost.der");
     const KEY: &[u8] =
         include_bytes!("../../tests/fixtures/api-client/synthetic-localhost-key.der");
@@ -1057,6 +1150,285 @@ mod tests {
         let mut bytes = format!("HTTP/1.1 {status} Fixture\r\nContent-Type: application/json\r\nCache-Control: no-store\r\nContent-Length: {}\r\nConnection: close\r\n{extra}\r\n", body.len()).into_bytes();
         bytes.extend_from_slice(&body);
         bytes
+    }
+
+    #[test]
+    fn operation_and_recovery_cli_consume_actual_http_unix_owner_receipts() {
+        use crate::api::owner::operation_tests;
+        use tentaflake_admission::ledger::api::ApiOperationState;
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        for state in [
+            ApiOperationState::Queued,
+            ApiOperationState::Unknown,
+            ApiOperationState::Succeeded,
+            ApiOperationState::Aborted,
+        ] {
+            let (api, cookie, _) = operation_tests::fixture(state);
+            for args in [
+                vec!["operation", "operation-fixture"],
+                vec![
+                    "recover",
+                    "--epoch",
+                    operation_tests::EPOCH,
+                    "--key",
+                    operation_tests::KEY,
+                    "--method",
+                    "POST",
+                    "--target",
+                    "/api/v1/environments",
+                ],
+            ] {
+                let command = parse(&args).unwrap();
+                let actual = runtime.block_on(operation_tests::http(
+                    api.clone(),
+                    &cookie,
+                    &command.request.target,
+                ));
+                assert!(actual.starts_with("HTTP/1.1 200"));
+                // Reuse the private synthetic TLS fixture to feed these actual
+                // owner bytes through the existing pinned HTTPS client. This
+                // proves client compatibility, not deployment TLS/ledger ownership.
+                let (origin, handle) = tls_fixture(Some(actual.into_bytes()));
+                let result =
+                    execute(&trusted_client(), &origin, &command.request, None, None).unwrap();
+                let requests = handle.join().unwrap();
+                assert_eq!(requests.len(), 1, "read was replayed");
+                assert!(requests[0].starts_with(
+                    format!("GET {} HTTP/1.1\r\n", command.request.target).as_bytes()
+                ));
+                if args[0] == "operation" {
+                    assert_eq!(result.value["id"], "operation-fixture");
+                } else {
+                    assert_eq!(result.value["state"], "found");
+                    assert_eq!(result.value["retrySafe"], false);
+                    assert_eq!(result.value["operation"]["id"], "operation-fixture");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn actual_cli_create_receives_owner_unsupported_for_a_valid_bounded_body() {
+        use crate::api::{owner::operation_tests, server};
+        use tentaflake_admission::ledger::api::ApiOperationState;
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let (api, cookie, backend) = operation_tests::fixture(ApiOperationState::Queued);
+        let session = runtime.block_on(operation_tests::http(
+            api.clone(),
+            &cookie,
+            "/api/v1/session",
+        ));
+        let session: Value =
+            serde_json::from_str(session.split_once("\r\n\r\n").unwrap().1).unwrap();
+        let body = br#"{"planId":"fixture","startAfterCreate":false}"#.to_vec();
+        let header = format!(
+            "POST /api/v1/environments HTTP/1.1\r\nHost: host.example.invalid\r\nOrigin: https://host.example.invalid\r\nCookie: {cookie}\r\nX-Tentaflake-CSRF: {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n",
+            session["csrfToken"].as_str().unwrap(),
+            body.len()
+        );
+        let actual = runtime.block_on(server::tests::exchange(
+            api,
+            [header.as_bytes(), &body].concat(),
+        ));
+        assert!(actual.starts_with("HTTP/1.1 501"));
+        assert_eq!(backend.reads(), 0);
+        let command = parse(&[
+            "create",
+            "fixture.json",
+            "--epoch",
+            operation_tests::EPOCH,
+            "--key",
+            UUID,
+        ])
+        .unwrap();
+        let (origin, handle) = tls_fixture(Some(actual.into_bytes()));
+        let failure = execute(
+            &trusted_client(),
+            &origin,
+            &command.request,
+            Some(body.clone()),
+            Some(TOKEN),
+        )
+        .unwrap_err();
+        assert!(failure.contains("HTTP 501, unsupported"));
+        let requests = handle.join().unwrap();
+        assert_eq!(requests.len(), 1);
+        assert!(requests[0].ends_with(&body));
+    }
+
+    #[test]
+    fn operation_client_rejects_another_receipt_or_mismatched_etag() {
+        let command = parse(&["operation", "operation-fixture"]).unwrap();
+        let mut headers = HeaderMap::new();
+        headers.insert("etag", HeaderValue::from_static("\"r8\""));
+        let value = json!({"id":"operation-fixture","revision":"r8"});
+        validate_response(&command.request, &headers, &value).unwrap();
+        assert!(
+            validate_response(
+                &command.request,
+                &headers,
+                &json!({"id":"another-operation","revision":"r8"})
+            )
+            .is_err()
+        );
+        headers.insert("etag", HeaderValue::from_static("W/\"r8\""));
+        assert!(validate_response(&command.request, &headers, &value).is_err());
+    }
+
+    #[test]
+    fn explicit_ca_file_is_protected_bounded_and_does_not_disable_tls() {
+        let fixture = Fixture::new();
+        fixture.write("ca.pem", CA_PEM);
+        fs::set_permissions(
+            fixture.path.join("ca.pem"),
+            fs::Permissions::from_mode(0o644),
+        )
+        .unwrap();
+        let owner = unsafe { libc::geteuid() };
+        let read = |name: &str| read_ca_at(&fixture.anchor, Path::new(name), owner);
+        assert_eq!(read("ca.pem").unwrap(), CA_PEM);
+        assert!(
+            parse(&["session", "--ca-file", "/run/api-ca.pem"])
+                .unwrap()
+                .ca
+                .is_some()
+        );
+        for path in ["relative", "/run//ca.pem", "/run/../ca.pem", "/run/ca.pem/"] {
+            assert!(parse(&["session", "--ca-file", path]).is_err());
+        }
+        symlink("ca.pem", fixture.path.join("ca-link")).unwrap();
+        assert!(read("ca-link").is_err());
+        fs::DirBuilder::new()
+            .mode(0o700)
+            .create(fixture.path.join("certificates"))
+            .unwrap();
+        fixture.write("certificates/ca.pem", CA_PEM);
+        symlink("certificates", fixture.path.join("parent-link")).unwrap();
+        assert!(read("parent-link/ca.pem").is_err());
+        fs::set_permissions(
+            fixture.path.join("certificates"),
+            fs::Permissions::from_mode(0o770),
+        )
+        .unwrap();
+        assert!(read("certificates/ca.pem").is_err());
+        for mode in [0o664, 0o606] {
+            fs::set_permissions(
+                fixture.path.join("ca.pem"),
+                fs::Permissions::from_mode(mode),
+            )
+            .unwrap();
+            assert!(read("ca.pem").is_err());
+        }
+        fs::set_permissions(
+            fixture.path.join("ca.pem"),
+            fs::Permissions::from_mode(0o644),
+        )
+        .unwrap();
+        fs::hard_link(fixture.path.join("ca.pem"), fixture.path.join("hardlink")).unwrap();
+        assert!(read("ca.pem").is_err());
+        fs::remove_file(fixture.path.join("hardlink")).unwrap();
+        fixture.write("too-large", &vec![b'a'; credential::MAX_CA + 1]);
+        assert!(read("too-large").is_err());
+        assert!(read("missing").is_err());
+        let fifo =
+            std::ffi::CString::new(fixture.path.join("ca-fifo").as_os_str().as_encoded_bytes())
+                .unwrap();
+        assert_eq!(unsafe { libc::mkfifo(fifo.as_ptr(), 0o600) }, 0);
+        assert!(read("ca-fifo").is_err());
+        let _socket =
+            std::os::unix::net::UnixListener::bind(fixture.path.join("ca-socket")).unwrap();
+        assert!(read("ca-socket").is_err());
+        if owner == 0 {
+            let file = File::open(fixture.path.join("ca.pem")).unwrap();
+            assert_eq!(
+                unsafe { libc::fchown(file.as_raw_fd(), 12345, u32::MAX) },
+                0
+            );
+            assert!(read("ca.pem").is_err());
+            assert_eq!(unsafe { libc::fchown(file.as_raw_fd(), 0, u32::MAX) }, 0);
+        } else {
+            assert!(read_ca_at(&fixture.anchor, Path::new("ca.pem"), owner + 1).is_err());
+        }
+        for bytes in [
+            &b"not PEM"[..],
+            &b"-----BEGIN CERTIFICATE-----\ninvalid\n-----END CERTIFICATE-----\n"[..],
+        ] {
+            assert!(
+                add_ca(client_builder(), bytes)
+                    .and_then(|builder| builder.build().map_err(|_| CA_ERROR.into()))
+                    .is_err()
+            );
+        }
+        assert!(add_ca(client_builder(), &CA_PEM.repeat(17)).is_err());
+        let mut trailing = CA_PEM.to_vec();
+        trailing.extend_from_slice(b"unexpected data");
+        assert!(add_ca(client_builder(), &trailing).is_err());
+        let command = parse(&["session"]).unwrap();
+        for explicit in [None, Some(NONISSUER_PEM), Some(CA_PEM)] {
+            let (origin, handle) =
+                tls_fixture(Some(reply(200, "", json!({"user":{"id":"fixture"}}))));
+            let builder = match explicit {
+                None => client_builder(),
+                Some(bytes) => add_ca(client_builder(), bytes).unwrap(),
+            };
+            let result = execute(
+                &builder.build().unwrap(),
+                &origin,
+                &command.request,
+                None,
+                Some(TOKEN),
+            );
+            let requests = handle.join().unwrap();
+            if explicit == Some(CA_PEM) {
+                assert!(result.is_ok());
+                assert_eq!(requests.len(), 1);
+            } else {
+                assert!(result.is_err());
+                assert!(requests.is_empty(), "untrusted TLS exposed an HTTP request");
+            }
+        }
+        // Correct explicit CA cannot authorize a different endpoint hostname.
+        let (mut origin, handle) = tls_fixture(Some(reply(200, "", json!({}))));
+        let address = format!("127.0.0.1:{}", origin.port().unwrap())
+            .parse()
+            .unwrap();
+        origin.set_host(Some("wrong.example.invalid")).unwrap();
+        let client = add_ca(
+            client_builder().resolve("wrong.example.invalid", address),
+            &read("ca.pem").unwrap(),
+        )
+        .unwrap()
+        .build()
+        .unwrap();
+        assert!(execute(&client, &origin, &command.request, None, Some(TOKEN)).is_err());
+        assert!(handle.join().unwrap().is_empty());
+    }
+
+    #[test]
+    fn explicit_ca_reopened_identity_rejects_replacement_during_read() {
+        let fixture = Fixture::new();
+        fixture.write("ca.pem", CA_PEM);
+        fixture.write("replacement.pem", CA_PEM);
+        let result = credential::read_ca_at(
+            &fixture.anchor,
+            OsStr::new("ca.pem"),
+            unsafe { libc::geteuid() },
+            || {
+                fs::rename(
+                    fixture.path.join("replacement.pem"),
+                    fixture.path.join("ca.pem"),
+                )
+                .unwrap();
+                Ok(fixture.anchor.try_clone().unwrap())
+            },
+        );
+        assert!(result.is_err());
     }
 
     #[test]

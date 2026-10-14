@@ -38,6 +38,28 @@ fn api_client_validates_before_host_configuration_credentials_or_network() {
                 "api",
                 "--origin",
                 "https://api.example.invalid",
+                "--ca-file",
+                "relative",
+                "meta",
+            ],
+            "absolute --ca-file",
+        ),
+        (
+            vec![
+                "api",
+                "--origin",
+                "https://api.example.invalid",
+                "--ca-file",
+                "/dev/null",
+                "meta",
+            ],
+            "protected valid API CA bundle",
+        ),
+        (
+            vec![
+                "api",
+                "--origin",
+                "https://api.example.invalid",
                 "meta",
                 "--hide",
             ],

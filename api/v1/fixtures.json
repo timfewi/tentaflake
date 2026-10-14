@@ -2750,6 +2750,78 @@
         },
         "problems": []
       }
+    },
+    {
+      "name": "stopped creation receipt preserves original resource revisions",
+      "schema": "Operation",
+      "value": {
+        "id": "operation-stopped-create",
+        "ownerId": "owner-fixture",
+        "kind": "create",
+        "environmentId": "environment-fixture",
+        "target": {
+          "kind": "environment",
+          "id": "environment-fixture"
+        },
+        "state": "succeeded",
+        "steps": [],
+        "error": null,
+        "createdAt": "2026-10-13T12:00:00Z",
+        "updatedAt": "2026-10-13T12:01:00Z",
+        "revision": "r8",
+        "requestDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "result": {
+          "resources": [
+            {
+              "kind": "environment",
+              "id": "environment-fixture",
+              "state": "created",
+              "revision": "r8"
+            },
+            {
+              "kind": "workspace",
+              "id": "workspace-fixture",
+              "state": "created",
+              "revision": "r8"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "operator abort remains terminal without claiming storage deletion",
+      "schema": "Operation",
+      "value": {
+        "id": "operation-stopped-create",
+        "ownerId": "owner-fixture",
+        "kind": "create",
+        "environmentId": "environment-fixture",
+        "target": {
+          "kind": "environment",
+          "id": "environment-fixture"
+        },
+        "state": "failed",
+        "steps": [],
+        "error": {
+          "code": "unready",
+          "message": "Creation was ended by explicit operator recovery. Storage may remain retained; this operation must not be replayed."
+        },
+        "createdAt": "2026-10-13T12:00:00Z",
+        "updatedAt": "2026-10-13T12:01:00Z",
+        "revision": "r8",
+        "requestDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "result": null
+      }
+    },
+    {
+      "name": "pending publication cannot prove missing key safe to retry",
+      "schema": "OperationRecovery",
+      "value": {
+        "state": "unknown",
+        "operation": null,
+        "retrySafe": false,
+        "reason": "The host cannot establish safe current-epoch absence."
+      }
     }
   ],
   "invalid": [

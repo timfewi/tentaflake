@@ -5,6 +5,7 @@ mod client;
 mod config;
 mod control;
 mod credential;
+mod operations;
 mod owner;
 mod server;
 mod session;

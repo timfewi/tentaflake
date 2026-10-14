@@ -5,6 +5,7 @@
   node = import ./fixtures/creation-node.nix { inherit self; };
 
   testScript = ''
+    import datetime
     import json
     import shlex
 
@@ -79,6 +80,77 @@
             assert creation.succeed(shlex.join(["readlink", "--", root])).strip() == plan
             assert creation.succeed("test -L " + shlex.quote(root) + " && " + shlex.join(["stat", "-c", "%u:%h", root])).strip() == "0:1"
 
+    api_probe = "${./fixtures/creation-api.py}"
+    api_origin = "https://creation-api.example.invalid:18443"
+    api_root = "/run/tentaflake-creation-api"
+
+    def creation_api_command(arguments, trust=True):
+        command = ["timeout", "--kill-after=3s", "25s", "tentaflake", "api", "--origin", api_origin,
+                   "--bearer-file", api_root + "/bearer"]
+        if trust:
+            command += ["--ca-file", api_root + "/ca.pem"]
+        return shlex.join(command + arguments)
+
+    def creation_api(arguments):
+        before = creation_fingerprint()
+        value = json.loads(creation.succeed(creation_api_command(arguments), timeout=30))
+        assert creation_fingerprint() == before, "receipt read changed the actual ledger"
+        return value
+
+    def creation_api_start(seed=False):
+        if seed:
+            creation.succeed(shlex.join(["timeout", "--kill-after=3s", "100s", "python3", api_probe, "seed"]), timeout=105)
+        creation.succeed("systemctl start tentaflake-api.service creation-api-relay.service")
+        creation.wait_until_succeeds(creation_api_command(["session"]), timeout=40)
+        session = creation_api(["session"])
+        assert session["user"]["id"] == "creation-operator" and session["grants"] == []
+        return session["mutationEpoch"]
+
+    def creation_api_stop():
+        creation.succeed("timeout 30s systemctl stop creation-api-relay.service tentaflake-api.service")
+        for unit in ("creation-api-relay.service", "tentaflake-api.service", "tentaflake-api-owner.service", "tentaflake-api-owner.socket"):
+            assert creation.succeed("systemctl show --value --property=ActiveState " + unit).strip() == "inactive"
+
+    def creation_api_read(operation):
+        original = creation_op(operation)
+        before = creation_fingerprint()
+        value = creation_api(["operation", operation])
+        expected_state = {"queued": "queued", "unknown": "unknown", "succeeded": "succeeded", "aborted": "failed"}[original["state"]]
+        assert value["state"] == expected_state
+        assert value["id"] == operation and value["ownerId"] == original["mutation"]["key"]["principal"]
+        assert value["kind"] == "create" and value["environmentId"] == original["environmentId"]
+        assert value["target"] == {"kind": "environment", "id": original["environmentId"]}
+        assert value["revision"] == "r" + str(original["updatedRevision"])
+        assert value["requestDigest"] == original["mutation"]["requestDigest"]
+        for public, private in (("createdAt", "createdAt"), ("updatedAt", "updatedAt")):
+            assert value[public] == datetime.datetime.fromtimestamp(original[private], datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        assert set(value) == {"id", "ownerId", "kind", "environmentId", "target", "state", "steps", "error", "createdAt", "updatedAt", "revision", "requestDigest", "result"}
+        assert value["steps"] == []
+        if original["state"] == "succeeded":
+            result = original["result"]
+            assert value["error"] is None and value["result"] == {"resources": [
+                {"kind": "environment", "id": result["environmentId"], "state": "created", "revision": "r" + str(result["environmentRevision"])},
+                {"kind": "workspace", "id": result["workspaceId"], "state": "created", "revision": "r" + str(result["workspaceRevision"])}]}
+        else:
+            assert value["result"] is None
+            if original["state"] == "aborted":
+                assert value["error"]["code"] == "unready" and "explicit operator recovery" in value["error"]["message"]
+        wire = json.loads(creation.succeed(shlex.join(["timeout", "--kill-after=3s", "25s", "python3", api_probe, "operation", operation]), timeout=30))
+        assert wire == {"status": 200, "etag": '"' + value["revision"] + '"', "body": value}
+        key = original["mutation"]["key"]
+        lookup = creation_api(["recover", "--epoch", key["epoch"], "--key", key["key"].upper(), "--method", key["method"], "--target", key["canonicalTarget"]])
+        assert lookup == {"state": "found", "operation": value, "retrySafe": False}
+        assert creation_fingerprint() == before
+        return value
+
+    def creation_api_missing(expected):
+        epoch = creation_api(["session"])["mutationEpoch"]
+        result = creation_api(["recover", "--epoch", epoch, "--key", "00000000-0000-0000-0000-000000000000", "--method", "POST", "--target", "/api/v1/environments"])
+        assert result["state"] == expected and result["operation"] is None
+        assert result["retrySafe"] == (expected == "absent")
+        if expected == "absent":
+            assert result["mutationEpoch"] == epoch
+
     with subtest("creation fixture bootstraps without starting its source or acquiring images"):
         creation.succeed("systemctl stop " + shlex.join(creation_owners))
         for unit in creation_owners:
@@ -93,15 +165,29 @@
         assert creation.succeed("docker image ls --quiet --no-trunc").strip() == ""
         creation_stopped()
 
+    with subtest("generated API owner reads the real ledger through explicit private TLS trust"):
+        current_epoch = creation_api_start(seed=True)
+        before = creation_fingerprint()
+        creation.fail(creation_api_command(["session"], trust=False), timeout=30)
+        assert creation_fingerprint() == before
+        creation_api_missing("absent")
+        creation.succeed(shlex.join(["timeout", "--kill-after=3s", "25s", "python3", api_probe, "unsupported"]), timeout=30)
+        status, output = creation.execute(creation_api_command(["create", api_root + "/unsupported-create.json", "--epoch", current_epoch,
+            "--key", "12345678-1234-4234-8234-123456789abc"]) + " 2>&1", timeout=30)
+        assert status == 2 and "HTTP 501, unsupported" in output
+        assert creation_fingerprint() == before
+
     with subtest("actual creation supervisor prepares both volumes exactly once"):
         created = creation_seed("op-supervised", "01" * 16, "queue")
         assert creation_op("op-supervised")["state"] == "queued"
+        creation_api_read("op-supervised")
         rows = creation_rows(created["environmentId"])
         assert len(rows) == 2 and all(row["allocation"]["state"] == "unknown" for row in rows)
         unit = "tentaflake-environment-create@op-supervised.service"
         creation.succeed("timeout 320s systemctl start " + shlex.quote(unit), timeout=325)
         observed = creation_op("op-supervised")
         assert observed["state"] == "succeeded" and observed["recovery"] is None, observed
+        supervised_receipt = creation_api_read("op-supervised")
         assert observed["execution"]["bootId"] == creation_boot
         assert observed["execution"]["supervisor"]["unit"] == unit
         assert all(row["allocation"]["state"] == "present" and row["release"] is None
@@ -148,6 +234,7 @@
         assert creation.succeed("systemctl show --value --property=MainPID " + shlex.quote(interrupted_unit)).strip() == "0"
         observed = creation_op("op-interrupted")
         assert observed["state"] == "unknown" and observed["execution"] == interruption["execution"]
+        creation_api_read("op-interrupted")
         assert observed["execution"]["bootId"] == creation_boot
         assert all(row["allocation"]["state"] == "present" and row["release"] is None
                    for row in creation_rows(interrupted["environmentId"]))
@@ -170,6 +257,7 @@
         rows = creation_rows(queued["environmentId"])
         assert len(rows) == 2 and all(row["release"] is not None for row in rows)
         assert creation_op("op-queued-abort")["state"] == "aborted"
+        aborted_receipt = creation_api_read("op-queued-abort")
         before = creation_fingerprint()
         creation_reconcile("abort", "op-queued-abort", queued_revision)
         assert creation_fingerprint() == before
@@ -188,6 +276,7 @@
 
     # Restart the same disk; never delete/reset its ledger or pretend a dead PID
     # alone fences old descendants. Source quota owners remain explicitly stopped.
+    creation_api_stop()
     creation.shutdown()
     creation.start()
     creation.wait_for_unit("multi-user.target")
@@ -195,6 +284,9 @@
     assert creation.succeed("cat /proc/sys/kernel/random/boot_id").strip() != creation_boot
     assert creation.succeed("readlink -f /etc/tentaflake/admission.json").strip() == creation_plan
     creation_stopped()
+    creation_api_start(seed=True)
+    assert creation_api_read("op-supervised") == supervised_receipt
+    assert creation_api_read("op-queued-abort") == aborted_receipt
 
     with subtest("staging and live creators or loop mappings refuse abort without ledger writes"):
         staging = empty["volumes"][0]["imagePath"] + ".new"
@@ -265,15 +357,23 @@
         assert all(row["release"] is not None for row in creation_rows(empty["environmentId"]))
         charged = [row for row in creation_snapshot()["storage"] if row["release"] is None]
         assert len(charged) == 7 and sum(row["allocation"]["bytes"] for row in charged) == 7 * 128 * 1024 * 1024
+        for operation in ("op-interrupted", "op-complete", "op-partial", "op-empty"):
+            creation_api_read(operation)
         creation_stopped()
 
     with subtest("publication removes templates without losing historical maintenance or retry receipts"):
         system = creation.succeed("readlink -f /run/current-system").strip()
         candidate = creation.succeed("readlink -f " + shlex.quote(system + "/specialisation/without-template")).strip()
         candidate_plan = creation.succeed("readlink -f " + shlex.quote(candidate + "/etc/tentaflake/admission.json")).strip()
-        assert json.loads(creation.succeed("cat " + shlex.quote(candidate_plan)))["creationTemplates"] == {}
+        candidate_manifest = json.loads(creation.succeed("cat " + shlex.quote(candidate_plan)))
+        assert candidate_manifest["creationTemplates"] == {}
+        assert candidate_manifest["apiConfig"] == creation_manifest["apiConfig"]
         revision = creation_snapshot()["revision"]
         publication = json.loads(creation.succeed(shlex.join(["tentaflake", "admission", "publication", "begin", candidate_plan, "remove-creation-template", str(revision)])))
+        creation_api_missing("unknown")
+        assert creation_api_read("op-supervised") == supervised_receipt
+        assert creation_api_read("op-queued-abort") == aborted_receipt
+        creation_api_stop()
         creation.succeed(shlex.join([candidate + "/bin/switch-to-configuration", "test"]), timeout=180)
         assert creation.succeed("readlink -f /etc/tentaflake/admission.json").strip() == candidate_plan
         # Finishing reads all recorded original paths/units despite an empty new
@@ -281,6 +381,10 @@
         creation.succeed(shlex.join(["tentaflake", "admission", "publication", "finish",
             "remove-creation-template", str(publication["begunRevision"])]))
         creation_nix_evidence(creation_plan, candidate_plan)
+        creation_api_start()
+        creation_api_missing("absent")
+        assert creation_api_read("op-supervised") == supervised_receipt
+        assert creation_api_read("op-queued-abort") == aborted_receipt
         before = creation_fingerprint()
         creation.succeed(shlex.join(["install", "-m", "0600", "/dev/null", staging]))
         try:
@@ -294,6 +398,7 @@
             creation.succeed(shlex.join(["rm", "--", staging]))
         creation_stopped()
 
+    creation_api_stop()
     for store_unit in ("nix-store.mount", r"nix-.ro\x2dstore.mount"):
         assert creation.succeed("systemctl show --value --property=DefaultDependencies " + shlex.quote(store_unit)).strip() == "no"
         assert "umount.target" not in creation.succeed("systemctl show --value --property=Conflicts " + shlex.quote(store_unit)).split()
