@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 ### Fixed
+- Verify expected missing-ledger refusals before cleaning up quota owners in
+  both initial OCI admission VM fixtures.
+- Detach only the read-only shared Nix store during admission VM shutdown,
+  preserving ordinary runtime and persistent-volume cleanup.
 - Capture CLI refusal diagnostics from stderr in publication VM assertions.
 - Keep guest Nix's store-mutating registration out of prebuilt, read-only
   admission VM fixtures, including publication specialisations.
