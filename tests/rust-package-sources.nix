@@ -12,7 +12,13 @@ let
     name:
     let
       source = packages.${name}.src;
-      sources = [ name ] ++ lib.optional (name == "tentaflake-cli") "tentaflake-admission";
+      sources = [
+        name
+      ]
+      ++ lib.optional (lib.elem name [
+        "tentaflake-cli"
+        "tentaflake-worker"
+      ]) "tentaflake-admission";
     in
     builtins.pathExists (source + "/crates/${name}/src/main.rs")
     && lib.all (member: builtins.pathExists (source + "/${member}/Cargo.toml")) members
@@ -25,6 +31,10 @@ assert lib.all isolated binaries;
 assert builtins.pathExists (
   packages.tentaflake-cli.src + "/crates/tentaflake-admission/src/lib.rs"
 );
+assert builtins.pathExists (
+  packages.tentaflake-worker.src + "/crates/tentaflake-admission/src/lib.rs"
+);
+assert !(builtins.pathExists (packages.tentaflake-broker.src + "/crates/tentaflake-admission/src"));
 assert builtins.pathExists (packages.tentaflake-cli.src + "/adapters/catalog.json");
 assert builtins.pathExists (packages.tentaflake-cli.src + "/images/catalog.json");
 assert !(builtins.pathExists (packages.tentaflake-broker.src + "/images/catalog.json"));
