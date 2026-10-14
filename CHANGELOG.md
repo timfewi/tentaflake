@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   keeps its claim and snapshot instead of guessing from an empty name lookup.
 - Enforce broker bridge isolation before broader host INPUT and FORWARD accepts
   using independent per-agent nftables tables.
+- Capture CLI refusal diagnostics from stderr in publication VM assertions.
 - Keep guest Nix's store-mutating registration out of prebuilt, read-only
   admission VM fixtures, including publication specialisations.
 - Handle kernel PTY mounts during admission maintenance, preserve refusal of

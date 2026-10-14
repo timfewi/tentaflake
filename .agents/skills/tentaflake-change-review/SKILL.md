@@ -1,7 +1,7 @@
 ---
 name: tentaflake-change-review
 description: Review a Tentaflake change for a concrete requirement, proportionate verification, synchronized docs and a complete PR.
-version: 1.1.8
+version: 1.1.9
 ---
 
 # Tentaflake change review
@@ -59,6 +59,8 @@ and no queued job after a successful run instead of requiring a later
 `reset-failed`. After an intentional refusal, allow its known failed state to
 remain, but reject new failures during cleanup. Keep refusal and container-absence
 evidence independent of cleanup.
+The VM driver's command result contains stdout only. Capture stderr explicitly
+when asserting a CLI refusal message, while retaining the nonzero-exit check.
 Systemd's loaded inventory can include dependency-only `not-found` mounts (the
 VM exposed `home.mount`). Keep required-unit reads strict. Any incidental-mount
 exception needs inert properties and successful installed-file absence checks
