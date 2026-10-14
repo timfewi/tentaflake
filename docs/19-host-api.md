@@ -1,8 +1,9 @@
 # Host environment API v1
 
-Status: authoritative **contract only**, for [#152](https://github.com/timfewi/tentaflake/issues/152).
-The dynamic host API and matching CLI environment lifecycle are not implemented.
-Schema validation and fixtures do not establish backend, vendor, guest or live-host
+Status: authoritative contract for [#152](https://github.com/timfewi/tentaflake/issues/152),
+with an experimental discovery/session service. Dynamic environments and the
+matching CLI lifecycle remain unimplemented. Schema validation, unit tests and
+fixtures do not establish vendor, guest, private HTTPS relay or live-host
 acceptance. Existing installed-host `agent plan`/`agent import` commands retain
 their documented stopped configuration-file behavior.
 
@@ -20,6 +21,60 @@ requests or prove a server implements the described enforcement.
 The existing nixpkgs lock supplies `jsonschema` 4.26.0 and its required
 `rfc3339-validator` 0.1.4 format checker; dependency updates follow that reviewed
 pin rather than an independent Python installation.
+
+## Experimental authentication service
+
+`tentaflake.api.enable` installs `tentaflake-api.service`, running
+`tentaflake api serve <generated-store-config> <generated-store-plan>`. It requires
+an explicitly bootstrapped admission ledger and its installed, published plan.
+The plan binds the non-secret API configuration; stale installation or publication
+refuses authenticated requests. Pending maintenance still permits authentication
+for recovery, but grants no resource mutation authority.
+
+Configure explicit `host`, `origin`, `principal.id` and `principal.name` values in
+the consumer flake. `listen` defaults to `127.0.0.1:18181` and accepts only loopback
+addresses. The consumer owns the private HTTPS relay and its access policy. It
+must preserve the configured Host and the browser's actual Origin; do not synthesize
+an allowed Origin or expose the loopback service through a public proxy. The
+service supplies no TLS endpoint, CORS policy or UI dependency.
+
+`operatorTokenFile` and `cliBearerFile` are optional runtime source-path **strings**;
+at least one is required. Systemd supplies their contents as protected
+`LoadCredential` files. Never use Nix path values or inline secret contents.
+Configure distinct, cryptographically random credentials of 32–4096 printable
+non-whitespace ASCII bytes. A single final newline is accepted. The loader checks
+root ownership, private permissions, a single regular-file link and protected,
+unchanged ancestry. It rejects Nix-store credential paths and equal operator/bearer
+contents. Secrets do not appear in service arguments, responses or logs.
+
+The implemented routes are `GET /api/meta` and `GET/POST/DELETE /api/v1/session`. Discovery
+reports an implemented backend because this service handles real requests; it
+does not assert that environment features exist. Sessions currently return an
+empty grant list. Other authenticated operations, including capabilities and
+environment lists, return `unsupported`; the real UI remains blocked on those
+implementations. Bearer authentication uses its independently configured file;
+cookie logout does not revoke that operator-managed credential.
+Public OIDC negotiation routes also return `unsupported`; no provider or redirect
+flow is enabled.
+
+Sessions expire after 15 minutes idle or eight hours absolute and are revoked by
+service restart or a changed authority/configuration binding. Up to 256 sessions
+and ten login attempts per minute are permitted. Session and CSRF identifiers use
+32 random bytes each. Before issuing a session, the existing admission ledger
+durably records a domain-separated credential fingerprint. Reusing that token,
+including after restart or publication, is refused. The 4096 retained consumption
+records are never automatically pruned; exhaustion fails closed. A lost login
+response can consume a token without delivering its session: supply a fresh runtime
+token and restart the service explicitly, rather than deleting ledger history.
+Older binaries that reject the new private ledger field cannot safely be used
+to bypass this history during rollback.
+
+HTTP headers, request bodies, connection lifetimes and active work are bounded.
+An aborted connection keeps its blocking work charged until that work finishes.
+No request-body, credential or authenticated-resource access log is emitted.
+The VM fixture generates its own guest-only credentials and tests real HTTP
+requests and restart refusal; successful execution of that fixture is a separate
+acceptance gate. It does not prove the consumer's HTTPS relay configuration.
 
 ## Transport, identity and authority
 

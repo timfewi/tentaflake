@@ -128,6 +128,7 @@ let
     inherit volumes runtimes;
     inherit (config.tentaflake.worker.maintenance) workers;
     workerImage = config.tentaflake.worker.maintenance.image;
+    apiConfig = config.tentaflake.api.configuration;
     tools = {
       cli = "${pkgs.callPackage ../pkgs/tentaflake-cli { }}/bin/tentaflake";
       systemctl = "${pkgs.systemd}/bin/systemctl";

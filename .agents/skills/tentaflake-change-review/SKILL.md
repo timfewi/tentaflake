@@ -1,7 +1,7 @@
 ---
 name: tentaflake-change-review
 description: Review a Tentaflake change for a concrete requirement, proportionate verification, synchronized docs and a complete PR.
-version: 1.1.10
+version: 1.1.11
 ---
 
 # Tentaflake change review
@@ -33,6 +33,11 @@ evidence for the current revision. A skipped build is not runtime acceptance.
 See [build boundaries](../../../docs/17-builds.md) for affected workflow dispatch.
 Full `just ci`/`just e2e`, VM, ISO and system builds are larger workloads.
 Evaluation does not prove runtime behavior or authorize activation.
+
+For asynchronous HTTP work, bound queued blocking tasks as well as connections.
+A connection deadline can drop its task handle while `spawn_blocking` continues;
+hold the work permit inside that closure and test cancellation with real requests.
+Thread-count limits alone leave the pending task queue unbounded.
 
 For filesystem ownership tests, obtain the focused Nix package test result as
 well as Cargo evidence. A real sandbox mapped `/` to an unowned overflow UID;

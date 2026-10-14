@@ -22,6 +22,7 @@ mod admission_runtime;
 mod admission_storage;
 mod admission_systemd;
 mod admission_worker;
+mod api;
 mod onboarding;
 
 const DEFAULT_CONFIG: &str = "/etc/tentaflake/cli.conf";
@@ -225,6 +226,7 @@ fn run(mut args: Vec<String>) -> Result<u8, String> {
         "remote-check" => return remote_check(&args[1..]),
         "runtimes" => return runtimes(&args[1..], mode),
         "admission" => return admission::run(&args[1..], mode),
+        "api" => return api::run(&args[1..], mode),
         "agent" if args.get(1).map(String::as_str) == Some("template") => {
             return onboarding::template(&args[2..], mode);
         }
@@ -2794,6 +2796,7 @@ fn print_help() {
          USAGE\n\
            tentaflake help|--help|-h\n\
            tentaflake runtimes [--json]\n\
+           tentaflake api serve <generated-store-config> <generated-store-plan>\n\
            tentaflake admission explain <snapshot-file> [--hide]\n\
            tentaflake admission inventory <generated-store-plan> [--hide]\n\
            tentaflake admission bootstrap <generated-store-plan>\n\

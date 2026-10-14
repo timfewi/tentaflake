@@ -690,7 +690,9 @@ let
       }
     ];
   };
-  guardedWorkerPlan = builtins.fromJSON guardedWorker.config.tentaflake.admissionManifest.text;
+  guardedWorkerPlan = builtins.fromJSON (
+    builtins.unsafeDiscardStringContext guardedWorker.config.tentaflake.admissionManifest.text
+  );
   guardedWorkerSpec = guardedWorkerPlan.workers.hermes-worker;
   guardedWorkerService = guardedWorker.config.systemd.services.tentaflake-worker-hermes-worker;
   legacyWorkerInputs = workerCapsule.config.tentaflake.worker.maintenance;
@@ -1227,6 +1229,7 @@ assert guardedWorkerService.serviceConfig.ProtectSystem == "strict";
 assert guardedWorkerService.serviceConfig.ReadOnlyPaths == [ "/var/lib/hermes-worker/workspace" ];
 assert guardedWorkerPlan.workers == guardedWorker.config.tentaflake.worker.maintenance.workers;
 assert guardedWorkerPlan.workerImage == guardedWorker.config.tentaflake.worker.maintenance.image;
+assert import ./api-policy.nix { inherit pkgs; };
 assert
   builtins.attrNames guardedWorkerSpec == [
     "config"

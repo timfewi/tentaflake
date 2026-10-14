@@ -15,275 +15,80 @@ commands and interfaces below are not installed APIs.
 
 ## Delivery checkpoint
 
-2026-10-14: PRs #149/#150 (libc/Tokio), #151/#160/#162 (bounded source checks and
-evaluation), #161 (reviewed Debian/Ubuntu metadata) and #163 (bounded optional
-cache setup) are merged. Automatic PR/push checks remain separate from explicit
-configuration, package and VM gates.
+2026-10-14. This checkpoint records implementation and verification separately;
+it does not announce a release or live-host acceptance. Keep the public host
+independent of personal infrastructure and any particular UI repository. Clients
+use the documented API without private build dependencies, preserving a possible
+later open-source release of the separately owned UI.
 
-PRs #156–#159 retain their implementation boundaries below. Complete run
-`38478204372` passed evaluation, non-VM builds and the repaired onboarding gate,
-then exposed a test race between an active Docker client unit and a running
-container. The bounded Running wait preserves every capability/security
-assertion. Replacement run `38483033310` tests capability head `33c435f` against
-main `01340a9`, including the previously unreached Research VM. Dependent PRs
-remain open until their relevant runtime gates pass.
+The common runtime/catalog and stopped installed-host onboarding are merged
+(#115/#135), along with private-state quota prerequisites and the reviewed base
+image catalog. Image metadata, source declarations and package builds do not
+establish model, Research, Worker or coding-agent acceptance. The authoritative
+[v1 contract](19-host-api.md) covers 47 operations. The separate UI uses generated
+types and transport, but its recorded browser evidence uses fixtures and a
+stand-in backend; real host interaction remains outstanding.
 
-Actual Nix CLI package builds for #157–#159 and draft #164/#165 now pass after
-anchoring filesystem fixtures at explicitly owned directory descriptors. The
-Nix sandbox maps `/` to an unrelated UID; public absolute-path ownership checks
-still reject that root. The same protected traversal, replacement detection and
-process-lock tests run beneath each fixture anchor. No production UID or sticky
-directory exception was added. Both draft branches also pass `just fast`.
+Current integration work:
 
-Next: capability admission [#116](https://github.com/timfewi/tentaflake/issues/116),
-real coding-agent acceptance [#136](https://github.com/timfewi/tentaflake/issues/136),
-and the versioned CLI/UI environment API [#152](https://github.com/timfewi/tentaflake/issues/152).
-The [v1 API contract](19-host-api.md), merged in [PR #155](https://github.com/timfewi/tentaflake/pull/155),
-owns 47 routes, exact grants, policy-bound plans, durable receipts, workspace/files
-and stream schemas. Its local-only validator passes 38 valid and 38 rejected
-examples. Review tightened creation authority, receipt
-recovery and native-writer file conflicts. These are contract/source checks only.
-The separately owned UI has migrated to generated types and the real transport;
-its recorded browser checks use fixtures and a stand-in backend. The host service,
-matching CLI and live interaction acceptance remain next. Public host code stays
-independent of personal deployment policy and the separate UI repository. Keep
-the client usable through the documented API without private dependencies so a
-future open-source release remains possible; publication is a separate decision.
+- **OCI/storage/publication, PR #166:** complete effective specifications, exact
+  supervisor/daemon/CID ownership, durable Unknown claims and explicit stopped
+  bootstrap/publication. Run `38513151502` passed the storage/publication
+  assertions, then failed initial OCI fixture cleanup on a quota owner that had
+  correctly refused the missing ledger. Commit `ace90b4` checks that exact
+  invocation's refusal before accepting its retained failed state. Only the
+  immutable read-only VM store receives lazy unmounting after normal shutdown;
+  persistent quota shutdown checks remain strict. Focused no-build projections,
+  rendered Python and cleanup regressions pass. Replacement runtime evidence
+  and the previously unreached Research VM remain required.
+- **Model/Research integration:** PR #167 and the upstream Research readiness
+  work still need their relevant runtime gates and final public pin integration.
+  Exact requested capabilities and live evidence remain prerequisites; neither
+  a configured endpoint nor a declaration grants access.
+- **Reference coding agent, PR #168:** pinned native package and image evidence
+  exist. An actual model turn, tool use, file change and lifecycle acceptance are
+  still required (#136).
+- **Worker safety/maintenance, PRs #169/#170:** bounded artifact transport and
+  exact CID handling precede shared admission fencing. Guarded image loading
+  journals uncertainty in the existing ledger; explicit recovery requires the
+  stopped backend and complete old/new maintenance inventory. Maintenance fast
+  gates passed 350 Rust tests; actual CLI and Worker Nix packages passed 245 and
+  163 tests respectively. No-build projections and the generated plan passed.
+  The #170 Broker disconnect-test cleanup fix `b22d10a` passed 19 streaming tests
+  and automatic CI. Relevant integration VM evidence remains pending.
+- **Host API, #152, `feat/host-api`:** implementing the HTTP service inside the
+  existing CLI, bound to the installed/published immutable host plan. Runtime
+  credentials, exact private origin, bounded cookie/bearer sessions and durable
+  single-use login fingerprints have been implemented locally. Admission's 104
+  tests and 15 focused API tests pass, with Clippy and formatting. Real loopback
+  HTTP tests cover discovery, refusal bounds and cancellation accounting; the
+  optional Nix service passes its focused no-build projection. The complete fast
+  gate passes 372 Rust tests plus static/helper checks; final origin and public
+  OIDC refusal regressions pass the focused gate. CLI package and guest HTTP
+  authentication acceptance remain the next gates.
+  Only authentication is being connected; resource operations remain explicitly
+  unsupported until their actual lifecycle owner exists.
 
-Generic declarative model/Research/worker admission now covers exact requests,
-both storage quotas, resource ceilings and v3 diagnostics. Local `just fast`
-passes 130 Rust tests and 29 routing regressions; the adapter policy/helper check
-also passes, including generated manual-start refusal. Broader module evaluation
-requires an uncached Research client closure; no local dependency rebuild was
-started. Added generic startup and Research projection VM regressions await CI.
-The explicit gate exposed a VM-fixture import recursion; focused evaluation
-reproduced it and passes after making the import independent of node `pkgs`.
-The full runtime/build gate is being rerun for that fix.
+Resume here: finish and review the API authentication/service integration, then
+add ledger-owned operation receipts, exact grants and dynamic environments to
+that same admission/runtime owner. Creation must stay within installed policy
+without rebuilding the host. Follow with workspace/files/streams and the matching
+CLI, then actual client and coding-agent acceptance. Preserve private v3 ledger
+history; consumed login tokens and uncertain resource claims must never become
+fresh retries through restart, pruning or publication.
 
-The next shared-core slice adds `crates/tentaflake-admission`: exact typed
-decisions, checked aggregate reservations including host/Research reserves,
-source-generation freshness and a private durable claim ledger. Only newly
-synced claims yield a dispatch permit; existing receipts never redispatch,
-unknown outcomes retain capacity and confirmed stops retain storage. Review
-fixed unsafe directory ancestry and stale-owner capability grants. CI then exposed
-an inherited-descriptor lock-release race; a deterministic failing regression
-now passes with explicit lock release. Fast-gate components pass with 170 Rust
-tests and 31 routing regressions; the API fixtures
-and focused Nix package-source check pass. Actual offline CLI interactions cover
-allow, redaction, owner/expiry/strict denial and unsafe-input refusal.
+Remaining Worker requirements include exact grants, aggregate private storage
+and compute, daemon-generation job recovery and exact results-mount validation.
+The OCI Worker-request path stays closed until those requirements are verified.
+General artifact acquisition also needs durable uncertainty handling; the guarded
+Worker loader alone does not establish that for every image creator.
 
-The following storage slice uses schema-v2 independent allocation rows so
-never-started, removed, orphaned and uncertain volumes remain charged once.
-Explicit bootstrap requires a complete inventory; only a new synced allocation
-returns an image-creation permit. Existing receipts cannot recreate a missing
-image. Startup requires exact owned Present workspace and state allocations;
-storage-only admission also covers legacy workspace-only quotas. Review removed
-an obsolete historical-size rule that disagreed with this allocation accounting.
-Fast-gate components passed with 195 Rust tests, 31 routing regressions and the
-47-route API contract. The library alone does not fence existing image creators.
-
-The storage runtime slice connects ledger v3 to the generated quota services.
-Explicit stopped-host bootstrap verifies masked legacy creators, a complete
-loaded/installed mount inventory, idle Docker and no attached loop devices;
-diagnostic inventory remains incomplete and Unknown. An exact systemd invocation
-holds an inherited exclusive host fence and the ledger transaction through
-create/mount/ownership. New images require synced Unknown claims; existing,
-orphan, missing and uncertain images retain charges and never authorize implicit
-recreation. Stop unmounts without releasing storage. Read-only explicit recovery
-can verify an exact retained image. Backups depend on the guarded services and
-verify exact host mounts before reading them.
-
-The shared backing filesystem must have current free bytes for every retained
-logical image, the new image and explicit headroom. Device/mount identities are
-checked; sparse/shared extents receive no credit. This is a conservative
-admission-time guard, not a physical extent reservation. Unrelated host writes
-and later filesystem metadata allocation can still exhaust space. Kernel discard
-proof is therefore not claimed or required for this model.
-
-Changed ownership: CLI `admission_runtime`, `admission_fence`, `admission_systemd`
-and protected storage code; quota/admission/backup modules; a dedicated sequential
-storage node in the existing integration VM. Fast source checks, the actual Nix
-CLI package, focused adapter evaluation and the actual-helper check pass,
-including read-only Btrfs verification. The integration VM derivation evaluates;
-its storage phase has not run and no live host acceptance is claimed.
-
-Storage runtime is prepared in draft [PR #164](https://github.com/timfewi/tentaflake/pull/164).
-The next slice adds root-only `admission publication status|begin|finish|cancel`.
-Begin requires stopped workloads and certain retained claims before durable
-Pending. Installation remains an explicit operator action. Finish/cancel inspect
-the desired installed plan and both generations' complete unit/path inventory
-under the host fence and ledger lock. Historical retries return receipts without
-reopening candidate artifacts or repeating observations. No charges are released.
-The existing storage VM now includes a genuine NixOS specialisation, activation,
-rollback/cancel, retained-image checks and a real Unknown-claim refusal.
-
-Publication verification: `just fast` and the actual Nix CLI package pass. The
-package gate caught one remaining public-path reopen in a publication fixture;
-its anchored reopen now exercises the same durable historical receipt query.
-The integration VM derivation and rendered Python script validate; the VM has
-not run. Changed owners are the CLI publication/host observer, ledger receipt
-query, storage VM and operator guidance.
-
-Next: complete storage/publication runtime verification, then automated host
-installation, aggregate OCI startup/stop accounting, live capability collectors and the
-authenticated dynamic host API. Pinned image acquisition, the first real coding
-agent, strict guest-kernel execution and the private VPS deployment remain in
-scope. Publication APIs still require trusted drain/install/fence proof; library
-or source checks do not establish runtime isolation or vendor acceptance.
-
-The OCI slice in `feat/oci-runtime` now binds the complete effective specification
-to schema-3 host plans and persists boot/daemon/supervisor/image identity before
-create, then one full CID before start. It replaces the whole admitted Docker
-unit, refreshes actual prerequisites around create/start, and retains uncertain
-claims without replay. Normal exact-CID stop/removal retains storage. Public
-`mkLocalImage` builds immutable descriptors without IFD; explicit acquisition
-loads the archive separately and proves the local image ID without claiming
-registry provenance.
-
-Checkpoint: the OCI implementation, explicit stopped-Docker bootstrap fence and
-old/new runtime-unit publication inventory are ready for runtime verification.
-The pinned fast gate passed 288 Rust tests and 17 bounded archive tests. The
-final CLI Nix package passes 220 tests, including the added inert-socket
-regression; formatting and Clippy pass. The actual generated Nix plan passes the
-closed Rust loader. Adapter and expanded VM definitions evaluate and the
-rendered Python compiles. Two sequential OCI nodes cover budget denial,
-exact-CID retirement, foreign-name refusal and a real supervisor/daemon crash;
-neither node has run. Owners are the CLI OCI/bootstrap supervisors, admission
-module, image contract/helper and storage/OCI VM fixtures. The next step is the
-full remote runtime gate after the predecessor PRs; it must pass before merge.
-External capability collectors and automatic Unknown recovery remain unfinished.
-
-The [base-image catalog](20-base-images.md) adds Debian 13 and Ubuntu 26.04 LTS
-platform manifest selection with an offline metadata validator. The 2026-10-13
-registry collection verified 12 raw metadata files (45,878 bytes). Formatting,
-lint, ShellCheck, 122 Rust tests, 30 routing tests, 11 image tests and the API
-contract checks (47 routes, 38 valid/38 rejected examples) passed. Focused image
-pinning evaluation, the public selector, CLI build and generated installed flake
-also passed. No image layers, signatures or native runtime acceptance were
-established. Host image acquisition remains separate from Research and is not
-implemented by this catalog.
-
-Research work is tracked in [environment admission #8](https://github.com/timfewi/tentaflake-research/issues/8)
-and [guest transport #9](https://github.com/timfewi/tentaflake-research/issues/9).
-Strict guests have a distinct [backend track #153](https://github.com/timfewi/tentaflake/issues/153)
-and remain unavailable until usable KVM and actual guest acceptance exist.
-Private deployment configuration and its operational evidence stay with the
-host owner. No host deployment or live runtime acceptance is claimed here.
-
-Completed: #115 common runtime/catalog in [PR #139](https://github.com/timfewi/tentaflake/pull/139)
-and #135 installed-host onboarding in [PR #140](https://github.com/timfewi/tentaflake/pull/140),
-merged after green CI. Both issues are closed. Generic imports default to stopped;
-OpenClaw and coding-agent vendor acceptance remain outstanding. No host activation
-or publication of these unreleased changes was performed.
-
-[PR #142](https://github.com/timfewi/tentaflake/pull/142) additionally narrows CI for
-operator onboarding. Its CI completed in 2m51s, skipping both VM suites and Research
-preparation. Docs, CI metadata and focused onboarding changes retain proportionate
-checks; shared runtime/security changes retain their relevant acceptance gates.
-
-Delivered #116 prerequisite in [PR #143](https://github.com/timfewi/tentaflake/pull/143): extend the existing Btrfs quota module to optional
-private state, preserving workspace paths and explicit migration. Adapter metadata
-owns actual state sources/initialization directories; state ownership precedes
-workspace ownership, seeds and healing. Selected state/workspace mounts are
-separate Restic sources. Review reproduced privileged permission changes through
-quota source symlinks; generated-helper refusal regressions now exercise that
-boundary without a VM. The runtime VM fixture covers physical limits, dependency
-stops, symlink refusal, persistence, restoration and non-conversion of ext4.
-Local validation: 15 generated-helper refusal checks, adapter/legacy and module
-assertions, image policy, 47 CLI tests, CLI Clippy/formatting, installed-flake
-plan/import interactions, Nix lint/formatting and ShellCheck passed. The VM
-configuration evaluates; both runtime and Research VM suites passed in CI. No
-local VM, ISO or system build, production activation or paid model probe ran.
-Initial PR #143 CI exposed namespace bind mounts masquerading as quota evidence;
-the helpers now identify the exact loop backing image, and the existing-data
-refusal test remains intact. All replacement CI gates passed at commit
-`eecb2025c0d2a2f29dd6500c075500c8175d93bd`; PR #143 merged as
-`a03fdb02e94d4444438ff8779d0ac02ef8191158`. #116 remains open for its
-remaining capability-admission requirements.
-
-Next: finish capability-specific admission, shared bounded policy decisions/replay
-and fail-closed readiness for #116; then accept actual coding agents in #136.
-Research pin/client work (#110) merged in PR #144 and is closed. Independent
-VPN readiness (#141) retains its separate acceptance requirements.
-Mutable upstream OpenCode/Pi documentation is only a candidate lead: no reviewed
-artifact, provider call or vendor acceptance follows from it. M03-M10 and the
-remaining issues retain all their acceptance requirements.
-
-#141 source integration is prepared on `feat/research-vpn-evidence`: the existing
-public Research pin already supplies observer selections through the default
-module, without another wrapper or changed defaults. The Research guide now
-documents WireGuard/tun evidence, public peer checks and bounded operator draining.
-The focused `tests/research-vpn-observer.nix` evaluation passes with builds disabled:
-three valid configurations, five refusals, exact unit arguments and observer authority.
-It is included in `tests/research-policy.nix`; its broader closure-backed check
-was not built. Nix formatting/lint, local Markdown links/anchors and both guide
-Nix examples pass. Real-tunnel
-VM verification is explicitly excluded from this lightweight-only run. Upstream
-WireGuard fixture evidence stays separate; local integration, non-WireGuard exit
-and production acceptance remain outstanding. #141 remains open.
-
-#106 source work is prepared on `feat/private-management-contract`: an explicit
-host management/SSH contract retains the existing Tailscale defaults and legacy
-enable alias. Read-only configured capabilities replace the security module's
-transport-specific gate; public OpenSSH remains forbidden. The version-2 manifest
-and CLI preserve unknown management evidence for legacy/incomplete records.
-Focused option refusals, 53 CLI checks and Clippy pass. A blackbox regression
-fails against the skipped-probe implementation and passes when unknown
-management evidence retains live Serve/Funnel inspection. Authorized runtime
-fixtures for public-access denial and existing-consumer access remain excluded
-from this lightweight-only run. No enrollment, remote grants or host activation
-is claimed; #106 remains open for that acceptance.
-
-#113 Worker safety prerequisites are prepared on `feat/worker-runtime-safety`,
-directly on OCI parent `b6acfca`, without Model/Research admission dependencies.
-Owning files are `crates/tentaflake-worker`, `modules/worker.nix` and the worker
-guide. Existing durable queue claims and capacity limits remain. A root-only
-read-only probe reports bounded queue counts under an existing shared lock;
-it grants no readiness or dispatch authority. CLI parsing precedes mutation.
-Dispatch resolves a local immutable image ID, refuses pulls and inherited
-remote runtime settings, syncs an intent before create and a full CID before
-start, and uses only that CID afterward. Unknown create outcomes preserve the
-claim/snapshot and block automatic drain or approve recovery, even with a
-terminal result. Ordinary runtime output and client duration are bounded;
-client termination proves no daemon cancellation. Artifact transfer now bounds
-both pipes, total client lifetime and raw TAR metadata/trailers without buffering
-the archive. Transport uncertainty retains the intent and full CID; fully observed
-invalid archives still complete without artifacts. The configured Podman package
-supplies its declared gVisor runtime. Legacy migration and backup rollback
-review remain documented; no worker authority or backup sources change.
-
-The standalone fast gate passed 322 Rust tests and static/helper checks. The
-actual offline Worker Nix package passed 45 unit, three probe CLI and eleven
-queue CLI tests. A real CLI child reproduced the former artifact deadline
-escape before the fix. Fixtures use supported 0750 result permissions because
-Nix forbids chmod setgid; the VM checks the real tmpfiles mode 2750. Focused
-Docker/Podman projections with IFD disabled select the tested package and
-confirm configured runtimes and private tmpfiles. The rendered 2137-line VM
-script compiles. Real VM execution remains pending. No local VM or system build ran.
-
-Worker maintenance is being integrated on `feat/worker-maintenance`: shared
-fence ownership lives in the admission crate, CLI guards validate installed
-authority, and Nix projects owned services/watchers/loaders. The existing ledger
-retains uncertain image loads; explicit recovery requires a stopped backend.
-Maintenance observes both plans' private running/jobs state without workspace
-mounts. Owning files are the admission/CLI/Worker crates, `modules/worker.nix`,
-`modules/admission.nix`, `tests/module-eval.nix` and `tests/storage-admission.nix`.
-All fast-gate components pass, including 350 Rust tests and Clippy. The focused
-CLI Nix package passes 245 tests and the Worker package 163, including the shared
-admission library in each. No-build Docker/Podman/storage projections pass;
-the generated plan passes the real Rust loader and the 2277-line VM script
-compiles. Full module evaluation with IFD disabled remains blocked by an unbuilt
-Research closure dependency. Real VM evidence is still pending for this
-integration; no local system or VM build ran.
-
-After verifying this maintenance integration, the delivery priority is the real
-authenticated host API and dynamic CLI/UI lifecycle in #152, reusing the existing
-admission/runtime owner. Worker requests still fail closed in owned OCI admission.
-Job recovery tied to daemon generations remains required. Replace the Worker
-read-only-mount validation skip with exact results-mount validation before
-enabling grants. Private worker data/retention remain outside admitted
-workspace/state volumes; worker compute still relies on explicit host reserves.
-#113 remains open until its relevant delivery gates pass.
+Private management (#106), independent VPN/readiness (#141), strict guest
+execution (#153) and operational deployment retain their acceptance requirements.
+Separate-kernel execution needs usable KVM and actual guest evidence and must
+never silently become a host-kernel container. Consumer deployment configuration,
+credentials and host-specific evidence remain outside this public repository.
+No host activation or live runtime acceptance is claimed by this checkpoint.
 
 ## Initial environment delivery
 

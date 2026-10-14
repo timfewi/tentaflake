@@ -32,6 +32,7 @@ pub const MAX_RECEIPTS: usize = MAX_RESERVATIONS;
 pub const MAX_LEDGER_BYTES: usize = 8 * 1024 * 1024;
 const LEDGER_SCHEMA_VERSION: u32 = 3;
 const MAX_PUBLICATIONS: usize = MAX_RECEIPTS;
+const MAX_OPERATOR_LOGINS: usize = 4096;
 const STATE: &str = "ledger.json";
 const STAGING: &str = ".ledger.pending";
 const LOCK: &str = ".lock";
@@ -199,6 +200,13 @@ pub struct WorkerImageLoadReceipt {
     pub updated_revision: u64,
 }
 
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct OperatorLoginReceipt {
+    fingerprint: String,
+    consumed_revision: u64,
+}
+
 /// Host-owned observations, never assertions accepted from an untrusted client.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Observation {
@@ -284,6 +292,8 @@ struct State {
     // Existing private v3 ledgers predate guarded Worker image loading.
     #[serde(default)]
     worker_image_load: Option<WorkerImageLoadReceipt>,
+    #[serde(default)]
+    operator_logins: Vec<OperatorLoginReceipt>,
 }
 
 impl Ledger {
@@ -322,6 +332,7 @@ impl Ledger {
             receipts: Vec::new(),
             publications: Vec::new(),
             worker_image_load: None,
+            operator_logins: Vec::new(),
             storage: inventory
                 .allocations
                 .into_iter()
@@ -397,6 +408,43 @@ impl Ledger {
             pending: state.pending().cloned(),
             worker_image_load: state.worker_image_load,
         })
+    }
+
+    /// Consume one already authenticated, high-entropy operator credential.
+    /// The caller supplies only its cryptographic fingerprint and must wait for
+    /// durable success before issuing a session. This grants no resource or
+    /// dispatch authority. Pending publication and uncertain work intentionally
+    /// do not block operator login needed for recovery. History is never pruned.
+    pub fn consume_operator_login(
+        &self,
+        authority: &PublishedAuthority,
+        fingerprint: &str,
+    ) -> Result<(), LedgerError> {
+        authority.validate()?;
+        if !operator_fingerprint(fingerprint) {
+            return Err(LedgerError::Invalid("operator login fingerprint"));
+        }
+        let _lock = self.lock(false)?;
+        let mut state = self.read()?;
+        if *authority != state.published {
+            return Err(LedgerError::StaleAuthority);
+        }
+        if state
+            .operator_logins
+            .iter()
+            .any(|receipt| receipt.fingerprint == fingerprint)
+        {
+            return Err(LedgerError::Conflict);
+        }
+        if state.operator_logins.len() >= MAX_OPERATOR_LOGINS {
+            return Err(LedgerError::Full);
+        }
+        state.advance()?;
+        state.operator_logins.push(OperatorLoginReceipt {
+            fingerprint: fingerprint.into(),
+            consumed_revision: state.revision,
+        });
+        self.write(&state)
     }
 
     /// Read-only recovery diagnostics, never permission to repeat a load.
@@ -1154,6 +1202,13 @@ fn absolute_reference(value: &str) -> bool {
             .all(|part| !part.is_empty() && part != "." && part != "..")
 }
 
+fn operator_fingerprint(value: &str) -> bool {
+    value.len() == 64
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
+
 impl PublishedAuthority {
     fn validate(&self) -> Result<(), LedgerError> {
         if !identifier(&self.generation)
@@ -1268,6 +1323,7 @@ impl State {
             || self.receipts.len() > MAX_RECEIPTS
             || self.storage.len() > MAX_STORAGE_ALLOCATIONS
             || self.publications.len() > MAX_PUBLICATIONS
+            || self.operator_logins.len() > MAX_OPERATOR_LOGINS
         {
             return Err(LedgerError::Invalid("header or receipt limit"));
         }
@@ -1292,6 +1348,11 @@ impl State {
                 self.worker_image_load
                     .iter()
                     .map(|receipt| receipt.updated_revision),
+            )
+            .chain(
+                self.operator_logins
+                    .iter()
+                    .map(|receipt| receipt.consumed_revision),
             )
             .max()
             .unwrap_or(1);
@@ -1469,6 +1530,40 @@ impl State {
                     .any(|publication| publication.request.expected_authority == load.authority)
         }) {
             return Err(LedgerError::Invalid("image-load authority history"));
+        }
+        let mut revisions: BTreeSet<_> = self
+            .receipts
+            .iter()
+            .map(|receipt| [receipt.claimed_revision, receipt.updated_revision])
+            .chain(
+                self.storage
+                    .iter()
+                    .map(|receipt| [receipt.claimed_revision, receipt.updated_revision]),
+            )
+            .chain(
+                self.publications
+                    .iter()
+                    .map(|receipt| [receipt.begun_revision, receipt.updated_revision]),
+            )
+            .chain(
+                self.worker_image_load
+                    .iter()
+                    .map(|receipt| [receipt.claimed_revision, receipt.updated_revision]),
+            )
+            .flatten()
+            .collect();
+        let mut fingerprints = BTreeSet::new();
+        let mut previous = 1;
+        for receipt in &self.operator_logins {
+            if !operator_fingerprint(&receipt.fingerprint)
+                || !fingerprints.insert(&receipt.fingerprint)
+                || receipt.consumed_revision <= previous
+                || receipt.consumed_revision > self.revision
+                || !revisions.insert(receipt.consumed_revision)
+            {
+                return Err(LedgerError::Invalid("operator login history"));
+            }
+            previous = receipt.consumed_revision;
         }
         Ok(())
     }
@@ -1893,6 +1988,23 @@ mod tests {
                     .unwrap();
                 std::process::exit(0);
             }
+            "operator-login-crash" => {
+                open()
+                    .unwrap()
+                    .consume_operator_login(&authority("policy-1"), &"a".repeat(64))
+                    .unwrap();
+                std::process::exit(0);
+            }
+            "operator-login-race" => {
+                let result = open().and_then(|ledger| {
+                    ledger.consume_operator_login(&authority("policy-1"), &"a".repeat(64))
+                });
+                std::process::exit(match result {
+                    Ok(()) => 0,
+                    Err(LedgerError::Busy | LedgerError::Conflict) => 17,
+                    Err(error) => panic!("unexpected concurrent login result: {error}"),
+                });
+            }
             "publication-crash" => {
                 let ledger = open().unwrap();
                 let request = publication(&ledger, "publish-2", "policy-2");
@@ -1922,7 +2034,8 @@ mod tests {
             | "storage-write-failure"
             | "publication-write-failure"
             | "image-load-write-failure"
-            | "image-load-complete-failure") => {
+            | "image-load-complete-failure"
+            | "operator-login-write-failure") => {
                 let ledger = open().unwrap();
                 let mut permit = (mode == "bind-write-failure").then(|| claim(&ledger, "a"));
                 let image_permit = (mode == "image-load-complete-failure").then(|| {
@@ -1941,7 +2054,12 @@ mod tests {
                     assert_ne!(libc::signal(libc::SIGXFSZ, libc::SIG_IGN), libc::SIG_ERR);
                     assert_eq!(libc::setrlimit(libc::RLIMIT_FSIZE, &limit), 0);
                 }
-                if let Some(permit) = image_permit {
+                if mode == "operator-login-write-failure" {
+                    assert!(matches!(
+                        ledger.consume_operator_login(&authority("policy-1"), &"a".repeat(64)),
+                        Err(LedgerError::Io(_))
+                    ));
+                } else if let Some(permit) = image_permit {
                     assert!(matches!(permit.complete(), Err(LedgerError::Io(_))));
                 } else if mode == "image-load-write-failure" {
                     assert!(matches!(
@@ -3810,6 +3928,267 @@ mod tests {
             ledger.cancel_publication("pending", 3, |_, _| panic!("invalid state cannot cancel")),
             Err(LedgerError::Invalid(_))
         ));
+    }
+
+    #[test]
+    fn operator_login_survives_process_exit_and_cannot_be_consumed_twice() {
+        let fixture = Fixture::new();
+        let ledger = fixture.ledger();
+        let before = ledger.snapshot().unwrap();
+        fixture.child("operator-login-crash");
+        let reopened = fixture.open("ledger").unwrap();
+        let after = reopened.snapshot().unwrap();
+        assert_eq!(after.revision, before.revision + 1);
+        assert_eq!(after.entries, before.entries);
+        assert_eq!(after.storage, before.storage);
+        let bytes = fs::read(fixture.path().join(STATE)).unwrap();
+        assert!(matches!(
+            reopened.consume_operator_login(&authority("policy-1"), &"a".repeat(64)),
+            Err(LedgerError::Conflict)
+        ));
+        assert_eq!(fs::read(fixture.path().join(STATE)).unwrap(), bytes);
+        let state: State = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(state.operator_logins.len(), 1);
+        assert_eq!(state.operator_logins[0].fingerprint, "a".repeat(64));
+        assert_eq!(state.operator_logins[0].consumed_revision, 2);
+    }
+
+    #[test]
+    fn operator_login_uses_existing_lock_and_only_one_process_consumes() {
+        let fixture = Fixture::new();
+        let ledger = fixture.ledger();
+        {
+            let _lock = ledger.lock(false).unwrap();
+            assert!(matches!(
+                ledger.consume_operator_login(&authority("policy-1"), &"a".repeat(64)),
+                Err(LedgerError::Busy)
+            ));
+        }
+        let children: Vec<_> = (0..2)
+            .map(|_| {
+                Command::new(std::env::current_exe().unwrap())
+                    .args(["--exact", "ledger::tests::subprocess_entry", "--ignored"])
+                    .env("TENTAFLAKE_LEDGER_TEST_ROOT", &fixture.0)
+                    .env("TENTAFLAKE_LEDGER_TEST_MODE", "operator-login-race")
+                    .stdout(std::process::Stdio::null())
+                    .spawn()
+                    .unwrap()
+            })
+            .collect();
+        let mut codes: Vec<_> = children
+            .into_iter()
+            .map(|mut child| child.wait().unwrap().code().unwrap())
+            .collect();
+        codes.sort();
+        assert_eq!(codes, [0, 17]);
+        let state: State =
+            serde_json::from_slice(&fs::read(fixture.path().join(STATE)).unwrap()).unwrap();
+        assert_eq!(state.revision, 2);
+        assert_eq!(state.operator_logins.len(), 1);
+    }
+
+    #[test]
+    fn operator_login_write_failure_never_reports_success_or_discards_staging() {
+        let fixture = Fixture::new();
+        let ledger = fixture.ledger();
+        let before = fs::read(fixture.path().join(STATE)).unwrap();
+        fixture.child("operator-login-write-failure");
+        assert_eq!(fs::read(fixture.path().join(STATE)).unwrap(), before);
+        assert!(fixture.path().join(STAGING).is_file());
+        assert!(matches!(
+            ledger.consume_operator_login(&authority("policy-1"), &"a".repeat(64)),
+            Err(LedgerError::Io(_))
+        ));
+        assert_eq!(ledger.snapshot().unwrap().revision, 1);
+        assert!(fixture.path().join(STAGING).is_file());
+    }
+
+    #[test]
+    fn operator_login_requires_exact_authority_and_canonical_fingerprint() {
+        let fixture = Fixture::new();
+        let ledger = fixture.ledger();
+        let before = fs::read(fixture.path().join(STATE)).unwrap();
+        for fingerprint in [
+            String::new(),
+            "a".repeat(63),
+            "a".repeat(65),
+            "A".repeat(64),
+            "g".repeat(64),
+            format!("{}\n", "a".repeat(63)),
+        ] {
+            assert!(matches!(
+                ledger.consume_operator_login(&authority("policy-1"), &fingerprint),
+                Err(LedgerError::Invalid(_))
+            ));
+        }
+        for field in 0..3 {
+            let mut stale = authority("policy-1");
+            match field {
+                0 => stale.generation.push('x'),
+                1 => stale.revision.push('x'),
+                _ => stale.manifest_path.push('x'),
+            }
+            assert!(matches!(
+                ledger.consume_operator_login(&stale, &"a".repeat(64)),
+                Err(LedgerError::StaleAuthority)
+            ));
+        }
+        assert_eq!(fs::read(fixture.path().join(STATE)).unwrap(), before);
+    }
+
+    #[test]
+    fn operator_login_remains_available_for_recovery_without_reset_on_publication() {
+        let fixture = Fixture::new();
+        let ledger = fixture.ledger();
+        ledger
+            .consume_operator_login(&authority("policy-1"), &"a".repeat(64))
+            .unwrap();
+        let request = publication(&ledger, "publish-with-logins", "policy-2");
+        ledger.begin_publication(&request).unwrap();
+        ledger
+            .consume_operator_login(&authority("policy-1"), &"b".repeat(64))
+            .unwrap();
+        assert!(ledger.publication_status().unwrap().pending.is_some());
+        assert!(matches!(
+            ledger.consume_operator_login(&request.candidate, &"c".repeat(64)),
+            Err(LedgerError::StaleAuthority)
+        ));
+        ledger
+            .finish_publication(&request.operation_id, 4, |_, _| {
+                installed(&request.candidate)
+            })
+            .unwrap();
+        for fingerprint in ["a".repeat(64), "b".repeat(64)] {
+            assert!(matches!(
+                ledger.consume_operator_login(&request.candidate, &fingerprint),
+                Err(LedgerError::Conflict)
+            ));
+        }
+        let before = ledger.snapshot().unwrap();
+        drop(
+            ledger
+                .begin_worker_image_load(&request.candidate, "/immutable/worker-image.json")
+                .unwrap(),
+        );
+        ledger
+            .consume_operator_login(&request.candidate, &"c".repeat(64))
+            .unwrap();
+        assert_eq!(
+            ledger.worker_image_load().unwrap().unwrap().outcome,
+            WorkerImageLoadOutcome::Unknown
+        );
+        let after = ledger.snapshot().unwrap();
+        assert_eq!(after.entries, before.entries);
+        assert_eq!(after.storage, before.storage);
+        let state: State =
+            serde_json::from_slice(&fs::read(fixture.path().join(STATE)).unwrap()).unwrap();
+        assert_eq!(
+            state
+                .operator_logins
+                .iter()
+                .map(|receipt| receipt.consumed_revision)
+                .collect::<Vec<_>>(),
+            [2, 4, 7]
+        );
+    }
+
+    #[test]
+    fn operator_login_capacity_is_bounded_and_history_is_never_pruned() {
+        let fixture = Fixture::new();
+        let ledger = fixture.ledger();
+        let path = fixture.path().join(STATE);
+        let mut state: State = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        state.operator_logins = (0..MAX_OPERATOR_LOGINS - 1)
+            .map(|index| OperatorLoginReceipt {
+                fingerprint: format!("{index:064x}"),
+                consumed_revision: index as u64 + 2,
+            })
+            .collect();
+        state.revision = MAX_OPERATOR_LOGINS as u64;
+        fs::write(&path, serde_json::to_vec(&state).unwrap()).unwrap();
+        ledger
+            .consume_operator_login(
+                &authority("policy-1"),
+                &format!("{:064x}", MAX_OPERATOR_LOGINS - 1),
+            )
+            .unwrap();
+        let full = fs::read(&path).unwrap();
+        assert!(matches!(
+            ledger.consume_operator_login(
+                &authority("policy-1"),
+                &format!("{MAX_OPERATOR_LOGINS:064x}")
+            ),
+            Err(LedgerError::Full)
+        ));
+        assert!(matches!(
+            ledger.consume_operator_login(&authority("policy-1"), &format!("{:064x}", 0)),
+            Err(LedgerError::Conflict)
+        ));
+        assert_eq!(fs::read(&path).unwrap(), full);
+        assert_eq!(
+            fixture.open("ledger").unwrap().snapshot().unwrap().revision,
+            MAX_OPERATOR_LOGINS as u64 + 1
+        );
+    }
+
+    #[test]
+    fn operator_login_old_v3_and_tampered_history_are_distinguished() {
+        let fixture = Fixture::new();
+        let ledger = fixture.ledger();
+        let path = fixture.path().join(STATE);
+        let mut legacy: serde_json::Value =
+            serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        legacy.as_object_mut().unwrap().remove("operatorLogins");
+        fs::write(&path, serde_json::to_vec(&legacy).unwrap()).unwrap();
+        let reopened = fixture.open("ledger").unwrap();
+        reopened
+            .consume_operator_login(&authority("policy-1"), &"a".repeat(64))
+            .unwrap();
+        let original: serde_json::Value =
+            serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        for (field, value) in [
+            ("fingerprint", serde_json::json!("A".repeat(64))),
+            ("consumedRevision", serde_json::json!(1)),
+            ("consumedRevision", serde_json::json!(3)),
+            ("unexpected", serde_json::json!(true)),
+        ] {
+            let mut changed = original.clone();
+            changed["operatorLogins"][0][field] = value;
+            fs::write(&path, serde_json::to_vec(&changed).unwrap()).unwrap();
+            assert!(fixture.open("ledger").is_err());
+        }
+        let mut duplicate = original.clone();
+        duplicate["revision"] = serde_json::json!(3);
+        let mut second = duplicate["operatorLogins"][0].clone();
+        second["consumedRevision"] = serde_json::json!(3);
+        duplicate["operatorLogins"]
+            .as_array_mut()
+            .unwrap()
+            .push(second);
+        fs::write(&path, serde_json::to_vec(&duplicate).unwrap()).unwrap();
+        assert!(fixture.open("ledger").is_err());
+        fs::write(&path, serde_json::to_vec(&original).unwrap()).unwrap();
+        let completed = ledger
+            .begin_worker_image_load(&authority("policy-1"), "/immutable/image.json")
+            .unwrap()
+            .complete()
+            .unwrap();
+        let mut collision: serde_json::Value =
+            serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        collision["operatorLogins"][0]["consumedRevision"] =
+            serde_json::json!(completed.updated_revision);
+        fs::write(&path, serde_json::to_vec(&collision).unwrap()).unwrap();
+        assert!(fixture.open("ledger").is_err());
+        let mut overflow = original;
+        overflow["revision"] = serde_json::json!(u64::MAX);
+        overflow["operatorLogins"][0]["consumedRevision"] = serde_json::json!(u64::MAX);
+        let bytes = serde_json::to_vec(&overflow).unwrap();
+        fs::write(&path, &bytes).unwrap();
+        assert!(matches!(
+            ledger.consume_operator_login(&authority("policy-1"), &"b".repeat(64)),
+            Err(LedgerError::Full)
+        ));
+        assert_eq!(fs::read(&path).unwrap(), bytes);
     }
 
     #[test]

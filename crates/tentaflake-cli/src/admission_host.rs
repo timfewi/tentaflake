@@ -30,6 +30,8 @@ pub(crate) struct HostPlan {
     pub workers: BTreeMap<String, crate::admission_worker::WorkerSpec>,
     #[serde(default)]
     pub worker_image: Option<crate::admission_worker::ImageSpec>,
+    #[serde(default)]
+    pub api_config: Option<PathBuf>,
     pub tools: Tools,
 }
 
@@ -132,6 +134,13 @@ impl HostPlan {
             crate::admission_oci::validate_runtime(self, id, runtime)?;
         }
         crate::admission_worker::validate_plan(self)?;
+        if self
+            .api_config
+            .as_ref()
+            .is_some_and(|path| !store_path(path))
+        {
+            return Err("host API configuration must be immutable".into());
+        }
         let specs: Vec<_> = self
             .volumes
             .iter()

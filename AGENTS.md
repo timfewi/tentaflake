@@ -158,6 +158,13 @@ are already published or require access to another repository for public checks.
   remain required. See `docs/agent-adapters.md` and `docs/14-workspace-quota.md`.
 - CLI help is configuration-free; management commands require generated
   host configuration and inventory.
+- `crates/tentaflake-cli/src/api` and `modules/api.nix` own the optional private
+  HTTP service. Its configuration is bound into the published admission plan;
+  credentials arrive only through runtime systemd credentials. Authentication
+  never grants resource authority. Durable consumed-token fingerprints share
+  the admission ledger and survive restart/publication. Keep HTTP work charged
+  until blocking tasks finish, including after connection cancellation. Discovery
+  and sessions are implemented; remaining contract operations stay unsupported.
 - `api/v1/openapi.json` owns the host API wire contract; clients consume its
   schema and offline fixtures. Run `just api-contract` for local-only schema
   validation. Fixtures do not establish a working backend or host authority.

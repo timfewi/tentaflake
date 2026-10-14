@@ -1,7 +1,149 @@
-# Storage and Worker maintenance through the real host CLI, D-Bus and services.
+# Storage, Worker maintenance and HTTP authentication through real host services.
 # Generic OCI controllers remain stopped: this does not prove aggregate OCI
 # startup admission, Worker capability readiness or job execution acceptance.
 { self }:
+let
+  apiProbe = self.inputs.nixpkgs.legacyPackages.x86_64-linux.writeText "tentaflake-api-http-fixture.py" ''
+    import hashlib
+    import http.client
+    import json
+    import os
+    import pathlib
+    import re
+    import secrets
+    import subprocess
+    import sys
+    import time
+
+    OPERATOR = pathlib.Path("/run/tentaflake-api-fixture-operator")
+    BEARER = pathlib.Path("/run/tentaflake-api-fixture-bearer")
+    STATE = pathlib.Path("/run/tentaflake-api-fixture-session.json")
+    LEDGER = pathlib.Path("/var/lib/tentaflake-admission/ledger.json")
+    ORIGIN = "https://api.example.invalid"
+    HOST = "api.example.invalid"
+
+    def save(path, value):
+        with path.open("x") as target:
+            target.write(value)
+
+    def request(method, path, expected, payload=None, extra=None):
+        headers = {"Host": HOST, "Origin": ORIGIN}
+        headers.update(extra or {})
+        data = None
+        if payload is not None:
+            data = json.dumps(payload).encode()
+            headers["Content-Type"] = "application/json"
+        connection = http.client.HTTPConnection("127.0.0.1", 18181, timeout=5)
+        try:
+            connection.request(method, path, body=data, headers=headers)
+            response = connection.getresponse()
+            body = response.read(32769)
+            assert len(body) <= 32768, "HTTP response bound"
+            assert response.status == expected, (method, path, response.status, expected)
+            assert response.getheader("Cache-Control") == "no-store", "cache policy"
+            assert response.getheader("X-Content-Type-Options") == "nosniff", "content sniffing"
+            result = json.loads(body) if body else None
+            if expected >= 400:
+                assert set(result) == {"error", "requestId"}, "error shape"
+                assert OPERATOR.read_text().encode() not in body, "operator credential in response"
+                assert BEARER.read_text().encode() not in body, "bearer credential in response"
+            return result, response.getheader("Set-Cookie")
+        finally:
+            connection.close()
+
+    def ledger():
+        with LEDGER.open("rb") as source:
+            raw = source.read(4 * 1024 * 1024 + 1)
+        assert len(raw) <= 4 * 1024 * 1024, "ledger bound"
+        assert OPERATOR.read_text().encode() not in raw, "operator credential persisted"
+        assert BEARER.read_text().encode() not in raw, "bearer credential persisted"
+        return json.loads(raw)
+
+    def wait_ready():
+        deadline = time.monotonic() + 10
+        while True:
+            try:
+                return request("GET", "/api/meta", 200)[0]
+            except (ConnectionError, OSError):
+                if time.monotonic() >= deadline:
+                    raise AssertionError("API did not listen before deadline") from None
+                time.sleep(0.1)
+
+    def no_logged_credentials():
+        output = subprocess.run(["journalctl", "--no-pager", "-o", "cat", "-n", "200", "-u", "tentaflake-api.service"],
+                                check=True, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=5).stdout
+        assert OPERATOR.read_text().encode() not in output, "operator credential in journal"
+        assert BEARER.read_text().encode() not in output, "bearer credential in journal"
+
+    os.umask(0o077)
+    phase = sys.argv[1]
+    if phase == "seed":
+        save(OPERATOR, secrets.token_hex(32))
+        save(BEARER, secrets.token_hex(32))
+        assert OPERATOR.read_text() != BEARER.read_text(), "independent fixture credentials"
+    elif phase == "login":
+        before = ledger()
+        meta = wait_ready()
+        assert meta == {"service": "tentaflake", "apiVersions": [1], "host": "api-fixture",
+                        "auth": {"methods": ["operator-token"]}, "backend": "implemented"}, "minimal discovery"
+        request("GET", "/api/meta", 403, extra={"Host": "other.example.invalid"})
+        request("GET", "/api/v1/session", 401)
+        login = {"method": "operator-token", "secret": OPERATOR.read_text()}
+        request("POST", "/api/v1/session", 403, login, {"Origin": "https://other.example.invalid"})
+        request("POST", "/api/v1/session", 403, login, {"Host": "other.example.invalid"})
+        request("POST", "/api/v1/session", 401, {"method": "operator-token", "secret": secrets.token_hex(32)})
+        assert ledger() == before, "refused login changed durable state"
+        session, cookie_header = request("POST", "/api/v1/session", 200, login)
+        assert cookie_header is not None, "session cookie missing"
+        parts = cookie_header.split("; ")
+        assert re.fullmatch(r"__Host-tentaflake-session=[0-9a-f]{64}", parts[0]), "cookie shape"
+        assert set(parts[1:]) == {"Secure", "HttpOnly", "SameSite=Strict", "Path=/"}, "cookie attributes"
+        assert set(session) == {"user", "csrfToken", "expiresAt", "grants", "revisions", "mutationEpoch"}, "session shape"
+        assert session["user"] == {"id": "fixture-operator", "name": "Fixture operator"}, "configured identity"
+        assert session["grants"] == [], "authentication must not invent grants"
+        assert re.fullmatch(r"[0-9a-f]{64}", session["csrfToken"]), "CSRF shape"
+        assert re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z", session["expiresAt"]), "session expiry"
+        cookie = {"Cookie": parts[0]}
+        observed, _ = request("GET", "/api/v1/session", 200, extra=cookie)
+        assert observed["user"] == session["user"] and observed["csrfToken"] == session["csrfToken"], "session identity"
+        after = ledger()
+        assert after["revision"] == before["revision"] + 1, "exact login consumption revision"
+        assert after["storage"] == before["storage"] and after["receipts"] == before["receipts"], "login resource mutation"
+        assert after["published"] == before["published"], "login authority mutation"
+        fingerprint = hashlib.sha256(b"tentaflake/operator-login/v1\0" + OPERATOR.read_bytes()).hexdigest()
+        assert after["operatorLogins"] == [{"fingerprint": fingerprint, "consumedRevision": after["revision"]}], "single durable fingerprint"
+        request("POST", "/api/v1/session", 401, login)
+        request("DELETE", "/api/v1/session", 403, extra=cookie)
+        request("DELETE", "/api/v1/session", 403, extra={**cookie, "X-Tentaflake-CSRF": "incorrect"})
+        request("GET", "/api/v1/session", 200, extra=cookie)
+        bearer = {"Authorization": "Bearer " + BEARER.read_text()}
+        authenticated, _ = request("GET", "/api/v1/session", 200, extra=bearer)
+        assert authenticated["user"] == session["user"] and authenticated["grants"] == [], "independent CLI identity"
+        request("GET", "/api/v1/session", 400, extra={**cookie, **bearer})
+        request("GET", "/api/v1/session", 401, extra={"Authorization": "Bearer " + OPERATOR.read_text()})
+        for path in ["/api/v1/capabilities", "/api/v1/environments"]:
+            result, _ = request("GET", path, 501, extra=cookie)
+            assert result["error"]["code"] == "unsupported", "unimplemented operation must refuse"
+        result, cleared = request("DELETE", "/api/v1/session", 204,
+                                  extra={**cookie, "X-Tentaflake-CSRF": session["csrfToken"]})
+        assert result is None and cleared is not None and "Max-Age=0" in cleared, "logout cookie expiry"
+        request("GET", "/api/v1/session", 401, extra=cookie)
+        assert ledger() == after, "read/refusal/logout changed durable state"
+        save(STATE, json.dumps({"ledger": after, "cookie": parts[0]}))
+        no_logged_credentials()
+    elif phase == "restart":
+        saved = json.loads(STATE.read_text())
+        wait_ready()
+        request("POST", "/api/v1/session", 401, {"method": "operator-token", "secret": OPERATOR.read_text()})
+        request("GET", "/api/v1/session", 401, extra={"Cookie": saved["cookie"]})
+        request("GET", "/api/v1/session", 200, extra={"Authorization": "Bearer " + BEARER.read_text()})
+        assert ledger() == saved["ledger"], "restart resurrected consumed credential"
+        no_logged_credentials()
+    else:
+        raise AssertionError("unknown fixture phase")
+    print("API fixture phase passed: " + phase)
+  '';
+in
 {
   node =
     {
@@ -81,6 +223,7 @@
       };
       environment.systemPackages = [
         pkgs.btrfs-progs
+        pkgs.python3
         pkgs.util-linux
       ];
       environment.etc."tentaflake/stale-admission.json".source =
@@ -97,6 +240,7 @@
         services = {
           tentaflake-worker-generic-storage.wantedBy = lib.mkForce [ ];
           tentaflake-worker-image.wantedBy = lib.mkForce [ ];
+          tentaflake-api.wantedBy = lib.mkForce [ ];
         };
         paths.tentaflake-worker-generic-storage.wantedBy = lib.mkForce [ ];
       };
@@ -108,6 +252,18 @@
         modernConsole.enable = false;
         nixSettings.enable = false;
         shell.enable = true;
+        api = {
+          enable = true;
+          host = "api-fixture";
+          origin = "https://api.example.invalid";
+          listen = "127.0.0.1:18181";
+          principal = {
+            id = "fixture-operator";
+            name = "Fixture operator";
+          };
+          operatorTokenFile = "/run/tentaflake-api-fixture-operator";
+          cliBearerFile = "/run/tentaflake-api-fixture-bearer";
+        };
         worker.agents.generic-storage = {
           enable = true;
           workspace = "/var/lib/generic-storage/workspace";
@@ -295,6 +451,31 @@
             storage.succeed("rm -- " + shlex.quote(filler))
             stop_storage_units()
 
+    with subtest("real HTTP authentication consumes credentials durably without resource grants"):
+        # Credentials exist only in the guest runtime. This exercises the local
+        # HTTP listener behind its declared origin, not an HTTPS relay or a UI.
+        api_probe = ${builtins.toJSON (toString apiProbe)}
+        api_configuration = json.loads(storage.succeed("cat " + shlex.quote(storage_manifest["apiConfig"])))
+        assert api_configuration["origin"] == "https://api.example.invalid"
+        assert api_configuration["operatorLogin"] and api_configuration["cliBearer"]
+        before_auth = storage_snapshot()
+        storage.succeed(shlex.join(["python3", api_probe, "seed"]))
+        try:
+            storage.succeed("systemctl start tentaflake-api.service")
+            storage.wait_for_unit("tentaflake-api.service")
+            storage.succeed(shlex.join(["python3", api_probe, "login"]))
+            authenticated = storage_snapshot()
+            assert authenticated["revision"] == before_auth["revision"] + 1
+            assert authenticated["storage"] == before_auth["storage"]
+            assert authenticated["receipts"] == before_auth["receipts"]
+            storage.succeed("systemctl restart tentaflake-api.service")
+            storage.wait_for_unit("tentaflake-api.service")
+            storage.succeed(shlex.join(["python3", api_probe, "restart"]))
+            assert storage_snapshot() == authenticated
+        finally:
+            storage.succeed("timeout 30s systemctl stop tentaflake-api.service")
+            assert storage.succeed("systemctl show --value --property=ActiveState tentaflake-api.service").strip() == "inactive"
+
     with subtest("guarded storage creates exact host mounts and retains charges on stop"):
         storage.fail(storage_command("volume-start", "workspace:generic-storage"))
         start_storage_workspace()
@@ -400,6 +581,7 @@
     candidate_manifest = json.loads(storage.succeed("cat " + shlex.quote(candidate_plan)))
     assert candidate_manifest["policy"]["generation"] == storage_manifest["policy"]["generation"]
     assert candidate_manifest["policy"]["revision"] != storage_manifest["policy"]["revision"]
+    assert candidate_manifest["apiConfig"] == storage_manifest["apiConfig"]
     assert candidate_manifest["instances"] == storage_manifest["instances"]
     assert [volume["spec"] for volume in candidate_manifest["volumes"]] == [volume["spec"] for volume in storage_manifest["volumes"]]
 

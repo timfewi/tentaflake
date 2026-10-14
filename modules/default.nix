@@ -5,6 +5,7 @@
 {
   imports = [
     ./admission.nix
+    ./api.nix
     ./agent-instances.nix
     ./options.nix
     ./boot.nix

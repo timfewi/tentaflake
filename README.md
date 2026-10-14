@@ -38,6 +38,9 @@ when installing another configuration. The experimental
 binds durable claims to exact container identities and supports separately
 acquired local Nix images. Runtime acceptance, external capability collectors,
 automated installation and the host API service remain under development.
+The opt-in [experimental HTTP service](docs/19-host-api.md#experimental-authentication-service)
+implements discovery and operator sessions; dynamic environment operations remain
+unsupported while their admission and lifecycle integration is developed.
 
 Discover presets with `tentaflake runtimes --json`. A digest-pinned image and
 command can use the [common isolated workload definition](docs/agent-adapters.md#generic-isolated-workload)
