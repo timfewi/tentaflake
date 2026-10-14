@@ -187,7 +187,9 @@ The configured Podman package supplies its declared gVisor runtime. The fast gat
 passes 359 Rust tests and static/helper checks; the actual offline Worker Nix
 package passes 40 unit, three probe CLI and eight queue CLI tests. Its fixture
 uses the supported 0750 result layout because Nix forbids chmod setgid; the VM
-exercises the actual tmpfiles layout. VM/configuration verification is pending.
+exercises the actual tmpfiles layout. Scoped Nix lint/format, actual Docker and
+Podman worker option projections with IFD disabled, and compilation of the
+rendered 2,293-line VM script pass. Real VM execution remains pending.
 Next: bind the collector and worker launcher inventory to the common host fence,
 add daemon-generation recovery and bound the artifact stream. Replace the
 Worker read-only-mount validation skip with exact results-mount validation
