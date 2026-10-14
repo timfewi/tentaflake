@@ -161,8 +161,14 @@ runtime authority from the proof alone.
 
 The supported backend is the declared NixOS Docker package with `docker.socket`,
 its generated configuration, internal containerd and default state paths and
-namespaces. Extra daemon flags and `live-restore` are refused. Admission disables
-live restore, masks `docker-prune.service` and rejects automatic pruning so
+namespaces. Exact image identity currently requires the classic image store:
+admission defaults `features.containerd-snapshotter = false`, rejects `true`, and
+checks the immutable daemon configuration and live driver status. Docker's
+containerd image store uses manifest IDs instead of the required config IDs.
+Changing an existing image store is an explicit operator migration; its images
+and containers do not automatically transfer between stores. Admission performs
+no conversion or daemon restart. Extra daemon flags and `live-restore` are refused.
+Admission disables live restore, masks `docker-prune.service` and rejects automatic pruning so
 retained container identities survive. Other Docker/Podman clients, daemons,
 containerd, shims and OCI runtime processes must also be stopped; the command
 does not terminate them. A corrupt or unfinished volatile proof under

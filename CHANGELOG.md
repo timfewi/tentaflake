@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 ### Fixed
+- Require Docker's classic image store for admission's exact configuration-digest
+  contract, checking immutable settings and live driver status before loading an
+  image; existing stores require explicit operator migration.
 - Clear only verified quota-owner refusal counters after stopped/no-job evidence
   in storage VM recovery; start-rate failures cannot satisfy refusal assertions.
 - Give parallel CLI test fixtures distinct directory names even when clock

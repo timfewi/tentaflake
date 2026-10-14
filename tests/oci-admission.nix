@@ -304,6 +304,8 @@ in
 
     with subtest("explicit local image acquisition creates no runtime claim"):
         oci_prepare_unbootstrapped(oci, oci_manifest)
+        daemon_info = json.loads(oci.succeed(oci_docker("info", "--format", "{{json .}}")))
+        assert daemon_info["Driver"] and all(row[0] != "driver-type" for row in daemon_info["DriverStatus"]), daemon_info["DriverStatus"]
         for name in oci_ids:
             oci.fail(oci_command("runtime-start", name))
             oci.fail(oci_docker("container", "inspect", name))

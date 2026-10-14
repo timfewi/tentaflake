@@ -208,6 +208,10 @@ in
           message = "tentaflake host admission requires Docker live-restore disabled so explicit stopped-daemon bootstrap can fence legacy dispatch.";
         }
         {
+          assertion = !config.virtualisation.docker.daemon.settings.features.containerd-snapshotter;
+          message = "tentaflake host admission requires the classic Docker image store (features.containerd-snapshotter=false) for exact config-digest identity; changing an existing store requires operator-owned migration.";
+        }
+        {
           assertion = !config.virtualisation.docker.autoPrune.enable;
           message = "tentaflake host admission requires Docker automatic pruning disabled to preserve exact retained container identities.";
         }
@@ -231,7 +235,10 @@ in
         }) runtimeNames
       );
 
-    virtualisation.docker.daemon.settings.live-restore = lib.mkIf (cfg != null) (lib.mkDefault false);
+    virtualisation.docker.daemon.settings = lib.mkIf (cfg != null) {
+      live-restore = lib.mkDefault false;
+      features.containerd-snapshotter = lib.mkDefault false;
+    };
 
     virtualisation.oci-containers.containers = lib.mkIf (cfg != null) (
       lib.genAttrs runtimeNames (_: {

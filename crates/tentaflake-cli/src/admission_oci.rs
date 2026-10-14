@@ -598,6 +598,7 @@ pub(crate) fn acquire(path: &Path, id: &str) -> Result<u8, String> {
     };
     let fence = admission_fence::exclusive()?;
     installed(path)?;
+    let before = daemon(&plan)?;
     let d = local_descriptor(descriptor)?;
     // Descriptors are generated from this immutable regular archive. Hold its FD
     // through load; no mutable path lookup or extraction is involved.
@@ -620,6 +621,9 @@ pub(crate) fn acquire(path: &Path, id: &str) -> Result<u8, String> {
         Duration::from_secs(180),
     )?;
     image(&plan, spec)?;
+    if daemon(&plan)? != before {
+        return Err("Docker daemon changed during image acquisition".into());
+    }
     Ok(0)
 }
 
@@ -729,6 +733,31 @@ fn caller(
         },
     })
 }
+fn classic_image_store(info: &Value) -> bool {
+    // Moby's containerd store always reports a driver-type row and identifies
+    // images by manifest/index digest. Our immutable archive contract identifies
+    // the config digest. Check live status as well as the immutable settings so
+    // a daemon-reload cannot make an old running store appear compatible.
+    info.get("Driver")
+        .and_then(Value::as_str)
+        .is_some_and(|driver| !driver.is_empty())
+        && info
+            .get("DriverStatus")
+            .and_then(Value::as_array)
+            .is_some_and(|rows| {
+                rows.len() <= 128
+                    && rows.iter().all(|row| {
+                        row.as_array().is_some_and(|fields| {
+                            fields.len() == 2
+                                && fields.iter().all(|field| {
+                                    field.as_str().is_some_and(|value| value.len() <= 4096)
+                                })
+                                && fields[0].as_str() != Some("driver-type")
+                        })
+                    })
+            })
+}
+
 pub(crate) fn daemon(plan: &HostPlan) -> Result<(String, DaemonIdentity), String> {
     let socket =
         fs::symlink_metadata("/run/docker.sock").map_err(|_| "local Docker socket unavailable")?;
@@ -745,8 +774,12 @@ pub(crate) fn daemon(plan: &HostPlan) -> Result<(String, DaemonIdentity), String
     {
         return Err("Docker launch prerequisites unavailable".into());
     }
+    crate::admission_bootstrap::daemon_config(plan, &unit)?;
     let start_time_ticks = process_start(service.main_pid)?;
     let info = docker_json(plan, &["info", "--format", "{{json .}}"])?;
+    if !classic_image_store(&info) {
+        return Err("admission requires the running classic Docker image store; containerd snapshotter or unavailable driver status cannot establish config-digest identity".into());
+    }
     if info
         .get("Runtimes")
         .and_then(Value::as_object)
@@ -1525,6 +1558,34 @@ mod tests {
     use serde_json::json;
     use tentaflake_admission::ledger::RuntimeDispatch;
     use tentaflake_admission::{Decision, Reservation};
+
+    #[test]
+    fn image_store_requires_classic_live_status_even_with_new_declared_settings() {
+        let classic = json!({"Driver":"overlay2", "DriverStatus":[["Backing Filesystem","extfs"],["Supports d_type","true"]]});
+        assert!(classic_image_store(&classic));
+        assert!(classic_image_store(
+            &json!({"Driver":"vfs","DriverStatus":[]})
+        ));
+        for status in [
+            json!([["driver-type", "io.containerd.snapshotter.v1"]]),
+            json!([["driver-type", "unknown"]]),
+            json!([
+                ["Backing Filesystem", "extfs"],
+                ["driver-type", "io.containerd.snapshotter.v1"]
+            ]),
+            Value::Null,
+            json!({}),
+            json!([[]]),
+            json!([["key"]]),
+            json!([["key", false]]),
+        ] {
+            let mut observed = classic.clone();
+            observed["DriverStatus"] = status;
+            assert!(!classic_image_store(&observed));
+        }
+        assert!(!classic_image_store(&json!({"Driver":"overlay2"})));
+        assert!(!classic_image_store(&json!({"DriverStatus":[]})));
+    }
 
     fn fixture() -> (HostPlan, RuntimeSpec, Receipt, Map<String, Value>, Value) {
         let plan: HostPlan =
