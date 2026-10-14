@@ -1,7 +1,7 @@
 ---
 name: tentaflake-change-review
 description: Review a Tentaflake change for a concrete requirement, proportionate verification, synchronized docs and a complete PR.
-version: 1.1.4
+version: 1.1.5
 ---
 
 # Tentaflake change review
@@ -49,6 +49,9 @@ remain, but reject new failures during cleanup. Keep refusal and container-absen
 evidence independent of cleanup.
 When a VM deliberately declares missing grants, assert the doctor's exact severe
 findings and nonzero exit; healthy subsystem checks must retain that host posture.
+After extracting service scripts into immutable helpers, migrate every inline-script
+assertion: verify the wrapper's selected path, then inspect or execute that helper
+in the build check. Do not add evaluation-time reads of helper derivations.
 
 - Keep the template generic and secret-free; deployment policy belongs in forks.
 - Preserve identified consumers and state. Document intentional API changes and
