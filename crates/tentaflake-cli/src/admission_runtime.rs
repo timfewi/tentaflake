@@ -413,14 +413,13 @@ pub(crate) fn offline_units(
         let observed = admission_systemd::load_unit(&plan.tools.busctl, name)?;
         offline_quota_unit(&observed, plan, path)?;
     }
-    inventory.extend(names);
     // Removed definitions can leave a native mount job whose prepare dependency
     // already completed. Inspect all available mount units, including unloaded
     // files, rather than inferring their absence from the new plan.
-    for name in admission_systemd::list_mount_units(&plan.tools.busctl)? {
-        let observed = admission_systemd::load_unit(&plan.tools.busctl, &name)?;
+    for observed in admission_systemd::observe_mount_units(&plan.tools.busctl, &names)? {
         maintenance_mount(&observed, plan, other)?;
     }
+    inventory.extend(names);
     if inventory.len() > 2048 {
         return Err("maintenance unit inventory limit exceeded".into());
     }

@@ -53,6 +53,10 @@ and no queued job after a successful run instead of requiring a later
 `reset-failed`. After an intentional refusal, allow its known failed state to
 remain, but reject new failures during cleanup. Keep refusal and container-absence
 evidence independent of cleanup.
+Systemd's loaded inventory can include dependency-only `not-found` mounts (the
+VM exposed `home.mount`). Keep required-unit reads strict. Any incidental-mount
+exception needs inert properties and successful installed-file absence checks
+before and after observation; query failures never prove absence.
 When a VM deliberately declares missing grants, assert the doctor's exact severe
 findings and nonzero exit; healthy subsystem checks must retain that host posture.
 After extracting service scripts into immutable helpers, migrate every inline-script
