@@ -1,7 +1,7 @@
 ---
 name: tentaflake-change-review
 description: Review a Tentaflake change for a concrete requirement, proportionate verification, synchronized docs and a complete PR.
-version: 1.1.20
+version: 1.1.21
 ---
 
 # Tentaflake change review
@@ -40,6 +40,12 @@ the older Model result with the later timestamp, hiding an expired prerequisite.
 Exercise delayed later observations and the real combined lifecycle; separate
 Model-only and Research-only cases do not establish their composition. Changes
 to shared live collectors must retain both explicit VM routes.
+When scanning a generated dependency lockfile, realize its source derivation
+first. Evaluating the Dev Containers source path alone produced an absent
+`yarn.lock` on a cold store, preventing the remaining security checks from running.
+Keep Semgrep bounded to two workers and retain strict parsing. Its default worker
+count exhausted local io_uring allocations; the pinned parser also rejected a
+valid arithmetic Bash `for` loop. An equivalent bounded `while` keeps coverage.
 
 For asynchronous HTTP work, bound queued blocking tasks as well as connections.
 A connection deadline can drop its task handle while `spawn_blocking` continues;

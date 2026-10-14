@@ -19,8 +19,11 @@ pub(super) struct Api {
     plan: PathBuf,
     sessions: Mutex<Sessions>,
     work: Arc<Semaphore>,
+    #[cfg(test)]
+    fixture_current: Option<Current>,
 }
 
+#[derive(Clone)]
 struct Current {
     authority: PublishedAuthority,
     policy: String,
@@ -56,6 +59,8 @@ pub(super) fn serve(configuration: &Path, plan: &Path) -> Result<(), String> {
         plan: plan.into(),
         sessions: Mutex::new(sessions),
         work: Arc::new(Semaphore::new(MAX_CONNECTIONS)),
+        #[cfg(test)]
+        fixture_current: None,
     });
     api.current()
         .map_err(|_| "host API requires its installed, published admission plan")?;
@@ -117,6 +122,10 @@ async fn connection(mut stream: UnixStream, api: Arc<Api>, peer_uid: u32) {
 
 impl Api {
     fn current(&self) -> Result<Current, AuthError> {
+        #[cfg(test)]
+        if let Some(current) = &self.fixture_current {
+            return Ok(current.clone());
+        }
         crate::admission_runtime::installed(&self.plan).map_err(|_| AuthError::Unavailable)?;
         let plan =
             crate::admission_host::load_plan(&self.plan).map_err(|_| AuthError::Unavailable)?;
@@ -225,15 +234,16 @@ impl Api {
         }
         let kind = request_kind(&request.method, &request.headers);
         let auth = sessions.authenticate(&request.headers, kind, context, clock)?;
-        require_empty(body)?;
         if request.headers.contains_key("upgrade") {
             return Err(AuthError::Unsupported);
         }
         if path == "/api/v1/session" {
             if request.method == Method::GET {
+                require_empty(body)?;
                 return self.session_reply(&auth, &current);
             }
             if request.method == Method::DELETE {
+                require_empty(body)?;
                 sessions.logout(&auth)?;
                 let mut reply = response(StatusCode::NO_CONTENT, Bytes::new());
                 reply.headers_mut().insert(
@@ -244,6 +254,7 @@ impl Api {
             }
         }
         if path == "/api/v1/capabilities" && request.method == Method::GET {
+            require_empty(body)?;
             return Ok(json_reply(
                 StatusCode::OK,
                 super::capabilities::project(&current.host_policy, current.revisions())?,
@@ -336,6 +347,7 @@ pub(super) fn fixture() -> Arc<Api> {
             .unwrap(),
         ),
         work: Arc::new(Semaphore::new(1)),
+        fixture_current: None,
     })
 }
 
@@ -355,6 +367,65 @@ pub(super) async fn exchange(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn authenticated_unsupported_json_is_not_a_bodyless_route() {
+        let mut api = fixture();
+        let api_mut = Arc::get_mut(&mut api).unwrap();
+        let recorded: Value = serde_json::from_str(include_str!(
+            "../../../tentaflake-admission/tests/recorded-start.json"
+        ))
+        .unwrap();
+        let current = Current {
+            authority: PublishedAuthority {
+                generation: "authority-fixture".into(),
+                revision: format!("sha256:{}", "1".repeat(64)),
+                manifest_path: "/nix/store/00000000000000000000000000000000-fixture".into(),
+            },
+            policy: "policy-fixture".into(),
+            binding: "binding-fixture".into(),
+            epoch: "epoch-fixture".into(),
+            host_policy: serde_json::from_value(recorded["snapshot"]["policy"].clone()).unwrap(),
+        };
+        let login = api_mut
+            .sessions
+            .get_mut()
+            .unwrap()
+            .fixture_login(current.context(&api_mut.config));
+        api_mut.fixture_current = Some(current);
+        let cookie = login.set_cookie.split(';').next().unwrap();
+        let unknown_cookie = format!("__Host-tentaflake-session={}", "0".repeat(64));
+        let fixtures: Value =
+            serde_json::from_str(include_str!("../../../../api/v1/fixtures.json")).unwrap();
+        let create = fixtures["exchanges"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|entry| entry["name"] == "createEnvironment")
+            .unwrap();
+        let body = serde_json::to_string(&create["request"]["body"]).unwrap();
+        tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap().block_on(async {
+            for (method, path, payload, csrf, credential, status) in [
+                ("POST", "/api/v1/environments", body.as_str(), login.auth.csrf_token.as_str(), cookie, 501),
+                // Unsupported handlers must not parse or dispatch an opaque body.
+                ("POST", "/api/v1/environments", "not JSON", login.auth.csrf_token.as_str(), cookie, 501),
+                ("POST", "/api/v1/environments", body.as_str(), "wrong", cookie, 403),
+                ("POST", "/api/v1/environments", body.as_str(), login.auth.csrf_token.as_str(), unknown_cookie.as_str(), 401),
+                ("GET", "/api/v1/session", "{}", login.auth.csrf_token.as_str(), cookie, 400),
+                ("DELETE", "/api/v1/session", "{}", login.auth.csrf_token.as_str(), cookie, 400),
+                ("GET", "/api/v1/capabilities", "{}", login.auth.csrf_token.as_str(), cookie, 400),
+                ("GET", "/api/meta", "{}", login.auth.csrf_token.as_str(), cookie, 400),
+                ("GET", "/api/v1/session", "", login.auth.csrf_token.as_str(), cookie, 200),
+            ] {
+                let request = format!("{method} {path} HTTP/1.1\r\nHost: host.example.invalid\r\nOrigin: https://host.example.invalid\r\nCookie: {credential}\r\nX-Tentaflake-CSRF: {csrf}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{payload}", payload.len());
+                let reply = crate::api::server::tests::exchange(api.clone(), request.into_bytes()).await;
+                assert!(reply.starts_with(&format!("HTTP/1.1 {status}")), "{method} {path}: expected HTTP {status}, received {}", reply.lines().next().unwrap_or("missing status"));
+                assert!(reply.contains("cache-control: no-store\r\n"));
+                assert!(!reply.contains(cookie));
+                assert!(!reply.contains(payload) || payload.is_empty() || status == 200);
+            }
+        });
+    }
 
     #[test]
     fn cancelled_unix_connection_keeps_blocking_work_charged() {

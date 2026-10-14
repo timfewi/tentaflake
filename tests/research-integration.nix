@@ -817,14 +817,16 @@ pkgs.testers.runNixOSTest {
         assert observed["Config"]["User"] == "10000:10000"
         host = observed["HostConfig"]
         assert host["Runtime"] == "runsc"
-        assert host["NetworkMode"] == (model["network"]["name"] if model else "none")
         if model:
             network = json.loads(machine.succeed(docker("network", "inspect", model["network"]["name"])))[0]
+            assert host["NetworkMode"] == network["Id"]
             assert network["Internal"] is True and set(network["Containers"]) == {cid}
             assert network["Options"]["com.docker.network.bridge.name"] == model["network"]["bridge"]
             assert network["IPAM"]["Config"] == [{"Subnet": model["network"]["subnet"], "Gateway": model["network"]["gateway"]}]
             assert set(observed["NetworkSettings"]["Networks"]) == {model["network"]["name"]}
             assert observed["NetworkSettings"]["Networks"][model["network"]["name"]]["NetworkID"] == network["Id"]
+        else:
+            assert host["NetworkMode"] == "none"
         assert host["ReadonlyRootfs"] and not host["Privileged"] and not host["AutoRemove"]
         assert set(host["CapDrop"]) == {"ALL"} and not host["CapAdd"]
         security = {option.replace(":", "=", 1) for option in host["SecurityOpt"]}

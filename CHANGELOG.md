@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 ### Fixed
+- Return documented `501` refusals for authenticated unsupported API mutations
+  with request bodies, retaining authentication and implemented bodyless-route checks.
+- Update the compatible Quinn protocol and Dev Containers shell-quote dependency
+  pins for current security advisories. Realize patched source before scanning
+  its generated lockfile so the security gate also works from a cold store.
 - Preserve authenticated Model/Research observation times through combined
   collection; later probes or source checks cannot renew an earlier prerequisite.
 - Verify immutable store mount sources through protected descriptors across OCI

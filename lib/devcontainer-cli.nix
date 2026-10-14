@@ -17,7 +17,8 @@ in
 
 # The dependency patch pins basic-ftp 6.2.1 through Yarn resolutions: get-uri
 # still requests 5.x, whose TLS identity handling is affected by
-# GHSA-c475-qrg2-pj4r. Keep the patched lock and offline-cache hash together.
+# GHSA-c475-qrg2-pj4r. It also updates shell-quote within its existing 1.x ranges
+# for GHSA-pqg4-j6r4-53mv. Keep the patched lock and offline-cache hash together.
 # Keep the contributor E2E runner independently updatable while nixpkgs catches
 # up. Both the release source and its complete Yarn dependency cache are pinned
 # by content hash, so this remains reproducible and network-free at build time.
@@ -28,7 +29,7 @@ pkgs.devcontainer.overrideAttrs (
 
     yarnOfflineCache = pkgs.fetchYarnDeps {
       yarnLock = "${finalAttrs.src}/yarn.lock";
-      hash = "sha256-T7T7j4O8rlhEyrCN50a+/PSpa9Q8bUz6nzh6rqw0aYg=";
+      hash = "sha256-aWk+yoy7gBwR6q6nvJB56VZ7xShTOkF4H4MA4qYkZkc=";
     };
 
     # proxy-agent 6.5.0 still constrains proxy-from-env to the CommonJS-only 1.x
