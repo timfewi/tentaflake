@@ -1,7 +1,7 @@
 ---
 name: tentaflake-change-review
 description: Review a Tentaflake change for a concrete requirement, proportionate verification, synchronized docs and a complete PR.
-version: 1.1.10
+version: 1.1.11
 ---
 
 # Tentaflake change review
@@ -40,6 +40,8 @@ host Cargo tests passed while the package tests failed. Anchor private fixtures
 at checked directory descriptors, retain descendant ownership/mode checks, and
 independently assert that the public absolute-path API still refuses foreign
 root ownership. Never relax production ownership policy to fit a sandbox.
+Use a process-wide counter for concurrent fixture names; PID plus a nanosecond
+clock reading alone collided in parallel CI diagnostics tests.
 
 VM lifecycle fixtures must inspect container readiness after a unit becomes
 active. A successful `systemctl stop` may unload the unit; assert inactive state

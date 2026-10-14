@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 ### Fixed
+- Give parallel CLI test fixtures distinct directory names even when clock
+  readings coincide.
 - Verify expected missing-ledger refusals before cleaning up quota owners in
   both initial OCI admission VM fixtures.
 - Detach only the read-only shared Nix store during admission VM shutdown,
