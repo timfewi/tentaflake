@@ -150,14 +150,15 @@ full remote runtime gate after the predecessor PRs; it must pass before merge.
 External capability collectors and automatic Unknown recovery remain unfinished.
 
 The native Codex reference now pins the official Linux x86_64 `0.162.1` full
-package. This independent branch inherits the verified artifact hash, package
-layout/content checks, image/descriptor builds, seven wrapper regressions and
-36 routing tests from the source integration. Its isolated native smoke passed
+package. Artifact acquisition and package layout/content checks pass. This
+branch's `just fast` passes 293 Rust tests, seven wrapper regressions, 36 routing
+tests and the declared static/helper gates. Its image/descriptor gate returns the
+same immutable output used for the native smoke, which passed
 WebSocket/Unix initialization, effective model/provider config and strict
 unknown-field refusal without replacing the config file. The fixture exposed
 only the exact image closure and scratch directories, with test credentials and
-no external network; optional plugin sync attempts were denied. This branch's
-fast gate remains pending. Live Model admission remains a separate feature. The
+no external network; optional plugin sync attempts were denied.
+Live Model admission remains a separate feature. The
 operator's Generic definition must request its model grant; the image keeps
 `/state/.codex` and receives the virtual token through the environment. Actual
 admitted capsule, tool/session and provider acceptance remain pending.
