@@ -1,7 +1,7 @@
 ---
 name: tentaflake-repo-guidance
 description: Locate the owning source, guide and checks before changing Tentaflake modules, adapters, CLI or installer.
-version: 2.6.15
+version: 2.6.16
 ---
 
 # Tentaflake repository guidance
@@ -21,7 +21,7 @@ relevant source and guide. Avoid loading unrelated references.
 | LLM broker and streaming | `modules/broker.nix`, `crates/tentaflake-broker/` | [Broker](../../../docs/12-brokered-egress.md) |
 | Research projection | `modules/research.nix`, `lib/researchClient.nix`, adapter hooks | [Research](../../../docs/16-research.md) |
 | Host API contract | `api/v1/openapi.json`, fixtures, `scripts/test_api_contract.py` | [Host API](../../../docs/19-host-api.md) |
-| Private API service and client | `crates/tentaflake-cli/src/api/`, `modules/api.nix` | [Host API](../../../docs/19-host-api.md) |
+| Private API transport, authority owner and client | CLI `api/server.rs`, `api/control.rs`, `api/owner.rs`, `api/client.rs`, `modules/api.nix` | [Host API](../../../docs/19-host-api.md) |
 | Dynamic environment ledger transactions | `crates/tentaflake-admission/src/ledger/api.rs` | [Host API](../../../docs/19-host-api.md#private-ledger-foundation) |
 | Creation supervision, recovery, templates and authority retention | CLI `admission_creation.rs`, `admission_creation_recovery.rs`, `admission_template.rs`, `admission_retention.rs`, `modules/admission.nix` | [Host API](../../../docs/19-host-api.md), [Quota](../../../docs/14-workspace-quota.md) |
 | Stopped creation/reconciliation VM acceptance | `tests/creation-admission.nix`, `tests/fixtures/creation-*`, CLI test-only `admission_creation/vm_fixture.rs` | [Builds](../../../docs/17-builds.md) |

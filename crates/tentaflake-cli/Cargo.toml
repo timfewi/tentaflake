@@ -16,7 +16,7 @@ reqwest = { version = "=0.12.28", default-features = false, features = ["blockin
 serde = { version = "=1.0.229", features = ["derive"] }
 serde_json = "1.0"
 tentaflake-admission = { path = "../tentaflake-admission" }
-tokio = { version = "=1.53.2", features = ["rt", "net", "time", "sync"] }
+tokio = { version = "=1.53.2", features = ["rt", "net", "time", "sync", "io-util"] }
 
 [dev-dependencies]
 rustls = { version = "=0.23.45", default-features = false, features = ["ring", "std", "tls12"] }

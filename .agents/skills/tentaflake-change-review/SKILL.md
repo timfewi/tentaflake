@@ -1,7 +1,7 @@
 ---
 name: tentaflake-change-review
 description: Review a Tentaflake change for a concrete requirement, proportionate verification, synchronized docs and a complete PR.
-version: 1.1.14
+version: 1.1.15
 ---
 
 # Tentaflake change review
@@ -38,6 +38,10 @@ For asynchronous HTTP work, bound queued blocking tasks as well as connections.
 A connection deadline can drop its task handle while `spawn_blocking` continues;
 hold the work permit inside that closure and test cancellation with real requests.
 Thread-count limits alone leave the pending task queue unbounded.
+Session-revocation fixtures must prove the saved cookie still succeeds immediately
+before restart or process death. The original HTTP fixture saved an already
+logged-out cookie, so its restart refusal could not detect missing revocation.
+Keep logout coverage separate and preserve durable token consumption on restart.
 
 For filesystem ownership tests, obtain the focused Nix package test result as
 well as Cargo evidence. A real sandbox mapped `/` to an unowned overflow UID;

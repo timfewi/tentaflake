@@ -33,14 +33,14 @@ Current integration work:
 
 - **OCI/storage/publication, PR #166:** complete effective specifications, exact
   supervisor/daemon/CID ownership, durable Unknown claims and explicit stopped
-  bootstrap/publication. Run `38536113968` passed storage/publication and normal
-  shutdown in 5 seconds, then failed OCI local image acquisition because Docker's
-  default containerd store reports manifest/index identities instead of the
-  required config digest. Commit `c9442ef` explicitly requires the classic image
-  store and verifies its live configuration without weakening exact identity.
-  Its 226 package tests, focused Rust/Nix checks, independent source review and
-  automatic CI pass; replacement full run `38542786276` is pending.
-  OCI/crash and Research VM acceptance remain outstanding.
+  bootstrap/publication. Commit `c9442ef` requires Docker's classic image store
+  and verifies its live configuration without weakening exact config identity.
+  Run `38542786276` passes acquisition, normal OCI start/stop, resource release,
+  create-conflict refusal, storage/publication and normal shutdown. Its crash
+  test fails after Docker restart and supervisor SIGKILL: systemd skips ExecStop,
+  leaving the receipt Active with its CID and full reservation retained. An
+  authenticated ExecStopPost completion path is being prepared; the existing
+  Unknown assertion remains required. Research VM acceptance also remains pending.
 - **Model/Research integration:** PR #167 and the upstream Research readiness
   work still need their relevant runtime gates and final public pin integration.
   Exact requested capabilities and live evidence remain prerequisites; neither
@@ -104,10 +104,23 @@ compilation pass; actual daemon/GC registration and VM acceptance remain
 unverified. HTTP creation still returns `501`.
 New code reads old v3 files; older binaries reject the new field once written.
 
-Resume here: obtain actual supervised creation/recovery VM evidence, including
-partial outcomes and historical retries.
-Only then connect HTTP planning/queueing and exact grants through a bounded
-host-namespace owner; the isolated HTTP process cannot run the host collectors. Keep
+The stacked `feat/host-control` work separates the HTTP process into a dedicated
+unprivileged account and a root Unix owner for sessions, credentials and the
+ledger. The closed channel preserves duplicate headers and validates fixed socket
+ownership and peer identities; interrupted requests retain bounded owner work.
+Only the owner retains `CAP_SYS_PTRACE`, required to inspect PID 1's namespace.
+Socket and owner lifetimes follow frontend stop/failure. `just fast` passes
+**454 Rust tests** plus static/helper checks; 36 focused API tests and Clippy pass.
+The actual offline CLI Nix package passes **349 tests**, with four intentional
+helpers ignored. Focused API policy assertions pass; the no-build VM projection
+and rendered HTTP helper compile. Actual socket activation, credential namespace,
+active-cookie revocation and owner-failure acceptance remain outstanding. HTTP
+resource operations remain `501`.
+
+Resume here: obtain actual owner and supervised creation/recovery VM evidence,
+including partial outcomes and historical retries. Only then connect HTTP
+planning/queueing and exact grants through the bounded host-namespace owner;
+the isolated HTTP process cannot run the host collectors. Keep
 creation within installed policy without rebuilding the host. Follow with
 workspace/files/streams and the matching
 CLI, then actual client and coding-agent acceptance. Preserve private v3 ledger

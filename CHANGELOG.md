@@ -50,6 +50,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   budget reservation or upstream dispatch, omit session IDs from audit logs,
   and keep arbitrary client headers excluded. Clients still own ID propagation.
 ### Added
+- Separate unprivileged HTTP framing from the root authentication/state owner
+  over a bounded private Unix channel. Credentials and ledger access remain with
+  the owner; stopped frontends revoke sessions and cannot trigger automatic replay.
 - Add private ledger transactions for stopped dynamic environments, exact action
   grants and scoped operation recovery, with atomic workspace/state charges and
   once-only supervisor claims. Explicit operator abort retains stopped images and

@@ -25,9 +25,17 @@ pin rather than an independent Python installation.
 
 ## Experimental authentication service
 
-`tentaflake.api.enable` installs `tentaflake-api.service`, running
-`tentaflake api serve <generated-store-config> <generated-store-plan>`. It requires
-an explicitly bootstrapped admission ledger and its installed, published plan.
+`tentaflake.api.enable` installs an unprivileged `tentaflake-api.service`, running
+`tentaflake api serve <generated-store-config>`. It forwards bounded requests over
+a protected local socket to `tentaflake-api-owner.service`, whose
+`tentaflake api owner <generated-store-config> <generated-store-plan>` invocation
+requires systemd socket activation and the host's root mount namespace.
+The owner retains only `CAP_SYS_PTRACE` to inspect `/proc/1/ns/mnt`; Linux applies
+ptrace access checks to that namespace handle even for UID 0. The HTTP process
+has no capabilities.
+Only that owner holds sessions, reads credentials and accesses the admission
+ledger. The HTTP process has no direct credential or ledger access. The owner
+requires an explicitly bootstrapped ledger and its installed, published plan.
 The plan binds the non-secret API configuration; stale installation or publication
 refuses authenticated requests. Pending maintenance still permits authentication
 for recovery, but grants no resource mutation authority.
@@ -41,7 +49,7 @@ service supplies no TLS endpoint, CORS policy or UI dependency.
 
 `operatorTokenFile` and `cliBearerFile` are optional runtime source-path **strings**;
 at least one is required. Systemd supplies their contents as protected
-`LoadCredential` files. Never use Nix path values or inline secret contents.
+`LoadCredential` files in the owner service. Never use Nix path values or inline secret contents.
 Configure distinct, cryptographically random credentials of 32–4096 printable
 non-whitespace ASCII bytes. A single final newline is accepted. The loader checks
 root ownership, private permissions, a single regular-file link and protected,
@@ -65,7 +73,10 @@ Public OIDC negotiation routes also return `unsupported`; no provider or redirec
 flow is enabled.
 
 Sessions expire after 15 minutes idle or eight hours absolute and are revoked by
-service restart or a changed authority/configuration binding. Up to 256 sessions
+HTTP service restart/failure, owner restart or a changed authority/configuration
+binding. The owner and its activation socket stop with the HTTP service, including
+unexpected process exit. Once that dependent stop completes, no leftover socket
+can reactivate the frontend. Up to 256 sessions
 and ten login attempts per minute are permitted. Session and CSRF identifiers use
 32 random bytes each. Before issuing a session, the existing admission ledger
 durably records a domain-separated credential fingerprint. Reusing that token,
@@ -77,11 +88,17 @@ Older binaries that reject the new private ledger field cannot safely be used
 to bypass this history during rollback.
 
 HTTP headers, request bodies, connection lifetimes and active work are bounded.
-An aborted connection keeps its blocking work charged until that work finishes.
+The private channel authenticates both peers, preserves header duplicates and
+accepts one closed, bounded request per connection. It accepts no caller-selected
+host command, plan, principal or authority. Owner failure returns `unavailable`
+without local authentication or replay. An aborted connection keeps its owner
+work charged until that work finishes.
 No request-body, credential or authenticated-resource access log is emitted.
 The VM fixture generates its own guest-only credentials and tests real HTTP
-requests and restart refusal; successful execution of that fixture is a separate
-acceptance gate. It does not prove the consumer's HTTPS relay configuration.
+requests, actual UID/filesystem boundaries, active-session revocation after restart
+and process death, and owner unavailability. Successful execution of that fixture
+is a separate acceptance gate, including the actual owner mount namespace and
+systemd lifetime coupling. It does not prove the consumer's HTTPS relay configuration.
 
 ## Private ledger foundation
 

@@ -122,38 +122,92 @@ in
         message = "tentaflake.api.origin exceeds the API origin length limit.";
       }
     ];
-    systemd.services.tentaflake-api = lib.mkIf cfg.enable {
-      description = "Tentaflake private host API authentication";
-      wantedBy = [ "multi-user.target" ];
-      after = [ "network.target" ];
-      serviceConfig = {
-        Type = "simple";
-        ExecStart = lib.escapeShellArgs [
-          (lib.getExe cli)
-          "api"
-          "serve"
-          (toString cfg.configuration)
-          (toString config.tentaflake.admissionManifest)
-        ];
-        User = "root";
-        Group = "root";
-        UMask = "0077";
-        LoadCredential =
-          lib.optional (cfg.operatorTokenFile != null) "operator-token:${cfg.operatorTokenFile}"
-          ++ lib.optional (cfg.cliBearerFile != null) "cli-bearer:${cfg.cliBearerFile}";
-        ProtectSystem = "strict";
-        ProtectHome = true;
-        PrivateTmp = true;
-        NoNewPrivileges = true;
-        CapabilityBoundingSet = "";
-        AmbientCapabilities = "";
-        RestrictAddressFamilies = [
-          "AF_INET"
-          "AF_INET6"
-        ];
-        # Bootstrap owns this directory. A missing ledger must fail rather than
-        # creating state implicitly at service startup.
-        ReadWritePaths = [ "/var/lib/tentaflake-admission" ];
+    users.groups.tentaflake-api = lib.mkIf cfg.enable { };
+    users.users.tentaflake-api = lib.mkIf cfg.enable {
+      isSystemUser = true;
+      group = "tentaflake-api";
+    };
+    systemd = {
+      sockets.tentaflake-api-owner = lib.mkIf cfg.enable {
+        description = "Tentaflake private host API owner channel";
+        bindsTo = [ "tentaflake-api.service" ];
+        partOf = [ "tentaflake-api.service" ];
+        listenStreams = [ "/run/tentaflake-api-owner.sock" ];
+        socketConfig = {
+          SocketUser = "root";
+          SocketGroup = "tentaflake-api";
+          SocketMode = "0660";
+          RemoveOnStop = true;
+        };
+      };
+      services = {
+        tentaflake-api = lib.mkIf cfg.enable {
+          description = "Tentaflake private host API HTTP transport";
+          wantedBy = [ "multi-user.target" ];
+          requires = [ "tentaflake-api-owner.socket" ];
+          after = [
+            "network.target"
+            "tentaflake-api-owner.socket"
+          ];
+          serviceConfig = {
+            Type = "simple";
+            ExecStart = lib.escapeShellArgs [
+              (lib.getExe cli)
+              "api"
+              "serve"
+              (toString cfg.configuration)
+            ];
+            User = "tentaflake-api";
+            Group = "tentaflake-api";
+            UMask = "0077";
+            ProtectSystem = "strict";
+            ProtectHome = true;
+            PrivateTmp = true;
+            NoNewPrivileges = true;
+            CapabilityBoundingSet = "";
+            AmbientCapabilities = "";
+            RestrictAddressFamilies = [
+              "AF_INET"
+              "AF_INET6"
+              "AF_UNIX"
+            ];
+            InaccessiblePaths = [
+              "-/var/lib/tentaflake-admission"
+              "-/var/lib/tentaflake-admission.lock"
+              "-/run/credentials/tentaflake-api-owner.service"
+            ];
+          };
+        };
+        tentaflake-api-owner = lib.mkIf cfg.enable {
+          description = "Tentaflake private host API authority and sessions";
+          bindsTo = [ "tentaflake-api.service" ];
+          after = [ "tentaflake-api.service" ];
+          partOf = [ "tentaflake-api.service" ];
+          serviceConfig = {
+            Type = "simple";
+            ExecStart = lib.escapeShellArgs [
+              (lib.getExe cli)
+              "api"
+              "owner"
+              (toString cfg.configuration)
+              (toString config.tentaflake.admissionManifest)
+            ];
+            User = "root";
+            Group = "root";
+            UMask = "0077";
+            LoadCredential =
+              lib.optional (cfg.operatorTokenFile != null) "operator-token:${cfg.operatorTokenFile}"
+              ++ lib.optional (cfg.cliBearerFile != null) "cli-bearer:${cfg.cliBearerFile}";
+            NoNewPrivileges = true;
+            # /proc/1/ns/mnt is guarded by ptrace access checks even for UID 0.
+            # Keep only the capability required to verify the host namespace.
+            CapabilityBoundingSet = "CAP_SYS_PTRACE";
+            AmbientCapabilities = "";
+            RestrictAddressFamilies = [ "AF_UNIX" ];
+            # The owner verifies PID 1's mount namespace itself. Do not introduce
+            # implicit filesystem namespaces or create the ledger on service start.
+          };
+        };
       };
     };
   };

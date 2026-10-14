@@ -9,8 +9,11 @@ let
     import json
     import os
     import pathlib
+    import pwd
     import re
     import secrets
+    import signal
+    import stat
     import subprocess
     import sys
     import time
@@ -33,7 +36,7 @@ let
         if payload is not None:
             data = json.dumps(payload).encode()
             headers["Content-Type"] = "application/json"
-        connection = http.client.HTTPConnection("127.0.0.1", 18181, timeout=5)
+        connection = http.client.HTTPConnection("127.0.0.1", 18181, timeout=25)
         try:
             connection.request(method, path, body=data, headers=headers)
             response = connection.getresponse()
@@ -70,10 +73,56 @@ let
                 time.sleep(0.1)
 
     def no_logged_credentials():
-        output = subprocess.run(["journalctl", "--no-pager", "-o", "cat", "-n", "200", "-u", "tentaflake-api.service"],
+        output = subprocess.run(["journalctl", "--no-pager", "-o", "cat", "-n", "200",
+                                 "-u", "tentaflake-api.service", "-u", "tentaflake-api-owner.service"],
                                 check=True, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=5).stdout
         assert OPERATOR.read_text().encode() not in output, "operator credential in journal"
         assert BEARER.read_text().encode() not in output, "bearer credential in journal"
+
+    def main_pid(unit):
+        value = subprocess.run(["systemctl", "show", "--value", "--property=MainPID", unit],
+                               check=True, capture_output=True, text=True, timeout=5).stdout.strip()
+        assert value.isdecimal() and int(value) > 0, "service has no main process"
+        return int(value)
+
+    def boundary():
+        wait_ready()
+        account = pwd.getpwnam("tentaflake-api")
+        assert account.pw_uid != 0 and account.pw_gid != 0, "frontend account is privileged"
+        frontend = main_pid("tentaflake-api.service")
+        owner = main_pid("tentaflake-api-owner.service")
+        for pid, uid, capabilities in [(frontend, account.pw_uid, 0), (owner, 0, 1 << 19)]:
+            fields = dict(line.split(":", 1) for line in pathlib.Path(f"/proc/{pid}/status").read_text().splitlines())
+            assert set(fields["Uid"].split()) == {str(uid)}, "service uid differs"
+            assert int(fields["CapEff"].strip(), 16) == capabilities, "unexpected effective capabilities"
+        host_namespace = os.stat("/proc/1/ns/mnt")
+        owner_namespace = os.stat(f"/proc/{owner}/ns/mnt")
+        assert (owner_namespace.st_dev, owner_namespace.st_ino) == (host_namespace.st_dev, host_namespace.st_ino), "owner left host namespace"
+        environment = pathlib.Path(f"/proc/{frontend}/environ").read_bytes().split(b"\0")
+        assert not any(value.startswith(b"CREDENTIALS_DIRECTORY=") for value in environment), "frontend received credentials"
+        channel = os.stat("/run/tentaflake-api-owner.sock")
+        assert stat.S_ISSOCK(channel.st_mode) and stat.S_IMODE(channel.st_mode) == 0o660, "owner socket protection"
+        assert (channel.st_uid, channel.st_gid) == (0, account.pw_gid), "owner socket ownership"
+        denied_paths = [str(LEDGER), "/var/lib/tentaflake-admission.lock", str(OPERATOR), str(BEARER),
+                        "/run/credentials/tentaflake-api-owner.service/operator-token",
+                        "/run/credentials/tentaflake-api-owner.service/cli-bearer"]
+        code = """import os, sys
+    for path in sys.argv[1:]:
+        try:
+            descriptor = os.open(path, os.O_RDONLY | os.O_NONBLOCK)
+        except PermissionError:
+            continue
+        os.close(descriptor)
+        raise AssertionError('frontend accessed a protected file')
+    """
+        subprocess.run(["nsenter", f"--mount=/proc/{frontend}/ns/mnt", "setpriv",
+                        "--reuid", str(account.pw_uid), "--regid", str(account.pw_gid), "--clear-groups",
+                        "python3", "-c", code, *denied_paths], check=True, timeout=10)
+
+    def live_cookie():
+        saved = json.loads(STATE.read_text())
+        request("GET", "/api/v1/session", 200, extra={"Cookie": saved["cookie"]})
+        assert ledger() == saved["ledger"], "session read mutated ledger"
 
     os.umask(0o077)
     phase = sys.argv[1]
@@ -81,6 +130,51 @@ let
         save(OPERATOR, secrets.token_hex(32))
         save(BEARER, secrets.token_hex(32))
         assert OPERATOR.read_text() != BEARER.read_text(), "independent fixture credentials"
+    elif phase == "rotate":
+        OPERATOR.write_text(secrets.token_hex(32))
+    elif phase == "boundary":
+        boundary()
+    elif phase == "active":
+        live_cookie()
+    elif phase == "live-login":
+        wait_ready()
+        before = ledger()
+        _, cookie = request("POST", "/api/v1/session", 200,
+                            {"method": "operator-token", "secret": OPERATOR.read_text()})
+        assert cookie is not None, "active session cookie missing"
+        cookie = cookie.split("; ", 1)[0]
+        assert re.fullmatch(r"__Host-tentaflake-session=[0-9a-f]{64}", cookie), "active cookie shape"
+        after = ledger()
+        fingerprint = hashlib.sha256(b"tentaflake/operator-login/v1\0" + OPERATOR.read_bytes()).hexdigest()
+        assert after == {**before, "revision": before["revision"] + 1,
+                         "operatorLogins": before["operatorLogins"] + [
+                             {"fingerprint": fingerprint, "consumedRevision": before["revision"] + 1}]}, "fresh login changed more than consumption"
+        STATE.write_text(json.dumps({"ledger": after, "cookie": cookie}))
+        live_cookie()
+    elif phase == "unavailable":
+        wait_ready()
+        before = ledger()
+        owner = main_pid("tentaflake-api-owner.service")
+        descriptor = os.pidfd_open(owner)
+        try:
+            assert main_pid("tentaflake-api-owner.service") == owner, "owner changed before pause"
+            signal.pidfd_send_signal(descriptor, signal.SIGSTOP)
+            deadline = time.monotonic() + 5
+            while pathlib.Path(f"/proc/{owner}/stat").read_text().rsplit(")", 1)[1].split()[0] != "T":
+                assert time.monotonic() < deadline, "owner did not stop"
+                time.sleep(0.02)
+            request("GET", "/api/meta", 503)
+            request("GET", "/api/v1/session", 503,
+                    extra={"Authorization": "Bearer " + BEARER.read_text()})
+            assert ledger() == before, "unavailable owner mutated ledger"
+        finally:
+            try:
+                signal.pidfd_send_signal(descriptor, signal.SIGCONT)
+            finally:
+                os.close(descriptor)
+        wait_ready()
+        assert ledger() == before, "late read mutated ledger"
+        no_logged_credentials()
     elif phase == "login":
         before = ledger()
         meta = wait_ready()
@@ -571,17 +665,49 @@ in
             storage.succeed("systemctl start tentaflake-api.service")
             storage.wait_for_unit("tentaflake-api.service")
             storage.succeed(shlex.join(["python3", api_probe, "login"]))
+            storage.succeed(shlex.join(["python3", api_probe, "boundary"]))
             authenticated = storage_snapshot()
             assert authenticated["revision"] == before_auth["revision"] + 1
             assert authenticated["storage"] == before_auth["storage"]
             assert authenticated["receipts"] == before_auth["receipts"]
-            storage.succeed("systemctl restart tentaflake-api.service")
-            storage.wait_for_unit("tentaflake-api.service")
-            storage.succeed(shlex.join(["python3", api_probe, "restart"]))
+            # The earlier cookie was explicitly logged out. Rotate only the
+            # guest credential and reload its owner to establish a fresh active
+            # session before each independent process-lifetime revocation.
+            for action in ("restart", "kill"):
+                storage.succeed(shlex.join(["python3", api_probe, "rotate"]))
+                storage.succeed("systemctl restart tentaflake-api.service")
+                storage.wait_for_unit("tentaflake-api.service")
+                storage.succeed(shlex.join(["python3", api_probe, "live-login"]))
+                active = storage_snapshot()
+                assert active["revision"] == authenticated["revision"] + 1
+                assert active["storage"] == authenticated["storage"]
+                assert active["receipts"] == authenticated["receipts"]
+                owner_invocation = storage.succeed("systemctl show --value --property=InvocationID tentaflake-api-owner.service").strip()
+                assert len(owner_invocation) == 32
+                storage.succeed(shlex.join(["python3", api_probe, "active"]))
+                if action == "kill":
+                    storage.succeed("systemctl kill --kill-whom=main --signal=KILL tentaflake-api.service")
+                    storage.wait_until_succeeds('test "$(systemctl show --value --property=ActiveState tentaflake-api.service)" = failed', timeout=20)
+                    storage.wait_until_succeeds('test "$(systemctl show --value --property=ActiveState tentaflake-api-owner.service)" = inactive', timeout=20)
+                    storage.wait_until_succeeds('test "$(systemctl show --value --property=ActiveState tentaflake-api-owner.socket)" = inactive', timeout=20)
+                    storage.succeed("test ! -e /run/tentaflake-api-owner.sock")
+                    assert storage_snapshot() == active
+                    storage.succeed("systemctl start tentaflake-api.service")
+                else:
+                    storage.succeed("systemctl restart tentaflake-api.service")
+                storage.wait_for_unit("tentaflake-api.service")
+                storage.succeed(shlex.join(["python3", api_probe, "restart"]))
+                assert storage.succeed("systemctl show --value --property=InvocationID tentaflake-api-owner.service").strip() != owner_invocation
+                assert storage_snapshot() == active
+                authenticated = active
+            storage.succeed(shlex.join(["python3", api_probe, "boundary"]))
+            storage.succeed(shlex.join(["python3", api_probe, "unavailable"]))
             assert storage_snapshot() == authenticated
         finally:
             storage.succeed("timeout 30s systemctl stop tentaflake-api.service")
-            assert storage.succeed("systemctl show --value --property=ActiveState tentaflake-api.service").strip() == "inactive"
+            for unit in ("tentaflake-api.service", "tentaflake-api-owner.service", "tentaflake-api-owner.socket"):
+                assert storage.succeed("systemctl show --value --property=ActiveState " + shlex.quote(unit)).strip() == "inactive"
+            storage.succeed("test ! -e /run/tentaflake-api-owner.sock")
 
     with subtest("guarded storage creates exact host mounts and retains charges on stop"):
         storage.fail(storage_command("volume-start", "workspace:generic-storage"))

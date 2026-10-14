@@ -184,10 +184,15 @@ are already published or require access to another repository for public checks.
   host configuration and inventory.
 - `crates/tentaflake-cli/src/api` and `modules/api.nix` own the optional private
   HTTP service. Its configuration is bound into the published admission plan;
-  credentials arrive only through runtime systemd credentials. Authentication
-  never grants resource authority. Durable consumed-token fingerprints share
-  the admission ledger and survive restart/publication. Keep HTTP work charged
-  until blocking tasks finish, including after connection cancellation. Discovery
+  the dedicated unprivileged HTTP process forwards bounded requests to one
+  root Unix owner. Only the owner receives runtime systemd credentials and opens
+  the ledger. Preserve exact peer identities, header duplicates and the owner/
+  socket lifetime coupling that revokes sessions when the HTTP process stops.
+  Require the actual host mount namespace; do not infer it from module options.
+  Authentication never grants resource authority. Durable consumed-token
+  fingerprints share the admission ledger and survive restart/publication. Keep
+  HTTP work charged until owner blocking tasks finish, including after connection
+  cancellation. Discovery
   and sessions are implemented; capacity reporting exposes published ceilings,
   never free resources, grants or live readiness. Remaining resource operations
   stay unsupported.
