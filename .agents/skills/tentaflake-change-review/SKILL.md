@@ -1,7 +1,7 @@
 ---
 name: tentaflake-change-review
 description: Review a Tentaflake change for a concrete requirement, proportionate verification, synchronized docs and a complete PR.
-version: 1.1.2
+version: 1.1.3
 ---
 
 # Tentaflake change review
@@ -40,6 +40,13 @@ host Cargo tests passed while the package tests failed. Anchor private fixtures
 at checked directory descriptors, retain descendant ownership/mode checks, and
 independently assert that the public absolute-path API still refuses foreign
 root ownership. Never relax production ownership policy to fit a sandbox.
+
+VM lifecycle fixtures must inspect container readiness after a unit becomes
+active. A successful `systemctl stop` may unload the unit; assert inactive state
+and no queued job instead of requiring a later `reset-failed` on that unloaded
+unit. Keep the refusal and container-absence evidence independent of cleanup.
+When a VM deliberately declares missing grants, assert the doctor's exact severe
+findings and nonzero exit; healthy subsystem checks must retain that host posture.
 
 - Keep the template generic and secret-free; deployment policy belongs in forks.
 - Preserve identified consumers and state. Document intentional API changes and
