@@ -252,10 +252,10 @@ The standalone fast gate passed 322 Rust tests and static/helper checks. The
 actual offline Worker Nix package passed 45 unit, three probe CLI and eleven
 queue CLI tests. A real CLI child reproduced the former artifact deadline
 escape before the fix. Fixtures use supported 0750 result permissions because
-Nix forbids chmod setgid; the VM checks the real tmpfiles mode 2750. Earlier
-Docker/Podman projections with IFD disabled verified configured runtimes and
-private tmpfiles; refreshing them against the final package is pending.
-Real VM execution remains pending. No local VM or system build ran.
+Nix forbids chmod setgid; the VM checks the real tmpfiles mode 2750. Focused
+Docker/Podman projections with IFD disabled select the tested package and
+confirm configured runtimes and private tmpfiles. The rendered 2137-line VM
+script compiles. Real VM execution remains pending. No local VM or system build ran.
 
 Optional Worker requests still fail closed in owned OCI admission. Next: bind
 the collector and worker launcher inventory to the common maintenance fence,
