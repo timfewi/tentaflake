@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 ### Fixed
+- Mark crashed OCI supervisors Unknown through an exact-invocation post-stop
+  hook, retaining container identity and resource charges without daemon mutation.
 - Require Docker's classic image store for admission's exact configuration-digest
   contract, checking immutable settings and live driver status before loading an
   image; existing stores require explicit operator migration.

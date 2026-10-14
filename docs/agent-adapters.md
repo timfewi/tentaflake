@@ -177,7 +177,10 @@ the ledger records Active. Output is forwarded to the service journal.
 Normal stop uses the owned full ID, verifies the container stopped, removes that
 exact container and retains its storage charge. Name collisions, failed writes,
 interrupted mutations and ambiguous observations keep compute reserved as
-Unknown; repeating a request never authorizes another create. Foreign containers
+Unknown; repeating a request never authorizes another create. An authenticated
+systemd post-stop helper marks a crashed invocation Unknown without changing its
+container ID or releasing resources; it cannot modify an older invocation after
+a refused restart. Foreign containers
 are never removed by name. Automatic recovery from these uncertain claims is
 not implemented. This first lifecycle slice targets offline Generic workloads;
 external capability collectors and vendor acceptance remain separate work.

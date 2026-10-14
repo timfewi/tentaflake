@@ -14,12 +14,19 @@ pub(crate) fn run(args: &[String], mode: OutputMode) -> Result<u8, String> {
         [command, file, id] if command == "image-acquire" => {
             return crate::admission_oci::acquire(Path::new(file), id);
         }
-        [command, file, id] if command == "runtime-start" || command == "runtime-stop" => {
-            return crate::admission_oci::lifecycle(
-                Path::new(file),
-                id,
-                command == "runtime-start",
-            );
+        [command, file, id]
+            if matches!(
+                command.as_str(),
+                "runtime-start" | "runtime-stop" | "runtime-finish"
+            ) =>
+        {
+            use crate::admission_oci::Lifecycle;
+            let action = match command.as_str() {
+                "runtime-start" => Lifecycle::Start,
+                "runtime-stop" => Lifecycle::Stop,
+                _ => Lifecycle::Finish,
+            };
+            return crate::admission_oci::lifecycle(Path::new(file), id, action);
         }
         [command, rest @ ..] if command == "publication" => {
             return crate::admission_publication::run(rest, mode);

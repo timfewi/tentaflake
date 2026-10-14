@@ -683,31 +683,58 @@ pub(crate) fn valid_unit(
         && (1..=120_000_000).contains(&service.timeout_stop_usec)
         && service.exec_start_pre.is_empty()
         && service.exec_start_post.is_empty()
-        && service.exec_stop_post.is_empty()
         && service.exec_reload.is_empty()
         && service.exec_condition.is_empty()
         && exec_is(&service.exec_start, plan, path, id, "runtime-start")
         && exec_is(&service.exec_stop, plan, path, id, "runtime-stop")
+        && exec_is(&service.exec_stop_post, plan, path, id, "runtime-finish")
+}
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Lifecycle {
+    Start,
+    Stop,
+    Finish,
+}
+impl Lifecycle {
+    fn accepts_caller(self, unit: &UnitObservation, pid: u32) -> bool {
+        let Some(service) = &unit.service else {
+            return false;
+        };
+        if pid == 0 {
+            return false;
+        }
+        match self {
+            Self::Start => {
+                unit.active_state == "activating"
+                    && unit.sub_state == "start"
+                    && service.main_pid == pid
+            }
+            Self::Stop => {
+                unit.active_state == "deactivating"
+                    && unit.sub_state == "stop"
+                    && service.control_pid == pid
+            }
+            Self::Finish => {
+                unit.active_state == "deactivating"
+                    && unit.sub_state == "stop-post"
+                    && service.control_pid == pid
+                    && service.main_pid == 0
+            }
+        }
+    }
 }
 fn caller(
     plan: &HostPlan,
     path: &Path,
     id: &str,
     spec: &RuntimeSpec,
-    start: bool,
+    action: Lifecycle,
 ) -> Result<SupervisorIdentity, String> {
     let unit = admission_systemd::inspect_unit(&plan.tools.busctl, &spec.unit)?;
     let service = unit.service.as_ref().ok_or("runtime service unavailable")?;
     let pid = std::process::id();
-    let correct_phase = if start {
-        unit.active_state == "activating" && unit.sub_state == "start" && service.main_pid == pid
-    } else {
-        unit.active_state == "deactivating"
-            && unit.sub_state == "stop"
-            && service.control_pid == pid
-    };
     if !valid_unit(&unit, plan, path, id, spec)
-        || !correct_phase
+        || !action.accepts_caller(&unit, pid)
         || unit.invocation_id == [0; 16]
         || service.control_group.is_empty()
         || service.control_group == "/"
@@ -721,7 +748,7 @@ fn caller(
     {
         return Err("runtime command is not the exact owned systemd invocation".into());
     }
-    let main_pid = if start { pid } else { 0 };
+    let main_pid = if action == Lifecycle::Start { pid } else { 0 };
     Ok(SupervisorIdentity {
         unit: spec.unit.clone(),
         invocation_id: invocation_hex(&unit.invocation_id),
@@ -1224,19 +1251,24 @@ fn notify_ready() -> Result<(), String> {
     Ok(())
 }
 
-pub(crate) fn lifecycle(path: &Path, id: &str, start: bool) -> Result<u8, String> {
+pub(crate) fn lifecycle(path: &Path, id: &str, action: Lifecycle) -> Result<u8, String> {
     require_root()?;
     let plan = load_plan(path)?;
     let spec = plan
         .runtimes
         .get(id)
         .ok_or("no declared runtime for instance")?;
-    let caller = caller(&plan, path, id, spec, start)?;
-    if start {
-        start_runtime(&plan, path, id, spec, caller)
-    } else {
-        stop_runtime(&plan, path, id, spec, &caller)?;
-        Ok(0)
+    let caller = caller(&plan, path, id, spec, action)?;
+    match action {
+        Lifecycle::Start => start_runtime(&plan, path, id, spec, caller),
+        Lifecycle::Stop => {
+            stop_runtime(&plan, path, id, spec, &caller)?;
+            Ok(0)
+        }
+        Lifecycle::Finish => {
+            finish_runtime(&plan, path, id, spec, &caller)?;
+            Ok(0)
+        }
     }
 }
 fn start_runtime(
@@ -1272,7 +1304,7 @@ fn start_runtime(
     let outcome = ledger
         .claim(&request, |published| {
             current_authority(plan, path, published)?;
-            if caller(plan, path, id, spec, true)? != supervisor {
+            if caller(plan, path, id, spec, Lifecycle::Start)? != supervisor {
                 return Err("runtime supervisor identity changed".into());
             }
             let now = timestamp()?;
@@ -1421,7 +1453,7 @@ fn refresh_prerequisites(
     original: &[ReadinessGeneration],
 ) -> Result<(), String> {
     installed(path)?;
-    if caller(plan, path, id, spec, true)? != intent.supervisor {
+    if caller(plan, path, id, spec, Lifecycle::Start)? != intent.supervisor {
         return Err("runtime supervisor changed during dispatch".into());
     }
     let fresh = readiness(plan, path, id, &intent.runtime_generation, timestamp()?)?;
@@ -1549,6 +1581,69 @@ fn stop_runtime(
     if let Some(error) = error {
         return Err(error);
     }
+    Ok(())
+}
+
+// ExecStop is skipped when the main process fails in systemd's running state.
+// ExecStopPost can only mark this invocation uncertain. It has no daemon
+// mutation/absence authority and must never touch another invocation's claim.
+fn finish_observation(
+    receipt: &Receipt,
+    plan: &HostPlan,
+    id: &str,
+    spec: &RuntimeSpec,
+    supervisor: &SupervisorIdentity,
+) -> Result<Option<Observation>, String> {
+    let Some(dispatch) = &receipt.runtime else {
+        return Ok(None);
+    };
+    if dispatch.intent.supervisor.invocation_id != supervisor.invocation_id {
+        return Ok(None);
+    }
+    if dispatch.intent.supervisor.unit != supervisor.unit
+        || supervisor.unit != spec.unit
+        || receipt.request.instance_id != id
+        || dispatch.intent.spec_revision != plan.instances[id].revision
+        || dispatch.intent.image != spec.image
+    {
+        return Err("runtime finish does not own this exact invocation".into());
+    }
+    Ok(match receipt.reservation.state {
+        ReservationState::Active | ReservationState::Reserved => Some(Observation::Unknown),
+        ReservationState::Unknown | ReservationState::Retained => None,
+    })
+}
+
+fn finish_runtime(
+    plan: &HostPlan,
+    path: &Path,
+    id: &str,
+    spec: &RuntimeSpec,
+    supervisor: &SupervisorIdentity,
+) -> Result<(), String> {
+    let _fence = admission_fence::exclusive()?;
+    installed(path)?;
+    let ledger = Ledger::open(Path::new(LEDGER)).map_err(|e| e.to_string())?;
+    let status = ledger.publication_status().map_err(|e| e.to_string())?;
+    current_authority(plan, path, &status.published)?;
+    let (revision, receipt) = ledger.runtime_receipt(id).map_err(|e| e.to_string())?;
+    let Some(receipt) = receipt else {
+        return Ok(());
+    };
+    if finish_observation(&receipt, plan, id, spec, supervisor)?.is_none() {
+        return Ok(());
+    }
+    ledger
+        .reconcile(&receipt.request.operation_id, revision, |recorded| {
+            // Recheck the caller and historical identity under the ledger lock.
+            // Unknown preserves all charges, bound CID and dispatch history.
+            if caller(plan, path, id, spec, Lifecycle::Finish)? != *supervisor {
+                return Err("runtime finish supervisor changed".into());
+            }
+            finish_observation(recorded, plan, id, spec, supervisor)?
+                .ok_or_else(|| "runtime finish claim changed".into())
+        })
+        .map_err(|e| e.to_string())?;
     Ok(())
 }
 
@@ -1801,6 +1896,60 @@ mod tests {
     }
 
     #[test]
+    fn finish_only_marks_the_exact_unfinished_invocation_unknown() {
+        let (plan, spec, mut receipt, _, _) = fixture();
+        let mut supervisor = receipt.runtime.as_ref().unwrap().intent.supervisor.clone();
+        supervisor.pid = 0;
+        supervisor.start_time_ticks = 0;
+        receipt.reservation.state = ReservationState::Active;
+        for state in [ReservationState::Active, ReservationState::Reserved] {
+            receipt.reservation.state = state;
+            assert_eq!(
+                finish_observation(&receipt, &plan, "agent-fixture", &spec, &supervisor).unwrap(),
+                Some(Observation::Unknown)
+            );
+        }
+        for state in [ReservationState::Unknown, ReservationState::Retained] {
+            receipt.reservation.state = state;
+            assert_eq!(
+                finish_observation(&receipt, &plan, "agent-fixture", &spec, &supervisor).unwrap(),
+                None
+            );
+        }
+        receipt.reservation.state = ReservationState::Active;
+        let mut later = supervisor.clone();
+        later.invocation_id = "3".repeat(32);
+        assert_eq!(
+            finish_observation(&receipt, &plan, "agent-fixture", &spec, &later).unwrap(),
+            None
+        );
+        for change in 0..4 {
+            let mut wrong = receipt.clone();
+            match change {
+                0 => {
+                    wrong.runtime.as_mut().unwrap().intent.supervisor.unit =
+                        "docker-foreign.service".into()
+                }
+                1 => wrong.request.instance_id = "foreign".into(),
+                2 => wrong.runtime.as_mut().unwrap().intent.spec_revision = "foreign".into(),
+                _ => {
+                    wrong.runtime.as_mut().unwrap().intent.image = RuntimeImage::Registry {
+                        reference: format!("example@sha256:{}", "b".repeat(64)),
+                    }
+                }
+            }
+            assert!(
+                finish_observation(&wrong, &plan, "agent-fixture", &spec, &supervisor).is_err()
+            );
+        }
+        receipt.runtime = None;
+        assert_eq!(
+            finish_observation(&receipt, &plan, "agent-fixture", &spec, &supervisor).unwrap(),
+            None
+        );
+    }
+
+    #[test]
     fn whole_unit_rejects_additional_mutators_restart_and_unbounded_cleanup() {
         use crate::admission_systemd::{ServiceObservation, UnitJob};
         let (plan, spec, _, _, _) = fixture();
@@ -1851,20 +2000,38 @@ mod tests {
                 notify_access: "main".into(),
                 exec_start_pre: vec![],
                 exec_start_post: vec![],
-                exec_stop_post: vec![],
+                exec_stop_post: vec![exec("runtime-finish")],
                 exec_reload: vec![],
                 exec_condition: vec![],
             }),
         };
         assert!(valid_unit(&unit, &plan, path, "agent-fixture", &spec));
-        for change in [0, 1, 2, 3] {
+        assert!(Lifecycle::Start.accepts_caller(&unit, 42));
+        assert!(!Lifecycle::Finish.accepts_caller(&unit, 42));
+        let mut finishing = unit.clone();
+        finishing.active_state = "deactivating".into();
+        finishing.sub_state = "stop-post".into();
+        finishing.service.as_mut().unwrap().main_pid = 0;
+        finishing.service.as_mut().unwrap().control_pid = 52;
+        assert!(Lifecycle::Finish.accepts_caller(&finishing, 52));
+        assert!(!Lifecycle::Finish.accepts_caller(&finishing, 42));
+        assert!(!Lifecycle::Finish.accepts_caller(&finishing, 0));
+        assert!(!Lifecycle::Stop.accepts_caller(&finishing, 52));
+        finishing.service.as_mut().unwrap().main_pid = 42;
+        assert!(!Lifecycle::Finish.accepts_caller(&finishing, 52));
+        finishing.service.as_mut().unwrap().main_pid = 0;
+        finishing.sub_state = "stop".into();
+        assert!(!Lifecycle::Finish.accepts_caller(&finishing, 52));
+        assert!(Lifecycle::Stop.accepts_caller(&finishing, 52));
+        for change in [0, 1, 2, 3, 4] {
             let mut changed = unit.clone();
             let s = changed.service.as_mut().unwrap();
             match change {
                 0 => s.exec_stop_post.push(exec("foreign")),
                 1 => s.restart = "always".into(),
                 2 => s.timeout_stop_usec = u64::MAX,
-                _ => s.kill_mode = "process".into(),
+                3 => s.kill_mode = "process".into(),
+                _ => s.exec_stop_post.clear(),
             }
             assert!(!valid_unit(&changed, &plan, path, "agent-fixture", &spec));
         }

@@ -626,7 +626,7 @@ assert localSupervisor.serviceConfig.NotifyAccess == "main";
 assert localSupervisor.serviceConfig.KillMode == "control-group";
 assert localSupervisor.serviceConfig.ExecStartPre == [ ];
 assert localSupervisor.serviceConfig.ExecStartPost == [ ];
-assert localSupervisor.serviceConfig.ExecStopPost == [ ];
+assert lib.hasInfix "runtime-finish" localSupervisor.serviceConfig.ExecStopPost;
 assert
   localSupervisor.script == "" && localSupervisor.preStart == "" && localSupervisor.preStop == "";
 assert lib.hasInfix "runtime-start" localSupervisor.serviceConfig.ExecStart;
