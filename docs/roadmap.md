@@ -68,6 +68,12 @@ Current integration work:
   authenticated unsupported mutations with bodies return `501`, while implemented
   bodyless routes still reject bodies. The revised combined VM checks the exact
   network ID used by dispatch; its rendered driver compiles without builds/IFD.
+  A subsequent scan found four new Rustls 0.23.45 advisories. The shared lock and
+  explicit CLI test pin now select 0.23.46 without other dependency changes;
+  source review passes, as does a complete security rerun (153 Rust and 479 Yarn
+  packages; 19 Semgrep rules, no findings or parse warnings). A stale Cargo
+  artifact initially ran tests absent from this branch; after cleaning the four
+  workspace packages, the fast gate passes 520 Rust tests, four helpers ignored.
   Final package and combined runtime gates remain pending. Exact
   requested capabilities and live evidence remain prerequisites; a configured
   endpoint or declaration alone grants no access.
