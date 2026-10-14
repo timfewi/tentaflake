@@ -506,6 +506,170 @@ impl State {
         }
         Ok(())
     }
+
+    /// Shared read-only candidate checks; queue alone persists the returned rows.
+    fn prepare_api_create(
+        &self,
+        context: &ApiContext,
+        operation_id: &str,
+        spec: &EnvironmentSpec,
+        expected_grants_revision: u64,
+        fresh: impl FnOnce(
+            &PublishedAuthority,
+            &ReservationSnapshot,
+            &EnvironmentSpec,
+        ) -> Result<CreatePolicy, String>,
+    ) -> Result<Vec<StorageReceipt>, LedgerError> {
+        self.api_context(context)?;
+        self.require_stable()?;
+        spec.validate()?;
+        if expected_grants_revision != self.api.grants_revision {
+            return Err(LedgerError::StaleRevision);
+        }
+        if !id(operation_id) || spec.instance.owner_id != context.principal {
+            return Err(LedgerError::Invalid("create request binding"));
+        }
+        if self.api.operations.len() >= MAX_OPERATIONS
+            || self.api.environments.len() >= MAX_ENVIRONMENTS
+            || self.storage.len() + 2 > MAX_STORAGE_ALLOCATIONS
+            || self
+                .api
+                .environments
+                .iter()
+                .map(|env| env.spec.grants.len())
+                .sum::<usize>()
+                + spec.grants.len()
+                > MAX_ACTION_GRANTS
+        {
+            return Err(LedgerError::Full);
+        }
+        if self
+            .api
+            .operations
+            .iter()
+            .any(|op| op.mutation.operation_id == operation_id)
+            || self.dynamic_instance(&spec.instance.id)
+            || self.dynamic_instance(&spec.workspace_id)
+            || self
+                .api
+                .workspaces
+                .iter()
+                .any(|w| w.id == spec.workspace_id || w.id == spec.instance.id)
+            || self.storage.iter().any(|row| {
+                row.allocation
+                    .binding
+                    .as_ref()
+                    .is_some_and(|binding| binding.instance_id == spec.instance.id)
+            })
+            || self
+                .receipts
+                .iter()
+                .any(|r| r.request.instance_id == spec.instance.id)
+            || spec
+                .instance
+                .storage
+                .iter()
+                .any(|wanted| self.storage.iter().any(|r| r.allocation.id == wanted.id))
+            || self
+                .api
+                .environments
+                .iter()
+                .flat_map(|env| &env.spec.grants)
+                .any(|old| spec.grants.iter().any(|new| new.id == old.id))
+        {
+            return Err(LedgerError::Conflict);
+        }
+        let operations: Vec<_> = spec
+            .instance
+            .storage
+            .iter()
+            .map(|requirement| {
+                format!(
+                    "{operation_id}:{}",
+                    match requirement.kind {
+                        StorageKind::Workspace => "workspace",
+                        StorageKind::State => "state",
+                    }
+                )
+            })
+            .collect();
+        if self.native_operation_exists(operation_id)
+            || operations.iter().any(|operation| {
+                self.native_operation_exists(operation) || self.api_operation_exists(operation)
+            })
+        {
+            return Err(LedgerError::Conflict);
+        }
+        // Two native rows and the API operation each own one durable revision.
+        self.revision.checked_add(3).ok_or(LedgerError::Full)?;
+        let mut reservations = self.snapshot();
+        let policy =
+            fresh(&self.published, &reservations, spec).map_err(|_| LedgerError::Context)?;
+        self.check_policy(&policy.policy)?;
+        let mut limits = Vec::new();
+        crate::decision::check_instance_limits(&policy.policy, &spec.instance, &mut limits);
+        if !limits.is_empty() {
+            return Err(LedgerError::Invalid(
+                "dynamic instance exceeds host ceiling",
+            ));
+        }
+        policy.create_grant.validate()?;
+        if policy.create_grant.action != ApiAction::EnvironmentsCreate
+            || policy.create_grant.target
+                != (ApiTarget::Host {
+                    id: context.host.clone(),
+                })
+            || policy.create_grant.expires_at.is_some()
+            || !policy.create_grant.active(context.now)
+            || policy.issued_grants != spec.grants
+            || spec
+                .grants
+                .iter()
+                .any(|g| g.id == policy.create_grant.id || !g.active(context.now))
+        {
+            return Err(LedgerError::Conflict);
+        }
+        let mut rows = Vec::with_capacity(2);
+        for (requirement, operation_id) in spec.instance.storage.iter().zip(operations) {
+            let request = StorageRequest {
+                request: AdmissionRequest {
+                    schema_version: SCHEMA_VERSION,
+                    operation_id: operation_id.clone(),
+                    instance_id: spec.instance.id.clone(),
+                    principal_id: context.principal.clone(),
+                    expected: crate::ExpectedRevisions {
+                        policy: policy.policy.revision.clone(),
+                        instance: spec.instance.revision.clone(),
+                        ledger: reservations.revision,
+                    },
+                },
+                allocation_id: requirement.id.clone(),
+            };
+            let snapshot = StorageAdmissionSnapshot {
+                schema_version: SCHEMA_VERSION,
+                policy: policy.policy.clone(),
+                instance: spec.instance.clone(),
+                reservations: reservations.clone(),
+            };
+            let decision = decide_storage(&snapshot, &request);
+            if !decision.allowed {
+                return Err(LedgerError::StorageDenied(Box::new(decision)));
+            }
+            let allocation = decision
+                .allocation
+                .ok_or(LedgerError::Invalid("create allocation"))?;
+            reservations.revision += 1; // The complete revision range was checked above.
+            reservations.storage.push(allocation.clone());
+            rows.push(StorageReceipt {
+                request: Some(request),
+                release: None,
+                allocation,
+                claimed_revision: reservations.revision,
+                updated_revision: reservations.revision,
+            });
+        }
+        Ok(rows)
+    }
 }
 
 impl Ledger {
@@ -643,6 +807,35 @@ impl Ledger {
             .collect())
     }
 
+    /// Check a host-reconstructed stopped-create candidate under the same lock
+    /// and native accounting rules as queueing. This writes no state and returns
+    /// no reservation or dispatch permission; queue must revalidate everything.
+    /// `fresh` must be read-only, authenticate the installed template/grants and
+    /// observe both slots/pool under the caller's outer host fence. It receives
+    /// the coherent pre-candidate snapshot and must not reopen this ledger.
+    pub fn api_preview_create(
+        &self,
+        context: &ApiContext,
+        operation_id: &str,
+        spec: &EnvironmentSpec,
+        expected_grants_revision: u64,
+        fresh: impl FnOnce(
+            &PublishedAuthority,
+            &ReservationSnapshot,
+            &EnvironmentSpec,
+        ) -> Result<CreatePolicy, String>,
+    ) -> Result<(), LedgerError> {
+        let _lock = self.lock(false)?;
+        self.read()?.prepare_api_create(
+            context,
+            operation_id,
+            spec,
+            expected_grants_revision,
+            fresh,
+        )?;
+        Ok(())
+    }
+
     pub fn api_queue_create(
         &self,
         context: &ApiContext,
@@ -672,148 +865,37 @@ impl Ledger {
             }
             return Ok(ApiQueued::Existing(Box::new(op.clone())));
         }
-        state.require_stable()?;
-        spec.validate()?;
-        if mutation.key.epoch != context.epoch
-            || expected_grants_revision != state.api.grants_revision
-        {
+        if mutation.key.epoch != context.epoch {
             return Err(LedgerError::StaleRevision);
         }
         if mutation.key.method != ApiMethod::Post
             || mutation.key.canonical_target != "/api/v1/environments"
-            || spec.instance.owner_id != context.principal
         {
             return Err(LedgerError::Invalid("create request binding"));
         }
-        if state.api.operations.len() >= MAX_OPERATIONS
-            || state.api.environments.len() >= MAX_ENVIRONMENTS
-            || state.storage.len() + 2 > MAX_STORAGE_ALLOCATIONS
-            || state
-                .api
-                .environments
-                .iter()
-                .map(|env| env.spec.grants.len())
-                .sum::<usize>()
-                + spec.grants.len()
-                > MAX_ACTION_GRANTS
-        {
-            return Err(LedgerError::Full);
-        }
-        if state
-            .api
-            .operations
+        let rows = state.prepare_api_create(
+            context,
+            &mutation.operation_id,
+            spec,
+            expected_grants_revision,
+            fresh,
+        )?;
+        let storage_operations = rows
             .iter()
-            .any(|op| op.mutation.operation_id == mutation.operation_id)
-            || state.dynamic_instance(&spec.instance.id)
-            || state.dynamic_instance(&spec.workspace_id)
-            || state
-                .api
-                .workspaces
-                .iter()
-                .any(|w| w.id == spec.workspace_id || w.id == spec.instance.id)
-            || state.storage.iter().any(|row| {
-                row.allocation
-                    .binding
+            .map(|row| {
+                row.request
                     .as_ref()
-                    .is_some_and(|binding| binding.instance_id == spec.instance.id)
+                    .expect("prepared create request")
+                    .request
+                    .operation_id
+                    .clone()
             })
-            || state
-                .receipts
-                .iter()
-                .any(|r| r.request.instance_id == spec.instance.id)
-            || spec
-                .instance
-                .storage
-                .iter()
-                .any(|wanted| state.storage.iter().any(|r| r.allocation.id == wanted.id))
-            || state
-                .api
-                .environments
-                .iter()
-                .flat_map(|env| &env.spec.grants)
-                .any(|old| spec.grants.iter().any(|new| new.id == old.id))
-        {
-            return Err(LedgerError::Conflict);
-        }
-        let policy =
-            fresh(&state.published, &state.snapshot(), spec).map_err(|_| LedgerError::Context)?;
-        state.check_policy(&policy.policy)?;
-        let mut limits = Vec::new();
-        crate::decision::check_instance_limits(&policy.policy, &spec.instance, &mut limits);
-        if !limits.is_empty() {
-            return Err(LedgerError::Invalid(
-                "dynamic instance exceeds host ceiling",
-            ));
-        }
-        policy.create_grant.validate()?;
-        if policy.create_grant.action != ApiAction::EnvironmentsCreate
-            || policy.create_grant.target
-                != (ApiTarget::Host {
-                    id: context.host.clone(),
-                })
-            || policy.create_grant.expires_at.is_some()
-            || !policy.create_grant.active(context.now)
-            || policy.issued_grants != spec.grants
-            || spec
-                .grants
-                .iter()
-                .any(|g| g.id == policy.create_grant.id || !g.active(context.now))
-        {
-            return Err(LedgerError::Conflict);
-        }
-        let mut storage_operations = Vec::new();
-        for requirement in &spec.instance.storage {
-            let operation_id = format!(
-                "{}:{}",
-                mutation.operation_id,
-                match requirement.kind {
-                    StorageKind::Workspace => "workspace",
-                    StorageKind::State => "state",
-                }
-            );
-            if state.native_operation_exists(&operation_id)
-                || state.api_operation_exists(&operation_id)
-                || state.native_operation_exists(&mutation.operation_id)
-            {
-                return Err(LedgerError::Conflict);
-            }
-            let request = StorageRequest {
-                request: AdmissionRequest {
-                    schema_version: SCHEMA_VERSION,
-                    operation_id: operation_id.clone(),
-                    instance_id: spec.instance.id.clone(),
-                    principal_id: context.principal.clone(),
-                    expected: crate::ExpectedRevisions {
-                        policy: policy.policy.revision.clone(),
-                        instance: spec.instance.revision.clone(),
-                        ledger: state.revision,
-                    },
-                },
-                allocation_id: requirement.id.clone(),
-            };
-            let snapshot = StorageAdmissionSnapshot {
-                schema_version: SCHEMA_VERSION,
-                policy: policy.policy.clone(),
-                instance: spec.instance.clone(),
-                reservations: state.snapshot(),
-            };
-            let decision = decide_storage(&snapshot, &request);
-            if !decision.allowed {
-                return Err(LedgerError::StorageDenied(Box::new(decision)));
-            }
-            let allocation = decision
-                .allocation
-                .ok_or(LedgerError::Invalid("create allocation"))?;
-            state.advance()?;
-            state.storage.push(StorageReceipt {
-                request: Some(request),
-                release: None,
-                allocation,
-                claimed_revision: state.revision,
-                updated_revision: state.revision,
-            });
-            storage_operations.push(operation_id);
-        }
+            .collect();
+        state.revision = rows
+            .last()
+            .expect("validated storage pair")
+            .updated_revision;
+        state.storage.extend(rows);
         state.advance()?;
         let op = ApiOperation {
             mutation: mutation.clone(),

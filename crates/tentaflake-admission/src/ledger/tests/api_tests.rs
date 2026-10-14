@@ -120,6 +120,423 @@ fn claim(ledger: &Ledger) -> CreationPermit<'_> {
     }
 }
 
+// Include directory and lock-file identity/timestamps, not merely JSON content:
+// a preview must not replace files, stage writes, or create new artifacts.
+fn persisted_files(fixture: &Fixture) -> serde_json::Value {
+    let mut paths = vec![fixture.path()];
+    paths.extend(
+        fs::read_dir(fixture.path())
+            .unwrap()
+            .map(|entry| entry.unwrap().path()),
+    );
+    paths.sort();
+    serde_json::json!(
+        paths
+            .iter()
+            .map(|path| {
+                let meta = fs::symlink_metadata(path).unwrap();
+                serde_json::json!({
+                    "path": path.file_name().unwrap().to_str().unwrap(),
+                    "bytes": if meta.is_file() { fs::read(path).unwrap() } else { Vec::new() },
+                    "dev": meta.dev(), "ino": meta.ino(), "mode": meta.mode(),
+                    "uid": meta.uid(), "gid": meta.gid(), "links": meta.nlink(), "len": meta.len(),
+                    "modified": [meta.mtime(), meta.mtime_nsec()],
+                    "changed": [meta.ctime(), meta.ctime_nsec()],
+                })
+            })
+            .collect::<Vec<_>>()
+    )
+}
+
+#[test]
+fn preview_is_read_only_lock_coherent_and_never_reserves() {
+    let fixture = Fixture::new();
+    let ledger = fixture.ledger_with(inventory(&[]));
+    let before = persisted_files(&fixture);
+    for _ in 0..2 {
+        ledger
+            .api_preview_create(
+                &api_context(),
+                "api-op-1",
+                &spec("env-a"),
+                0,
+                |published, snapshot, wanted| {
+                    assert_eq!(published, &authority("policy-1"));
+                    assert_eq!(snapshot.revision, 1);
+                    assert!(
+                        snapshot.complete
+                            && snapshot.storage.is_empty()
+                            && snapshot.entries.is_empty()
+                    );
+                    assert!(matches!(ledger.snapshot(), Err(LedgerError::Busy)));
+                    assert!(matches!(fixture.open("ledger"), Err(LedgerError::Busy)));
+                    Ok(policy(wanted))
+                },
+            )
+            .unwrap();
+        assert_eq!(persisted_files(&fixture), before);
+    }
+    assert!(matches!(
+        ledger.api_preview_create(
+            &api_context(),
+            "api-op-1",
+            &spec("env-a"),
+            0,
+            |_, _, _| Err("physical pool or installed template unavailable".into())
+        ),
+        Err(LedgerError::Context)
+    ));
+    assert_eq!(persisted_files(&fixture), before);
+    assert_eq!(
+        ledger.api_lookup(&api_context(), &mutation().key).unwrap(),
+        ApiLookup::Absent
+    );
+    assert!(
+        ledger
+            .api_snapshot(&api_context())
+            .unwrap()
+            .environments
+            .is_empty()
+    );
+
+    // Unrelated authentication changes the global revision, not native grant CAS.
+    ledger
+        .consume_operator_login(&authority("policy-1"), &"a".repeat(64))
+        .unwrap();
+    let queued = queue(&ledger);
+    assert_eq!(queued.queued_revision, 5);
+    let rows = ledger.read().unwrap().storage;
+    assert_eq!(rows.len(), 2);
+    for (index, row) in rows.iter().enumerate() {
+        assert_eq!(
+            row.request.as_ref().unwrap().request.expected.ledger,
+            2 + index as u64
+        );
+        assert_eq!(row.claimed_revision, 3 + index as u64);
+        assert_eq!(row.updated_revision, row.claimed_revision);
+        assert_eq!(row.allocation.bytes, MIN_STORAGE_BYTES);
+        assert_eq!(row.allocation.state, StorageState::Unknown);
+    }
+}
+
+#[test]
+fn preview_and_queue_charge_orphan_unknown_storage_and_refuse_second_slot_atomically() {
+    let fixture = Fixture::new();
+    let mut retained = inventory(&["old"]);
+    retained
+        .allocations
+        .retain(|row| row.kind == StorageKind::State);
+    retained.allocations[0].binding = None;
+    retained.allocations[0].state = StorageState::Unknown;
+    retained.allocations[0].bytes = 2 * MIN_STORAGE_BYTES;
+    let ledger = fixture.ledger_with(retained.clone());
+    let before = persisted_files(&fixture);
+    let fresh =
+        |_: &PublishedAuthority, snapshot: &ReservationSnapshot, wanted: &EnvironmentSpec| {
+            assert_eq!(snapshot.storage, retained.allocations);
+            Ok(policy(wanted))
+        };
+    let preview = ledger.api_preview_create(&api_context(), "api-op-1", &spec("env-a"), 0, fresh);
+    let queued = ledger.api_queue_create(&api_context(), &mutation(), &spec("env-a"), 0, fresh);
+    for result in [preview, queued.map(|_| ())] {
+        match result {
+            Err(LedgerError::StorageDenied(decision)) => assert!(
+                decision
+                    .reasons
+                    .iter()
+                    .any(|r| r.code == ReasonCode::ResourceExhausted && r.subject == "stateBytes")
+            ),
+            other => panic!("expected second-slot capacity refusal: {other:?}"),
+        }
+    }
+    assert_eq!(persisted_files(&fixture), before);
+    ledger
+        .api_preview_create(
+            &api_context(),
+            "api-op-1",
+            &spec("env-a"),
+            0,
+            |_, _, wanted| {
+                let mut current = policy(wanted);
+                current.policy.capacity.state_bytes = 3 * MIN_STORAGE_BYTES;
+                Ok(current)
+            },
+        )
+        .unwrap();
+    assert_eq!(persisted_files(&fixture), before);
+}
+
+#[test]
+fn preview_requires_current_authority_owner_grants_and_stable_host_before_observation() {
+    for case in 0..7 {
+        let fixture = Fixture::new();
+        let ledger = fixture.ledger_with(inventory(&[]));
+        let mut trusted = api_context();
+        let mut revision = 0;
+        let mut operation = "api-op-1";
+        match case {
+            0 => trusted.authority = authority("stale-policy"),
+            1 => trusted.principal = "foreign-owner".into(),
+            2 => revision = 1,
+            3 => operation = "bad:operation",
+            4 => trusted.now = 0,
+            5 => {
+                ledger
+                    .begin_publication(&publication(&ledger, "publish", "policy-2"))
+                    .unwrap();
+            }
+            6 => {
+                drop(
+                    ledger
+                        .begin_worker_image_load(&authority("policy-1"), "/immutable/image.json")
+                        .unwrap(),
+                );
+            }
+            _ => unreachable!(),
+        }
+        let before = persisted_files(&fixture);
+        assert!(
+            ledger
+                .api_preview_create(
+                    &trusted,
+                    operation,
+                    &spec("env-a"),
+                    revision,
+                    |_, _, _| panic!("invalid context must not observe")
+                )
+                .is_err(),
+            "case {case}"
+        );
+        assert_eq!(persisted_files(&fixture), before);
+    }
+}
+
+#[test]
+fn preview_and_queue_share_policy_limits_and_exact_issued_grants() {
+    for case in 0..7 {
+        let fixture = Fixture::new();
+        let ledger = fixture.ledger_with(inventory(&[]));
+        let fresh = |_: &PublishedAuthority, _: &ReservationSnapshot, wanted: &EnvironmentSpec| {
+            let mut current = policy(wanted);
+            match case {
+                0 => current.policy.per_instance.memory_bytes -= 1,
+                1 => current.policy.per_instance.memory_swap_bytes -= 1,
+                2 => current.policy.per_instance.nano_cpus -= 1,
+                3 => current.policy.per_instance.pids -= 1,
+                4 => current.issued_grants.clear(),
+                5 => {
+                    current.create_grant.target = ApiTarget::Host {
+                        id: "foreign-host".into(),
+                    }
+                }
+                6 => current.create_grant.expires_at = Some(200),
+                _ => unreachable!(),
+            }
+            Ok(current)
+        };
+        let before = persisted_files(&fixture);
+        assert!(
+            ledger
+                .api_preview_create(&api_context(), "api-op-1", &spec("env-a"), 0, fresh)
+                .is_err()
+        );
+        assert!(
+            ledger
+                .api_queue_create(&api_context(), &mutation(), &spec("env-a"), 0, fresh)
+                .is_err()
+        );
+        assert_eq!(persisted_files(&fixture), before);
+    }
+}
+
+#[test]
+fn preview_respects_all_retained_ids_and_native_operation_namespaces() {
+    let fixture = Fixture::new();
+    let ledger = fixture.ledger_with(inventory(&[]));
+    let queued = queue(&ledger);
+    for case in 0..5 {
+        let mut wanted = spec("env-b");
+        let mut operation = "api-op-2";
+        match case {
+            0 => operation = "api-op-1",
+            1 => wanted = spec("env-a"),
+            2 => {
+                wanted.workspace_id = spec("env-a").workspace_id;
+                wanted.grants[1].target = ApiTarget::Workspace {
+                    id: wanted.workspace_id.clone(),
+                };
+            }
+            3 => wanted.instance.storage[0].id = spec("env-a").instance.storage[0].id.clone(),
+            4 => wanted.grants[0].id = spec("env-a").grants[0].id.clone(),
+            _ => unreachable!(),
+        }
+        let before = persisted_files(&fixture);
+        assert!(
+            matches!(
+                ledger.api_preview_create(
+                    &api_context(),
+                    operation,
+                    &wanted,
+                    queued.updated_revision,
+                    |_, _, _| panic!("collision must not observe")
+                ),
+                Err(LedgerError::Conflict)
+            ),
+            "case {case}"
+        );
+        assert_eq!(persisted_files(&fixture), before);
+    }
+    for operation in ["api-op-1", "api-op-1:workspace", "api-op-1:state"] {
+        let fixture = Fixture::new();
+        let ledger = fixture.ledger_with(inventory(&[]));
+        let (snapshot, mut request) = storage_context("native", 1);
+        request.request.operation_id = operation.into();
+        assert!(matches!(
+            ledger.reserve_storage(&request, |_| Ok(snapshot)).unwrap(),
+            StorageClaimOutcome::New(_)
+        ));
+        let before = persisted_files(&fixture);
+        assert!(matches!(
+            ledger.api_preview_create(
+                &api_context(),
+                "api-op-1",
+                &spec("env-a"),
+                0,
+                |_, _, _| panic!("native operation collision")
+            ),
+            Err(LedgerError::Conflict)
+        ));
+        assert_eq!(persisted_files(&fixture), before);
+    }
+}
+
+#[test]
+fn preview_cannot_bypass_native_record_capacity_or_revision_overflow() {
+    let fixture = Fixture::new();
+    let mut retained = inventory(&[]);
+    retained.allocations = (0..MAX_STORAGE_ALLOCATIONS - 1)
+        .map(|index| StorageAllocation {
+            id: format!("orphan-{index}"),
+            kind: StorageKind::State,
+            bytes: 1,
+            binding: None,
+            state: StorageState::Unknown,
+        })
+        .collect();
+    let ledger = fixture.ledger_with(retained);
+    let before = persisted_files(&fixture);
+    assert!(matches!(
+        ledger.api_preview_create(
+            &api_context(),
+            "api-op-1",
+            &spec("env-a"),
+            0,
+            |_, _, _| panic!("both rows need record capacity")
+        ),
+        Err(LedgerError::Full)
+    ));
+    assert_eq!(persisted_files(&fixture), before);
+
+    let fixture = Fixture::new();
+    let ledger = fixture.ledger_with(inventory(&[]));
+    ledger
+        .consume_operator_login(&authority("policy-1"), &"a".repeat(64))
+        .unwrap();
+    let mut state = ledger.read().unwrap();
+    state.revision = u64::MAX - 2;
+    state.operator_logins[0].consumed_revision = state.revision;
+    ledger.write(&state).unwrap();
+    let before = persisted_files(&fixture);
+    assert!(matches!(
+        ledger.api_preview_create(
+            &api_context(),
+            "api-op-1",
+            &spec("env-a"),
+            0,
+            |_, _, _| panic!("all three revisions must fit")
+        ),
+        Err(LedgerError::Full)
+    ));
+    assert_eq!(persisted_files(&fixture), before);
+}
+
+#[test]
+fn preview_is_not_a_reservation_and_existing_retry_remains_history_during_publication() {
+    let fixture = Fixture::new();
+    let ledger = fixture.ledger_with(inventory(&[]));
+    ledger
+        .api_preview_create(
+            &api_context(),
+            "candidate",
+            &spec("candidate"),
+            0,
+            |_, _, wanted| Ok(policy(wanted)),
+        )
+        .unwrap();
+    queue(&ledger);
+    assert!(matches!(
+        ledger.api_queue_create(
+            &api_context(),
+            &ApiMutation {
+                operation_id: "candidate".into(),
+                key: ApiKey {
+                    key: "00000000-0000-0000-0000-000000000002".into(),
+                    ..mutation().key
+                },
+                ..mutation()
+            },
+            &spec("candidate"),
+            0,
+            |_, _, _| panic!("native grant revision changed")
+        ),
+        Err(LedgerError::StaleRevision)
+    ));
+    let mut permit = claim(&ledger);
+    for kind in [StorageKind::Workspace, StorageKind::State] {
+        permit.provision(kind, |_| Ok(())).unwrap();
+    }
+    let completed = permit.complete(101).unwrap();
+    ledger
+        .begin_publication(&publication(&ledger, "publication", "policy-2"))
+        .unwrap();
+    let before = persisted_files(&fixture);
+    assert!(matches!(
+        ledger.api_preview_create(
+            &api_context(),
+            "candidate",
+            &spec("candidate"),
+            completed.queued_revision,
+            |_, _, _| panic!("publication pending")
+        ),
+        Err(LedgerError::TransitionPending)
+    ));
+    assert_eq!(
+        ledger
+            .api_queue_create(
+                &api_context(),
+                &mutation(),
+                &spec("ignored"),
+                u64::MAX,
+                |_, _, _| panic!("historical receipt must not replay")
+            )
+            .unwrap(),
+        ApiQueued::Existing(Box::new(completed))
+    );
+    let mut changed = mutation();
+    changed.request_digest = format!("sha256:{}", "b".repeat(64));
+    assert!(matches!(
+        ledger.api_queue_create(
+            &api_context(),
+            &changed,
+            &spec("ignored"),
+            0,
+            |_, _, _| panic!("different body")
+        ),
+        Err(LedgerError::Conflict)
+    ));
+    assert_eq!(persisted_files(&fixture), before);
+}
+
 #[test]
 fn catalog_authority_cannot_be_issued_or_persisted_by_environment_creation() {
     let fixture = Fixture::new();
@@ -1786,6 +2203,23 @@ fn released_capacity_is_reusable_but_retired_ids_and_native_entrypoints_are_not(
             )
             .is_err()
     );
+    let before_preview = persisted_files(&fixture);
+    ledger
+        .api_preview_create(
+            &api_context(),
+            &next.operation_id,
+            &spec("env-b"),
+            aborted.updated_revision,
+            |_, snapshot, spec| {
+                assert!(snapshot.storage.is_empty());
+                let mut current = policy(spec);
+                current.policy.capacity.workspace_bytes = MIN_STORAGE_BYTES;
+                current.policy.capacity.state_bytes = MIN_STORAGE_BYTES;
+                Ok(current)
+            },
+        )
+        .unwrap();
+    assert_eq!(persisted_files(&fixture), before_preview);
     assert!(matches!(
         ledger.api_queue_create(
             &api_context(),

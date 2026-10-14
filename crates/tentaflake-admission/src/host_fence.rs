@@ -25,11 +25,21 @@ pub struct HostFence {
 }
 
 pub fn exclusive() -> Result<HostFence, String> {
+    exclusive_at_host(true)
+}
+
+/// Lock the already-established host fence without creating or repairing it.
+/// Read-only planning must refuse hosts whose bootstrap fence is absent.
+pub fn exclusive_existing() -> Result<HostFence, String> {
+    exclusive_at_host(false)
+}
+
+fn exclusive_at_host(create: bool) -> Result<HostFence, String> {
     if unsafe { libc::geteuid() } != 0 {
         return Err("host admission fence requires root".into());
     }
     let path = Path::new(FENCE_PATH);
-    acquire(path, 0, LOCK_TIMEOUT, || {
+    acquire(path, 0, LOCK_TIMEOUT, create, || {
         open_root(path.parent().ok_or("invalid host admission fence path")?, 0)
     })
 }
@@ -208,6 +218,7 @@ fn acquire(
     path: &Path,
     owner_uid: u32,
     timeout: Duration,
+    create: bool,
     reopen_parent: impl Fn() -> Result<File, String>,
 ) -> Result<HostFence, String> {
     let deadline = Instant::now() + timeout;
@@ -217,6 +228,8 @@ fn acquire(
     // directory stays read-only. Do not request creation on that path.
     let file = if let Some(file) = open_existing(&parent, &name, owner_uid)? {
         file
+    } else if !create {
+        return Err("host admission fence is absent".into());
     } else {
         match open_at(&parent, &name, libc::O_RDWR | libc::O_CREAT | libc::O_EXCL) {
             Ok(file) => {
@@ -321,6 +334,7 @@ mod tests {
                 &self.path(),
                 unsafe { libc::geteuid() },
                 Duration::ZERO,
+                true,
                 || self.open_parent(),
             )
         }
@@ -345,6 +359,79 @@ mod tests {
             let _ = self.0.kill();
             let _ = self.0.wait();
         }
+    }
+
+    #[test]
+    fn existing_only_fence_never_creates_and_still_checks_lock_and_identity() {
+        let fixture = Fixture::new();
+        let existing = || {
+            acquire(
+                &fixture.path(),
+                unsafe { libc::geteuid() },
+                Duration::ZERO,
+                false,
+                || fixture.open_parent(),
+            )
+        };
+        let before = fs::metadata(&fixture.root).unwrap();
+        assert_eq!(existing().unwrap_err(), "host admission fence is absent");
+        assert_eq!(fs::read_dir(&fixture.root).unwrap().count(), 0);
+        let after = fs::metadata(&fixture.root).unwrap();
+        assert_eq!(
+            (
+                before.ino(),
+                before.mtime(),
+                before.mtime_nsec(),
+                before.ctime(),
+                before.ctime_nsec()
+            ),
+            (
+                after.ino(),
+                after.mtime(),
+                after.mtime_nsec(),
+                after.ctime(),
+                after.ctime_nsec()
+            )
+        );
+
+        let creating_owner = fixture.acquire().unwrap();
+        assert!(existing().unwrap_err().contains("busy"));
+        drop(creating_owner);
+        let original = fs::metadata(fixture.path()).unwrap();
+        drop(existing().unwrap());
+        assert!(identity_matches(
+            &original,
+            &fs::metadata(fixture.path()).unwrap()
+        ));
+        let opens = Cell::new(0);
+        assert!(
+            acquire(
+                &fixture.path(),
+                unsafe { libc::geteuid() },
+                Duration::ZERO,
+                false,
+                || {
+                    opens.set(opens.get() + 1);
+                    if opens.get() == 2 {
+                        fs::rename(fixture.path(), fixture.root.join("old.lock")).unwrap();
+                        drop(
+                            OpenOptions::new()
+                                .write(true)
+                                .create_new(true)
+                                .mode(0o600)
+                                .open(fixture.path())
+                                .unwrap(),
+                        );
+                    }
+                    fixture.open_parent()
+                }
+            )
+            .unwrap_err()
+            .contains("path changed")
+        );
+        fs::set_permissions(fixture.path(), fs::Permissions::from_mode(0o666)).unwrap();
+        assert!(existing().unwrap_err().contains("protected"));
+        assert_eq!(fs::metadata(fixture.path()).unwrap().mode() & 0o7777, 0o666);
     }
 
     #[test]
@@ -374,6 +461,7 @@ mod tests {
             &fixture.path(),
             unsafe { libc::geteuid() },
             Duration::from_secs(2),
+            true,
             || fixture.open_parent(),
         );
         let competing = fixture.acquire();
@@ -381,6 +469,7 @@ mod tests {
             &fixture.root.join("absent.lock"),
             unsafe { libc::geteuid() },
             Duration::ZERO,
+            true,
             || fixture.open_parent(),
         );
         let create = fs::write(fixture.root.join("forbidden"), b"");
@@ -452,6 +541,7 @@ mod tests {
                 &fixture.path(),
                 unsafe { libc::geteuid() },
                 Duration::ZERO,
+                true,
                 || {
                     opens.set(opens.get() + 1);
                     if opens.get() == 2 {
@@ -503,6 +593,7 @@ mod tests {
                 &fixture.path(),
                 unsafe { libc::geteuid() },
                 Duration::from_secs(2),
+                true,
                 || fixture.open_parent(),
             )
             .unwrap(),
@@ -531,6 +622,7 @@ mod tests {
                 &fixture.path(),
                 unsafe { libc::geteuid() },
                 Duration::from_secs(2),
+                true,
                 || fixture.open_parent(),
             )
             .unwrap(),
