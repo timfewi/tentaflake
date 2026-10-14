@@ -433,7 +433,7 @@ in
             ExecStart = lib.mkForce (command "runtime-start");
             ExecStartPost = lib.mkForce [ ];
             ExecStop = lib.mkForce (command "runtime-stop");
-            ExecStopPost = lib.mkForce [ ];
+            ExecStopPost = lib.mkForce (command "runtime-finish");
             ExecReload = lib.mkForce [ ];
           };
         }

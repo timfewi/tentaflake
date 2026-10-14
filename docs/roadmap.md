@@ -38,9 +38,11 @@ Current integration work:
   Run `38542786276` passes acquisition, normal OCI start/stop, resource release,
   create-conflict refusal, storage/publication and normal shutdown. Its crash
   test fails after Docker restart and supervisor SIGKILL: systemd skips ExecStop,
-  leaving the receipt Active with its CID and full reservation retained. An
-  authenticated ExecStopPost completion path is being prepared; the existing
-  Unknown assertion remains required. Research VM acceptance also remains pending.
+  leaving the receipt Active with its CID and full reservation retained.
+  Commit `fa3fad4` adds an authenticated, exact-invocation ExecStopPost path that
+  marks unfinished claims Unknown without Docker mutations or resource release.
+  Focused Rust/Nix gates and independent source reviews pass. Replacement run
+  `38549784563` is pending, including the unchanged crash assertion and Research VM.
 - **Model/Research integration:** PR #167 and the upstream Research readiness
   work still need their relevant runtime gates and final public pin integration.
   Exact requested capabilities and live evidence remain prerequisites; neither
@@ -90,8 +92,9 @@ Claimed work requires a changed boot; successful recovery requires both native
 receipts already Present. Exact terminal retries skip original-template loads
 and live observations. Publication and Worker/native recovery prepare historical
 maintenance inventory outside their ledger callbacks, avoiding recursive locks.
-`just fast` passes **446 Rust tests** plus static/helper gates; the actual offline
-Nix CLI package passes **341 tests**, including all 130 admission tests. Four
+On PR #172, `just fast` passes **448 Rust tests** plus static/helper gates after
+integrating the OCI crash finalizer. The prior actual offline Nix CLI package at
+`475eaff` passed **341 tests**, including all 130 admission tests. Four
 intentional subprocess/VM helpers are ignored in each full test inventory. All 20
 static helper paths are unchanged; actual rendered dynamic-helper tests pass
 argument refusals, Btrfs creation/verification and sibling-slot isolation. The
@@ -104,15 +107,16 @@ compilation pass; actual daemon/GC registration and VM acceptance remain
 unverified. HTTP creation still returns `501`.
 New code reads old v3 files; older binaries reject the new field once written.
 
-The stacked `feat/host-control` work separates the HTTP process into a dedicated
+The stacked host-control PR #173 separates the HTTP process into a dedicated
 unprivileged account and a root Unix owner for sessions, credentials and the
 ledger. The closed channel preserves duplicate headers and validates fixed socket
 ownership and peer identities; interrupted requests retain bounded owner work.
 Only the owner retains `CAP_SYS_PTRACE`, required to inspect PID 1's namespace.
 Socket and owner lifetimes follow frontend stop/failure. `just fast` passes
-**454 Rust tests** plus static/helper checks; 36 focused API tests and Clippy pass.
-The actual offline CLI Nix package passes **349 tests**, with four intentional
-helpers ignored. Focused API policy assertions pass; the no-build VM projection
+**456 Rust tests** plus static/helper checks after the crash-finalizer integration;
+36 focused API tests and Clippy pass. The actual offline CLI Nix package passes
+**351 tests**, with four intentional helpers ignored. Focused API policy and
+adapter assertions pass; the no-build VM projection
 and rendered HTTP helper compile. Actual socket activation, credential namespace,
 active-cookie revocation and owner-failure acceptance remain outstanding. HTTP
 resource operations remain `501`.
@@ -135,6 +139,8 @@ charged during abort; recovery must never rerun ownership or creation helpers.
 
 Remaining Worker requirements include exact grants, aggregate private storage
 and compute, daemon-generation job recovery and exact results-mount validation.
+The next bounded slice binds the controller's read-only results mount to its
+declared Worker and verifies protected directory identity, without granting access.
 The OCI Worker-request path stays closed until those requirements are verified.
 General artifact acquisition also needs durable uncertainty handling; the guarded
 Worker loader alone does not establish that for every image creator.

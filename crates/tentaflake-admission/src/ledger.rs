@@ -2772,6 +2772,56 @@ mod tests {
     }
 
     #[test]
+    fn finished_supervisor_retains_bound_active_claim_as_durable_unknown() {
+        let fixture = Fixture::new();
+        let ledger = fixture.ledger();
+        let active = running(claim(&ledger, "a"));
+        let storage = ledger.snapshot().unwrap().storage;
+        let unknown = ledger
+            .reconcile("start-a", active.updated_revision, |recorded| {
+                assert_eq!(recorded, &active);
+                Ok(Observation::Unknown)
+            })
+            .unwrap();
+        assert_eq!(unknown.reservation.state, ReservationState::Unknown);
+        assert_eq!(unknown.reservation.resources, active.reservation.resources);
+        assert_eq!(unknown.runtime, active.runtime);
+        assert_eq!(unknown.request, active.request);
+        let reopened = fixture.open("ledger").unwrap();
+        assert_eq!(
+            reopened.runtime_receipt("a").unwrap().1,
+            Some(unknown.clone())
+        );
+        assert_eq!(reopened.snapshot().unwrap().storage, storage);
+        let repeated = reopened
+            .reconcile("start-a", unknown.updated_revision, |_| {
+                Ok(Observation::Unknown)
+            })
+            .unwrap();
+        assert_eq!(repeated, unknown);
+        let (snapshot, request) = context("a", 1);
+        assert!(matches!(
+            reopened
+                .claim(&request, |_| Ok(runtime_context(snapshot, 110)))
+                .unwrap(),
+            ClaimOutcome::Existing(_)
+        ));
+        let (snapshot, request) = context("b", unknown.updated_revision);
+        let ClaimOutcome::Denied(decision) = reopened
+            .claim(&request, |_| Ok(runtime_context(snapshot, 110)))
+            .unwrap()
+        else {
+            panic!("unknown active charge must block another dispatch");
+        };
+        assert!(
+            decision
+                .reasons
+                .iter()
+                .any(|reason| reason.code == ReasonCode::UnknownReservation)
+        );
+    }
+
+    #[test]
     fn exact_reconciliation_retains_storage_and_cannot_release_a_newer_operation() {
         let fixture = Fixture::new();
         let ledger = fixture.ledger();

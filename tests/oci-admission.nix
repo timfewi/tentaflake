@@ -350,7 +350,8 @@ in
         daemon_info = json.loads(oci.succeed(oci_docker("info", "--format", "{{json .}}")))
         assert daemon_info["Driver"] and all(row[0] != "driver-type" for row in daemon_info["DriverStatus"]), daemon_info["DriverStatus"]
         for name in oci_ids:
-            oci.fail(oci_command("runtime-start", name))
+            for action in ["runtime-start", "runtime-stop", "runtime-finish"]:
+                oci.fail(oci_command(action, name))
             oci.fail(oci_docker("container", "inspect", name))
         source = oci_manifest["runtimes"][oci_ids[0]]["image"]
         assert source["kind"] == "local-artifact"
