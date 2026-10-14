@@ -3887,9 +3887,17 @@
             "$ref": "#/components/schemas/Revision"
           },
           "usedBytes": {
-            "type": "integer",
-            "minimum": 0,
-            "maximum": 1125899906842624
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 1125899906842624
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Observed workspace usage, or null when no current usage observation is available. Null is not zero and does not prove absence or free capacity."
           },
           "quotaBytes": {
             "type": "integer",

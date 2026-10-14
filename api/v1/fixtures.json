@@ -941,7 +941,7 @@
               "id": "workspace-fixture",
               "ownerId": "owner-fixture",
               "revision": "workspace-fixture-1",
-              "usedBytes": 0,
+              "usedBytes": null,
               "quotaBytes": 1073741824
             },
             "usage": null,
@@ -2822,6 +2822,17 @@
         "retrySafe": false,
         "reason": "The host cannot establish safe current-epoch absence."
       }
+    },
+    {
+      "name": "unobserved workspace usage is explicit unknown",
+      "schema": "Workspace",
+      "value": {
+        "id": "workspace-fixture",
+        "ownerId": "owner-fixture",
+        "revision": "workspace-fixture-1",
+        "usedBytes": null,
+        "quotaBytes": 1073741824
+      }
     }
   ],
   "invalid": [
@@ -3464,6 +3475,39 @@
             }
           ]
         }
+      }
+    },
+    {
+      "name": "negative workspace usage is not an observation",
+      "schema": "Workspace",
+      "value": {
+        "id": "workspace-fixture",
+        "ownerId": "owner-fixture",
+        "revision": "workspace-fixture-1",
+        "usedBytes": -1,
+        "quotaBytes": 1073741824
+      }
+    },
+    {
+      "name": "boolean workspace usage is not an observation",
+      "schema": "Workspace",
+      "value": {
+        "id": "workspace-fixture",
+        "ownerId": "owner-fixture",
+        "revision": "workspace-fixture-1",
+        "usedBytes": false,
+        "quotaBytes": 1073741824
+      }
+    },
+    {
+      "name": "overflow workspace usage is not an observation",
+      "schema": "Workspace",
+      "value": {
+        "id": "workspace-fixture",
+        "ownerId": "owner-fixture",
+        "revision": "workspace-fixture-1",
+        "usedBytes": 1125899906842625,
+        "quotaBytes": 1073741824
       }
     }
   ]
