@@ -54,7 +54,19 @@ tests and 31 routing regressions; the API fixtures
 and focused Nix package-source check pass. Actual offline CLI interactions cover
 allow, redaction, owner/expiry/strict denial and unsafe-input refusal.
 
-Next: host-owned live collectors and mandatory startup/stop integration with
+The following storage slice uses schema-v2 independent allocation rows so
+never-started, removed, orphaned and uncertain volumes remain charged once.
+Explicit bootstrap requires a complete inventory; only a new synced allocation
+returns an image-creation permit. Existing receipts cannot recreate a missing
+image. Startup requires exact owned Present workspace and state allocations;
+storage-only admission also covers legacy workspace-only quotas. Review removed
+an obsolete historical-size rule that disagreed with this allocation accounting.
+Fast-gate components pass with 195 Rust tests, 31 routing regressions and the
+47-route API contract. Host inventory collection and quota-unit integration
+remain outstanding; the library alone does not fence existing image creators.
+
+Next: host-owned inventory and policy publication, quota creation fencing, live
+collectors and mandatory startup/stop integration with
 the ledger, then the authenticated dynamic host API. Offline `admission explain`
 and library tests do not establish live admission, runtime or vendor acceptance.
 

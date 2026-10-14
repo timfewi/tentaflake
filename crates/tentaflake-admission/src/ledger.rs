@@ -1,13 +1,14 @@
-//! Private, durable startup claims. Only a newly committed claim grants dispatch.
+//! Private, durable startup and storage claims. Only a new claim grants dispatch.
 //!
 //! The caller owns authentication, current host evidence, bounded dispatch, and
 //! proof of container ownership/absence. An unknown result never frees capacity.
 //! Keep the permit until the bounded start handoff and outcome commit finish.
 use crate::decision::identifier;
 use crate::{
-    AdmissionRequest, AdmissionSnapshot, Decision, MAX_RESERVATIONS, Reservation,
-    ReservationSnapshot, ReservationState, SCHEMA_VERSION, authorize, decide,
-    validate_reservations,
+    AdmissionRequest, AdmissionSnapshot, Decision, MAX_RESERVATIONS, MAX_STORAGE_ALLOCATIONS,
+    Reservation, ReservationSnapshot, ReservationState, SCHEMA_VERSION, StorageAdmissionSnapshot,
+    StorageAllocation, StorageDecision, StorageRequest, StorageState, authorize, authorize_storage,
+    decide, decide_storage, validate_reservations,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -73,6 +74,28 @@ pub struct Receipt {
     pub updated_revision: u64,
 }
 
+/// A complete, host-collected inventory of all managed backing slots, including
+/// removed definitions and orphan files. Completeness means enumeration, never
+/// filesystem readiness. Unknown rows remain charged. The host must fence all
+/// quota creators while collecting and bootstrapping this inventory.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct StorageInventory {
+    pub complete: bool,
+    pub allocations: Vec<StorageAllocation>,
+}
+
+/// Exactly one immutable provision intent per allocation. Imported inventory
+/// has no create request and can never yield permission to recreate its image.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct StorageReceipt {
+    pub request: Option<StorageRequest>,
+    pub allocation: StorageAllocation,
+    pub claimed_revision: u64,
+    pub updated_revision: u64,
+}
+
 /// Host-owned observations, never assertions accepted from an untrusted client.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Observation {
@@ -87,6 +110,12 @@ pub enum ClaimOutcome<'a> {
     New(DispatchPermit<'a>),
     Existing(Box<Receipt>),
     Denied(Decision),
+}
+
+pub enum StorageClaimOutcome<'a> {
+    New(StoragePermit<'a>),
+    Existing(Box<StorageReceipt>),
+    Denied(StorageDecision),
 }
 
 pub struct Ledger {
@@ -119,6 +148,17 @@ pub struct DispatchPermit<'a> {
     index: usize,
 }
 
+/// A charge is not proof that the backing slot is empty. Before dispatching the
+/// fixed prepare helper, the trusted host must verify final and staging absence
+/// under this permit. Existing data must never be overwritten or reformatted.
+#[must_use = "a new storage permit owns one bounded provision; dropping retains its charge"]
+pub struct StoragePermit<'a> {
+    ledger: &'a Ledger,
+    _lock: LedgerLock,
+    state: State,
+    index: usize,
+}
+
 #[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct State {
@@ -126,13 +166,18 @@ struct State {
     revision: u64,
     generation: String,
     receipts: Vec<Receipt>,
+    storage: Vec<StorageReceipt>,
 }
 
 impl Ledger {
     /// Explicit bootstrap only. Creates a new private directory and refuses an
     /// existing path, including an empty directory left by an interrupted init.
     /// `generation` is the stable host admission authority epoch, not a boot ID.
-    pub fn initialize(path: &Path, generation: &str) -> Result<Self, LedgerError> {
+    pub fn initialize(
+        path: &Path,
+        generation: &str,
+        inventory: StorageInventory,
+    ) -> Result<Self, LedgerError> {
         let name = path
             .file_name()
             .ok_or(LedgerError::Invalid("directory path"))?;
@@ -140,13 +185,37 @@ impl Ledger {
             path.parent()
                 .ok_or(LedgerError::Invalid("directory parent"))?,
         )?;
-        Self::initialize_in(parent, name, generation)
+        Self::initialize_in(parent, name, generation, inventory)
     }
 
-    fn initialize_in(parent: File, name: &OsStr, generation: &str) -> Result<Self, LedgerError> {
-        if !identifier(generation) {
-            return Err(LedgerError::Invalid("generation"));
+    fn initialize_in(
+        parent: File,
+        name: &OsStr,
+        generation: &str,
+        inventory: StorageInventory,
+    ) -> Result<Self, LedgerError> {
+        if !inventory.complete {
+            return Err(LedgerError::Invalid("incomplete storage inventory"));
         }
+        let state = State {
+            schema_version: SCHEMA_VERSION,
+            revision: 1,
+            generation: generation.to_owned(),
+            receipts: Vec::new(),
+            storage: inventory
+                .allocations
+                .into_iter()
+                .map(|allocation| StorageReceipt {
+                    request: None,
+                    allocation,
+                    claimed_revision: 1,
+                    updated_revision: 1,
+                })
+                .collect(),
+        };
+        // Validate before creating any ledger path. Existing over-budget rows
+        // remain truthful inventory; budget enforcement belongs to admission.
+        state.validate()?;
         let encoded_name = cstring(name)?;
         if unsafe { libc::mkdirat(parent.as_raw_fd(), encoded_name.as_ptr(), 0o700) } != 0 {
             return Err(io::Error::last_os_error().into());
@@ -157,12 +226,7 @@ impl Ledger {
         };
         ledger.validate_directory()?;
         let _lock = ledger.lock(true)?;
-        ledger.write(&State {
-            schema_version: SCHEMA_VERSION,
-            revision: 1,
-            generation: generation.to_owned(),
-            receipts: Vec::new(),
-        })?;
+        ledger.write(&state)?;
         Ok(ledger)
     }
 
@@ -205,6 +269,14 @@ impl Ledger {
                 reservation: None,
             }));
         }
+        if state.storage.iter().any(|receipt| {
+            receipt
+                .request
+                .as_ref()
+                .is_some_and(|storage| storage.request.operation_id == request.operation_id)
+        }) {
+            return Err(LedgerError::Conflict);
+        }
         if let Some(receipt) = state
             .receipts
             .iter()
@@ -245,6 +317,104 @@ impl Ledger {
             state,
             index,
         }))
+    }
+
+    /// Reserve one declared backing slot before any allocation or formatting.
+    /// Owner, desired binding and revisions are freshly checked under the same
+    /// lock used by startup. Model/Research readiness does not gate storage for
+    /// deliberately stopped instances. All managed quota creators must use this
+    /// path once the host enables this ledger's aggregate storage accounting.
+    pub fn reserve_storage(
+        &self,
+        request: &StorageRequest,
+        fresh_context: impl FnOnce() -> Result<StorageAdmissionSnapshot, String>,
+    ) -> Result<StorageClaimOutcome<'_>, LedgerError> {
+        let lock = self.lock(false)?;
+        let mut state = self.read()?;
+        let mut snapshot = fresh_context().map_err(|_| LedgerError::Context)?;
+        snapshot.reservations = state.snapshot();
+        let reasons = authorize_storage(&snapshot, request);
+        if !reasons.is_empty() {
+            return Ok(StorageClaimOutcome::Denied(StorageDecision {
+                allowed: false,
+                reasons,
+                allocation: None,
+            }));
+        }
+        if state
+            .receipts
+            .iter()
+            .any(|receipt| receipt.request.operation_id == request.request.operation_id)
+        {
+            return Err(LedgerError::Conflict);
+        }
+        if let Some(receipt) = state.storage.iter().find(|receipt| {
+            receipt.request.as_ref().is_some_and(|existing| {
+                existing.request.operation_id == request.request.operation_id
+            })
+        }) {
+            if receipt.request.as_ref() != Some(request) {
+                return Err(LedgerError::Conflict);
+            }
+            return Ok(StorageClaimOutcome::Existing(Box::new(receipt.clone())));
+        }
+        let decision = decide_storage(&snapshot, request);
+        if !decision.allowed {
+            return Ok(StorageClaimOutcome::Denied(decision));
+        }
+        if let Some(receipt) = state
+            .storage
+            .iter()
+            .find(|receipt| receipt.allocation.id == request.allocation_id)
+        {
+            return Ok(StorageClaimOutcome::Existing(Box::new(receipt.clone())));
+        }
+        if state.storage.len() >= MAX_STORAGE_ALLOCATIONS {
+            return Err(LedgerError::Full);
+        }
+        let mut allocation = decision.allocation.ok_or(LedgerError::Invalid(
+            "allowed storage decision without allocation",
+        ))?;
+        allocation.state = StorageState::Unknown;
+        state.advance()?;
+        state.storage.push(StorageReceipt {
+            request: Some(request.clone()),
+            allocation,
+            claimed_revision: state.revision,
+            updated_revision: state.revision,
+        });
+        self.write(&state)?;
+        let index = state.storage.len() - 1;
+        Ok(StorageClaimOutcome::New(StoragePermit {
+            ledger: self,
+            _lock: lock,
+            state,
+            index,
+        }))
+    }
+
+    /// Reconcile an exact charged slot after a fenced provisioner has stopped.
+    /// Present requires trusted inspection of the exact final image and binding.
+    /// Missing/partial images stay Unknown: neither absence nor timeout grants
+    /// permission to recreate, release, resize or rebind the allocation.
+    pub fn reconcile_storage(
+        &self,
+        allocation_id: &str,
+        expected_ledger_revision: u64,
+        observe: impl FnOnce(&StorageReceipt) -> Result<StorageState, String>,
+    ) -> Result<StorageReceipt, LedgerError> {
+        let _lock = self.lock(false)?;
+        let mut state = self.read()?;
+        if state.revision != expected_ledger_revision {
+            return Err(LedgerError::StaleRevision);
+        }
+        let index = state
+            .storage
+            .iter()
+            .position(|receipt| receipt.allocation.id == allocation_id)
+            .ok_or(LedgerError::Conflict)?;
+        let observed = observe(&state.storage[index]).map_err(|_| LedgerError::Context)?;
+        self.record_storage(&mut state, index, observed)
     }
 
     /// Reconcile one exact operation under the dispatch lock. The host callback
@@ -299,6 +469,21 @@ impl Ledger {
             self.write(state)?;
         }
         Ok(state.receipts[index].clone())
+    }
+
+    fn record_storage(
+        &self,
+        state: &mut State,
+        index: usize,
+        observed: StorageState,
+    ) -> Result<StorageReceipt, LedgerError> {
+        if state.storage[index].allocation.state != observed {
+            state.advance()?;
+            state.storage[index].allocation.state = observed;
+            state.storage[index].updated_revision = state.revision;
+            self.write(state)?;
+        }
+        Ok(state.storage[index].clone())
     }
 
     fn validate_directory(&self) -> Result<(), LedgerError> {
@@ -408,6 +593,19 @@ impl DispatchPermit<'_> {
     }
 }
 
+impl StoragePermit<'_> {
+    pub fn receipt(&self) -> &StorageReceipt {
+        &self.state.storage[self.index]
+    }
+
+    /// Commit trusted inspection before releasing the provision lock. Present
+    /// does not prove mount readiness; startup still requires fresh live evidence.
+    pub fn complete(mut self, observed: StorageState) -> Result<StorageReceipt, LedgerError> {
+        self.ledger
+            .record_storage(&mut self.state, self.index, observed)
+    }
+}
+
 impl State {
     fn advance(&mut self) -> Result<(), LedgerError> {
         self.revision = self.revision.checked_add(1).ok_or(LedgerError::Full)?;
@@ -437,6 +635,11 @@ impl State {
                 .values()
                 .map(|index| self.receipts[*index].reservation.clone())
                 .collect(),
+            storage: self
+                .storage
+                .iter()
+                .map(|receipt| receipt.allocation.clone())
+                .collect(),
         }
     }
 
@@ -445,6 +648,7 @@ impl State {
             || self.revision == 0
             || !identifier(&self.generation)
             || self.receipts.len() > MAX_RECEIPTS
+            || self.storage.len() > MAX_STORAGE_ALLOCATIONS
         {
             return Err(LedgerError::Invalid("header or receipt limit"));
         }
@@ -458,6 +662,7 @@ impl State {
             .receipts
             .iter()
             .map(|receipt| receipt.updated_revision)
+            .chain(self.storage.iter().map(|receipt| receipt.updated_revision))
             .max()
             .unwrap_or(1);
         if latest_update != self.revision {
@@ -503,22 +708,55 @@ impl State {
                 ));
             }
             let latest = &self.receipts[current[request.instance_id.as_str()]].reservation;
-            if latest.owner_id != receipt.reservation.owner_id
-                || latest.resources.workspace_bytes < receipt.reservation.resources.workspace_bytes
-                || latest.resources.state_bytes < receipt.reservation.resources.state_bytes
-            {
-                return Err(LedgerError::Invalid(
-                    "retained storage ownership or capacity",
-                ));
+            if latest.owner_id != receipt.reservation.owner_id {
+                return Err(LedgerError::Invalid("historical reservation ownership"));
             }
             let original_snapshot = ReservationSnapshot {
                 revision: self.revision,
                 generation: self.generation.clone(),
                 complete: true,
                 entries: vec![original.clone()],
+                storage: Vec::new(),
             };
             if !validate_reservations(&original_snapshot).is_empty() {
                 return Err(LedgerError::Invalid("original reservation"));
+            }
+        }
+        for receipt in &self.storage {
+            if receipt.claimed_revision == 0
+                || receipt.claimed_revision > receipt.updated_revision
+                || receipt.updated_revision > self.revision
+            {
+                return Err(LedgerError::Invalid("storage receipt revision"));
+            }
+            match &receipt.request {
+                None if receipt.claimed_revision == 1 => {}
+                Some(request) => {
+                    let admission = &request.request;
+                    let binding = receipt
+                        .allocation
+                        .binding
+                        .as_ref()
+                        .ok_or(LedgerError::Invalid("provisioned storage without binding"))?;
+                    if admission.schema_version != SCHEMA_VERSION
+                        || !identifier(&admission.operation_id)
+                        || !identifier(&admission.instance_id)
+                        || !identifier(&admission.principal_id)
+                        || !identifier(&admission.expected.policy)
+                        || !identifier(&admission.expected.instance)
+                        || admission.expected.ledger == 0
+                        || admission.expected.ledger.checked_add(1)
+                            != Some(receipt.claimed_revision)
+                        || !operations.insert(&admission.operation_id)
+                        || !claims.insert(receipt.claimed_revision)
+                        || request.allocation_id != receipt.allocation.id
+                        || binding.instance_id != admission.instance_id
+                        || binding.owner_id != admission.principal_id
+                    {
+                        return Err(LedgerError::Invalid("storage receipt identity or revision"));
+                    }
+                }
+                None => return Err(LedgerError::Invalid("inventory import revision")),
             }
         }
         Ok(())
@@ -596,7 +834,7 @@ mod tests {
     use crate::{
         Capability, EvidenceKind, EvidenceSource, EvidenceStatus, ExpectedRevisions, Grant,
         HostPolicy, Instance, Isolation, MIN_STORAGE_BYTES, ReadinessEvidence, ReadinessGeneration,
-        ReadinessSnapshot, ReasonCode, Resources,
+        ReadinessSnapshot, ReasonCode, Resources, StorageBinding, StorageKind, StorageRequirement,
     };
     use std::fs::{self, DirBuilder, OpenOptions};
     use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt, symlink};
@@ -625,14 +863,23 @@ mod tests {
         }
 
         fn ledger(&self) -> Ledger {
-            self.initialize("ledger").unwrap()
+            self.ledger_with(inventory(&["a", "b"]))
         }
 
-        fn initialize(&self, name: &str) -> Result<Ledger, LedgerError> {
+        fn ledger_with(&self, inventory: StorageInventory) -> Ledger {
+            self.initialize("ledger", inventory).unwrap()
+        }
+
+        fn initialize(
+            &self,
+            name: &str,
+            inventory: StorageInventory,
+        ) -> Result<Ledger, LedgerError> {
             Ledger::initialize_in(
                 fixture_directory(&self.0, "")?,
                 OsStr::new(name),
                 "authority-1",
+                inventory,
             )
         }
 
@@ -690,6 +937,44 @@ mod tests {
         }
     }
 
+    fn requirements(instance: &str) -> Vec<StorageRequirement> {
+        [
+            ("workspace", StorageKind::Workspace),
+            ("state", StorageKind::State),
+        ]
+        .into_iter()
+        .map(|(name, kind)| StorageRequirement {
+            id: format!("{name}-{instance}"),
+            kind,
+            binding_revision: format!("binding-{name}-{instance}"),
+        })
+        .collect()
+    }
+
+    fn inventory(instances: &[&str]) -> StorageInventory {
+        StorageInventory {
+            complete: true,
+            allocations: instances
+                .iter()
+                .flat_map(|instance| {
+                    requirements(instance)
+                        .into_iter()
+                        .map(move |requirement| StorageAllocation {
+                            id: requirement.id,
+                            kind: requirement.kind,
+                            bytes: MIN_STORAGE_BYTES,
+                            binding: Some(StorageBinding {
+                                instance_id: (*instance).into(),
+                                owner_id: "owner-1".into(),
+                                revision: requirement.binding_revision,
+                            }),
+                            state: StorageState::Present,
+                        })
+                })
+                .collect(),
+        }
+    }
+
     fn context(instance: &str, revision: u64) -> (AdmissionSnapshot, AdmissionRequest) {
         let sources = [
             EvidenceKind::Runtime,
@@ -716,6 +1001,7 @@ mod tests {
                 isolation: Isolation::Container,
                 resources: resources(1),
                 requested_capabilities: Vec::new(),
+                storage: requirements(instance),
             },
             readiness: ReadinessSnapshot {
                 generation: "authority-1".into(),
@@ -747,6 +1033,7 @@ mod tests {
                 generation: "ignored".into(),
                 complete: false,
                 entries: Vec::new(),
+                storage: Vec::new(),
             },
         };
         let request = AdmissionRequest {
@@ -772,6 +1059,34 @@ mod tests {
         }
     }
 
+    fn storage_context(
+        instance: &str,
+        revision: u64,
+    ) -> (StorageAdmissionSnapshot, StorageRequest) {
+        let (snapshot, mut request) = context(instance, revision);
+        request.operation_id = format!("provision-workspace-{instance}");
+        (
+            StorageAdmissionSnapshot {
+                schema_version: snapshot.schema_version,
+                policy: snapshot.policy,
+                instance: snapshot.instance,
+                reservations: snapshot.reservations,
+            },
+            StorageRequest {
+                request,
+                allocation_id: format!("workspace-{instance}"),
+            },
+        )
+    }
+
+    fn reserve<'a>(ledger: &'a Ledger, instance: &str) -> StoragePermit<'a> {
+        let (snapshot, request) = storage_context(instance, ledger.snapshot().unwrap().revision);
+        match ledger.reserve_storage(&request, || Ok(snapshot)).unwrap() {
+            StorageClaimOutcome::New(permit) => permit,
+            _ => panic!("expected a new storage claim"),
+        }
+    }
+
     #[test]
     #[ignore = "subprocess fixture; invoked by filesystem tests"]
     fn subprocess_entry() {
@@ -789,9 +1104,28 @@ mod tests {
                 // uncertain reservation must survive and prohibit redispatch.
                 std::process::exit(0);
             }
-            "write-failure" => {
+            "storage-crash" => {
                 let ledger = open().unwrap();
-                let (snapshot, request) = context("a", 1);
+                let _permit = reserve(&ledger, "a");
+                std::process::exit(0);
+            }
+            "storage-exhausted" => {
+                let ledger = open().unwrap();
+                let (snapshot, request) = storage_context("b", ledger.snapshot().unwrap().revision);
+                let StorageClaimOutcome::Denied(decision) =
+                    ledger.reserve_storage(&request, || Ok(snapshot)).unwrap()
+                else {
+                    panic!("other process must see the committed storage charge");
+                };
+                assert!(
+                    decision
+                        .reasons
+                        .iter()
+                        .any(|reason| reason.code == ReasonCode::ResourceExhausted)
+                );
+            }
+            mode @ ("write-failure" | "storage-write-failure") => {
+                let ledger = open().unwrap();
                 let limit = libc::rlimit {
                     rlim_cur: 64,
                     rlim_max: 64,
@@ -800,10 +1134,19 @@ mod tests {
                     assert_ne!(libc::signal(libc::SIGXFSZ, libc::SIG_IGN), libc::SIG_ERR);
                     assert_eq!(libc::setrlimit(libc::RLIMIT_FSIZE, &limit), 0);
                 }
-                assert!(matches!(
-                    ledger.claim(&request, || Ok((snapshot, 110))),
-                    Err(LedgerError::Io(_))
-                ));
+                if mode == "write-failure" {
+                    let (snapshot, request) = context("a", 1);
+                    assert!(matches!(
+                        ledger.claim(&request, || Ok((snapshot, 110))),
+                        Err(LedgerError::Io(_))
+                    ));
+                } else {
+                    let (snapshot, request) = storage_context("a", 1);
+                    assert!(matches!(
+                        ledger.reserve_storage(&request, || Ok(snapshot)),
+                        Err(LedgerError::Io(_))
+                    ));
+                }
             }
             _ => panic!("unknown subprocess fixture"),
         }
@@ -1001,19 +1344,78 @@ mod tests {
         claim(&ledger, "a").complete(Observation::Stopped).unwrap();
         claim(&ledger, "b").complete(Observation::Running).unwrap();
         let revision = ledger.snapshot().unwrap().revision;
-        let (snapshot, request) = context("c", revision);
-        let ClaimOutcome::Denied(decision) =
-            ledger.claim(&request, || Ok((snapshot, 110))).unwrap()
+        let (snapshot, request) = storage_context("c", revision);
+        let StorageClaimOutcome::Denied(decision) =
+            ledger.reserve_storage(&request, || Ok(snapshot)).unwrap()
         else {
             panic!("retained storage must count against host capacity");
         };
         assert!(decision.reasons.iter().any(|reason| {
             reason.code == ReasonCode::ResourceExhausted && reason.subject == "workspaceBytes"
         }));
-        assert!(decision.reasons.iter().any(|reason| {
-            reason.code == ReasonCode::ResourceExhausted && reason.subject == "stateBytes"
-        }));
+        assert_eq!(ledger.snapshot().unwrap().storage.len(), 4);
         assert_eq!(ledger.snapshot().unwrap().revision, revision);
+    }
+
+    #[test]
+    fn restart_can_use_smaller_new_slots_while_old_allocations_remain_charged() {
+        let fixture = Fixture::new();
+        let mut initial = inventory(&["a"]);
+        for allocation in &mut initial.allocations {
+            allocation.bytes = 2 * MIN_STORAGE_BYTES;
+        }
+        let mut smaller = inventory(&["a"]).allocations;
+        for allocation in &mut smaller {
+            allocation.id.push_str("-new");
+            allocation
+                .binding
+                .as_mut()
+                .unwrap()
+                .revision
+                .push_str("-new");
+        }
+        initial.allocations.extend(smaller);
+        let expected_storage = initial.allocations.clone();
+        let ledger = fixture.ledger_with(initial);
+        let (mut snapshot, request) = context("a", 1);
+        snapshot.policy.capacity = resources(3);
+        snapshot.policy.per_instance = resources(2);
+        snapshot.instance.resources = resources(2);
+        let ClaimOutcome::New(permit) = ledger.claim(&request, || Ok((snapshot, 110))).unwrap()
+        else {
+            panic!("original larger slots should be admitted");
+        };
+        let stopped = permit.complete(Observation::Stopped).unwrap();
+
+        let (mut snapshot, mut request) = context("a", stopped.updated_revision);
+        snapshot.policy.capacity = resources(3);
+        snapshot.policy.per_instance = resources(2);
+        snapshot.instance.revision = "instance-2".into();
+        for requirement in &mut snapshot.instance.storage {
+            requirement.id.push_str("-new");
+            requirement.binding_revision.push_str("-new");
+        }
+        for evidence in &mut snapshot.readiness.evidence {
+            evidence.instance_revision = "instance-2".into();
+        }
+        request.operation_id = "restart-on-smaller-slots".into();
+        request.expected.instance = "instance-2".into();
+        let ClaimOutcome::New(permit) = ledger.claim(&request, || Ok((snapshot, 110))).unwrap()
+        else {
+            panic!("new exact slots should not resize or release historical allocations");
+        };
+        permit.complete(Observation::Running).unwrap();
+        let current = fixture.open("ledger").unwrap().snapshot().unwrap();
+        assert_eq!(current.entries[0].resources, resources(1));
+        assert_eq!(current.storage, expected_storage);
+        assert_eq!(
+            current
+                .storage
+                .iter()
+                .map(|allocation| allocation.bytes)
+                .sum::<u64>(),
+            6 * MIN_STORAGE_BYTES
+        );
     }
 
     #[test]
@@ -1034,11 +1436,237 @@ mod tests {
     }
 
     #[test]
+    fn storage_reservation_serializes_the_last_slot_across_processes() {
+        let fixture = Fixture::new();
+        let mut initial = inventory(&[]);
+        initial.allocations.push(StorageAllocation {
+            id: "orphan-workspace".into(),
+            kind: StorageKind::Workspace,
+            bytes: MIN_STORAGE_BYTES,
+            binding: None,
+            state: StorageState::Present,
+        });
+        let ledger = fixture.ledger_with(initial);
+        let (snapshot, request) = storage_context("a", 1);
+        let StorageClaimOutcome::New(permit) = ledger
+            .reserve_storage(&request, || {
+                assert!(matches!(ledger.snapshot(), Err(LedgerError::Busy)));
+                Ok(snapshot)
+            })
+            .unwrap()
+        else {
+            panic!("last available slot must be claimable");
+        };
+        assert_eq!(permit.receipt().allocation.state, StorageState::Unknown);
+        fixture.child("busy");
+        permit.complete(StorageState::Present).unwrap();
+        fixture.child("storage-exhausted");
+        assert_eq!(ledger.snapshot().unwrap().storage.len(), 2);
+    }
+
+    #[test]
+    fn storage_process_exit_preserves_charge_and_never_replays_provision() {
+        let fixture = Fixture::new();
+        let ledger = fixture.ledger_with(inventory(&[]));
+        fixture.child("storage-crash");
+        let durable = ledger.snapshot().unwrap();
+        assert_eq!(durable.revision, 2);
+        assert_eq!(durable.storage.len(), 1);
+        assert_eq!(durable.storage[0].state, StorageState::Unknown);
+        assert_eq!(durable.storage[0].bytes, MIN_STORAGE_BYTES);
+
+        let (snapshot, request) = storage_context("a", 1);
+        let StorageClaimOutcome::Existing(receipt) =
+            ledger.reserve_storage(&request, || Ok(snapshot)).unwrap()
+        else {
+            panic!("interrupted operation cannot acquire another create permit");
+        };
+        assert_eq!(receipt.allocation, durable.storage[0]);
+        let (snapshot, mut new_operation) = storage_context("a", 2);
+        new_operation.request.operation_id = "retry-provision-a".into();
+        let StorageClaimOutcome::Denied(decision) = ledger
+            .reserve_storage(&new_operation, || Ok(snapshot))
+            .unwrap()
+        else {
+            panic!("changing operation identity cannot recreate unknown storage");
+        };
+        assert!(
+            decision
+                .reasons
+                .iter()
+                .any(|reason| reason.code == ReasonCode::StorageUnknown)
+        );
+        let unchanged = ledger
+            .reconcile_storage("workspace-a", 2, |_| Ok(StorageState::Unknown))
+            .unwrap();
+        assert_eq!(unchanged.updated_revision, 2);
+        let present = ledger
+            .reconcile_storage("workspace-a", 2, |_| Ok(StorageState::Present))
+            .unwrap();
+        assert_eq!(present.updated_revision, 3);
+        assert_eq!(present.allocation.bytes, MIN_STORAGE_BYTES);
+        assert!(ledger.snapshot().unwrap().entries.is_empty());
+    }
+
+    #[test]
+    fn storage_write_failure_returns_no_permission_and_preserves_existing_inventory() {
+        let fixture = Fixture::new();
+        let ledger = fixture.ledger_with(inventory(&[]));
+        let before = fs::read(fixture.path().join(STATE)).unwrap();
+        fixture.child("storage-write-failure");
+        assert_eq!(fs::read(fixture.path().join(STATE)).unwrap(), before);
+        assert!(fixture.path().join(STAGING).is_file());
+        assert!(ledger.snapshot().unwrap().storage.is_empty());
+        let (snapshot, request) = storage_context("a", 1);
+        assert!(matches!(
+            ledger.reserve_storage(&request, || Ok(snapshot)),
+            Err(LedgerError::Io(_))
+        ));
+    }
+
+    #[test]
+    fn bootstrap_retains_orphan_unknown_and_over_budget_inventory() {
+        let fixture = Fixture::new();
+        let mut initial = inventory(&["a"]);
+        initial.allocations.push(StorageAllocation {
+            id: "removed-instance-workspace".into(),
+            kind: StorageKind::Workspace,
+            bytes: 3 * MIN_STORAGE_BYTES,
+            binding: None,
+            state: StorageState::Unknown,
+        });
+        let expected = initial.allocations.clone();
+        let ledger = fixture.ledger_with(initial);
+        assert_eq!(ledger.snapshot().unwrap().storage, expected);
+        let (snapshot, request) = context("a", 1);
+        let ClaimOutcome::Denied(decision) =
+            ledger.claim(&request, || Ok((snapshot, 110))).unwrap()
+        else {
+            panic!("preexisting over-budget inventory must block new startup");
+        };
+        assert!(
+            decision
+                .reasons
+                .iter()
+                .any(|reason| reason.code == ReasonCode::ResourceExhausted)
+        );
+        let (snapshot, request) = storage_context("b", 1);
+        assert!(matches!(
+            ledger.reserve_storage(&request, || Ok(snapshot)).unwrap(),
+            StorageClaimOutcome::Denied(_)
+        ));
+        assert_eq!(
+            fixture.open("ledger").unwrap().snapshot().unwrap().storage,
+            expected
+        );
+    }
+
+    #[test]
+    fn incomplete_or_duplicate_bootstrap_does_not_create_an_empty_ledger() {
+        let fixture = Fixture::new();
+        let mut incomplete = inventory(&[]);
+        incomplete.complete = false;
+        assert!(matches!(
+            fixture.initialize("ledger", incomplete),
+            Err(LedgerError::Invalid(_))
+        ));
+        assert!(!fixture.path().exists());
+        let mut duplicate = inventory(&["a"]);
+        duplicate.allocations.push(duplicate.allocations[0].clone());
+        assert!(matches!(
+            fixture.initialize("ledger", duplicate),
+            Err(LedgerError::Invalid(_))
+        ));
+        assert!(!fixture.path().exists());
+    }
+
+    #[test]
+    fn imported_present_storage_cannot_recreate_a_missing_image_or_rebind() {
+        let fixture = Fixture::new();
+        let ledger = fixture.ledger();
+        let (snapshot, request) = storage_context("a", 1);
+        let missing_image = fixture.0.join("must-not-be-created.img");
+        match ledger.reserve_storage(&request, || Ok(snapshot)).unwrap() {
+            StorageClaimOutcome::New(_) => {
+                fs::write(&missing_image, b"unexpected dispatch").unwrap();
+                panic!("imported allocation cannot authorize creation");
+            }
+            StorageClaimOutcome::Existing(receipt) => assert!(receipt.request.is_none()),
+            StorageClaimOutcome::Denied(_) => panic!("matching allocation should be visible"),
+        }
+        assert!(!missing_image.exists());
+        let (mut snapshot, request) = storage_context("a", 1);
+        snapshot.instance.storage[0].binding_revision = "changed-mount-or-uid".into();
+        assert!(matches!(
+            ledger.reserve_storage(&request, || Ok(snapshot)).unwrap(),
+            StorageClaimOutcome::Denied(_)
+        ));
+        assert_eq!(ledger.snapshot().unwrap().revision, 1);
+    }
+
+    #[test]
+    fn storage_replay_reauthorizes_and_operation_keys_cannot_change_kind() {
+        let fixture = Fixture::new();
+        let ledger = fixture.ledger_with(inventory(&[]));
+        let original = reserve(&ledger, "a")
+            .complete(StorageState::Present)
+            .unwrap();
+        let (mut snapshot, request) = storage_context("a", 1);
+        snapshot.instance.owner_id = "other-owner".into();
+        assert!(matches!(
+            ledger.reserve_storage(&request, || Ok(snapshot)).unwrap(),
+            StorageClaimOutcome::Denied(_)
+        ));
+        let (snapshot, mut changed) = storage_context("a", 1);
+        changed.allocation_id = "state-a".into();
+        assert!(matches!(
+            ledger.reserve_storage(&changed, || Ok(snapshot)),
+            Err(LedgerError::Conflict)
+        ));
+        let (snapshot, mut start) = context("a", original.updated_revision);
+        start.operation_id = request.request.operation_id;
+        assert!(matches!(
+            ledger.claim(&start, || Ok((snapshot, 110))),
+            Err(LedgerError::Conflict)
+        ));
+    }
+
+    #[test]
+    fn storage_only_legacy_workspace_does_not_need_compute_state_or_model() {
+        let fixture = Fixture::new();
+        let ledger = fixture.ledger_with(inventory(&[]));
+        let (mut snapshot, request) = storage_context("legacy", 1);
+        snapshot.instance.resources = Resources {
+            workspace_bytes: MIN_STORAGE_BYTES,
+            ..Resources::default()
+        };
+        snapshot
+            .instance
+            .storage
+            .retain(|requirement| requirement.kind == StorageKind::Workspace);
+        snapshot.instance.requested_capabilities = vec![Capability::Model];
+        let StorageClaimOutcome::New(permit) =
+            ledger.reserve_storage(&request, || Ok(snapshot)).unwrap()
+        else {
+            panic!("storage-only provisioning must support a stopped workspace-only definition");
+        };
+        permit.complete(StorageState::Present).unwrap();
+        assert_eq!(ledger.snapshot().unwrap().storage.len(), 1);
+    }
+
+    #[test]
     fn missing_corrupt_or_oversized_state_never_reinitializes() {
         let fixture = Fixture::new();
         let ledger = fixture.ledger();
         let path = fixture.path().join(STATE);
         let original = fs::read(&path).unwrap();
+        let mut old: serde_json::Value = serde_json::from_slice(&original).unwrap();
+        old["schemaVersion"] = serde_json::json!(1);
+        old.as_object_mut().unwrap().remove("storage");
+        let old = serde_json::to_vec(&old).unwrap();
+        fs::write(&path, &old).unwrap();
+        assert!(fixture.open("ledger").is_err());
+        assert_eq!(fs::read(&path).unwrap(), old);
         fs::write(&path, b"{\"schemaVersion\":1}").unwrap();
         assert!(matches!(ledger.snapshot(), Err(LedgerError::Invalid(_))));
         fs::write(&path, &original).unwrap();
@@ -1051,7 +1679,7 @@ mod tests {
         assert!(matches!(ledger.snapshot(), Err(LedgerError::Full)));
         fs::remove_file(path).unwrap();
         assert!(fixture.open("ledger").is_err());
-        assert!(fixture.initialize("ledger").is_err());
+        assert!(fixture.initialize("ledger", inventory(&[])).is_err());
     }
 
     #[test]
@@ -1096,12 +1724,12 @@ mod tests {
                 Err(LedgerError::Invalid("untrusted directory ancestry"))
             ));
             assert!(matches!(
-                Ledger::initialize(&public_path, "authority-1"),
+                Ledger::initialize(&public_path, "authority-1", inventory(&[])),
                 Err(LedgerError::Invalid("untrusted directory ancestry"))
             ));
             assert!(!public_path.exists());
         } else {
-            Ledger::initialize(&public_path, "authority-1").unwrap();
+            Ledger::initialize(&public_path, "authority-1", inventory(&[])).unwrap();
             assert!(Ledger::open(&public_path).is_ok());
         }
     }
@@ -1133,7 +1761,7 @@ mod tests {
             Err(LedgerError::Invalid(_))
         ));
         assert!(matches!(
-            fixture.initialize("second"),
+            fixture.initialize("second", inventory(&[])),
             Err(LedgerError::Invalid(_))
         ));
         assert!(!fixture.0.join("second").exists());

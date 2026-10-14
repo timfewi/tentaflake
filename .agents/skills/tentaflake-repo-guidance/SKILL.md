@@ -39,6 +39,9 @@ relevant source and guide. Avoid loading unrelated references.
   authority. Preserve checked aggregate accounting, exact grants and generation
   binding. Only a new synced ledger claim yields a dispatch permit; retain its
   lock through handoff and preserve unknown outcomes and stopped storage.
+  Charge volumes independently of runtime receipts, including never-started and
+  orphan images. Complete inventory and fenced creators precede authority;
+  existing allocations never permit implicit recreation, resize or rebinding.
 - Base images select reviewed platform manifests, separate from native presets.
   Preserve raw metadata bytes and run `just image-catalog`. Acquisition is separate
   from Research; digest chains do not prove signatures or runtime acceptance.

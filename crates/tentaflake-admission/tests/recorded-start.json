@@ -1,7 +1,7 @@
 {
   "nowUnixSeconds": 1001,
   "snapshot": {
-    "schemaVersion": 1,
+    "schemaVersion": 2,
     "policy": {
       "revision": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
       "generation": "fixture-authority-epoch",
@@ -54,7 +54,19 @@
         "workspaceBytes": 536870912,
         "stateBytes": 268435456
       },
-      "requestedCapabilities": []
+      "requestedCapabilities": [],
+      "storage": [
+        {
+          "id": "fixture-workspace-slot",
+          "kind": "workspace",
+          "bindingRevision": "fixture-workspace-binding"
+        },
+        {
+          "id": "fixture-state-slot",
+          "kind": "state",
+          "bindingRevision": "fixture-state-binding"
+        }
+      ]
     },
     "readiness": {
       "generation": "fixture-authority-epoch",
@@ -112,11 +124,35 @@
       "revision": 1,
       "generation": "fixture-authority-epoch",
       "complete": true,
-      "entries": []
+      "entries": [],
+      "storage": [
+        {
+          "id": "fixture-workspace-slot",
+          "kind": "workspace",
+          "bytes": 536870912,
+          "binding": {
+            "instanceId": "generic-fixture",
+            "ownerId": "owner-fixture",
+            "revision": "fixture-workspace-binding"
+          },
+          "state": "present"
+        },
+        {
+          "id": "fixture-state-slot",
+          "kind": "state",
+          "bytes": 268435456,
+          "binding": {
+            "instanceId": "generic-fixture",
+            "ownerId": "owner-fixture",
+            "revision": "fixture-state-binding"
+          },
+          "state": "present"
+        }
+      ]
     }
   },
   "request": {
-    "schemaVersion": 1,
+    "schemaVersion": 2,
     "operationId": "operation-fixture",
     "instanceId": "generic-fixture",
     "principalId": "owner-fixture",
