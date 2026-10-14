@@ -31,18 +31,15 @@ stand-in backend; real host interaction remains outstanding.
 
 Current integration work:
 
-- **OCI/storage/publication, PR #166:** complete effective specifications, exact
+- **OCI/storage/publication, merged PR #166:** complete effective specifications, exact
   supervisor/daemon/CID ownership, durable Unknown claims and explicit stopped
-  bootstrap/publication. Commit `c9442ef` requires Docker's classic image store
-  and verifies its live configuration without weakening exact config identity.
-  Run `38542786276` passes acquisition, normal OCI start/stop, resource release,
-  create-conflict refusal, storage/publication and normal shutdown. Its crash
-  test fails after Docker restart and supervisor SIGKILL: systemd skips ExecStop,
-  leaving the receipt Active with its CID and full reservation retained.
-  Commit `fa3fad4` adds an authenticated, exact-invocation ExecStopPost path that
-  marks unfinished claims Unknown without Docker mutations or resource release.
-  Focused Rust/Nix gates and independent source reviews pass. Replacement run
-  `38549784563` is pending, including the unchanged crash assertion and Research VM.
+  bootstrap/publication. Docker's classic image store and live configuration
+  preserve exact image identity. The authenticated, exact-invocation post-stop
+  path marks crashed claims Unknown without Docker mutation or resource release.
+  Full run `38549784563` passes at `fa3fad4`, including acquisition, normal
+  lifecycle, conflict refusal, storage/publication, shutdown, the unchanged crash
+  assertion and Research VM. Main merge `5c37324` also includes PRs #159/#164/#165;
+  no local host activation or deployment acceptance is implied.
 - **Model/Research integration:** PR #167 and the upstream Research readiness
   work still need their relevant runtime gates and final public pin integration.
   Exact requested capabilities and live evidence remain prerequisites; neither
@@ -151,7 +148,7 @@ directory replacement and legitimate result publication. `just fast` passes
 closed Rust loader. The actual offline CLI Nix package passes **358 tests**, with
 four intentional helpers ignored. No Worker readiness evidence or grant is added.
 
-The OCI source prerequisite authenticates immutable store mount sources through
+The OCI source prerequisite (#175) authenticates immutable store mount sources through
 held descriptors and repeated protected opens during OCI dispatch. It preserves
 file-only readers, pure plan validation and cleanup without the original mount
 sources. Nine focused tests (seven new regressions), **470 Rust tests** in
