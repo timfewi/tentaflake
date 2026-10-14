@@ -136,7 +136,7 @@ and interruption, reboot reconciliation, partial charges and historical retries
 after template removal. Its additional prepared Unknown cases use explicitly
 synthetic execution records. Offline no-build evaluation and rendered Python
 compilation pass; actual daemon/GC registration and VM acceptance remain
-unverified. HTTP creation still returns `501`.
+unverified. Public stopped creation follows in the separate API slice below.
 New code reads old v3 files; older binaries reject the new field once written.
 
 The stacked host-control PR #173 separates the HTTP process into a dedicated
@@ -168,7 +168,7 @@ and scoped Semgrep with no findings. The existing creation VM now covers the
 generated owner/publication path. Its offline `nix flake check --no-build`
 projection with IFD disabled, focused API policy assertions, rendered driver and
 guest probe compilation pass. Actual package and VM acceptance remain pending.
-Public creation remains `501`.
+This catalog slice alone does not implement public creation.
 
 The planning slice adds `POST /plans` using the installed template principal
 policy as its only create-grant owner. Exact offline previews share the core
@@ -184,8 +184,28 @@ target directory. Security passes both dependency scans and strict Semgrep
 (19 rules, 70 files) with no findings or parse warnings. The existing creation VM covers
 unchanged state and publication/Pending refusals. Its offline runtime projection
 passes `nix flake check --no-build` with IFD disabled; the rendered VM driver and
-guest probe compile. Actual package and VM acceptance remain pending. Public
-create/start/stop remain `501`.
+guest probe compile. Actual package and VM acceptance remain pending. PR #179
+adds previews only; stopped creation follows separately below.
+
+The stopped-create slice accepts exact cached offline plans with
+`startAfterCreate: false`. Historical scoped key/digest lookup precedes current
+grants, cache lifetime, epoch and Pending checks; history never dispatches again.
+The existing ledger atomically charges workspace and private state, then only a
+new queue may hand off once to the installed supervisor. Failed handoff preserves
+Queued for explicit recovery/abort. Original retained authority owns historical
+configuration; unmeasured workspace usage is null, not zero. No private client
+dependency, host rebuild, image acquisition or runtime start is added.
+Independent review reproduced an expired session returning `401` after queueing;
+final auth now runs after slow observation inside the pre-commit callback. The
+regression proves no queued record, grants or handoff; protected bearer rotation
+and retired-epoch errors are also checked. `just fast` passes **568 Rust tests**,
+four intentional helpers ignored, plus static/helper checks. Contract validation
+covers 47 routes, 42 valid and 41 invalid examples. Security passes 153 Rust and
+479 Yarn packages plus 19 Semgrep rules without findings. The offline runtime
+projection passes `nix flake check --no-build` with IFD disabled; the rendered
+driver and guest probe compile. The updated VM uses the real CLI/API for its
+first creation and checks actual Btrfs ownership and history across reboot,
+Pending and template removal. Actual package and VM acceptance remain pending.
 
 The isolated operation-read slice implements both GET routes using original
 host/principal ownership and stored timestamps/revisions/results. Pending or
@@ -203,16 +223,15 @@ That fixture uses guest-only TLS material and production `--ca-file`; protected
 CA file and real TLS positive/refusal tests pass without changing default trust.
 Scoped Nix lint, the offline `nix flake check --no-build` runtime projection with
 IFD disabled, and rendered VM driver compilation pass. Actual generated-owner/retained-ledger VM
-acceptance remains pending. Public resource mutations remain `501`; no creation
-or dispatch path is enabled.
+acceptance remains pending. This operation-read slice alone enables no creation
+or dispatch path.
 
 Resume here: obtain combined runtime acceptance for PR #176, then actual
 generated-owner/retained-ledger VM evidence for operation reads, the installed
-catalog and read-only planning, preserving explicit grants and content-bound
-revisions. Follow with stopped creation from exact server-bound candidates;
-the isolated HTTP process cannot run the host collectors. Keep
-creation within installed policy without rebuilding the host. Follow with
-workspace/files/streams and the matching
+catalog, read-only planning and stopped creation, preserving explicit grants and
+content-bound revisions. Creation stays within installed policy without a host
+rebuild; the isolated HTTP process cannot run host collectors. Follow with owned
+environment reads, workspace/files/streams and the matching
 CLI, then actual client and coding-agent acceptance. Preserve private v3 ledger
 history; consumed login tokens and uncertain resource claims must never become
 fresh retries through restart, pruning or publication.
