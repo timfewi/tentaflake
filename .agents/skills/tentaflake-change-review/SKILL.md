@@ -1,7 +1,7 @@
 ---
 name: tentaflake-change-review
 description: Review a Tentaflake change for a concrete requirement, proportionate verification, synchronized docs and a complete PR.
-version: 1.1.11
+version: 1.1.12
 ---
 
 # Tentaflake change review
@@ -48,7 +48,11 @@ active. A successful `systemctl stop` may unload the unit; assert inactive state
 and no queued job after a successful run instead of requiring a later
 `reset-failed`. After an intentional refusal, allow its known failed state to
 remain, but reject new failures during cleanup. Keep refusal and container-absence
-evidence independent of cleanup. Initial quota owners can already have refused
+evidence independent of cleanup. Repeated refusal fixtures must prove a fresh
+CLI invocation and its expected exit status, then clear only those known failed
+units after stop/no-job evidence; otherwise systemd's start limit can hide the
+intended refusal or block later recovery. Never disable the unit rate limit.
+Initial quota owners can already have refused
 the missing ledger at boot; verify that invocation's diagnostic and absent images
 before accepting its retained failed state in each node's bootstrap setup.
 The VM driver's command result contains stdout only. Capture stderr explicitly

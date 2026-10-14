@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 ### Fixed
+- Clear only verified quota-owner refusal counters after stopped/no-job evidence
+  in storage VM recovery; start-rate failures cannot satisfy refusal assertions.
 - Give parallel CLI test fixtures distinct directory names even when clock
   readings coincide.
 - Verify expected missing-ledger refusals before cleaning up quota owners in
