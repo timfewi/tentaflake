@@ -275,6 +275,8 @@ pkgs.testers.runNixOSTest {
       memorySize = 2048;
       cores = 2;
       diskSize = 2048;
+      # All guest inputs are prebuilt; keep the guarded store mount read-only.
+      writableStore = false;
       docker.enable = true;
       docker.daemon.settings."live-restore" = false;
       oci-containers.backend = "docker";
