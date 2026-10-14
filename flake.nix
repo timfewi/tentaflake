@@ -78,6 +78,7 @@
       # Contributor E2E tooling can move ahead of the nixpkgs package while
       # remaining source- and dependency-hash pinned.
       devcontainerCli = import ./lib/devcontainer-cli.nix { inherit pkgs; };
+      codexReference = import ./images/codex { inherit pkgs mkLocalImage; };
 
       # Security tools use the locked nixpkgs revisions; rule updates are
       # separate, reviewable hash bumps instead of live registry downloads.
@@ -151,6 +152,7 @@
         tentaflake-worker = self.packages.${system}.tentaflake-worker;
         tentaflake-worker-image = self.packages.${system}.tentaflake-worker-image;
         devcontainer-cli = self.packages.${system}.devcontainer-cli;
+        codex-reference = codexReference.descriptor;
         ci-vm-selection = import ./tests/ci-vm-selection.nix { inherit pkgs; };
         rust-package-sources = import ./tests/rust-package-sources.nix { inherit self pkgs; };
         image-pinning = import ./lib/pinnedImage-test.nix { inherit pkgs; };
@@ -270,8 +272,10 @@
       };
 
       # ── Convenience packages ──
-      packages.${system} = rec {
+      packages.${system} = {
         devcontainer-cli = devcontainerCli;
+        codex-reference-package = codexReference.package;
+        codex-reference-image = codexReference.archive;
         security-tools = securityTools;
         semgrep-rules = semgrepRules;
         tentaflake-cli = pkgs.callPackage ./pkgs/tentaflake-cli { };

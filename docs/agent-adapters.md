@@ -308,10 +308,48 @@ and reviewed by the operator; its catalog entry selects no image.
 
 <!-- runtime-catalog:end -->
 
-Codex and Claude Code are the next compatibility investigations for the initial
-environment UI. OpenCode, Goose, Aider, Pi and OpenHands remain alternatives.
-No adapter files or support claims are added for these candidates; see
-[coding-agent acceptance](roadmap.md#m02--coding-agent-acceptance-and-policy-enforcement).
+The experimental [Codex reference image](../images/codex/default.nix) packages
+the official Linux x86_64 `0.162.1` full archive with a fixed SHA-256. The acquired
+bytes, package layout and included content hashes have been checked. Binaries,
+resources, manifests and notices remain unchanged; image-owned glibc/ncurses
+paths supply the bundled dynamic programs. Signature and vendor acceptance
+remain separate requirements.
+
+`packages.x86_64-linux.codex-reference-image` provides the local OCI archive.
+An existing Generic definition can select it through `mkLocalImage`, request
+`model`, and set `command = [ "<explicit-allowed-broker-model>" ];`. The image
+entrypoint consumes that model argument and the existing virtual broker
+environment. Configure both quotas and the broker grant as for every Generic
+instance. Admitted model startup also requires the separate live Model admission
+feature. The entrypoint passes non-secret Responses-provider settings as native
+configuration overrides; the virtual token stays in the environment. It retains
+`/state/.codex` and starts a foreground app-server with a private
+`/tmp/tentaflake-codex/server.sock`, which is never exposed on the host.
+
+The pinned CLI supports an in-capsule client command of
+`codex --remote unix:///tmp/tentaflake-codex/server.sock resume <session-id>`.
+That is the intended manual session test after `tentaflake shell`; shell access
+alone proves no attachment. The built wrapper passes isolated native initialization
+and effective provider-config reads over the isolated fixture's private WebSocket/Unix
+transport; strict config rejects an unknown field without replacing its file.
+That fixture exposes only the exact image closure and scratch directories, with
+no external network or real credentials. Native startup attempts optional plugin
+sync in the background; these attempts are denied by network isolation. Actual
+admitted-capsule startup, editing/checking, cancellation, reconnection, restart
+persistence and provider compatibility still require acceptance. No inner sandbox
+or approval override is selected by the wrapper.
+See [coding-agent acceptance](roadmap.md#m02--coding-agent-acceptance-and-policy-enforcement).
+
+`just codex-reference` checks the wrapper without executing Codex. Package and
+image gates are explicit:
+
+```sh
+nix build --no-link .#codex-reference-package
+nix build --no-link .#checks.x86_64-linux.codex-reference
+```
+
+Codex remains outside the preset catalog. Claude Code is the other initial
+compatibility candidate; OpenCode, Goose, Aider, Pi and OpenHands remain alternatives.
 
 Primary OpenClaw sources read through the isolated Research service:
 
@@ -325,7 +363,7 @@ Primary OpenClaw sources read through the isolated Research service:
 - [v2026.9.7 Completions request builder](https://github.com/openclaw/openclaw/blob/v2026.9.7/packages/ai/src/transports/openai-completions-params.ts#L309): both direct and managed modes use a request with `stream: true`; `supportsUsageInStreaming` only controls `stream_options.include_usage`.
 - [v2026.9.7 Responses provider](https://github.com/openclaw/openclaw/blob/v2026.9.7/packages/ai/src/providers/openai-responses.ts#L143) and [stream lifecycle](https://github.com/openclaw/openclaw/blob/v2026.9.7/packages/ai/src/providers/openai-responses-shared.ts#L172): the direct provider constructs `stream: true` and consumes a Responses event stream.
 
-No runtime artifact was downloaded, built or pulled. Repository/release HTML exceeded
+No OpenClaw runtime artifact was downloaded, built or pulled. Repository/release HTML exceeded
 the bounded extraction limit; the older embedded-runner source path returned
 404. The versioned directory index identified the current source paths above.
 The inspected built-in OpenAI request builders require streaming. The broker
