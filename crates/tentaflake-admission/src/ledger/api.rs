@@ -236,9 +236,20 @@ pub enum ApiQueued {
 
 pub struct ApiSnapshot {
     pub grants_revision: u64,
-    pub environments: Vec<EnvironmentRecord>,
+    pub environments: Vec<OwnedEnvironment>,
     pub workspaces: Vec<WorkspaceRecord>,
     pub grants: Vec<ActionGrant>,
+}
+
+/// One exact environments.read grant authorizes this environment's public
+/// metadata, including its bound workspace metadata. It confers no separate
+/// workspace/file access. The original authority identifies retained template
+/// metadata; all three records are read from the same validated locked state.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct OwnedEnvironment {
+    pub environment: EnvironmentRecord,
+    pub workspace: WorkspaceRecord,
+    pub authority: PublishedAuthority,
 }
 
 /// Original accepted-create metadata for its authenticated owner, including
@@ -495,6 +506,14 @@ impl State {
             .filter(|grant| grant.active(context.now))
             .cloned()
             .collect()
+    }
+
+    fn api_workspace(&self, environment: &EnvironmentRecord) -> Result<&WorkspaceRecord, LedgerError> {
+        self.api
+            .workspaces
+            .iter()
+            .find(|workspace| workspace.id == environment.spec.workspace_id)
+            .ok_or(LedgerError::Invalid("API environment workspace"))
     }
 
     fn api_context(&self, context: &ApiContext) -> Result<(), LedgerError> {
@@ -765,8 +784,20 @@ impl Ledger {
                             })
                 })
             })
-            .map(|env| (*env).clone())
-            .collect();
+            .map(|env| {
+                let operation = state
+                    .api
+                    .operations
+                    .iter()
+                    .find(|operation| operation.mutation.operation_id == env.operation_id)
+                    .ok_or(LedgerError::Invalid("API environment creation"))?;
+                Ok(OwnedEnvironment {
+                    environment: (*env).clone(),
+                    workspace: state.api_workspace(env)?.clone(),
+                    authority: operation.authority.clone(),
+                })
+            })
+            .collect::<Result<_, LedgerError>>()?;
         let workspaces = state
             .api
             .workspaces
@@ -829,12 +860,7 @@ impl Ledger {
             .api_owned(context)
             .find(|env| env.operation_id == operation.mutation.operation_id)
             .ok_or(LedgerError::Invalid("create receipt environment"))?;
-        let workspace = state
-            .api
-            .workspaces
-            .iter()
-            .find(|workspace| workspace.id == environment.spec.workspace_id)
-            .ok_or(LedgerError::Invalid("create receipt workspace"))?;
+        let workspace = state.api_workspace(environment)?;
         Ok(Some(OwnedCreate {
             operation: operation.clone(),
             environment: environment.clone(),

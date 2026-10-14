@@ -648,6 +648,152 @@ fn stopped_creation_uses_native_storage_once_and_stable_resource_revisions() {
 }
 
 #[test]
+fn environment_reads_require_the_exact_grant_and_link_only_owned_workspace_metadata() {
+    let fixture = Fixture::new();
+    let ledger = fixture.ledger_with(inventory(&[]));
+    let mut accepted = Vec::new();
+    for (index, (read_environment, read_workspace)) in
+        [(true, false), (false, true), (true, true), (false, false), (true, true), (true, true)]
+            .into_iter()
+            .enumerate()
+    {
+        let mut authenticated = api_context();
+        if index == 4 {
+            authenticated.principal = "other-owner".into();
+        } else if index == 5 {
+            authenticated.host = "other-host".into();
+        }
+        let mut wanted = spec(&format!("env-{index}"));
+        wanted.instance.owner_id = authenticated.principal.clone();
+        wanted.grants.retain(|grant| match grant.action {
+            ApiAction::EnvironmentsRead => read_environment,
+            ApiAction::WorkspacesRead => read_workspace,
+            _ => false,
+        });
+        // A non-read grant keeps the no-read case a valid accepted create.
+        wanted.grants.push(ActionGrant {
+            id: format!("retain-{index}"),
+            action: ApiAction::WorkspacesRetain,
+            target: ApiTarget::Workspace { id: wanted.workspace_id.clone() },
+            expires_at: None,
+        });
+        let mut request = mutation();
+        request.operation_id = format!("api-op-{index}");
+        request.key.host = authenticated.host.clone();
+        request.key.principal = authenticated.principal.clone();
+        request.key.key = format!("00000000-0000-4000-8000-{index:012}");
+        let grant_revision = ledger.api_snapshot(&authenticated).unwrap().grants_revision;
+        ledger.api_queue_create(
+            &authenticated, &request, &wanted, grant_revision, |_, _, wanted| {
+                let mut current = policy(wanted);
+                current.policy.capacity = resources(8);
+                current.create_grant.target = ApiTarget::Host { id: authenticated.host.clone() };
+                Ok(current)
+            },
+        ).unwrap();
+        accepted.push((authenticated, request, wanted));
+    }
+    let reopened = fixture.open("ledger").unwrap();
+    let before = persisted_files(&fixture);
+    let snapshot = reopened.api_snapshot(&api_context()).unwrap();
+    assert_eq!(snapshot.environments.iter().map(|row| row.environment.spec.instance.id.as_str()).collect::<Vec<_>>(), ["env-0", "env-2"]);
+    assert_eq!(snapshot.workspaces.iter().map(|row| row.id.as_str()).collect::<Vec<_>>(), ["workspace-id-env-1", "workspace-id-env-2"]);
+    for row in &snapshot.environments {
+        assert_eq!(row.workspace.environment_id, row.environment.spec.instance.id);
+        assert_eq!(row.workspace.id, row.environment.spec.workspace_id);
+        assert_eq!(row.workspace.owner_id, "owner-1");
+        assert_eq!(row.authority, authority("policy-1"));
+    }
+    // environments.read includes the required public bound-workspace metadata,
+    // but never adds a standalone workspace-read grant or snapshot entry.
+    assert_eq!(snapshot.environments[0].workspace.id, "workspace-id-env-0");
+    assert!(!snapshot.grants.iter().any(|grant| grant.action == ApiAction::WorkspacesRead && grant.target == (ApiTarget::Workspace { id: "workspace-id-env-0".into() })));
+    for (index, (authenticated, request, wanted)) in accepted.iter().enumerate() {
+        let history = reopened.api_create_receipt(authenticated, &request.key, &request.request_digest).unwrap().unwrap();
+        assert_eq!(history.environment.spec, *wanted);
+        if index >= 4 {
+            let scoped = reopened.api_snapshot(authenticated).unwrap();
+            assert_eq!(scoped.environments.len(), 1);
+            assert_eq!(scoped.environments[0].environment.spec, *wanted);
+            assert_eq!(scoped.grants, wanted.grants);
+        }
+    }
+    assert_eq!(persisted_files(&fixture), before);
+
+    // Revocation hides the resource while the exact accepted-create receipt
+    // still returns its original metadata without granting general reads.
+    let (_, request, _) = &accepted[0];
+    reopened.api_abort_create(
+        &authority("policy-1"), &request.operation_id,
+        reopened.snapshot().unwrap().revision, 101,
+        |op, _, rows| Ok(abort_observation(op, rows, [CreateAbortStorageState::Absent; 2])),
+    ).unwrap();
+    let before = persisted_files(&fixture);
+    let snapshot = reopened.api_snapshot(&api_context()).unwrap();
+    assert_eq!(snapshot.environments.len(), 1);
+    assert_eq!(snapshot.environments[0].environment.spec.instance.id, "env-2");
+    assert_eq!(reopened.api_create_receipt(&api_context(), &request.key, &request.request_digest).unwrap().unwrap().environment.state, EnvironmentState::Aborted);
+    assert_eq!(persisted_files(&fixture), before);
+}
+
+#[test]
+fn environment_reads_preserve_native_state_and_original_authority_without_writes() {
+    for completed in [false, true] {
+        let fixture = Fixture::new();
+        let ledger = fixture.ledger_with(inventory(&[]));
+        let queued = queue(&ledger);
+        let before = persisted_files(&fixture);
+        let queued_view = ledger.api_snapshot(&api_context()).unwrap().environments.remove(0);
+        assert_eq!(queued_view.environment.state, EnvironmentState::Provisioning);
+        assert_eq!(queued_view.environment.revision, queued.updated_revision);
+        assert_eq!(queued_view.workspace.revision, queued.updated_revision);
+        assert_eq!(persisted_files(&fixture), before);
+
+        let mut permit = claim(&ledger);
+        assert!(matches!(ledger.api_snapshot(&api_context()), Err(LedgerError::Busy)));
+        if completed {
+            for kind in [StorageKind::Workspace, StorageKind::State] {
+                permit.provision(kind, |_| Ok(())).unwrap();
+            }
+            permit.complete(101).unwrap();
+        } else {
+            drop(permit);
+        }
+        let reopened = fixture.open("ledger").unwrap();
+        let before = persisted_files(&fixture);
+        let snapshot = reopened.api_snapshot(&api_context()).unwrap();
+        let view = &snapshot.environments[0];
+        let operation = reopened.api_operation(&api_context(), "api-op-1").unwrap().unwrap();
+        assert_eq!(view.environment.state, if completed { EnvironmentState::Stopped } else { EnvironmentState::Unknown });
+        assert_eq!(view.environment.revision, operation.updated_revision);
+        assert_eq!(view.workspace.revision, if completed { operation.updated_revision } else { queued.updated_revision });
+        assert_eq!(view.authority, queued.authority);
+        assert_eq!(view.environment.spec, spec("env-a"));
+        assert_eq!(persisted_files(&fixture), before);
+        if !completed {
+            assert!(reopened.snapshot().unwrap().storage.iter().all(|row| row.state == StorageState::Unknown));
+            continue;
+        }
+        let request = publication(&reopened, "read-publication", "policy-2");
+        reopened.begin_publication(&request).unwrap();
+        let before = persisted_files(&fixture);
+        let mut changed_epoch = api_context();
+        changed_epoch.epoch = "new-epoch".into();
+        assert_eq!(reopened.api_snapshot(&changed_epoch).unwrap().environments, snapshot.environments);
+        assert_eq!(persisted_files(&fixture), before);
+        reopened.finish_publication("read-publication", reopened.snapshot().unwrap().revision, |_, _| installed(&request.candidate)).unwrap();
+        assert!(matches!(reopened.api_snapshot(&api_context()), Err(LedgerError::StaleAuthority)));
+        changed_epoch.authority = request.candidate;
+        let before = persisted_files(&fixture);
+        let published = reopened.api_snapshot(&changed_epoch).unwrap();
+        assert_eq!(published.environments, snapshot.environments);
+        assert_eq!(published.grants, snapshot.grants);
+        assert_eq!(published.grants_revision, snapshot.grants_revision);
+        assert_eq!(persisted_files(&fixture), before);
+    }
+}
+
+#[test]
 fn owned_create_receipt_tracks_durable_lifecycle_without_writes() {
     for phase in 0..3 {
         let fixture = Fixture::new();
@@ -1981,7 +2127,7 @@ fn owned_create_receipt_retains_aborted_metadata_but_only_effective_owned_grants
     let owned = reopened.api_snapshot(&api_context()).unwrap();
     assert_eq!(history.grants, owned.grants);
     assert_eq!(owned.environments.len(), 1);
-    assert_eq!(owned.environments[0].spec.instance.id, "env-b");
+    assert_eq!(owned.environments[0].environment.spec.instance.id, "env-b");
     assert_eq!(owned.workspaces.len(), 1);
     assert_eq!(persisted_files(&fixture), before);
 
