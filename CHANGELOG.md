@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 ### Fixed
+- Update the shared Rustls lock and explicit TLS test pin to 0.23.46 for four
+  current advisories, preserving the existing TLS features and trust policy.
 - Return documented `501` refusals for authenticated unsupported API mutations
   with request bodies, retaining authentication and implemented bodyless-route checks.
 - Update the compatible Quinn protocol and Dev Containers shell-quote dependency
