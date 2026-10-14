@@ -1,7 +1,7 @@
 ---
 name: tentaflake-change-review
 description: Review a Tentaflake change for a concrete requirement, proportionate verification, synchronized docs and a complete PR.
-version: 1.1.3
+version: 1.1.4
 ---
 
 # Tentaflake change review
@@ -43,8 +43,10 @@ root ownership. Never relax production ownership policy to fit a sandbox.
 
 VM lifecycle fixtures must inspect container readiness after a unit becomes
 active. A successful `systemctl stop` may unload the unit; assert inactive state
-and no queued job instead of requiring a later `reset-failed` on that unloaded
-unit. Keep the refusal and container-absence evidence independent of cleanup.
+and no queued job after a successful run instead of requiring a later
+`reset-failed`. After an intentional refusal, allow its known failed state to
+remain, but reject new failures during cleanup. Keep refusal and container-absence
+evidence independent of cleanup.
 When a VM deliberately declares missing grants, assert the doctor's exact severe
 findings and nonzero exit; healthy subsystem checks must retain that host posture.
 
