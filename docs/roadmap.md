@@ -155,27 +155,26 @@ The isolated operation-read slice implements both GET routes using original
 host/principal ownership and stored timestamps/revisions/results. Pending or
 old-epoch missing keys remain Unknown; the owner rechecks auth/binding before
 returning. Operator-aborted creation maps to failed/unready without replay rights.
-The focused durable Pending-lookup test, 45 API tests and the actual CLI argument
-regression pass, together with all-target admission/CLI Clippy and 41 valid/38
-invalid public contract examples.
+After integrating the runtime/security prerequisites, `just fast` passes **530
+Rust tests**, with four intentional helpers ignored, plus formatting, Clippy and
+static checks. The contract has 41 valid/38 rejected examples; `just security`
+passes both dependency scans and strict Semgrep without findings or parse warnings.
 These transport fixtures substitute installed-state/receipt reads; they do not
 prove a generated owner against the real host ledger. Before merging, exercise
 actual creation receipts through the generated owner and CLI on the existing
 creation node, including terminal history and Pending absence.
 That fixture uses guest-only TLS material and production `--ca-file`; protected
 CA file and real TLS positive/refusal tests pass without changing default trust.
-Scoped Nix lint, offline no-build/IFD-disabled node evaluation and the rendered
-3000-line driver compile pass. Actual generated-owner/retained-ledger VM
+Scoped Nix lint, the offline `nix flake check --no-build` runtime projection with
+IFD disabled, and rendered VM driver compilation pass. Actual generated-owner/retained-ledger VM
 acceptance remains pending. Public resource mutations remain `501`; no creation
 or dispatch path is enabled.
 
-Resume here: obtain actual owner and supervised creation/recovery VM evidence,
-including partial outcomes and historical retries. Then expose the existing
-operation-ID and idempotency recovery reads through the owner, using an explicit
-public projection that hides private plans, supervisors and native operations.
-Reads must preserve original ownership, uncertainty and historical receipts;
-only a healthy current mutation epoch can establish retry-safe absence. Follow
-with server-bound planning/queueing and exact grants through that owner;
+Resume here: obtain combined runtime acceptance for PR #176, then actual
+generated-owner/retained-ledger VM evidence for operation reads. The next API
+slice is the installed catalog with explicit default-deny read grants and
+revisions derived from its actual public metadata and effective grants. Follow
+with server-bound planning/queueing and exact grants through the owner;
 the isolated HTTP process cannot run the host collectors. Keep
 creation within installed policy without rebuilding the host. Follow with
 workspace/files/streams and the matching
