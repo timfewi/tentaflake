@@ -355,6 +355,15 @@
     # the runtime probes bounded while leaving headroom for gVisor itself.
     runtime_probe_pids_limit = 64
 
+    def stop_unit(node, unit):
+        node.succeed("systemctl stop " + shlex.quote(unit))
+        # A successful stop may unload the unit. reset-failed then errors even
+        # though no failed state remains; verify the required quiescence directly.
+        state = node.succeed("systemctl show --property=ActiveState --value " + shlex.quote(unit)).strip()
+        assert state == "inactive", (unit, state)
+        jobs = node.succeed("systemctl list-jobs --no-legend --no-pager").splitlines()
+        assert all(unit not in line.split() for line in jobs), (unit, jobs)
+
     def check_live_doctor(node, backend, image, network, endpoint):
         name = "tf-doctor-fixture"
         apparmor = "--security-opt=apparmor=docker-default " if backend == "docker" else ""
@@ -422,6 +431,28 @@
             if line.startswith("ExecStart=")
         )
         return unit + "\n" + node.succeed("cat " + exec_start)
+
+    def security_posture(node):
+        status, output = node.execute("tentaflake doctor --security --json")
+        assert status == 1, output
+        report = json.loads(output)
+        assert report["profile"] == "balanced", report
+        # These stopped definitions intentionally lack their requested grants.
+        # The aggregate doctor must refuse them while individual healthy
+        # subsystems remain inspectable. Unexpected severe findings still fail.
+        severe = {
+            (finding["agent"], finding["id"])
+            for finding in report["findings"]
+            if finding["severity"] in ("high", "critical")
+        }
+        assert severe == {
+            ("generic-missing-model", "TFSEC-040"),
+            ("hermes-test", "TFSEC-040"),
+            ("hermes-test", "TFSEC-041"),
+            ("zeroclaw-assistant", "TFSEC-040"),
+            ("zeroclaw-assistant", "TFSEC-041"),
+        }, report
+        return report
 
     def wait_for_broker_health(node, endpoint, diagnostic):
         try:
@@ -544,15 +575,10 @@
         assert json.loads(report)["unknown_agents"] == ["agent-1"], report
 
     with subtest("security doctor reports exact missing grants for stopped capsules"):
-        status, report = machine.execute("tentaflake doctor --security --json")
-        assert status == 1, report
-        posture = json.loads(report)
-        assert posture["profile"] == "balanced", posture
+        posture = security_posture(machine)
         findings = {finding["id"] for finding in posture["findings"]}
-        assert {"TFSEC-040", "TFSEC-041"} <= findings, report
-        assert "TFSEC-013" not in findings, report
-        assert "TFSEC-002" not in report, report
-        assert "TFSEC-011" not in report, report
+        assert {"TFSEC-040", "TFSEC-041"} <= findings, posture
+        assert {"TFSEC-013", "TFSEC-002", "TFSEC-011"}.isdisjoint(findings), posture
 
     with subtest("declared agent produced its systemd unit"):
         # oci-containers names the unit docker-<container>.service.
@@ -787,7 +813,7 @@
         machine.fail("systemctl start docker-generic-missing-model.service")
         journal = machine.succeed("journalctl --no-pager -b -u docker-generic-missing-model.service")
         assert "Generic runtime admission refused: missing model." in journal, journal
-        machine.succeed("systemctl stop docker-generic-missing-model.service; systemctl reset-failed docker-generic-missing-model.service")
+        stop_unit(machine, "docker-generic-missing-model.service")
         machine.fail("docker inspect generic-missing-model")
         after_refusal = int(machine.succeed("date +%s").strip()) + 1
         creations = machine.succeed(
@@ -896,11 +922,9 @@
             "journalctl --no-pager -b -u "
             "tentaflake-broker-fetch-zeroclaw-assistant.service -n 100",
         )
-        broker_report = machine.succeed(
-            "tentaflake doctor --security --json"
-        )
-        assert "TFSEC-035" not in broker_report, broker_report
-        assert "TFSEC-036" not in broker_report, broker_report
+        broker_report = security_posture(machine)
+        broker_findings = {finding["id"] for finding in broker_report["findings"]}
+        assert {"TFSEC-035", "TFSEC-036"}.isdisjoint(broker_findings), broker_report
         machine.succeed(
             "docker network inspect tf-zeroclaw-assistant | "
             "jq -e '.[0].Internal == true and "
@@ -1491,7 +1515,7 @@
         )
         machine.succeed("systemctl stop " + watcher)
         machine.succeed("systemctl kill --kill-who=main --signal=SIGKILL " + worker)
-        machine.succeed("systemctl stop " + worker)
+        stop_unit(machine, worker)
         machine.succeed("test -f " + state + "/running/crash_1.json")
         machine.succeed(command)
         machine.succeed("jq -e '.status == \"interrupted\" and .artifacts_available == false' " + state + "/results/crash_1/result.json")
@@ -1499,7 +1523,6 @@
         machine.fail("test -e " + state + "/running/crash_1.json")
         machine.fail("test -e " + state + "/jobs/crash_1")
         machine.succeed(command)
-        machine.succeed("systemctl reset-failed " + worker)
         machine.succeed(
             "jq -e '.max_inbox_entries == 4 and .max_queue_entries == 2 and "
             ".max_queue_bytes == 1048576' /etc/tentaflake/workers/hermes-test.json"
@@ -1570,10 +1593,8 @@
             "tentaflake-backup-success.service; "
             "exit 1; }"
         )
-        fresh_report = machine.succeed(
-            "tentaflake doctor --security --json"
-        )
-        assert "TFSEC-027" not in fresh_report, fresh_report
+        fresh_report = security_posture(machine)
+        assert all(finding["id"] != "TFSEC-027" for finding in fresh_report["findings"]), fresh_report
         machine.succeed(
             "restic -r /var/lib/tentaflake-test-restic "
             "--password-file "
