@@ -17,8 +17,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   readings coincide.
 - Verify expected missing-ledger refusals before cleaning up quota owners in
   both initial OCI admission VM fixtures.
-- Detach only the read-only shared Nix store during admission VM shutdown,
-  preserving ordinary runtime and persistent-volume cleanup.
+- Keep the read-only shared Nix store available until admission VMs enter their
+  final shutdown ramfs, preserving ordinary runtime and persistent-volume cleanup.
 - Capture CLI refusal diagnostics from stderr in publication VM assertions.
 - Bound Worker artifact pipes, raw TAR metadata, trailer and client exit under
   one deadline without buffering the archive. Retain dispatch identity on

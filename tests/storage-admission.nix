@@ -250,15 +250,21 @@ in
         memorySize = 768;
         diskSize = 2048;
       };
-      # Detach the busy immutable shared store after ordinary services stop;
+      # Keep shutdown executables available until the final shutdown ramfs;
       # persistent volumes retain their normal unmount behavior.
-      systemd.units."nix-store.mount" = {
-        overrideStrategy = "asDropin";
-        text = ''
-          [Mount]
-          LazyUnmount=true
-        '';
-      };
+      systemd.units =
+        lib.genAttrs
+          [
+            "nix-store.mount"
+            "nix-.ro\\x2dstore.mount"
+          ]
+          (_: {
+            overrideStrategy = "asDropin";
+            text = ''
+              [Unit]
+              DefaultDependencies=no
+            '';
+          });
       environment.systemPackages = [
         pkgs.btrfs-progs
         pkgs.python3
@@ -905,6 +911,9 @@ in
             assert storage_snapshot() == uncertain_ledger
         finally:
             storage.succeed("rm -- " + shlex.quote(obstacle))
+    for store_unit in ("nix-store.mount", r"nix-.ro\x2dstore.mount"):
+        assert storage.succeed("systemctl show --value --property=DefaultDependencies " + shlex.quote(store_unit)).strip() == "no"
+        assert "umount.target" not in storage.succeed("systemctl show --value --property=Conflicts " + shlex.quote(store_unit)).split()
     storage.shutdown()
   '';
 }
