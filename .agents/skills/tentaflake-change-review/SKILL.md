@@ -28,6 +28,10 @@ Use for features, fixes and substantive reviews. Read `AGENTS.md` and
 | Installer | Focused disk/generated-flake checks; ISO/VM builds when explicitly authorized |
 
 `just` loads pinned tools; direct Cargo/lint commands need `nix develop`.
+Keep Cargo workspace artifacts local to their worktree. One cached integration
+binary ran planning-only tests absent from its current source. If target reuse
+or the reported tests reveal stale artifacts, clean the named workspace packages
+and rerun their gate; dependency caches alone may remain shared.
 PR/push CI and `just fast` cover static/unit checks; evaluation and builds are
 explicit gates. Before merging, identify and obtain relevant build/runtime
 evidence for the current revision. A skipped build is not runtime acceptance.
