@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 ### Fixed
+- Allow inert dependency-only mount entries during admission maintenance while
+  retaining strict required-unit and installed-file checks.
 - Preserve completed worker results without redispatching stale requests, and
   retain complete inbox copies when legacy private pending state is damaged.
 - Identify the exact quota loop backing image inside systemd namespaces;
