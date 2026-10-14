@@ -56,8 +56,12 @@ Current integration work:
   execution and actual VM acceptance remain pending.
   Upstream Research PR #10 merged as `c530cf7` after full CI `38559967871`
   passed at `6a4f9a4`, including package tests, OSV and redacted secret scanning.
-  Its exact Hickory 0.26.3 update fixes three advisories. Main package acceptance,
-  the public downstream pin and combined runtime gates remain pending. Exact
+  Its exact Hickory 0.26.3 update fixes three advisories. Main run `38561534086`
+  also passes client, source/security and full package checks at `c530cf73`;
+  Tentaflake now pins precisely that public merge, preserving every other input.
+  The downstream security gate found five advisories in the existing
+  `quinn-proto 0.11.15` lock entry; its scoped stable patch update and combined
+  downstream runtime gates remain pending. Exact
   requested capabilities and live evidence remain prerequisites; a configured
   endpoint or declaration alone grants no access.
 - **Reference coding agent, merged PR #168:** native Codex 0.162.1 package,

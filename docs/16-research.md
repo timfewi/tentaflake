@@ -233,10 +233,10 @@ cannot authorize dispatch. Preserve the response's authenticated observation tim
 and expiry while collecting other prerequisites. Each refresh authenticates its
 own relay process.
 
-This requires the upstream authenticated readiness operation. The current input
-pin predates that operation, so Research admission still refuses startup until
-the reviewed upstream change is integrated. The downstream lifecycle/real-VPN VM
-gate remains pending. A successful local readiness response proves neither
+The public input now includes the required authenticated readiness operation at
+`c530cf73`, accepted by upstream PR and main package/security gates. The downstream
+lifecycle and separate real-VPN acceptance remain pending. A successful local
+readiness response proves neither
 provider/browser health nor job capacity, and it does not reserve future access.
 Missing, unsupported or inconsistent evidence remains unavailable; there is no
 fallback to provider listings or network probes.
@@ -280,7 +280,7 @@ authenticated transports without a provider request, and verifies broker-loss
 cleanup while Research stays ready. Research-only instances retain no model
 credential or network. The combined fixture also checks unchanged model audit
 bytes and absent budget state around the probes.
-This extension still awaits its upstream input and VM gate. Its dummy interface
+This extension still awaits its downstream VM gate. Its dummy interface
 and local observation producer are test inputs, not real VPN evidence. The
 container image is a synthetic Python probe; vendor images and native MCP
 discovery remain separate acceptance work.

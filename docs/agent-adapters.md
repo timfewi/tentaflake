@@ -209,7 +209,8 @@ container does not require the broker to remain ready. These checks establish
 local transport prerequisites, not provider acceptance or available model budget.
 The [Research collector](16-research.md#verification-and-limits) authenticates the
 exact relay and backend processes against a fresh controller generation; its
-upstream readiness input and lifecycle VM acceptance remain pending. Worker
+reviewed upstream readiness input is pinned, while downstream lifecycle VM
+acceptance remains pending. Worker
 collection, vendor acceptance and automatic recovery remain separate work;
 missing capability evidence continues to refuse startup.
 

@@ -63,7 +63,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Authenticate requested Research admission through held relay peers, exact backend
   processes and bounded controller leases, alongside local Model prerequisites.
   Read-only sources require immutable store entries or their exact capability
-  owner; Worker readiness remains unavailable.
+  owner; Worker readiness remains unavailable. Pin the accepted public Research
+  readiness implementation with the Hickory 0.26.3 security corrections.
 - Separate unprivileged HTTP framing from the root authentication/state owner
   over a bounded private Unix channel. Credentials and ledger access remain with
   the owner; stopped frontends revoke sessions and cannot trigger automatic replay.
