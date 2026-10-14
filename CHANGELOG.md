@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 - Enforce broker bridge isolation before broader host INPUT and FORWARD accepts
   using independent per-agent nftables tables.
+- Handle kernel PTY mounts during admission maintenance, preserve refusal of
+  unverified overlay backing, and report mount failures without raw sources.
 - Allow inert dependency-only mount entries during admission maintenance while
   retaining strict required-unit and installed-file checks.
 - Preserve completed worker results without redispatching stale requests, and

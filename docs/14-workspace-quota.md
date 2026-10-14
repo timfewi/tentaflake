@@ -174,6 +174,8 @@ queued or surviving legacy quota work, unmasked file-backed native mount units,
 unavailable Docker observations, unsafe roots and unfinished staging. It checks
 loaded and installed mount units, including removed definitions. Refusing all
 attached loops avoids mistaking a backing-image alias for an unrelated image.
+OverlayFS (`overlay`) mount units are unsupported because the selected metadata does not
+establish their lower, upper and work directory ownership.
 It creates only missing
 protected backing directories, imports all images including removed definitions,
 and records verified exact declared Btrfs images as Present. Other images remain

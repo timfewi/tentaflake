@@ -66,6 +66,41 @@ pub(crate) struct MountObservation {
     pub filesystem_type: String,
 }
 
+impl UnitObservation {
+    /// Bounded diagnostic context. What may contain credentials, so never echo
+    /// it or mount options; unit identity and filesystem type have closed shapes.
+    pub(crate) fn mount_context(&self) -> String {
+        let id = if mount_name(&self.id) {
+            &self.id
+        } else {
+            "invalid"
+        };
+        let (kind, source) = self
+            .mount
+            .as_ref()
+            .map_or(("unobserved", "unobserved"), |mount| {
+                let kind = if !valid_filesystem_type(&mount.filesystem_type) {
+                    "invalid"
+                } else if mount.filesystem_type.is_empty() {
+                    "empty"
+                } else {
+                    &mount.filesystem_type
+                };
+                let source = if mount.what.is_empty() {
+                    "empty"
+                } else if mount.what == "none" {
+                    "none"
+                } else if Path::new(&mount.what).is_absolute() {
+                    "absolute"
+                } else {
+                    "other"
+                };
+                (kind, source)
+            });
+        format!("unit={id}, type={kind}, source={source}")
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct UnitJob {
     pub id: u32,
@@ -541,10 +576,7 @@ fn parse_mount(bytes: &[u8]) -> Result<MountObservation, String> {
     if what.len() > 4096
         || what.bytes().any(|byte| byte.is_ascii_control())
         || !(where_path.is_empty() || absolute_path(&where_path))
-        || filesystem_type.len() > 64
-        || !filesystem_type
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
+        || !valid_filesystem_type(&filesystem_type)
     {
         return Err("invalid systemd mount properties".into());
     }
@@ -553,6 +585,13 @@ fn parse_mount(bytes: &[u8]) -> Result<MountObservation, String> {
         where_path,
         filesystem_type,
     })
+}
+
+fn valid_filesystem_type(value: &str) -> bool {
+    value.len() <= 64
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
 }
 
 fn parse_service(bytes: &[u8]) -> Result<ServiceObservation, String> {
@@ -1251,6 +1290,34 @@ mod tests {
             .replace("\"running\"", "\"dead\"")
             .replace("/etc/systemd/system/home.mount", "")
             .replace("[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16]", "[]")
+    }
+
+    #[test]
+    fn mount_diagnostics_validate_metadata_and_never_echo_source() {
+        let mut unit = missing_mount("home.mount", MetadataScope::IncidentalMount).unwrap();
+        for (what, class) in [
+            ("", "empty"),
+            ("none", "none"),
+            ("/private/path", "absolute"),
+            ("scheme://secret@host/path", "other"),
+        ] {
+            unit.mount.as_mut().unwrap().what = what.into();
+            assert_eq!(
+                unit.mount_context(),
+                format!("unit=home.mount, type=empty, source={class}")
+            );
+        }
+        unit.id = "private\ninvalid.mount".into();
+        unit.mount.as_mut().unwrap().filesystem_type = "private\ninvalid".into();
+        assert_eq!(
+            unit.mount_context(),
+            "unit=invalid, type=invalid, source=other"
+        );
+        unit.mount.as_mut().unwrap().filesystem_type = "x".repeat(65);
+        assert_eq!(
+            unit.mount_context(),
+            "unit=invalid, type=invalid, source=other"
+        );
     }
 
     fn missing_mount(name: &str, scope: MetadataScope) -> Result<UnitObservation, String> {
