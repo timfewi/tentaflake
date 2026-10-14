@@ -166,7 +166,7 @@ because their Research closure is unavailable. The model fixture now extends
 the existing OCI node; its no-build evaluation and rendered Python compile pass.
 Its explicit local-mock broker package also passes all 40 tests. `just fast`
 passes formatting, lint, workspace Rust and the declared helper/contract checks.
-Next: integrate the parent assertion repair and obtain remote VM evidence.
+Parent helper-assertion repair `c05f5e4` is integrated. Next: obtain remote VM evidence.
 Provider/vendor acceptance remains
 separate. Research follows; optional workers also need their dispatcher migrated
 into maintenance fencing.
