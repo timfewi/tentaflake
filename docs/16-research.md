@@ -222,6 +222,23 @@ readiness, budgets and source-retention policy remain enforced by the service.
 
 ## Verification and limits
 
+The experimental common admission path projects the final Research process,
+client and relay declarations for explicitly requested Generic instances. Its
+collector binds the held relay connection to the exact live relay process and
+checks the service and egress listeners, process roots, configuration mounts,
+controller output directory and configured VPN interface. It brackets the
+authenticated `research_job` readiness response with these observations and a
+fresh controller lease. Lease renewal may retain a generation; expired evidence
+cannot authorize dispatch. Each refresh authenticates its own relay process.
+
+This requires the upstream authenticated readiness operation. The current input
+pin predates that operation, so Research admission still refuses startup until
+the reviewed upstream change is integrated. The downstream lifecycle/real-VPN VM
+gate remains pending. A successful local readiness response proves neither
+provider/browser health nor job capacity, and it does not reserve future access.
+Missing, unsupported or inconsistent evidence remains unavailable; there is no
+fallback to provider listings or network probes.
+
 The observer option fixture evaluates without building Research closures:
 
 ```sh
@@ -238,8 +255,14 @@ The broader policy and runtime gates are separate workloads:
 
 ```sh
 nix build --no-link .#checks.x86_64-linux.research-policy
+just research-admission-plan
 nix build --no-link -L .#checks.x86_64-linux.research-integration
 ```
+
+`research-admission-plan` checks generated Research-only and Model+Research host
+plans through the actual CLI loader. It requires the separately prepared pinned
+Research closures; evaluation permits IFD and can build missing inputs. It is
+separate from `just fast` and the offline/model `admission-plan` recipe.
 
 The policy check exercises remote MCP rejection, missing capability mounts,
 duplicate relay UIDs, legacy fetch rejection and disabled summarization. The VM

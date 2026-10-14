@@ -1,7 +1,7 @@
 ---
 name: tentaflake-change-review
 description: Review a Tentaflake change for a concrete requirement, proportionate verification, synchronized docs and a complete PR.
-version: 1.1.6
+version: 1.1.7
 ---
 
 # Tentaflake change review
@@ -23,7 +23,7 @@ Use for features, fixes and substantive reviews. Read `AGENTS.md` and
 | Ordinary source/configuration | Start with `just fast`, then focused assertions/tests |
 | Docs/skills | Inspect source claims, local links and frontmatter; run `just fast` |
 | Image validation | `nix build --no-link .#checks.x86_64-linux.image-pinning` |
-| Admission schema/projection | `just admission-plan` exercises generated offline and model plans through the actual loader |
+| Admission schema/projection | `just admission-plan` checks offline/model; separate `just research-admission-plan` checks prepared Research plans through the actual loader |
 | Runtime/security | Identify affected host/Research VMs; run when explicitly authorized |
 | Installer | Focused disk/generated-flake checks; ISO/VM builds when explicitly authorized |
 
@@ -39,6 +39,12 @@ For broker firewall changes, inspect hook ordering and exercise unrelated open
 host ports and DNAT paths in the VM. Broker drops in NixOS's late allow chains
 were bypassed by earlier global accepts; matching rule text did not prove the
 boundary. Keep authenticated local readiness separate from provider acceptance.
+
+For Unix listeners, exercise an accepted connection in the real kernel table:
+accepted server sockets retain the listener pathname. Match the unique listening
+row and its inherited FD, excluding established rows; duplicate listeners remain
+ambiguous. A path inode or socket creator UID alone does not identify the relay
+serving a connection. Preserve the held peer and process identity through probes.
 
 For filesystem ownership tests, obtain the focused Nix package test result as
 well as Cargo evidence. A real sandbox mapped `/` to an unowned overflow UID;

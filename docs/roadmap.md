@@ -168,8 +168,31 @@ Its explicit local-mock broker package also passes all 40 tests. `just fast`
 passes formatting, lint, workspace Rust and the declared helper/contract checks.
 Parent helper-assertion repair `c05f5e4` is integrated. Next: obtain remote VM evidence.
 Provider/vendor acceptance remains
-separate. Research follows; optional workers also need their dispatcher migrated
+separate. Optional workers also need their dispatcher migrated
 into maintenance fencing.
+
+`feat/research-admission` now projects the final Research process/relay contract
+and connects it to Generic grants, owned service dependencies and the OCI
+dispatcher. The collector authenticates the actual held relay peer, backend
+listeners, process roots/configuration and controller output directory around
+the new authenticated upstream readiness RPC. Exact controller generation,
+fresh response and lease expiry remain required before each dispatch step.
+The socket and partial-frame regression tests use real local Linux/Unix sockets.
+After correcting contradictory mount flags and accepted-socket pathname handling,
+123 focused admission tests and CLI all-target Clippy pass, including the final
+expiry check after daemon observations. `just fast` passes 334 Rust tests and
+the declared static/helper checks. The actual CLI Nix package passes 75 core,
+180 CLI and nine integration tests, including the new Linux socket observations.
+Nix formatting and scoped lint pass. Full Research projection evaluation is pending: the pinned
+client closure is unavailable locally. The separate `research-admission-plan`
+recipe preserves that preparation boundary. Upstream readiness commit `73eabe4`
+has passed its own fast checks but still awaits its serialized package CI/merge;
+the downstream input remains at `91ce540`, so no usable live Research admission
+or lifecycle/real-VPN VM acceptance is claimed. Next: prepare and evaluate the
+Research projections, integrate the reviewed upstream pin, then exercise the
+actual start path. PR #166's remote VM has now identified an incidental
+`home.mount` with `LoadState=not-found` in bootstrap inventory; its focused repair
+is being reviewed independently before the next serialized runtime gate.
 
 The [base-image catalog](20-base-images.md) adds Debian 13 and Ubuntu 26.04 LTS
 platform manifest selection with an offline metadata validator. The 2026-10-13

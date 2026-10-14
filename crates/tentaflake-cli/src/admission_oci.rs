@@ -5,6 +5,7 @@ use crate::admission_host::{
     HostPlan, load_plan, open_store_file, read_store_document, store_path,
 };
 use crate::admission_model::{self, ModelSpec, ReadyModel, Stage};
+use crate::admission_research::{self, ReadyResearch, ResearchSpec};
 use crate::admission_runtime::{LEDGER, authority, installed, require_root};
 use crate::admission_systemd::{self, ExecCommand, UnitObservation};
 use serde::Deserialize;
@@ -41,6 +42,7 @@ pub(crate) struct RuntimeSpec {
     pub container: ContainerSpec,
     pub provenance: Option<Provenance>,
     pub model: Option<ModelSpec>,
+    pub research: Option<ResearchSpec>,
 }
 
 /// Closed projection of the final upstream OCI container, after the shared
@@ -432,16 +434,70 @@ pub(crate) fn validate_runtime(
     {
         return Err("OCI external transport has no live capability collector".into());
     }
+    if let Some(research) = &spec.research {
+        admission_research::validate(id, research)?;
+        if !instance
+            .requested_capabilities
+            .contains(&Capability::Research)
+            || c.environment
+                .get("TENTAFLAKE_RESEARCH_COMMAND")
+                .map(String::as_str)
+                != research.client.executable.to_str()
+            || c.environment
+                .get("TENTAFLAKE_RESEARCH_SOCKET")
+                .map(String::as_str)
+                != research.client.socket_destination.to_str()
+        {
+            return Err("Research OCI transport differs from its owned declaration".into());
+        }
+        let mut required: Vec<_> = research
+            .client
+            .closure_paths
+            .iter()
+            .map(|path| (path.as_path(), path.as_path()))
+            .collect();
+        required.push((
+            research
+                .relay
+                .socket_path
+                .parent()
+                .ok_or("invalid Research relay path")?,
+            Path::new("/run/tentaflake-research"),
+        ));
+        for (source, destination) in required {
+            if !limits.mounts.iter().any(|mount| {
+                !mount.writable
+                    && Path::new(&mount.source) == source
+                    && Path::new(&mount.destination) == destination
+            }) || limits.mounts.iter().any(|mount| {
+                let path = Path::new(&mount.destination);
+                path != destination
+                    && (path.starts_with(destination) || destination.starts_with(path))
+            }) {
+                return Err(
+                    "Research client or relay mount differs from its owned declaration".into(),
+                );
+            }
+        }
+    } else if c.environment.contains_key("TENTAFLAKE_RESEARCH_COMMAND")
+        || c.environment.contains_key("TENTAFLAKE_RESEARCH_SOCKET")
+    {
+        return Err("Research OCI environment has no owned transport declaration".into());
+    }
     if instance
         .requested_capabilities
         .iter()
-        .all(|capability| *capability == Capability::Model)
-        && limits
-            .mounts
-            .iter()
-            .any(|mount| !mount.writable && !store_path(Path::new(&mount.source)))
+        .all(|capability| matches!(capability, Capability::Model | Capability::Research))
+        && limits.mounts.iter().any(|mount| {
+            !mount.writable
+                && !store_path(Path::new(&mount.source))
+                && spec.research.as_ref().is_none_or(|research| {
+                    research.relay.socket_path.parent() != Some(Path::new(&mount.source))
+                        || mount.destination != "/run/tentaflake-research"
+                })
+        })
     {
-        return Err("offline and model-only OCI read-only mounts must be immutable".into());
+        return Err("OCI read-only mount has no immutable source or owned Research relay".into());
     }
     // autoStart is systemd policy, but remains revision-bound with every field.
     let _ = c.auto_start;
@@ -821,7 +877,7 @@ fn readiness(
     id: &str,
     generation: &str,
     now: u64,
-    model: Option<&ReadyModel>,
+    collected: &StartEvidence,
 ) -> Result<ReadinessSnapshot, String> {
     let instance = &plan.instances[id];
     let mut result = ReadinessSnapshot {
@@ -829,7 +885,7 @@ fn readiness(
         sources: Vec::new(),
         evidence: Vec::new(),
     };
-    let mut add = |kind, source_generation: String| {
+    let mut add = |kind, source_generation: String, expires_at| {
         result.sources.push(ReadinessGeneration {
             kind,
             generation: source_generation.clone(),
@@ -843,12 +899,27 @@ fn readiness(
             instance_revision: instance.revision.clone(),
             generation: source_generation,
             observed_at: now,
-            expires_at: now.saturating_add(5),
+            expires_at,
         });
     };
-    add(EvidenceKind::Runtime, generation.into());
-    if let Some(model) = model {
-        add(EvidenceKind::Model, model.generation.clone());
+    add(
+        EvidenceKind::Runtime,
+        generation.into(),
+        now.saturating_add(5),
+    );
+    if let Some(model) = &collected.model {
+        add(
+            EvidenceKind::Model,
+            model.generation.clone(),
+            now.saturating_add(5),
+        );
+    }
+    if let Some(research) = &collected.research {
+        add(
+            EvidenceKind::Research,
+            research.generation.clone(),
+            research.valid_until,
+        );
     }
     for volume in plan.volumes.iter().filter(|v| v.spec.instance_id == id) {
         let unit = admission_systemd::inspect_unit(&plan.tools.busctl, &volume.units.owner)?;
@@ -915,9 +986,10 @@ fn readiness(
                 StorageKind::State => EvidenceKind::StateQuota,
             },
             source_generation,
+            now.saturating_add(5),
         );
     }
-    // Research/Worker still require their independently generation-bound collectors.
+    // Worker still requires an independently generation-bound collector.
     Ok(result)
 }
 fn current_authority(
@@ -1432,15 +1504,13 @@ fn start_runtime(
                 .as_ref()
                 .map(|model| admission_model::collect(plan, id, model, Stage::BeforeCreate))
                 .transpose()?;
+            evidence.research = spec
+                .research
+                .as_ref()
+                .map(|research| admission_research::collect(plan, id, research))
+                .transpose()?;
             let now = timestamp()?;
-            let readiness = readiness(
-                plan,
-                path,
-                id,
-                &runtime_generation,
-                now,
-                evidence.model.as_ref(),
-            )?;
+            let readiness = readiness(plan, path, id, &runtime_generation, now, &evidence)?;
             evidence.sources = readiness.sources.clone();
             let (image_id, config) = image(plan, spec)?;
             image_config = config;
@@ -1634,6 +1704,7 @@ fn parse_wait_exit(value: &str) -> Result<u8, String> {
 struct StartEvidence {
     sources: Vec<ReadinessGeneration>,
     model: Option<ReadyModel>,
+    research: Option<ReadyResearch>,
 }
 
 fn refresh_prerequisites(
@@ -1659,18 +1730,46 @@ fn refresh_prerequisites(
         (None, None) => {}
         _ => return Err("model transport changed during dispatch; claim remains charged".into()),
     }
+    let research = spec
+        .research
+        .as_ref()
+        .map(|research| admission_research::collect(plan, id, research))
+        .transpose()?;
+    match (&original.research, &research) {
+        (Some(original), Some(fresh)) if original.same_source(fresh) => {}
+        (None, None) => {}
+        _ => {
+            return Err("Research transport changed during dispatch; claim remains charged".into());
+        }
+    }
+    let collected = StartEvidence {
+        model,
+        research,
+        ..Default::default()
+    };
     let fresh = readiness(
         plan,
         path,
         id,
         &intent.runtime_generation,
         timestamp()?,
-        model.as_ref(),
+        &collected,
     )?;
     if fresh.sources != original.sources {
         return Err("readiness generation changed during dispatch; claim remains charged".into());
     }
-    unchanged(plan, intent)
+    unchanged(plan, intent)?;
+    // Daemon observations can consume a short Research lease. Check expiry
+    // after every potentially slow prerequisite, immediately before dispatch.
+    let now = timestamp()?;
+    if fresh
+        .evidence
+        .iter()
+        .any(|evidence| evidence.expires_at <= now)
+    {
+        return Err("readiness expired during dispatch; claim remains charged".into());
+    }
+    Ok(())
 }
 
 fn ledger_snapshot_placeholder(plan: &HostPlan) -> tentaflake_admission::ReservationSnapshot {
@@ -1954,6 +2053,61 @@ mod tests {
         let ready = admission_model::fixture(&model);
         spec.model = Some(model);
         ready
+    }
+
+    #[test]
+    fn research_projection_requires_the_exact_client_and_relay_mounts() {
+        for change in 0..10 {
+            let (mut plan, mut runtime, _, _, _) = fixture();
+            let research = admission_research::tests::spec();
+            plan.instances
+                .get_mut("agent-fixture")
+                .unwrap()
+                .requested_capabilities = vec![Capability::Research];
+            runtime.container.environment.insert(
+                "TENTAFLAKE_RESEARCH_COMMAND".into(),
+                research.client.executable.to_string_lossy().into_owned(),
+            );
+            runtime.container.environment.insert(
+                "TENTAFLAKE_RESEARCH_SOCKET".into(),
+                research
+                    .client
+                    .socket_destination
+                    .to_string_lossy()
+                    .into_owned(),
+            );
+            for path in &research.client.closure_paths {
+                runtime
+                    .container
+                    .volumes
+                    .push(format!("{0}:{0}:ro", path.display()));
+            }
+            runtime
+                .container
+                .volumes
+                .push("/run/tentaflake-research/agent-fixture:/run/tentaflake-research:ro".into());
+            runtime.research = Some(research);
+            validate_runtime(&plan, "agent-fixture", &runtime).unwrap();
+            match change {
+                0 => runtime.research = None,
+                1 => plan.instances.get_mut("agent-fixture").unwrap().requested_capabilities.clear(),
+                2 => { runtime.container.environment.remove("TENTAFLAKE_RESEARCH_COMMAND"); }
+                3 => { runtime.container.environment.insert("TENTAFLAKE_RESEARCH_SOCKET".into(), "/run/foreign/socket".into()); }
+                4 => { runtime.container.volumes.pop(); }
+                5 => { *runtime.container.volumes.last_mut().unwrap() = "/run/tentaflake-research/foreign:/run/tentaflake-research:ro".into(); }
+                6 => { runtime.container.volumes.remove(2); }
+                7 => runtime.container.volumes.push("/nix/store/00000000000000000000000000000000-shadow:/run/tentaflake-research/socket:ro".into()),
+                8 => runtime.container.volumes.push("/run/private:/private:ro".into()),
+                _ => {
+                    let destination = runtime.research.as_ref().unwrap().client.executable.display().to_string();
+                    runtime.container.volumes.push(format!("/nix/store/00000000000000000000000000000000-shadow:{destination}:ro"));
+                }
+            }
+            assert!(
+                validate_runtime(&plan, "agent-fixture", &runtime).is_err(),
+                "change {change}"
+            );
+        }
     }
 
     #[test]

@@ -40,6 +40,15 @@ admission-plan:
         TENTAFLAKE_TEST_ADMISSION_PLAN="$admission_plan_path" cargo test -p tentaflake-cli --locked admission_host::tests::generated_nix_plan_matches_closed_host_schema -- --ignored --exact; \
     done
 
+# Requires separately authorized closure preparation:
+# nix build --no-link .#checks.x86_64-linux.research-policy
+# Evaluation permits IFD and can build missing inputs; this is not a no-build gate.
+research-admission-plan:
+    for projection in researchAdmissionPlan modelResearchAdmissionPlan; do \
+        admission_plan_path="$(nix eval --raw --no-write-lock-file --option allow-import-from-derivation true ".#checks.x86_64-linux.research-policy.$projection" --apply 'plan: builtins.toFile "tentaflake-schema-fixture.json" (builtins.unsafeDiscardStringContext plan.text)')"; \
+        TENTAFLAKE_TEST_ADMISSION_PLAN="$admission_plan_path" cargo test -p tentaflake-cli --locked admission_host::tests::generated_nix_plan_matches_closed_host_schema -- --ignored --exact; \
+    done
+
 # Test routing with real Git histories and validate workflow syntax
 ci-policy:
     python3 scripts/test_ci_changes.py

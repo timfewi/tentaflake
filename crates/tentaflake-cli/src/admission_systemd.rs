@@ -13,6 +13,13 @@ const MAX_RESPONSE_BYTES: usize = 64 * 1024;
 const MAX_LIST_BYTES: usize = 512 * 1024;
 const OBSERVATION_TIMEOUT: Duration = Duration::from_secs(6);
 const CALL_TIMEOUT: Duration = Duration::from_secs(2);
+const RELAY_STATES: [&str; 5] = [
+    "active",
+    "activating",
+    "reloading",
+    "deactivating",
+    "refreshing",
+];
 const DESTINATION: &str = "org.freedesktop.systemd1";
 const UNIT_INTERFACE: &str = "org.freedesktop.systemd1.Unit";
 const UNIT_PROPERTIES: [&str; 8] = [
@@ -57,6 +64,17 @@ pub(crate) struct UnitObservation {
     pub invocation_id: [u8; 16],
     pub service: Option<ServiceObservation>,
     pub mount: Option<MountObservation>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct SocketObservation {
+    pub unit: UnitObservation,
+    pub listen: Vec<(String, String)>,
+    pub accept: bool,
+    // Socket.Service is not exposed by systemd. Triggers are observed unit
+    // associations, not proof of the process handling a particular connection.
+    pub triggers: Vec<String>,
+    pub max_connections: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -111,13 +129,62 @@ pub(crate) struct ExecCommand {
 /// errors, never evidence of absence. Unit properties bracket type-specific reads to
 /// reject observed transitions, but D-Bus property reads are not atomic.
 pub(crate) fn inspect_unit(busctl: &Path, name: &str) -> Result<UnitObservation, String> {
-    observe_unit(busctl, name, "GetUnit")
+    inspect_unit_until(busctl, name, Instant::now() + OBSERVATION_TIMEOUT)
+}
+
+/// Preserve the caller's total deadline across all selected property reads.
+pub(crate) fn inspect_unit_until(
+    busctl: &Path,
+    name: &str,
+    deadline: Instant,
+) -> Result<UnitObservation, String> {
+    observe_unit(busctl, name, "GetUnit", deadline)
 }
 
 /// Explicitly load a named unit's metadata, without starting it. A missing unit
 /// is still an error; a loaded mask remains visible for legacy-creator fencing.
 pub(crate) fn load_unit(busctl: &Path, name: &str) -> Result<UnitObservation, String> {
-    observe_unit(busctl, name, "LoadUnit")
+    observe_unit(
+        busctl,
+        name,
+        "LoadUnit",
+        Instant::now() + OBSERVATION_TIMEOUT,
+    )
+}
+
+/// Observe a loaded pathname stream socket. Unit identity and trigger metadata
+/// bracket the Socket properties; callers must still authenticate the selected
+/// listener and the process serving their actual connection.
+pub(crate) fn inspect_socket_until(
+    busctl: &Path,
+    name: &str,
+    deadline: Instant,
+) -> Result<SocketObservation, String> {
+    if !valid_busctl(busctl) || !unit_name(name) || !name.ends_with(".socket") {
+        return Err("invalid systemd observation tool or socket unit".into());
+    }
+    let deadline = observation_deadline(deadline, Instant::now());
+    let object = unit_object(busctl, name, "GetUnit", deadline)?;
+    let mut arguments = vec!["get-property", DESTINATION, &object, UNIT_INTERFACE];
+    arguments.extend(UNIT_PROPERTIES);
+    arguments.push("Triggers");
+    let before = read_bus(busctl, &arguments, deadline, MAX_RESPONSE_BYTES)?;
+    let properties = read_bus(
+        busctl,
+        &[
+            "get-property",
+            DESTINATION,
+            &object,
+            "org.freedesktop.systemd1.Socket",
+            "Listen",
+            "Accept",
+            "MaxConnections",
+        ],
+        deadline,
+        MAX_RESPONSE_BYTES,
+    )?;
+    let after = read_bus(busctl, &arguments, deadline, MAX_RESPONSE_BYTES)?;
+    parse_socket(&before, &properties, &after, name)
 }
 
 fn valid_busctl(busctl: &Path) -> bool {
@@ -126,25 +193,17 @@ fn valid_busctl(busctl: &Path) -> bool {
         && busctl.parent().and_then(Path::file_name) == Some("bin".as_ref())
 }
 
-fn observe_unit(busctl: &Path, name: &str, method: &str) -> Result<UnitObservation, String> {
+fn observe_unit(
+    busctl: &Path,
+    name: &str,
+    method: &str,
+    deadline: Instant,
+) -> Result<UnitObservation, String> {
     if !valid_busctl(busctl) || !unit_name(name) {
         return Err("invalid systemd observation tool or unit".into());
     }
-    let deadline = Instant::now() + OBSERVATION_TIMEOUT;
-    let object = parse_object(&read_bus(
-        busctl,
-        &[
-            "call",
-            DESTINATION,
-            "/org/freedesktop/systemd1",
-            "org.freedesktop.systemd1.Manager",
-            method,
-            "s",
-            name,
-        ],
-        deadline,
-        MAX_RESPONSE_BYTES,
-    )?)?;
+    let deadline = observation_deadline(deadline, Instant::now());
+    let object = unit_object(busctl, name, method, deadline)?;
     let mut arguments = vec!["get-property", DESTINATION, &object, UNIT_INTERFACE];
     arguments.extend(UNIT_PROPERTIES);
     let mut observed = parse_unit(
@@ -198,6 +257,28 @@ fn observe_unit(busctl: &Path, name: &str, method: &str) -> Result<UnitObservati
     Ok(observed)
 }
 
+fn unit_object(
+    busctl: &Path,
+    name: &str,
+    method: &str,
+    deadline: Instant,
+) -> Result<String, String> {
+    parse_object(&read_bus(
+        busctl,
+        &[
+            "call",
+            DESTINATION,
+            "/org/freedesktop/systemd1",
+            "org.freedesktop.systemd1.Manager",
+            method,
+            "s",
+            name,
+        ],
+        deadline,
+        MAX_RESPONSE_BYTES,
+    )?)
+}
+
 /// List loaded and installed quota service names, including obsolete creators.
 /// Enumeration is not a fence and never establishes that no units can appear.
 pub(crate) fn list_quota_units(busctl: &Path) -> Result<Vec<String>, String> {
@@ -222,6 +303,68 @@ pub(crate) fn list_runtime_units(busctl: &Path) -> Result<Vec<String>, String> {
         busctl,
         &["docker-*.service", "podman-*.service"],
         runtime_name,
+    )
+}
+
+/// Discover at most 16 loaded instances of one Research relay template. Include
+/// transitions so callers can refuse them; this list does not authenticate the
+/// process handling a connection or prove that no new instance can appear.
+pub(crate) fn list_relay_units_until(
+    busctl: &Path,
+    instance_id: &str,
+    deadline: Instant,
+) -> Result<Vec<String>, String> {
+    if !valid_busctl(busctl) {
+        return Err("invalid systemd observation tool".into());
+    }
+    let prefix = relay_prefix(instance_id)?;
+    let pattern = format!("{prefix}*.service");
+    let state_count = RELAY_STATES.len().to_string();
+    let mut arguments = vec![
+        "call",
+        DESTINATION,
+        "/org/freedesktop/systemd1",
+        "org.freedesktop.systemd1.Manager",
+        "ListUnitsByPatterns",
+        "asas",
+        &state_count,
+    ];
+    arguments.extend(RELAY_STATES);
+    arguments.extend(["1", &pattern]);
+    let bytes = read_bus(
+        busctl,
+        &arguments,
+        observation_deadline(deadline, Instant::now()),
+        MAX_RESPONSE_BYTES,
+    )?;
+    parse_relay_units(&bytes, &prefix)
+}
+
+fn relay_prefix(instance_id: &str) -> Result<String, String> {
+    if instance_id.is_empty()
+        || instance_id.len() > 63
+        || !instance_id.bytes().enumerate().all(|(index, byte)| {
+            byte.is_ascii_lowercase() || byte.is_ascii_digit() || (index > 0 && byte == b'-')
+        })
+    {
+        return Err("invalid Research relay instance ID".into());
+    }
+    Ok(format!("tentaflake-research-{instance_id}@"))
+}
+
+fn parse_relay_units(bytes: &[u8], prefix: &str) -> Result<Vec<String>, String> {
+    parse_listed_units_bounded(
+        bytes,
+        |name| {
+            unit_name(name)
+                && name
+                    .strip_prefix(prefix)
+                    .and_then(|suffix| suffix.strip_suffix(".service"))
+                    .is_some_and(|instance| !instance.is_empty() && !instance.contains('@'))
+        },
+        &RELAY_STATES,
+        16,
+        MAX_RESPONSE_BYTES,
     )
 }
 
@@ -262,6 +405,10 @@ fn list_units(
     Ok(names.into_iter().collect())
 }
 
+fn observation_deadline(deadline: Instant, now: Instant) -> Instant {
+    deadline.min(now + OBSERVATION_TIMEOUT)
+}
+
 fn read_bus(
     busctl: &Path,
     arguments: &[&str],
@@ -270,6 +417,7 @@ fn read_bus(
 ) -> Result<Vec<u8>, String> {
     let remaining = deadline
         .checked_duration_since(Instant::now())
+        .filter(|remaining| !remaining.is_zero())
         .ok_or("systemd observation deadline exceeded")?;
     let mut command = Command::new(busctl);
     command.env_clear().args([
@@ -286,6 +434,9 @@ fn read_bus(
     // client on timeout. Never use this path for start/stop or other mutations.
     let output = crate::output_with_timeout(&mut command, remaining.min(CALL_TIMEOUT))
         .map_err(|_| "systemd observation command failed")?;
+    if Instant::now() >= deadline {
+        return Err("systemd observation deadline exceeded".into());
+    }
     if !output.status.success()
         || output.stdout.len().saturating_add(output.stderr.len()) > max_bytes
         || !output.stderr.is_empty()
@@ -376,14 +527,21 @@ fn valid_states(load: &str, active: &str, sub: &str) -> bool {
 
 fn parse_unit(bytes: &[u8], name: &str) -> Result<UnitObservation, String> {
     let mut values = records(bytes, UNIT_PROPERTIES.len(), MAX_RESPONSE_BYTES)?;
-    let id: String = property(&mut values, "s")?;
-    let load_state: String = property(&mut values, "s")?;
-    let active_state: String = property(&mut values, "s")?;
-    let sub_state: String = property(&mut values, "s")?;
-    let (job_id, job_path): (u32, String) = property(&mut values, "(uo)")?;
-    let fragment_path: String = property(&mut values, "s")?;
-    let need_daemon_reload = property(&mut values, "b")?;
-    let invocation_bytes: Vec<u8> = property(&mut values, "ay")?;
+    parse_unit_values(&mut values, name)
+}
+
+fn parse_unit_values(
+    values: &mut std::vec::IntoIter<WireValue>,
+    name: &str,
+) -> Result<UnitObservation, String> {
+    let id: String = property(values, "s")?;
+    let load_state: String = property(values, "s")?;
+    let active_state: String = property(values, "s")?;
+    let sub_state: String = property(values, "s")?;
+    let (job_id, job_path): (u32, String) = property(values, "(uo)")?;
+    let fragment_path: String = property(values, "s")?;
+    let need_daemon_reload = property(values, "b")?;
+    let invocation_bytes: Vec<u8> = property(values, "ay")?;
     // A loaded but never invoked unit (including a mask) reports an empty ay.
     // Preserve the existing zero-ID representation of absent invocation proof.
     let invocation_id = if invocation_bytes.is_empty() {
@@ -421,6 +579,57 @@ fn parse_unit(bytes: &[u8], name: &str) -> Result<UnitObservation, String> {
         invocation_id,
         service: None,
         mount: None,
+    })
+}
+
+fn parse_socket_unit(bytes: &[u8], name: &str) -> Result<(UnitObservation, Vec<String>), String> {
+    let mut values = records(bytes, UNIT_PROPERTIES.len() + 1, MAX_RESPONSE_BYTES)?;
+    let unit = parse_unit_values(&mut values, name)?;
+    let mut triggers: Vec<String> = property(&mut values, "as")?;
+    if !name.ends_with(".socket")
+        || triggers.len() > 16
+        || triggers
+            .iter()
+            .any(|trigger| !unit_name(trigger) || !trigger.ends_with(".service"))
+    {
+        return Err("invalid systemd socket trigger properties".into());
+    }
+    triggers.sort();
+    if triggers.windows(2).any(|pair| pair[0] == pair[1]) {
+        return Err("duplicate systemd socket trigger properties".into());
+    }
+    Ok((unit, triggers))
+}
+
+fn parse_socket(
+    before: &[u8],
+    properties: &[u8],
+    after: &[u8],
+    name: &str,
+) -> Result<SocketObservation, String> {
+    let (unit, triggers) = parse_socket_unit(before, name)?;
+    let mut values = records(properties, 3, MAX_RESPONSE_BYTES)?;
+    let listen: Vec<(String, String)> = property(&mut values, "a(ss)")?;
+    let accept = property(&mut values, "b")?;
+    let max_connections = property(&mut values, "u")?;
+    if listen.len() > 16
+        || listen
+            .iter()
+            .any(|(kind, address)| kind != "Stream" || !absolute_path(address))
+        || listen.iter().collect::<BTreeSet<_>>().len() != listen.len()
+    {
+        return Err("invalid or unsupported systemd socket listener properties".into());
+    }
+    let (after_unit, after_triggers) = parse_socket_unit(after, name)?;
+    if unit != after_unit || triggers != after_triggers {
+        return Err("systemd socket changed during observation".into());
+    }
+    Ok(SocketObservation {
+        unit,
+        listen,
+        accept,
+        triggers,
+        max_connections,
     })
 }
 
@@ -566,6 +775,16 @@ fn parse_exec(data: Value) -> Result<Vec<ExecCommand>, String> {
 }
 
 fn parse_listed_units(bytes: &[u8], valid_name: fn(&str) -> bool) -> Result<Vec<String>, String> {
+    parse_listed_units_bounded(bytes, valid_name, &[], 512, MAX_LIST_BYTES)
+}
+
+fn parse_listed_units_bounded(
+    bytes: &[u8],
+    valid_name: impl Fn(&str) -> bool,
+    states: &[&str],
+    limit: usize,
+    max_bytes: usize,
+) -> Result<Vec<String>, String> {
     type UnitRecord = (
         String,
         String,
@@ -580,8 +799,8 @@ fn parse_listed_units(bytes: &[u8], valid_name: fn(&str) -> bool) -> Result<Vec<
     );
     // A method's single array return is wrapped once more than a property array.
     let [units]: [Vec<UnitRecord>; 1] =
-        property(&mut records(bytes, 1, MAX_LIST_BYTES)?, "a(ssssssouso)")?;
-    if units.len() > 512 {
+        property(&mut records(bytes, 1, max_bytes)?, "a(ssssssouso)")?;
+    if units.len() > limit {
         return Err("systemd unit listing limit exceeded".into());
     }
     let mut names = BTreeSet::new();
@@ -592,6 +811,7 @@ fn parse_listed_units(bytes: &[u8], valid_name: fn(&str) -> bool) -> Result<Vec<
             || description.len() > 1024
             || description.contains('\0')
             || !valid_states(&load, &active, &sub)
+            || (!states.is_empty() && !states.contains(&active.as_str()))
             || !following.is_empty()
             || !valid_unit_object(&object)
             || (job == 0 && (job_path != "/" || !job_type.is_empty()))
@@ -722,6 +942,40 @@ fn unit_name(value: &str) -> bool {
 mod tests {
     use super::*;
 
+    #[test]
+    fn nested_observations_never_extend_the_callers_deadline() {
+        let now = Instant::now();
+        let outer = now + Duration::from_millis(20);
+        assert_eq!(observation_deadline(outer, now), outer);
+        assert_eq!(
+            observation_deadline(outer, now + Duration::from_millis(10)),
+            outer
+        );
+        assert_eq!(
+            observation_deadline(now + Duration::from_secs(60), now),
+            now + OBSERVATION_TIMEOUT
+        );
+        assert_eq!(
+            observation_deadline(now, now + Duration::from_millis(1)),
+            now
+        );
+    }
+
+    #[test]
+    fn expired_observations_refuse_before_attempting_any_bus_command() {
+        // A syntactically valid but nonexistent tool distinguishes the deadline
+        // refusal from spawning a client with a freshly reset timeout.
+        let busctl = Path::new("/nix/store/00000000000000000000000000000000-systemd/bin/busctl");
+        let expired = Instant::now() - Duration::from_secs(1);
+        for error in [
+            inspect_unit_until(busctl, "example.service", expired).unwrap_err(),
+            inspect_socket_until(busctl, "example.socket", expired).unwrap_err(),
+            list_relay_units_until(busctl, "example", expired).unwrap_err(),
+        ] {
+            assert_eq!(error, "systemd observation deadline exceeded");
+        }
+    }
+
     // Wire shapes observed with systemd 261.3 busctl --json=short on the local
     // dbus.service alias. Invocation/PID values are synthetic fixture values.
     const UNIT: &str = r#"{"type":"s","data":"dbus-broker.service"}
@@ -749,6 +1003,166 @@ mod tests {
 {"type":"a(sasbttttuii)","data":[]}
 {"type":"a(sasbttttuii)","data":[]}
 {"type":"a(sasbttttuii)","data":[]}"#;
+
+    // Selected properties observed on dbus.socket with systemd 261.3. Service
+    // is not a Socket property; Unit.Triggers separately returned the service.
+    const SOCKET: &str = r#"{"type":"a(ss)","data":[["Stream","/run/dbus/system_bus_socket"]]}
+{"type":"b","data":false}
+{"type":"u","data":64}"#;
+
+    fn socket_unit() -> String {
+        format!(
+            "{}\n{}",
+            UNIT.replace("dbus-broker.service", "dbus.socket"),
+            r#"{"type":"as","data":["dbus-broker.service"]}"#
+        )
+    }
+
+    fn encode_properties(values: &[Value]) -> Vec<u8> {
+        values
+            .iter()
+            .map(Value::to_string)
+            .collect::<Vec<_>>()
+            .join("\n")
+            .into_bytes()
+    }
+
+    #[test]
+    fn socket_observation_preserves_actual_triggers_without_synthesizing_a_service() {
+        let unit = socket_unit();
+        let observed = parse_socket(
+            unit.as_bytes(),
+            SOCKET.as_bytes(),
+            unit.as_bytes(),
+            "dbus.socket",
+        )
+        .unwrap();
+        assert_eq!(observed.unit.id, "dbus.socket");
+        assert_eq!(
+            observed.listen,
+            [(
+                "Stream".to_owned(),
+                "/run/dbus/system_bus_socket".to_owned()
+            )]
+        );
+        assert!(!observed.accept);
+        assert_eq!(observed.max_connections, 64);
+        assert_eq!(observed.triggers, ["dbus-broker.service"]);
+        // Accept does not imply that a template or a live process appears in
+        // Triggers. The caller proves the servicing process independently.
+        let empty = unit.replace("[\"dbus-broker.service\"]", "[]");
+        let observed = parse_socket(
+            empty.as_bytes(),
+            SOCKET.replace("false", "true").as_bytes(),
+            empty.as_bytes(),
+            "dbus.socket",
+        )
+        .unwrap();
+        assert!(observed.accept);
+        assert!(observed.triggers.is_empty());
+    }
+
+    #[test]
+    fn socket_observation_refuses_malformed_or_unbounded_selected_properties() {
+        let unit = socket_unit();
+        for mode in 0..11 {
+            let mut values: Vec<Value> = SOCKET
+                .lines()
+                .map(|line| serde_json::from_str(line).unwrap())
+                .collect();
+            match mode {
+                0 => {
+                    values.pop();
+                }
+                1 => values.push(serde_json::json!({"type":"s","data":"extra"})),
+                2 => values[0]["type"] = serde_json::json!("as"),
+                3 => values[0]["data"][0] = serde_json::json!(["Stream", "/one", "/two"]),
+                4 => values[0]["data"][0][1] = serde_json::json!("/run/../socket"),
+                5 => values[0]["data"][0][1] = serde_json::json!("/run/socket\0"),
+                6 => values[0]["data"][0][0] = serde_json::json!("FutureTransport"),
+                7 => {
+                    values[0]["data"] = serde_json::json!([["Stream", "/one"], ["Stream", "/one"]])
+                }
+                8 => {
+                    values[0]["data"] = serde_json::json!(
+                        (0..17)
+                            .map(|index| ("Stream", format!("/run/socket{index}")))
+                            .collect::<Vec<_>>()
+                    )
+                }
+                9 => values[1]["data"] = serde_json::json!("true"),
+                _ => values[2]["data"] = serde_json::json!(4294967296_u64),
+            }
+            assert!(
+                parse_socket(
+                    unit.as_bytes(),
+                    &encode_properties(&values),
+                    unit.as_bytes(),
+                    "dbus.socket"
+                )
+                .is_err()
+            );
+        }
+        for triggers in [
+            serde_json::json!(["dbus-broker.service", "dbus-broker.service"]),
+            serde_json::json!(["other.socket"]),
+            serde_json::json!(["wild*.service"]),
+            serde_json::json!([false]),
+            serde_json::json!(
+                (0..17)
+                    .map(|index| format!("relay@{index}.service"))
+                    .collect::<Vec<_>>()
+            ),
+        ] {
+            let mut values: Vec<Value> = unit
+                .lines()
+                .map(|line| serde_json::from_str(line).unwrap())
+                .collect();
+            values[8]["data"] = triggers;
+            assert!(parse_socket_unit(&encode_properties(&values), "dbus.socket").is_err());
+        }
+        assert!(
+            parse_socket(
+                unit.as_bytes(),
+                &vec![b' '; MAX_RESPONSE_BYTES + 1],
+                unit.as_bytes(),
+                "dbus.socket"
+            )
+            .is_err()
+        );
+        assert!(parse_socket_unit(UNIT.as_bytes(), "dbus-broker.service").is_err());
+    }
+
+    #[test]
+    fn socket_observation_refuses_identity_trigger_and_reload_races() {
+        let before = socket_unit();
+        for (index, replacement) in [
+            (0, serde_json::json!("other.socket")),
+            (1, serde_json::json!("masked")),
+            (2, serde_json::json!("deactivating")),
+            (3, serde_json::json!("stop-pre")),
+            (4, serde_json::json!([7, "/org/freedesktop/systemd1/job/7"])),
+            (5, serde_json::json!("/etc/systemd/system/changed.socket")),
+            (6, serde_json::json!(true)),
+            (7, serde_json::json!(vec![2; 16])),
+            (8, serde_json::json!(["other.service"])),
+        ] {
+            let mut after: Vec<Value> = before
+                .lines()
+                .map(|line| serde_json::from_str(line).unwrap())
+                .collect();
+            after[index]["data"] = replacement;
+            assert!(
+                parse_socket(
+                    before.as_bytes(),
+                    SOCKET.as_bytes(),
+                    &encode_properties(&after),
+                    "dbus.socket"
+                )
+                .is_err()
+            );
+        }
+    }
 
     #[test]
     fn parses_observed_selected_properties_without_aliasing() {
@@ -951,6 +1365,86 @@ mod tests {
             "tentaflake-state-quota-example.service", "Quota fixture", "loaded", "inactive", "dead", "",
             "/org/freedesktop/systemd1/unit/tentaflake_2dstate_2dquota_2dexample_2eservice", 0, "", "/"
         ]]]})
+    }
+
+    #[test]
+    fn relay_listing_is_exact_bounded_and_includes_transitions() {
+        let prefix = relay_prefix("example-1").unwrap();
+        let relay = "tentaflake-research-example-1@0-42-0.service";
+        let mut value = listing();
+        value["data"][0][0][0] = serde_json::json!(relay);
+        for state in RELAY_STATES {
+            value["data"][0][0][3] = serde_json::json!(state);
+            assert_eq!(
+                parse_relay_units(&serde_json::to_vec(&value).unwrap(), &prefix).unwrap(),
+                [relay]
+            );
+        }
+        assert!(
+            parse_relay_units(br#"{"type":"a(ssssssouso)","data":[[]]}"#, &prefix)
+                .unwrap()
+                .is_empty()
+        );
+        for id in [
+            "",
+            "-example",
+            "example*",
+            "example@other",
+            "Example",
+            "a/b",
+            &"x".repeat(64),
+        ] {
+            assert!(relay_prefix(id).is_err());
+        }
+        for mode in 0..11 {
+            let mut changed = value.clone();
+            match mode {
+                0 => {
+                    changed["data"][0][0][0] =
+                        serde_json::json!("tentaflake-research-other@0.service")
+                }
+                1 => {
+                    changed["data"][0][0][0] =
+                        serde_json::json!("tentaflake-research-example-1@.service")
+                }
+                2 => {
+                    changed["data"][0][0][0] =
+                        serde_json::json!("tentaflake-research-example-1@a@b.service")
+                }
+                3 => {
+                    changed["data"][0][0][0] =
+                        serde_json::json!("tentaflake-research-example-1@*.service")
+                }
+                4 => changed["data"][0][0][3] = serde_json::json!("inactive"),
+                5 => changed["data"][0][0][5] = serde_json::json!("alias.service"),
+                6 => changed["data"][0]
+                    .as_array_mut()
+                    .unwrap()
+                    .push(value["data"][0][0].clone()),
+                7 => changed["data"][0][0][7] = serde_json::json!("0"),
+                8 => {
+                    changed["data"][0][0][6] = serde_json::json!("/org/freedesktop/systemd1/job/1")
+                }
+                9 => changed["extra"] = serde_json::json!(true),
+                _ => {
+                    // Unique valid entries still exceed the per-template cap.
+                    changed["data"][0] = serde_json::json!(
+                        (0..17)
+                            .map(|index| {
+                                let mut record = value["data"][0][0].clone();
+                                record[0] = serde_json::json!(format!("{prefix}{index}.service"));
+                                record[6] = serde_json::json!(format!(
+                                    "/org/freedesktop/systemd1/unit/relay{index}"
+                                ));
+                                record
+                            })
+                            .collect::<Vec<_>>()
+                    );
+                }
+            }
+            assert!(parse_relay_units(&serde_json::to_vec(&changed).unwrap(), &prefix).is_err());
+        }
+        assert!(parse_relay_units(&vec![b' '; MAX_RESPONSE_BYTES + 1], &prefix).is_err());
     }
 
     #[test]

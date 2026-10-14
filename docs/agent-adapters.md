@@ -186,8 +186,11 @@ the virtual-key environment through a retained file descriptor; credentials do
 not enter command arguments or admission receipts. Stopping an exact owned
 container does not require the broker to remain ready. These checks establish
 local transport prerequisites, not provider acceptance or available model budget.
-Research and worker collectors, vendor acceptance and automatic recovery remain
-separate work; missing capability evidence continues to refuse startup.
+The [Research collector](16-research.md#verification-and-limits) authenticates the
+exact relay and backend processes against a fresh controller generation; its
+upstream readiness input and lifecycle VM acceptance remain pending. Worker
+collection, vendor acceptance and automatic recovery remain separate work;
+missing capability evidence continues to refuse startup.
 
 ### OpenShell reuse decision
 

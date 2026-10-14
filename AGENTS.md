@@ -150,8 +150,13 @@ are already published or require access to another repository for public checks.
   provenance. `admission_model` owns live process/listener, protected environment,
   dedicated network and independent firewall evidence, bracketing authenticated
   `/readyz`. Keep secrets out of receipts/argv and stop independent of broker
-  health. Research/worker collectors and real lifecycle VM evidence remain
-  required. See `docs/agent-adapters.md` and `docs/14-workspace-quota.md`.
+  health. `admission_research` binds a held relay peer to its process, exact
+  backend listeners and process roots/configuration, and a fresh controller
+  generation. Keep ephemeral relay identity within each probe; renewals never
+  extend an already observed response's expiry. Its upstream readiness input
+  and real lifecycle VM evidence remain pending; worker collection is still
+  required. See `docs/16-research.md`, `docs/agent-adapters.md` and
+  `docs/14-workspace-quota.md`.
 - CLI help is configuration-free; management commands require generated
   host configuration and inventory.
 - `api/v1/openapi.json` owns the host API wire contract; clients consume its

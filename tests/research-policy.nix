@@ -166,35 +166,122 @@ let
       lib.remove "/run/tentaflake-research/generic-policy:/run/tentaflake-research:ro" genericContainer.volumes
     );
   };
-  genericWithModel =
-    genericResearchEval
-      {
-        capabilities = [
-          "model"
-          "research"
+  researchSpec = genericResearch.tentaflake.research.admissionResearch.generic-policy;
+  serviceBindings = genericResearch.systemd.services.agent-research.serviceConfig.BindReadOnlyPaths;
+  configBinding = "${researchSpec.service.configuration.source}:/etc/research/config.json";
+  changedProcess =
+    service: settings:
+    genericResearchEval { } {
+      systemd.services.${service}.serviceConfig = lib.mapAttrs (_: value: lib.mkForce value) settings;
+    };
+  unsupportedProcesses = [
+    (changedProcess "agent-research" { ExecStart = "${pkgs.coreutils}/bin/true"; })
+    (changedProcess "agent-research" { User = "root"; })
+    (changedProcess "agent-research" { RootDirectory = "/var/lib/research-root"; })
+    (changedProcess "agent-research" { PrivateNetwork = false; })
+    (changedProcess "agent-research-egress" { PrivateNetwork = true; })
+    (changedProcess "agent-research-egress-control" { PrivateNetwork = false; })
+    (changedProcess "tentaflake-research-generic-policy@" { User = "root"; })
+    (changedProcess "agent-research" { BindReadOnlyPaths = lib.remove configBinding serviceBindings; })
+    (changedProcess "agent-research" { BindReadOnlyPaths = serviceBindings ++ [ configBinding ]; })
+    (changedProcess "agent-research" {
+      BindReadOnlyPaths = lib.remove configBinding serviceBindings ++ [ "-${configBinding}" ];
+    })
+    (changedProcess "agent-research" {
+      BindReadOnlyPaths = serviceBindings ++ [ "/var/lib/research-config:/etc/research" ];
+    })
+  ];
+  extraRelayListener = genericResearchEval { } {
+    systemd.sockets.tentaflake-research-generic-policy.socketConfig.ListenStream = "0.0.0.0:19000";
+  };
+  modelSettings = {
+    tentaflake.networking.enable = lib.mkForce true;
+    tentaflake.broker.agents.generic-policy = {
+      enable = true;
+      networkName = "tf-generic-policy";
+      subnet = "10.203.45.0/30";
+      gateway = "10.203.45.1";
+      llm = {
+        enable = true;
+        providerCredentialFile = "/run/credentials/fixture-provider";
+        upstreamBaseUrl = "https://api.example.invalid/v1/";
+        allowedModels = [
+          {
+            name = "fixture-model";
+            inputMicrousdPerMillion = 1;
+            outputMicrousdPerMillion = 1;
+          }
         ];
-      }
-      {
-        tentaflake.networking.enable = lib.mkForce true;
-        tentaflake.broker.agents.generic-policy = {
-          enable = true;
-          networkName = "tf-generic-policy";
-          subnet = "10.203.45.0/30";
-          gateway = "10.203.45.1";
-          llm = {
-            enable = true;
-            providerCredentialFile = "/run/credentials/fixture-provider";
-            upstreamBaseUrl = "https://api.example.invalid/v1/";
-            allowedModels = [
-              {
-                name = "fixture-model";
-                inputMicrousdPerMillion = 1;
-                outputMicrousdPerMillion = 1;
-              }
-            ];
-          };
-        };
       };
+    };
+  };
+  combinedCapabilities.capabilities = [
+    "model"
+    "research"
+  ];
+  genericWithModel = genericResearchEval combinedCapabilities modelSettings;
+  emptyResources = lib.genAttrs [
+    "memoryBytes"
+    "memorySwapBytes"
+    "nanoCpus"
+    "pids"
+    "workspaceBytes"
+    "stateBytes"
+  ] (_: 0);
+  admissionSettings.tentaflake.security.admission = {
+    authorityEpoch = "research-plan-fixture";
+    physicalSpaceHeadroomBytes = 67108864;
+    capacity = {
+      memoryBytes = 17179869184;
+      memorySwapBytes = 17179869184;
+      nanoCpus = 8000000000;
+      pids = 4096;
+      workspaceBytes = 4294967296;
+      stateBytes = 4294967296;
+    };
+    hostReserve = emptyResources // {
+      memoryBytes = 2147483648;
+      memorySwapBytes = 2147483648;
+      nanoCpus = 2000000000;
+      pids = 512;
+    };
+    researchReserve = emptyResources // {
+      memoryBytes = 4294967296;
+      memorySwapBytes = 4294967296;
+      nanoCpus = 2000000000;
+      pids = 1024;
+    };
+    maxActive = 2;
+  };
+  admittedResearch = genericResearchEval { } admissionSettings;
+  admittedCombined = genericResearchEval combinedCapabilities (
+    lib.recursiveUpdate modelSettings admissionSettings
+  );
+  admittedUnrequested = genericResearchEval { capabilities = [ ]; } admissionSettings;
+  admittedMissingRelay = genericResearchEval { lifecycle = "stopped"; } (
+    lib.recursiveUpdate admissionSettings {
+      tentaflake.research.agents = lib.mkForce { hermes-policy.uid = 62101; };
+    }
+  );
+  manifest =
+    config:
+    builtins.fromJSON (builtins.unsafeDiscardStringContext config.tentaflake.admissionManifest.text);
+  researchManifest = manifest admittedResearch;
+  combinedManifest = manifest admittedCombined;
+  grant = capability: {
+    instanceId = "generic-policy";
+    ownerId = "host-root";
+    inherit capability;
+    expiresAt = null;
+  };
+  researchUnits = [
+    "tentaflake-research-generic-policy.socket"
+    "agent-research.socket"
+    "agent-research.service"
+    "agent-research-egress.socket"
+    "agent-research-egress.service"
+    "agent-research-egress-control.service"
+  ];
   client = import ../lib/researchClient.nix {
     inherit lib pkgs;
     config = valid;
@@ -247,9 +334,42 @@ assert
   !(lib.hasInfix "Generic runtime admission refused:" genericResearch.systemd.services.docker-generic-policy.preStart);
 assert denies "generic Research relay must match" genericUnrequested;
 assert denies "retain its exact read-only" genericMissingMount;
+assert valid.tentaflake.research.admissionResearch == { };
+assert genericUnrequested.tentaflake.research.admissionResearch == { };
+assert
+  builtins.attrNames genericResearch.tentaflake.research.admissionResearch == [ "generic-policy" ];
+assert researchSpec.schemaVersion == 1;
+assert researchSpec.client.executable == genericClient.server.command;
+assert researchSpec.client.closurePaths == genericClient.paths;
+assert researchSpec.client.socketDestination == "/run/tentaflake-research/socket";
+assert researchSpec.relay.socketUnit == "tentaflake-research-generic-policy.socket";
+assert researchSpec.relay.socketPath == "/run/tentaflake-research/generic-policy/socket";
+assert researchSpec.relay.template.unit == "tentaflake-research-generic-policy@.service";
+assert researchSpec.relay.template.uid == 62107;
+assert researchSpec.service.uid == 4201 && researchSpec.egress.uid == 4202;
+assert researchSpec.controller.uid == 0;
+assert
+  researchSpec.controller.configuration == null && researchSpec.relay.template.configuration == null;
+assert researchSpec.controlPath == "/run/agent-research-egress/control/state.json";
+assert researchSpec.vpnInterface == "fixture-vpn";
+assert lib.elem configBinding serviceBindings;
+assert builtins.hasContext researchSpec.service.configuration.source;
+assert builtins.hasContext researchSpec.service.rootDirectory;
+assert builtins.hasContext researchSpec.service.executable;
+assert lib.all
+  (spec: spec.executable == builtins.head spec.argv && spec.slice == "agent-research.slice")
+  [
+    researchSpec.service
+    researchSpec.egress
+    researchSpec.controller
+    researchSpec.relay.template
+  ];
+assert lib.all (denies "requires canonical final process") unsupportedProcesses;
+assert denies "requires canonical final process" extraRelayListener;
 assert lib.assertMsg (failures genericWithModel == [ ]) (
   builtins.toJSON (failures genericWithModel)
 );
+assert genericWithModel.tentaflake.research.admissionResearch.generic-policy == researchSpec;
 assert
   genericWithModel.virtualisation.oci-containers.containers.generic-policy.networks
   == [ "tf-generic-policy" ];
@@ -265,4 +385,57 @@ assert
 assert
   genericWithModel.virtualisation.oci-containers.containers.generic-policy.environment.TENTAFLAKE_RESEARCH_SOCKET
   == genericContainer.environment.TENTAFLAKE_RESEARCH_SOCKET;
-pkgs.runCommand "tentaflake-research-policy" { } "touch $out"
+assert lib.all (config: lib.assertMsg (failures config == [ ]) (builtins.toJSON (failures config)))
+  [
+    admittedResearch
+    admittedCombined
+    admittedMissingRelay
+  ];
+assert builtins.attrNames researchManifest.runtimes == [ "generic-policy" ];
+assert researchManifest.schemaVersion == 3 && combinedManifest.schemaVersion == 3;
+assert researchManifest.instances.generic-policy.requestedCapabilities == [ "research" ];
+assert researchManifest.runtimes.generic-policy.research == researchSpec;
+assert researchManifest.runtimes.generic-policy.model == null;
+assert researchManifest.policy.grants == [ (grant "research") ];
+assert
+  combinedManifest.instances.generic-policy.requestedCapabilities
+  == combinedCapabilities.capabilities;
+assert combinedManifest.runtimes.generic-policy.research == researchSpec;
+assert combinedManifest.runtimes.generic-policy.model != null;
+assert
+  combinedManifest.policy.grants == [
+    (grant "model")
+    (grant "research")
+  ];
+# An enabled Research service alone neither supplies an exact request nor grants
+# a capability whose per-instance relay/descriptor is absent.
+assert denies "generic Research relay must match" admittedUnrequested;
+assert (manifest admittedUnrequested).policy.grants == [ ];
+assert (manifest admittedUnrequested).runtimes.generic-policy.research == null;
+assert
+  (manifest admittedMissingRelay).instances.generic-policy.requestedCapabilities == [ "research" ];
+assert (manifest admittedMissingRelay).policy.grants == [ ];
+assert (manifest admittedMissingRelay).runtimes.generic-policy.research == null;
+assert !admittedMissingRelay.virtualisation.oci-containers.containers.generic-policy.autoStart;
+assert lib.all
+  (
+    config:
+    let
+      unit = config.systemd.services.docker-generic-policy;
+    in
+    unit.serviceConfig.Type == "notify"
+    && lib.hasInfix "runtime-start" unit.serviceConfig.ExecStart
+    && lib.all (
+      dependency: lib.elem dependency unit.requires && lib.elem dependency unit.after
+    ) researchUnits
+  )
+  [
+    admittedResearch
+    admittedCombined
+  ];
+pkgs.runCommand "tentaflake-research-policy" {
+  passthru = {
+    researchAdmissionPlan = admittedResearch.tentaflake.admissionManifest;
+    modelResearchAdmissionPlan = admittedCombined.tentaflake.admissionManifest;
+  };
+} "touch $out"

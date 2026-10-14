@@ -1,7 +1,7 @@
 ---
 name: tentaflake-repo-guidance
 description: Locate the owning source, guide and checks before changing Tentaflake modules, adapters, CLI or installer.
-version: 2.6.8
+version: 2.6.9
 ---
 
 # Tentaflake repository guidance
@@ -19,7 +19,7 @@ relevant source and guide. Avoid loading unrelated references.
 | Admission decisions, publication and diagnostic inventory | `crates/tentaflake-admission/`, CLI `admission*.rs`, `modules/admission.nix` | [Security](../../../docs/10-security-profiles.md#shared-admission-core) |
 | Private management | `modules/management.nix`, `modules/tailscale.nix`, versioned security manifest | [Management](../../../docs/11-tailscale-management.md) |
 | LLM broker and streaming | `modules/broker.nix`, `crates/tentaflake-broker/` | [Broker](../../../docs/12-brokered-egress.md) |
-| Research projection | `modules/research.nix`, `lib/researchClient.nix`, adapter hooks | [Research](../../../docs/16-research.md) |
+| Research projection/admission | `modules/research.nix`, `lib/researchClient.nix`, `admission_research*`, adapter hooks | [Research](../../../docs/16-research.md) |
 | Host API contract | `api/v1/openapi.json`, fixtures, `scripts/test_api_contract.py` | [Host API](../../../docs/19-host-api.md) |
 | Offline execution | `modules/worker.nix`, `crates/tentaflake-worker/` | [Worker](../../../docs/13-disposable-worker.md) |
 | Workspace/state limits | `modules/workspace-quota.nix`, adapter metadata, `modules/backup.nix` | [Quota](../../../docs/14-workspace-quota.md) |

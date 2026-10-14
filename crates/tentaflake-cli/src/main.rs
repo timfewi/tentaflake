@@ -20,9 +20,12 @@ mod admission_host;
 mod admission_model;
 mod admission_oci;
 mod admission_publication;
+mod admission_research;
+mod admission_research_rpc;
 mod admission_runtime;
 mod admission_storage;
 mod admission_systemd;
+mod admission_unix;
 mod onboarding;
 
 const DEFAULT_CONFIG: &str = "/etc/tentaflake/cli.conf";

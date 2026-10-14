@@ -54,6 +54,7 @@ let
       ];
       provenance = if provenance != null && provenance.enable then provenance else null;
       model = config.tentaflake.broker.admissionModels.${name} or null;
+      research = config.tentaflake.research.admissionResearch.${name} or null;
     };
   runtimes = lib.genAttrs runtimeNames runtime;
   instance =
@@ -125,14 +126,24 @@ let
       };
       grants = lib.concatMap (
         name:
-        lib.optional
-          (runtimes.${name}.model != null && lib.elem "model" (instance name).requestedCapabilities)
-          {
-            instanceId = name;
-            ownerId = "host-root";
-            capability = "model";
-            expiresAt = null;
-          }
+        lib.concatMap
+          (
+            capability:
+            lib.optional
+              (
+                runtimes.${name}.${capability} != null && lib.elem capability (instance name).requestedCapabilities
+              )
+              {
+                instanceId = name;
+                ownerId = "host-root";
+                inherit capability;
+                expiresAt = null;
+              }
+          )
+          [
+            "model"
+            "research"
+          ]
       ) runtimeNames;
     };
     instances = lib.genAttrs instanceNames instance;
@@ -258,6 +269,13 @@ in
         unit:
         let
           name = lib.removePrefix "docker-" unit;
+          researchUnits = lib.optionals (runtimes.${name}.research != null) [
+            "agent-research.socket"
+            "agent-research.service"
+            "agent-research-egress.socket"
+            "agent-research-egress.service"
+            "agent-research-egress-control.service"
+          ];
           command =
             action:
             lib.escapeShellArgs [
@@ -271,6 +289,8 @@ in
         {
           # Existing quota, capability and provenance Requires/After edges stay
           # attached to this unit. Acquisition is never a start hook.
+          requires = researchUnits;
+          after = researchUnits;
           script = lib.mkForce "";
           preStart = lib.mkForce "";
           postStart = lib.mkForce "";
