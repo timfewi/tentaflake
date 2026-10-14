@@ -180,8 +180,11 @@ hooks. It checks the generated Docker/nftables path under trusted host
 administration; arbitrary host TC, eBPF or XDP routing programs are outside this
 attestation.
 It repeats authenticated readiness before dispatch transitions; an unchanged
-generation never overrides a failed readiness probe. This is startup evidence,
-not continuous monitoring or a provider request.
+generation never overrides a failed readiness probe. The original five-second
+observation window includes post-probe checks and remains unchanged while other
+capabilities are collected. All prerequisite expiries are checked after the final
+source observations. This is startup evidence, not continuous monitoring or a
+provider request.
 
 Host-side `tentaflake doctor` and VM probes reach `/healthz` through the exact
 agent gateway address. VM readiness probes stop after 30 seconds and print the

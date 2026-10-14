@@ -6,6 +6,7 @@ let
   builders = import ../lib { inherit pkgs lib; };
   genericNames = [
     "generic-research"
+    "generic-research-model"
     "generic-ungranted"
   ];
   image = pkgs.dockerTools.buildLayeredImage {
@@ -45,6 +46,7 @@ let
         time.sleep(0.25)
   '';
   readinessProbe = pkgs.writeText "research-admitted-readiness.py" ''
+    import http.client
     import json
     import os
     from pathlib import Path
@@ -53,15 +55,41 @@ let
     import subprocess
     import sys
     import time
+    import urllib.parse
 
-    if len(sys.argv) == 1:
+    combined = len(sys.argv) == 2 and sys.argv[1] == "combined"
+    inside = len(sys.argv) == 1 or combined
+    expected_uid = 62104 if combined else 62103
+    if inside:
         assert os.getuid() == 10000 and os.getcwd() == "/workspace"
         command = os.environ["TENTAFLAKE_RESEARCH_COMMAND"]
         research_socket = os.environ["TENTAFLAKE_RESEARCH_SOCKET"]
         assert research_socket == "/run/tentaflake-research/socket"
         for path in ["/run/docker.sock", "/run/agent-research/socket", "/run/tentaflake-worker"]:
             assert not os.path.exists(path), path
-        assert "OPENAI_API_KEY" not in os.environ
+        if combined:
+            assert os.environ["OPENAI_API_KEY"] == os.environ["TENTAFLAKE_BROKER_TOKEN"]
+            assert os.environ["OPENAI_BASE_URL"] == os.environ["TENTAFLAKE_LLM_BASE_URL"]
+            endpoint = urllib.parse.urlsplit(os.environ["OPENAI_BASE_URL"])
+            assert (endpoint.scheme, endpoint.hostname, endpoint.port, endpoint.path) == (
+                "http", "10.203.75.1", 7810, "/v1")
+            # The same admitted CID must authenticate to the real broker. No
+            # model/provider request is sent, and neither key nor body is logged.
+            for authenticated in [False, True]:
+                connection = http.client.HTTPConnection(endpoint.hostname, endpoint.port, timeout=2)
+                try:
+                    headers = {"Authorization": "Bearer " + os.environ["OPENAI_API_KEY"]} if authenticated else {}
+                    connection.request("GET", "/readyz", headers=headers)
+                    response = connection.getresponse()
+                    body = response.read(1025)
+                    assert len(body) <= 1024
+                    assert response.status == (200 if authenticated else 401)
+                    if authenticated:
+                        assert json.loads(body) == {"status": "ready"}
+                finally:
+                    connection.close()
+        else:
+            assert "OPENAI_API_KEY" not in os.environ
         Path("/workspace/research-proof").write_text("workspace")
         Path("/state/research-proof").write_text("state")
         try:
@@ -80,7 +108,8 @@ let
     else:
         # Host synchronization uses the real relay/client/readiness operation.
         # It supplies no evidence to the admission collector.
-        command, research_socket = sys.argv[1:]
+        command, research_socket, expected_uid = sys.argv[1:]
+        expected_uid = int(expected_uid)
     messages = [
         {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {
             "protocolVersion": "2025-11-25", "capabilities": {},
@@ -118,11 +147,11 @@ let
         if child.poll() is None:
             child.kill()
             child.wait()
-    assert report["schema_version"] == 1 and report["caller_uid"] == 62103
+    assert report["schema_version"] == 1 and report["caller_uid"] == expected_uid
     assert report["untrusted"] is True and report["accepting"] is True
     assert report["egress"]["mode"] == "ready" and report["egress"]["lease_valid"] is True
     assert len(report["policy_sha256"]) == 64
-    if len(sys.argv) > 1:
+    if not inside:
         lease = json.loads(Path("/run/agent-research-egress/control/state.json").read_text())
         assert report["egress"]["generation"] == lease["generation"]
         assert lease["mode"] == "ready" and lease["valid_until"] > int(time.time())
@@ -240,7 +269,7 @@ pkgs.testers.runNixOSTest {
         definition = {
           schemaVersion = 1;
           image =
-            if name == "generic-research" then
+            if name != "generic-ungranted" then
               {
                 kind = "local-artifact";
                 inherit descriptor;
@@ -254,7 +283,9 @@ pkgs.testers.runNixOSTest {
             "import signal,sys,time; signal.signal(signal.SIGTERM, lambda *_: sys.exit(0)); print('research-admission-ready', flush=True); time.sleep(86400)"
           ];
           lifecycle = "stopped";
-          capabilities = lib.optional (name == "generic-research") "research";
+          capabilities =
+            lib.optional (name == "generic-research-model") "model"
+            ++ lib.optional (name != "generic-ungranted") "research";
           ownership = {
             uid = 10000;
             gid = 10000;
@@ -308,23 +339,44 @@ pkgs.testers.runNixOSTest {
         hermes-research.uid = 62101;
         zeroclaw-research.uid = 62102;
         generic-research.uid = 62103;
+        generic-research-model.uid = 62104;
+      };
+      broker.agents.generic-research-model = {
+        enable = true;
+        networkName = "tf-generic-research-model";
+        subnet = "10.203.75.0/30";
+        gateway = "10.203.75.1";
+        llm = {
+          enable = true;
+          # Readiness never contacts this reserved upstream. Provider acceptance
+          # is outside this combined local transport/lifecycle fixture.
+          upstreamBaseUrl = "https://combined-fixture.invalid/v1/";
+          providerCredentialFile = "/run/tentaflake-research-model-fixture/provider";
+          allowedModels = [
+            {
+              name = "fixture/model";
+              inputMicrousdPerMillion = 1;
+              outputMicrousdPerMillion = 1;
+            }
+          ];
+        };
       };
       security.admission = {
         authorityEpoch = "research-vm";
         physicalSpaceHeadroomBytes = 67108864;
         capacity = {
-          memoryBytes = 1610612736;
-          memorySwapBytes = 1610612736;
+          memoryBytes = 1744830464;
+          memorySwapBytes = 1744830464;
           nanoCpus = 2000000000;
-          pids = 1408;
-          workspaceBytes = 134217728;
-          stateBytes = 134217728;
+          pids = 1472;
+          workspaceBytes = 268435456;
+          stateBytes = 268435456;
         };
         hostReserve = {
-          memoryBytes = 268435456;
-          memorySwapBytes = 268435456;
+          memoryBytes = 402653184;
+          memorySwapBytes = 402653184;
           nanoCpus = 500000000;
-          pids = 256;
+          pids = 320;
           workspaceBytes = 0;
           stateBytes = 0;
         };
@@ -338,17 +390,17 @@ pkgs.testers.runNixOSTest {
         };
         maxActive = 1;
       };
-      workspaceQuota.agents.generic-research = {
+      workspaceQuota.agents = lib.genAttrs [ "generic-research" "generic-research-model" ] (name: {
         enable = true;
-        workspace = "/var/lib/generic-research/workspace";
+        workspace = "/var/lib/${name}/workspace";
         sizeMiB = 128;
         ownerUid = 10000;
         ownerGid = 10000;
         state = {
-          path = "/var/lib/generic-research/state";
+          path = "/var/lib/${name}/state";
           sizeMiB = 128;
         };
-      };
+      });
     };
     services.secureResearch = {
       serviceUid = 4201;
@@ -372,7 +424,7 @@ pkgs.testers.runNixOSTest {
           });
       tmpfiles.rules = [ "d /run/research-vpn 0755 root root -" ];
       # The earlier transport projections run their own ephemeral fixture CIDs.
-      # Only the declared admitted Generic unit may mutate Docker after bootstrap.
+      # Only the declared admitted Generic units may mutate Docker after bootstrap.
       services =
         lib.genAttrs
           [
@@ -536,8 +588,9 @@ pkgs.testers.runNixOSTest {
     control = research["controlPath"]
     relay_socket = research["relay"]["socketPath"]
     ledger = "/var/lib/tentaflake-admission/ledger.json"
-    volumes = {volume["spec"]["kind"]: volume for volume in plan["volumes"]}
-    assert set(plan["runtimes"]) == {agent} and runtime["model"] is None
+    volumes = {volume["spec"]["kind"]: volume for volume in plan["volumes"] if volume["spec"]["instanceId"] == agent}
+    combined_agent = "generic-research-model"
+    assert set(plan["runtimes"]) == {agent, combined_agent} and runtime["model"] is None
     assert plan["instances"][agent]["requestedCapabilities"] == ["research"]
     assert research["relay"]["template"]["uid"] == 62103
     assert runtime["image"] == {"kind": "local-artifact", "descriptor": "${descriptor}"}
@@ -554,8 +607,8 @@ pkgs.testers.runNixOSTest {
     def snapshot():
         return json.loads(machine.succeed("cat " + ledger))
 
-    def current():
-        return max((receipt for receipt in snapshot()["receipts"] if receipt["request"]["instanceId"] == agent),
+    def current(identifier=agent):
+        return max((receipt for receipt in snapshot()["receipts"] if receipt["request"]["instanceId"] == identifier),
                    key=lambda receipt: receipt["claimedRevision"])
 
     def stop_unit(name, allow_failed=False):
@@ -565,24 +618,25 @@ pkgs.testers.runNixOSTest {
         jobs = machine.succeed("systemctl list-jobs --no-legend --no-pager --full")
         assert all(name not in line.split() for line in jobs.splitlines()), jobs
 
-    def start_agent(succeeds=True):
-        previous = machine.succeed("systemctl show --value --property=InvocationID " + shlex.quote(unit)).strip()
-        command = "timeout 320s systemctl start " + shlex.quote(unit)
+    def start_agent(succeeds=True, identifier=agent):
+        selected_unit = plan["runtimes"][identifier]["unit"]
+        previous = machine.succeed("systemctl show --value --property=InvocationID " + shlex.quote(selected_unit)).strip()
+        command = "timeout 320s systemctl start " + shlex.quote(selected_unit)
         if succeeds:
             machine.succeed(command)
-            machine.wait_for_unit(unit)
+            machine.wait_for_unit(selected_unit)
         else:
             machine.fail(command)
-            invocation = machine.succeed("systemctl show --value --property=InvocationID " + shlex.quote(unit)).strip()
+            invocation = machine.succeed("systemctl show --value --property=InvocationID " + shlex.quote(selected_unit)).strip()
             assert invocation != previous and len(invocation) == 32 and all(c in "0123456789abcdef" for c in invocation), invocation
             for property_name, expected in [("ActiveState", "failed"), ("Result", "exit-code"), ("ExecMainStatus", "2")]:
-                actual = machine.succeed("systemctl show --value --property=" + property_name + " " + shlex.quote(unit)).strip()
+                actual = machine.succeed("systemctl show --value --property=" + property_name + " " + shlex.quote(selected_unit)).strip()
                 assert actual == expected, (property_name, actual)
             # Reset only this observed fresh admission refusal while the failed
             # state still pins the unit loaded. A rate-limit rejection is not
             # evidence that the collector ran or refused this changed source.
-            machine.succeed("systemctl reset-failed " + shlex.quote(unit))
-            stop_unit(unit)
+            machine.succeed("systemctl reset-failed " + shlex.quote(selected_unit))
+            stop_unit(selected_unit)
 
     def nix_evidence(retained=False):
         machine.wait_for_unit("register-nix-paths.service")
@@ -597,25 +651,27 @@ pkgs.testers.runNixOSTest {
             assert machine.succeed("readlink -- " + shlex.quote(root)).strip() == plan_path
             assert machine.succeed("test -L " + shlex.quote(root) + " && stat -c %u:%h -- " + shlex.quote(root)).strip() == "0:1"
 
-    def denied_without_dispatch():
+    def denied_without_dispatch(identifier=agent):
         before = snapshot()
-        start_agent(succeeds=False)
-        assert snapshot() == before, "Research refusal changed durable claims"
-        machine.fail(docker("container", "inspect", agent))
+        start_agent(succeeds=False, identifier=identifier)
+        assert snapshot() == before, "capability refusal changed durable claims"
+        machine.fail(docker("container", "inspect", identifier))
 
-    ready_command = shlex.join([
-        "timeout", "15s", "python3", "${readinessProbe}",
-        research["client"]["executable"], relay_socket,
-    ])
-
-    def wait_ready():
+    def wait_ready(identifier=agent):
+        selected = plan["runtimes"][identifier]["research"]
+        ready_command = shlex.join([
+            "timeout", "15s", "python3", "${readinessProbe}",
+            selected["client"]["executable"], selected["relay"]["socketPath"],
+            str(selected["relay"]["template"]["uid"]),
+        ])
         machine.wait_until_succeeds(ready_command, timeout=40)
         return json.loads(machine.succeed("cat " + shlex.quote(control)))
 
     with subtest("Research-only Generic uses explicit image acquisition and fenced bootstrap"):
         nix_evidence()
-        stop_unit(unit)
-        for volume in volumes.values():
+        for selected in plan["runtimes"].values():
+            stop_unit(selected["unit"])
+        for volume in plan["volumes"]:
             image_path = volume["spec"]["imagePath"]
             machine.succeed("test ! -e " + shlex.quote(image_path) + " && test ! -e " + shlex.quote(image_path + ".new"))
             owner = volume["units"]["owner"]
@@ -742,22 +798,33 @@ pkgs.testers.runNixOSTest {
                 machine.succeed("systemctl start agent-research.service agent-research-egress.service")
             wait_ready()
 
-    def assert_active():
-        receipt = current()
+    def assert_active(identifier=agent):
+        selected_runtime = plan["runtimes"][identifier]
+        selected_research = selected_runtime["research"]
+        model = selected_runtime["model"]
+        receipt = current(identifier)
         assert receipt["reservation"]["state"] == "active"
-        assert receipt["reservation"]["resources"] == plan["instances"][agent]["resources"]
+        assert receipt["reservation"]["resources"] == plan["instances"][identifier]["resources"]
         dispatch = receipt["runtime"]
         cid = dispatch["containerId"]
         assert len(cid) == 64 and all(c in "0123456789abcdef" for c in cid)
         observed = json.loads(machine.succeed(docker("container", "inspect", cid)))[0]
         assert observed["Id"] == cid and observed["State"]["Running"]
         assert observed["Image"] == dispatch["intent"]["imageId"]
-        assert dispatch["intent"]["image"] == runtime["image"]
-        assert dispatch["intent"]["specRevision"] == plan["instances"][agent]["revision"]
+        assert dispatch["intent"]["image"] == selected_runtime["image"]
+        assert dispatch["intent"]["specRevision"] == plan["instances"][identifier]["revision"]
         assert observed["Config"]["Labels"]["io.tentaflake.operation"] == receipt["request"]["operationId"]
         assert observed["Config"]["User"] == "10000:10000"
         host = observed["HostConfig"]
-        assert host["Runtime"] == "runsc" and host["NetworkMode"] == "none"
+        assert host["Runtime"] == "runsc"
+        assert host["NetworkMode"] == (model["network"]["name"] if model else "none")
+        if model:
+            network = json.loads(machine.succeed(docker("network", "inspect", model["network"]["name"])))[0]
+            assert network["Internal"] is True and set(network["Containers"]) == {cid}
+            assert network["Options"]["com.docker.network.bridge.name"] == model["network"]["bridge"]
+            assert network["IPAM"]["Config"] == [{"Subnet": model["network"]["subnet"], "Gateway": model["network"]["gateway"]}]
+            assert set(observed["NetworkSettings"]["Networks"]) == {model["network"]["name"]}
+            assert observed["NetworkSettings"]["Networks"][model["network"]["name"]]["NetworkID"] == network["Id"]
         assert host["ReadonlyRootfs"] and not host["Privileged"] and not host["AutoRemove"]
         assert set(host["CapDrop"]) == {"ALL"} and not host["CapAdd"]
         security = {option.replace(":", "=", 1) for option in host["SecurityOpt"]}
@@ -774,17 +841,19 @@ pkgs.testers.runNixOSTest {
         for options in host["Tmpfs"].values():
             assert set(options.split(",")) == {"rw", "nosuid", "nodev", "noexec", "size=8m"}
         expected_mounts = {}
-        for volume in runtime["container"]["volumes"]:
+        for volume in selected_runtime["container"]["volumes"]:
             source, target, mode = volume.split(":")
             expected_mounts[target] = (source, mode != "ro")
         actual_mounts = {item["Destination"]: (item["Source"], item["RW"]) for item in observed["Mounts"] if item["Type"] == "bind"}
         assert actual_mounts == expected_mounts
-        assert actual_mounts["/run/tentaflake-research"] == ("/run/tentaflake-research/generic-research", False)
+        assert actual_mounts["/run/tentaflake-research"] == ("/run/tentaflake-research/" + identifier, False)
         assert not any(item["Type"] == "volume" for item in observed["Mounts"])
-        report = json.loads(machine.succeed(docker("exec", cid, "/bin/python3", "-c", machine.succeed("cat ${readinessProbe}"))))
+        probe_args = ["combined"] if model else []
+        report = json.loads(machine.succeed(docker("exec", cid, "/bin/python3", "-c", machine.succeed("cat ${readinessProbe}"), *probe_args)))
         lease = json.loads(machine.succeed("cat " + shlex.quote(control)))
         assert report["egress"]["generation"] == lease["generation"]
-        machine.wait_until_succeeds("journalctl --no-pager -o cat -n 60 -u " + unit + " | grep -Fx research-admission-ready", timeout=30)
+        assert report["caller_uid"] == selected_research["relay"]["template"]["uid"]
+        machine.wait_until_succeeds("journalctl --no-pager -o cat -n 60 -u " + selected_runtime["unit"] + " | grep -Fx research-admission-ready", timeout=30)
         return receipt, lease["generation"]
 
     with subtest("owned Generic reaches Active only with authenticated same-generation Research"):
@@ -817,6 +886,93 @@ pkgs.testers.runNixOSTest {
         assert current()["reservation"]["state"] == "retained"
         assert snapshot()["storage"] == storage
         machine.fail(docker("container", "inspect", second["runtime"]["containerId"]))
+
+    with subtest("one Generic requires both live Model and Research before a combined claim"):
+        combined_runtime = plan["runtimes"][combined_agent]
+        combined_unit = combined_runtime["unit"]
+        combined_research = combined_runtime["research"]
+        model = combined_runtime["model"]
+        assert plan["instances"][combined_agent]["requestedCapabilities"] == ["model", "research"]
+        assert model is not None and combined_research is not None
+        assert combined_research["relay"]["template"]["uid"] == 62104
+        assert combined_runtime["image"] == runtime["image"]
+        assert {grant["capability"] for grant in plan["policy"]["grants"]
+                if grant["instanceId"] == combined_agent and grant["ownerId"] == "host-root"} == {"model", "research"}
+        assert plan["policy"]["maxActive"] == 1
+        assert all(receipt["reservation"]["state"] == "retained" for receipt in snapshot()["receipts"])
+        requires = machine.succeed("systemctl show --value --property=Requires " + combined_unit).split()
+        assert {model["unit"], controller, combined_research["service"]["unit"], combined_research["egress"]["unit"]}.issubset(requires)
+        combined_volumes = {volume["spec"]["kind"]: volume for volume in plan["volumes"]
+                            if volume["spec"]["instanceId"] == combined_agent}
+        for kind in ["state", "workspace"]:
+            machine.succeed("timeout 80s systemctl start " + shlex.quote(combined_volumes[kind]["units"]["owner"]))
+        combined_storage = snapshot()["storage"]
+        assert len(combined_storage) == 4 and all(row["allocation"]["state"] == "present" for row in combined_storage)
+        assert sum(row["allocation"]["bytes"] for row in combined_storage) == 536870912
+        # Runtime-only fixture credential, never passed in argv/output or sent
+        # upstream. The real broker/config/collector are used without patches.
+        machine.succeed("python3 - <<'PY'\nimport os\nfrom pathlib import Path\np = Path('/run/tentaflake-research-model-fixture')\np.mkdir(mode=0o700)\nfd = os.open(p / 'provider', os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o400)\nwith os.fdopen(fd, 'w') as stream:\n    stream.write(os.urandom(32).hex() + '\\n')\nPY")
+        broker = model["unit"]
+        health_command = "python3 -c " + shlex.quote(
+            "import json,urllib.request; response=urllib.request.urlopen('http://10.203.75.1:7810/healthz', timeout=2); "
+            "assert response.status == 200 and json.load(response) == {'status':'ready'}")
+        machine.succeed("systemctl start " + broker)
+        machine.wait_until_succeeds(health_command, timeout=30)
+        wait_ready(combined_agent)
+
+        # Research remains genuinely ready while the required broker has no
+        # process. A skipped dependency must not become positive Model evidence.
+        stop_unit(broker)
+        directory = "/run/systemd/system/" + broker + ".d"
+        dropin = directory + "/90-research-fixture.conf"
+        machine.succeed(shlex.join(["mkdir", "-p", directory]))
+        machine.succeed("printf '%s\\n' '[Unit]' 'ConditionPathExists=/run/research-fixture-never-created' > " + shlex.quote(dropin))
+        machine.succeed("systemctl daemon-reload")
+        try:
+            wait_ready(combined_agent)
+            denied_without_dispatch(combined_agent)
+            assert machine.succeed("systemctl show --value --property=MainPID " + broker).strip() == "0"
+        finally:
+            machine.succeed(shlex.join(["rm", "--", dropin]))
+            machine.succeed("systemctl daemon-reload")
+            machine.succeed("systemctl start " + broker)
+        machine.wait_until_succeeds(health_command, timeout=30)
+
+        # Conversely a healthy broker cannot authorize a draining Research
+        # controller. Both collectors must accept this same startup invocation.
+        machine.succeed("printf '%s\\n' draining > /run/research-vpn/fixture-mode.next")
+        machine.succeed("mv /run/research-vpn/fixture-mode.next /run/research-vpn/fixture-mode")
+        condition = "import json; assert json.load(open(" + repr(control) + "))['mode'] == 'draining'"
+        try:
+            machine.wait_until_succeeds("python3 -c " + shlex.quote(condition), timeout=10)
+            machine.succeed(health_command)
+            denied_without_dispatch(combined_agent)
+        finally:
+            machine.succeed("rm /run/research-vpn/fixture-mode")
+        wait_ready(combined_agent)
+
+    with subtest("the same admitted CID authenticates Model and Research without provider requests"):
+        audit_command = "sha256sum -- /var/lib/tentaflake-broker-llm-generic-research-model/audit.jsonl"
+        audit_before = machine.succeed(audit_command)
+        budget_absent = "test ! -e /var/lib/tentaflake-broker-llm-generic-research-model/budget.json"
+        machine.succeed(budget_absent)
+        start_agent(identifier=combined_agent)
+        combined_receipt, combined_generation = assert_active(combined_agent)
+        assert snapshot()["storage"] == combined_storage
+        assert current()["reservation"]["state"] == "retained"
+        assert sum(receipt["reservation"]["state"] == "active" for receipt in snapshot()["receipts"]) == 1
+        # The probe uses only /readyz and Research's read-only readiness RPC.
+        assert machine.succeed(audit_command) == audit_before
+        machine.succeed(budget_absent)
+        stop_unit(broker)
+        machine.wait_until_succeeds("test $(systemctl show --value --property=ActiveState " + combined_unit + ") = inactive", timeout=40)
+        retained = current(combined_agent)
+        assert retained["reservation"]["state"] == "retained"
+        assert retained["runtime"] == combined_receipt["runtime"]
+        assert retained["reservation"]["resources"]["memoryBytes"] == 0
+        assert snapshot()["storage"] == combined_storage
+        machine.fail(docker("container", "inspect", combined_receipt["runtime"]["containerId"]))
+        assert wait_ready(combined_agent)["generation"] == combined_generation
     nix_evidence(retained=True)
     for mount_unit in ["nix-store.mount", r"nix-.ro\x2dstore.mount"]:
         assert machine.succeed("systemctl show --value --property=DefaultDependencies " + shlex.quote(mount_unit)).strip() == "no"

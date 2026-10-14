@@ -221,6 +221,10 @@ jobs:
             nix build --no-link "${selected_checks[@]:offset:4}"
           done
 
+      - name: Generated admission plans through the CLI loader
+        if: needs.changes.outputs.evaluate == 'true'
+        run: nix develop --command just admission-plan research-admission-plan
+
       - name: nix build (tentaflake toplevel)
         if: needs.changes.outputs.evaluate == 'true' && needs.changes.outputs.runtime == 'true'
         run: nix build .#nixosConfigurations.tentaflake.config.system.build.toplevel --no-link

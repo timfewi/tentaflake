@@ -44,6 +44,17 @@
     "paths": ["crates/tentaflake-admission/**"],
     "checks": ["runtime", "cli", "rust", "static"]
   },
+  "live-admission-collectors": {
+    "paths": [
+      "crates/tentaflake-cli/src/admission_host.rs",
+      "crates/tentaflake-cli/src/admission_oci.rs",
+      "crates/tentaflake-cli/src/admission_model.rs",
+      "crates/tentaflake-cli/src/admission_research*.rs",
+      "crates/tentaflake-cli/src/admission_systemd.rs",
+      "crates/tentaflake-cli/src/admission_unix.rs"
+    ],
+    "checks": ["runtime", "research", "cli", "rust", "static"]
+  },
   "cli": {
     "paths": [
       "crates/tentaflake-cli/**",

@@ -122,6 +122,18 @@ class CiSelection(unittest.TestCase):
                 self.write(name, "changed\n")
                 self.assertEqual(self.vms(base, self.commit(), self.repository), {"runtime", "research"})
 
+    def test_shared_live_collectors_preserve_combined_research_vm_coverage(self):
+        for source in ("admission_host.rs", "admission_oci.rs", "admission_model.rs",
+                       "admission_research.rs", "admission_research_rpc.rs",
+                       "admission_systemd.rs", "admission_unix.rs"):
+            with self.subTest(source=source):
+                base = self.git("rev-parse", "HEAD")
+                self.write("crates/tentaflake-cli/src/" + source)
+                affected = select(base, self.commit(), self.repository)
+                self.assertEqual(affected, {"runtime", "research", "cli", "rust", "static"})
+                self.assertFalse(execution(affected, "fast")["builds"])
+                self.assertTrue(execution(affected, "full")["research"])
+
     def test_research_only_lock_pin_and_other_input_changes(self):
         self.lock["nodes"]["tentaflake-research"]["locked"]["rev"] = "new"
         self.write("flake.lock", json.dumps(self.lock))

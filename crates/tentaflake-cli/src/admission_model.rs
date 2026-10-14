@@ -12,7 +12,7 @@ use std::os::fd::{AsRawFd, FromRawFd};
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const MAX_OUTPUT: usize = 1024 * 1024;
 const MAX_ENVIRONMENT: u64 = 8192;
@@ -49,6 +49,8 @@ pub(crate) enum Stage<'a> {
 
 pub(crate) struct ReadyModel {
     pub generation: String,
+    pub observed_at: u64,
+    pub valid_until: u64,
     pub network_id: String,
     pub environment: BTreeMap<String, String>,
     pub environment_file: File,
@@ -871,8 +873,11 @@ fn observe(
         .collect();
     let generation = format!("{invocation}.{network_id}.{ifindex:x}.{:x}", firewall.table);
     remaining(deadline)?;
+    let observed_at = timestamp()?;
     Ok(ReadyModel {
         generation,
+        observed_at,
+        valid_until: observed_at.saturating_add(5),
         network_id,
         environment,
         environment_file,
@@ -949,8 +954,30 @@ pub(crate) fn collect(
     let before = observe(plan, id, spec, stage, deadline)?;
     probe(spec, &before.environment, deadline)?;
     let after = observe(plan, id, spec, stage, deadline)?;
+    finish_observation(&before, after, timestamp()?)
+}
+
+fn timestamp() -> Result<u64, String> {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs())
+        .map_err(|_| "model observation clock unavailable".into())
+}
+
+fn finish_observation(
+    before: &ReadyModel,
+    mut after: ReadyModel,
+    now: u64,
+) -> Result<ReadyModel, String> {
     if !before.same_source(&after) {
         return Err("model prerequisites changed during readiness probe".into());
+    }
+    // The window starts before the authenticated request and includes the
+    // source recheck. A matching later snapshot never renews that probe.
+    after.observed_at = before.observed_at;
+    after.valid_until = before.valid_until;
+    if after.observed_at > now || after.valid_until <= now {
+        return Err("model readiness expired during observation".into());
     }
     Ok(after)
 }
@@ -961,6 +988,8 @@ pub(crate) fn fixture(spec: &ModelSpec) -> ReadyModel {
     let file = File::open("/dev/null").unwrap();
     ReadyModel {
         generation: "a".repeat(32),
+        observed_at: 10,
+        valid_until: 15,
         network_id: "b".repeat(64),
         environment: BTreeMap::from([
             ("OPENAI_API_KEY".into(), "c".repeat(64)),
@@ -1179,6 +1208,23 @@ mod tests {
             change(&mut changed);
             assert!(!base.same_source(&changed));
         }
+    }
+
+    #[test]
+    fn source_rechecks_cannot_renew_the_authenticated_probe_window() {
+        let spec = spec();
+        let before = fixture(&spec);
+        let later = || {
+            let mut after = fixture(&spec);
+            after.observed_at = 14;
+            after.valid_until = 19;
+            after
+        };
+        assert!(before.same_source(&later()));
+        let ready = finish_observation(&before, later(), 14).unwrap();
+        assert_eq!((ready.observed_at, ready.valid_until), (10, 15));
+        assert!(finish_observation(&before, later(), 15).is_err());
+        assert!(finish_observation(&before, later(), 9).is_err());
     }
 
     fn network_fixture(spec: &ModelSpec) -> Value {

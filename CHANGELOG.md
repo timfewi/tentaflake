@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 ### Fixed
+- Preserve authenticated Model/Research observation times through combined
+  collection; later probes or source checks cannot renew an earlier prerequisite.
 - Verify immutable store mount sources through protected descriptors across OCI
   dispatch; source changes retain uncertain claims without blocking owned cleanup.
 - Bind declared controller results mounts to the exact requested Worker and

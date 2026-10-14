@@ -24,6 +24,7 @@ const TOOLS: [&str; 5] = [
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) struct ReadyReport {
     pub policy_sha256: String,
+    pub observed_at: u64,
     pub valid_until: u64,
 }
 
@@ -194,6 +195,7 @@ fn validate_report(
     }
     Ok(ReadyReport {
         policy_sha256: report.policy_sha256,
+        observed_at: report.observed_at,
         valid_until: report.egress.valid_until,
     })
 }
@@ -256,7 +258,9 @@ mod tests {
         let base = value(100);
         let parse =
             |value| validate_report(decode(&response(2, value), 2)?, UID, GENERATION, 99, 101);
-        assert_eq!(parse(base.clone()).unwrap().valid_until, 105);
+        let report = parse(base.clone()).unwrap();
+        assert_eq!(report.observed_at, 100);
+        assert_eq!(report.valid_until, 105);
         for (field, value) in [
             ("schema_version", json!(2)),
             ("caller_uid", json!(UID + 1)),
