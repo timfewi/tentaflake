@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 - Keep guest Nix's store-mutating registration out of prebuilt, read-only
   admission VM fixtures, including publication specialisations.
+- Pin each worker dispatch to a complete locally resolved image ID with pulls
+  disabled, exclude inherited remote runtime settings, and bound ordinary
+  runtime responses and log capture before allocation grows without limit.
+  Persist dispatch intent and full container ID before start; uncertain dispatch
+  keeps its claim and snapshot instead of guessing from an empty name lookup.
 - Handle kernel PTY mounts during admission maintenance, preserve refusal of
   unverified overlay backing, and report mount failures without raw sources.
 - Allow inert dependency-only mount entries during admission maintenance while

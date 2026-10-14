@@ -31,7 +31,18 @@ impl Fixture {
             .find(|p| p.is_file())
             .expect("pinned contributor shell contains bash");
         let runtime = root.join("fake-oci");
-        fs::write(&runtime, format!("#!{}\nprintf '%s\\n' \"$1\" >> '{}'/calls\ncase \"$1\" in\nps) exit 0;;\ncreate) kill -STOP \"$PPID\"; : > '{}'/stopped; exit 77;;\n*) exit 77;;\nesac\n", shell.display(), root.display(), root.display())).unwrap();
+        fs::write(&runtime, format!(r#"#!{}
+[[ "$1" == --host=unix:///run/docker.sock && "$2" == --config=/var/empty ]] || exit 90
+[[ ! ${{DOCKER_HOST+x}} && ! ${{DOCKER_CONTEXT+x}} && ! ${{DOCKER_CONFIG+x}} && ! ${{CONTAINER_HOST+x}} ]] || exit 91
+shift 2
+printf '%s\n' "$1" >> '{}'/calls
+case "$1" in
+image) printf '%s\n' 'sha256:{}';;
+ps) exit 0;;
+create) printf '%s\n' "$@" > '{}'/create-args; kill -STOP "$PPID"; : > '{}'/stopped; exit 77;;
+*) exit 77;;
+esac
+"#, shell.display(), root.display(), "ab".repeat(32), root.display(), root.display())).unwrap();
         fs::set_permissions(&runtime, fs::Permissions::from_mode(0o700)).unwrap();
         let config = root.join("config.json");
         // Old generated configurations omit the new capacity fields. The real
@@ -51,6 +62,23 @@ impl Fixture {
         let mut command = Command::new(env!("CARGO_BIN_EXE_tentaflake-worker"));
         command.arg("--config").arg(&self.config).args(args);
         command
+            .env("DOCKER_HOST", "tcp://untrusted.invalid:1234")
+            .env("DOCKER_CONTEXT", "untrusted")
+            .env("DOCKER_CONFIG", "/untrusted")
+            .env("CONTAINER_HOST", "ssh://untrusted.invalid");
+        command
+    }
+
+    fn runtime_script(&self, body: &str) {
+        let runtime = self.root.join("fake-oci");
+        let old = fs::read_to_string(&runtime).unwrap();
+        let prefix = old.split("case \"$1\" in").next().unwrap();
+        fs::write(runtime, format!("{prefix}{body}")).unwrap();
+    }
+
+    fn submit(&self) {
+        fs::write(self.root.join("workspace/.tentaflake-worker/inbox/job_1.json"),
+            br#"{"version":1,"id":"job_1","action_class":"local-reversible","argv":["true"],"timeout_seconds":1}"#).unwrap();
     }
 }
 
@@ -83,10 +111,9 @@ fn actual_commands_reject_competing_queue_owner_without_mutation() {
 }
 
 #[test]
-fn sigkill_at_dispatch_boundary_preserves_claim_and_restart_does_not_replay() {
+fn sigkill_at_dispatch_boundary_preserves_intent_and_restart_does_not_replay_or_cleanup() {
     let f = Fixture::new();
-    fs::write(f.root.join("workspace/.tentaflake-worker/inbox/job_1.json"),
-        br#"{"version":1,"id":"job_1","action_class":"local-reversible","argv":["true"],"timeout_seconds":1}"#).unwrap();
+    f.submit();
     let mut child = f
         .command(&["drain"])
         .stdout(Stdio::null())
@@ -107,22 +134,194 @@ fn sigkill_at_dispatch_boundary_preserves_claim_and_restart_does_not_replay() {
         "worker did not reach the stopped dispatch boundary"
     );
     assert!(f.root.join("state/running/job_1.json").is_file());
+    let create_args = fs::read_to_string(f.root.join("create-args")).unwrap();
+    assert!(create_args.lines().any(|line| line == "--pull=never"));
+    assert!(
+        create_args
+            .lines()
+            .any(|line| line == format!("sha256:{}", "ab".repeat(32)))
+    );
+    assert!(!create_args.lines().any(|line| line == "fixture:offline"));
+    let intent = fs::read(f.root.join("state/jobs/job_1/dispatch.json")).unwrap();
     for _ in 0..2 {
         let output = f.command(&["drain"]).output().unwrap();
         assert!(
-            output.status.success(),
+            !output.status.success(),
             "{}",
             String::from_utf8_lossy(&output.stderr)
         );
+        assert!(String::from_utf8_lossy(&output.stderr).contains("dispatch intent is unresolved"));
     }
     let calls = fs::read_to_string(f.root.join("calls")).unwrap();
     assert_eq!(calls.lines().filter(|s| *s == "create").count(), 1);
+    assert_eq!(calls.lines().filter(|s| *s == "ps").count(), 0);
+    assert_eq!(
+        fs::read(f.root.join("state/jobs/job_1/dispatch.json")).unwrap(),
+        intent
+    );
+    assert!(!f.root.join("state/results/job_1/result.json").exists());
+    assert!(f.root.join("state/running/job_1.json").is_file());
+    assert!(f.root.join("state/jobs/job_1/input").is_dir());
+}
+
+#[test]
+fn confirmed_create_persists_identity_before_start_and_uses_cid_for_every_followup() {
+    let f = Fixture::new();
+    let cid = "cd".repeat(32);
+    f.runtime_script(&format!(
+        r#"
+case "$1" in
+image) printf '%s\n' 'sha256:{}';;
+ps) exit 0;;
+create)
+  [[ -f '{}'/state/jobs/job_1/dispatch.json ]] || exit 92
+  printf '%s\n' '{cid}';;
+start)
+  [[ "$2" == '{cid}' && "$(<'{}'/state/jobs/job_1/container.json)" == *'{cid}'* ]] || exit 93;;
+inspect)
+  [[ "$3" == '{cid}' ]] || exit 94
+  case "$2" in
+    *Running*) if [[ -f '{}'/released ]]; then printf 'false\n'; else printf 'true\n'; fi;;
+    *ExitCode*) printf '0\n';;
+    *) exit 95;; esac;;
+exec)
+  [[ "$2" == '{cid}' ]] || exit 95
+  if [[ "$3" == head ]]; then printf 'TFW1:{}:0\n'; else
+    for ((i=0; i<1024; i++)); do printf '\0'; done
+  fi;;
+kill) [[ "$2" == --signal=USR1 && "$3" == '{cid}' ]] || exit 95; : > '{}'/released;;
+logs) [[ "$2" == '{cid}' ]] || exit 96; printf 'ok\n';;
+rm) [[ "$2" == --force && "$3" == '{cid}' ]] || exit 97;;
+*) exit 98;;
+esac
+"#,
+        "ab".repeat(32),
+        f.root.display(),
+        f.root.display(),
+        f.root.display(),
+        "ab".repeat(16),
+        f.root.display()
+    ));
+    f.submit();
+    let output = f.command(&["drain"]).output().unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
     let result: serde_json::Value =
         serde_json::from_slice(&fs::read(f.root.join("state/results/job_1/result.json")).unwrap())
             .unwrap();
-    assert_eq!(result["status"], "interrupted");
+    assert_eq!(result["status"], "succeeded");
+    let calls = fs::read_to_string(f.root.join("calls")).unwrap();
+    assert!(calls.lines().any(|call| call == "exec"));
+    assert!(calls.lines().any(|call| call == "kill"));
+    assert_eq!(calls.lines().filter(|call| *call == "create").count(), 1);
+    assert_eq!(calls.lines().filter(|call| *call == "rm").count(), 1);
+    // This fixture sends a valid empty archive: the marker/release protocol
+    // still runs, but there are no artifacts to publish.
+    assert_eq!(result["artifacts_available"], false);
     assert!(!f.root.join("state/running/job_1.json").exists());
     assert!(!f.root.join("state/jobs/job_1").exists());
+}
+
+#[test]
+fn failed_or_ambiguous_create_keeps_intent_and_does_not_guess_container_identity() {
+    for reply in [
+        "exit 77".to_owned(),
+        "printf 'short-id\\n'".to_owned(),
+        "printf 'untrusted diagnostic\\n' >&2; exit 77".to_owned(),
+        format!("printf '{}\\n'; exit 77", "cd".repeat(32)),
+        "while :; do printf aaaaaaaaaaaaaaaa; done".to_owned(),
+    ] {
+        let f = Fixture::new();
+        f.runtime_script(&format!("case \"$1\" in\nimage) printf '%s\\n' 'sha256:{}';;\nps) exit 0;;\ncreate) {reply};;\n*) exit 99;;\nesac\n", "ab".repeat(32)));
+        f.submit();
+        let output = f.command(&["drain"]).output().unwrap();
+        assert!(!output.status.success());
+        assert!(!String::from_utf8_lossy(&output.stderr).contains("untrusted diagnostic"));
+        assert!(f.root.join("state/jobs/job_1/dispatch.json").is_file());
+        assert!(f.root.join("state/jobs/job_1/input").is_dir());
+        assert!(f.root.join("state/running/job_1.json").is_file());
+        assert!(!f.root.join("state/jobs/job_1/container.json").exists());
+        let calls = fs::read(f.root.join("calls")).unwrap();
+        assert!(!f.command(&["drain"]).output().unwrap().status.success());
+        assert_eq!(fs::read(f.root.join("calls")).unwrap(), calls);
+    }
+}
+
+#[test]
+fn timed_out_create_preserves_durable_intent_without_recovery_runtime_calls() {
+    let f = Fixture::new();
+    let sleep = std::env::split_paths(&std::env::var_os("PATH").unwrap())
+        .map(|path| path.join("sleep"))
+        .find(|path| path.is_file())
+        .unwrap();
+    f.runtime_script(&format!("case \"$1\" in\nimage) printf '%s\\n' 'sha256:{}';;\nps) exit 0;;\ncreate) exec '{}' 30;;\n*) exit 99;;\nesac\n", "ab".repeat(32), sleep.display()));
+    f.submit();
+    let started = Instant::now();
+    let output = f.command(&["drain"]).output().unwrap();
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("timed out"));
+    assert!(started.elapsed() < Duration::from_secs(20));
+    assert!(f.root.join("state/jobs/job_1/dispatch.json").is_file());
+    assert!(f.root.join("state/jobs/job_1/input").is_dir());
+    assert!(f.root.join("state/running/job_1.json").is_file());
+    let calls = fs::read(f.root.join("calls")).unwrap();
+    assert!(!f.command(&["drain"]).output().unwrap().status.success());
+    assert_eq!(fs::read(f.root.join("calls")).unwrap(), calls);
+}
+
+#[test]
+fn missing_or_malformed_local_image_refuses_before_create() {
+    for reply in [
+        "exit 77",
+        "printf 'fixture:tag\\n'",
+        "printf 'sha256:abc\\n'",
+    ] {
+        let f = Fixture::new();
+        f.runtime_script(&format!(
+            "case \"$1\" in\nimage) {reply};;\n*) exit 99;;\nesac\n"
+        ));
+        f.submit();
+        assert!(!f.command(&["drain"]).output().unwrap().status.success());
+        assert_eq!(fs::read_to_string(f.root.join("calls")).unwrap(), "image\n");
+        assert!(!f.root.join("state/jobs/job_1").exists());
+    }
+}
+
+#[test]
+fn podman_selects_local_mode_without_inherited_connection_or_user_config() {
+    let f = Fixture::new();
+    let mut config: serde_json::Value =
+        serde_json::from_slice(&fs::read(&f.config).unwrap()).unwrap();
+    config["backend"] = serde_json::json!("podman");
+    fs::write(&f.config, serde_json::to_vec(&config).unwrap()).unwrap();
+    let runtime = f.root.join("fake-oci");
+    let old = fs::read_to_string(&runtime).unwrap();
+    let shebang = old.lines().next().unwrap();
+    fs::write(
+        &runtime,
+        format!(
+            r#"{shebang}
+[[ "$1" == --remote=false && "$2" == image ]] || exit 90
+[[ "$HOME" == /var/empty && "$XDG_CONFIG_HOME" == /var/empty ]] || exit 91
+[[ ! ${{CONTAINER_HOST+x}} && ! ${{CONTAINER_CONNECTION+x}} && ! ${{DOCKER_HOST+x}} ]] || exit 92
+printf 'observed\n' > '{}'/local-podman
+exit 77
+"#,
+            f.root.display()
+        ),
+    )
+    .unwrap();
+    f.submit();
+    let output = f
+        .command(&["drain"])
+        .env("CONTAINER_CONNECTION", "untrusted")
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    assert!(f.root.join("local-podman").is_file());
 }
 
 #[test]

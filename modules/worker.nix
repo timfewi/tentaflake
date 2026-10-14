@@ -8,7 +8,7 @@ let
   constants = import ../lib/constants.nix;
   cfg = config.tentaflake.worker;
   backend = config.virtualisation.oci-containers.backend;
-  runtime = lib.getExe pkgs.${backend};
+  runtime = lib.getExe config.virtualisation.${backend}.package;
   json = pkgs.formats.json { };
   enabledAgents = lib.filterAttrs (_: agent: agent.enable) cfg.agents;
   containerNames = lib.attrNames config.virtualisation.oci-containers.containers;
@@ -360,6 +360,8 @@ in
           [
             "d ${stateDir name} 0750 root ${group} -"
             "d ${stateDir name}/pending 0700 root root -"
+            "d ${stateDir name}/running 0700 root root -"
+            "f ${stateDir name}/.queue.lock 0600 root root -"
             "d ${stateDir name}/approvals 0700 root root -"
             "d ${stateDir name}/jobs 0700 root root -"
             "d ${resultDir name} 2750 root ${group} 14d"

@@ -59,6 +59,44 @@ image's `imageName` and `imageTag`. Set `worker.imageReference` explicitly for
 images without that metadata. The module loads the Nix derivation locally
 without pulling the reference from a registry.
 
+Before each dispatch, the worker resolves that reference to a complete local
+SHA-256 image ID and creates with that ID and `--pull=never`. Missing or malformed
+local image evidence refuses dispatch. Docker commands use the fixed local
+`/run/docker.sock` and empty client configuration; Podman commands explicitly
+select local mode. Inherited Docker/Podman connection settings are excluded.
+Ordinary runtime queries and mutations have a ten-second client deadline and
+a combined 64 KiB response ceiling. Job log capture uses `maxLogBytes` directly,
+so truncation bounds memory as well as the published file. Killing a timed-out
+client does not prove cancellation by the runtime daemon. The artifact tar
+stream deadline, automatic recovery tied to a daemon generation, common host
+fence and aggregate Worker resource/storage admission still require separate
+implementation.
+
+## Inspect queue prerequisites
+
+As the host root owner, use the same generated configuration as the worker:
+
+```sh
+tentaflake-worker --config /nix/store/<generated-worker-config>.json probe
+```
+
+`probe` emits a schema-1 JSON snapshot with the agent, observation time,
+pending/running/inbox entry and byte counts, and configured queue limits. It
+requires the installed protected directories and existing `.queue.lock`, takes
+a nonblocking shared lock, and refuses busy, missing, unsafe, malformed,
+over-capacity or observably changing queues. Observation is bounded to 4096
+entries, 64 MiB of request data and 1 MiB per request, with a two-second scan
+deadline; larger configured limits do not expand these observation ceilings.
+The Nix module initializes `running` and the empty lock without replacing an
+existing lock's contents.
+
+The probe does not invoke the runtime, change groups, create or repair layout,
+recover jobs, consume approvals or append audit events. Invalid command lines
+are rejected before configuration access or layout changes for all commands.
+Running counts can include unresolved dispatches. This is a prerequisite
+snapshot, not a readiness grant, queue reservation, live-container observation
+or aggregate resource/storage admission.
+
 ## Submit a job
 
 Write one complete file atomically when practical:
@@ -181,16 +219,23 @@ capture therefore copies into private state before removing the inbox entry.
 |---|---|
 | `pending/<id>.json` | Validated immutable request; approval remains outside the agent. |
 | `running/<id>.json` | Atomically claimed and synced before any OCI dispatch. |
+| `jobs/<id>/dispatch.json` | Synced image/name intent before create; unresolved intent blocks automatic recovery. |
+| `jobs/<id>/container.json` | Full container ID synced before start; subsequent operations use only that ID. |
 | `results/<id>/result.json` | Terminal result and artifacts synced before publication. |
 
-After a crash, a running claim is never dispatched again. Recovery checks the
-exact container name and ownership label before removing its disposable
-container and private staging. If no terminal result exists, it publishes
-`interrupted`: the execution outcome is unknown. Review it before submitting a
-new ID. A completed result with a stale private request is retained and the
-request retired without replay. Runtime listing/ownership errors preserve the
-claim and fail closed. This is conservative crash recovery, not a promise of
-exactly-once effects across operator rollback or deleted state.
+After a crash, a running claim is never dispatched again. An existing dispatch
+intent makes recovery refuse before any runtime lookup or cleanup, even if a
+terminal result exists. Keep the claim and snapshot for operator recovery: an
+empty container listing cannot rule out a delayed create request. Confirmed
+creates bind a full container ID before start; normal completion removes that
+exact container before deleting private job state.
+
+Legacy running claims without an intent retain their previous name/ownership
+recovery. If no terminal result exists, this publishes `interrupted`; the
+execution outcome is unknown. A completed result with a stale private request
+is retained and the request retired without replay. Runtime listing/ownership
+errors preserve the claim and fail closed. Legacy recovery does not prove
+daemon-generation identity or exactly-once effects across rollback/deleted state.
 
 `maxInboxEntries` and `maxInboxBytes` default to 256 entries and 8 MiB;
 `maxQueueEntries` and `maxQueueBytes` apply the same defaults jointly to private
@@ -206,8 +251,9 @@ their existing separate limits and retention still apply.
 Existing configurations without the new JSON fields use these defaults.
 Upgrade with the worker and watcher stopped and preserve a quota-aware backup.
 Complete legacy pending records and exact approvals remain valid. A legacy
-`jobs/<id>` snapshot with pending state is treated as abandoned execution and
-retired as `interrupted`, without replay. Unpublished private `.new` files are
+`jobs/<id>` snapshot with pending state and no dispatch intent is treated as
+abandoned execution and retired as `interrupted`, without replay. A dispatch
+intent requires explicit operator recovery. Unpublished private `.new` files are
 discarded during recovery. Malformed legacy pending records fail closed and
 preserve a complete inbox copy; inspect the exact job and restore or quarantine
 its private record offline before restarting. If restored queues exceed the new

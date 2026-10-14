@@ -12,7 +12,9 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 type Result<T> = std::result::Result<T, String>;
 
+mod probe;
 mod queue;
+mod runtime;
 
 const RESOLVE_NO_MAGICLINKS: u64 = 0x02;
 const RESOLVE_NO_SYMLINKS: u64 = 0x04;
@@ -163,40 +165,69 @@ fn main() {
     }
 }
 
-fn run() -> Result<()> {
-    let mut args = std::env::args().skip(1);
-    if args.next().as_deref() != Some("--config") {
-        return Err("usage: tentaflake-worker --config FILE drain|approve|deny [JOB]".into());
+#[derive(Debug, PartialEq, Eq)]
+enum WorkerCommand {
+    Probe,
+    Drain,
+    Approve(String),
+    Deny(String),
+}
+
+fn parse_args(mut args: impl Iterator<Item = OsString>) -> Result<(PathBuf, WorkerCommand)> {
+    const USAGE: &str = "usage: tentaflake-worker --config FILE probe|drain|approve|deny [JOB]";
+    if args.next().as_deref() != Some(OsStr::new("--config")) {
+        return Err(USAGE.into());
     }
-    let config_path = args
-        .next()
-        .ok_or_else(|| "--config requires a path".to_string())?;
-    let command = args
-        .next()
-        .ok_or_else(|| "missing drain, approve, or deny command".to_string())?;
+    let path = args.next().filter(|value| !value.is_empty()).ok_or(USAGE)?;
+    let command = args.next().ok_or(USAGE)?;
+    let command = match command.to_str() {
+        Some("probe") => WorkerCommand::Probe,
+        Some("drain") => WorkerCommand::Drain,
+        Some(kind @ ("approve" | "deny")) => {
+            let job = args.next().ok_or("missing job id")?;
+            let job = job.to_str().ok_or("job id must be UTF-8")?;
+            validate_identifier("job id", job, 64)?;
+            if kind == "approve" {
+                WorkerCommand::Approve(job.to_owned())
+            } else {
+                WorkerCommand::Deny(job.to_owned())
+            }
+        }
+        _ => return Err(USAGE.into()),
+    };
+    if args.next().is_some() {
+        return Err("unexpected argument".into());
+    }
+    Ok((PathBuf::from(path), command))
+}
+
+fn run() -> Result<()> {
+    // Reject the entire invocation before even reading configuration. In
+    // particular, malformed operator commands must not initialize queue state.
+    let (config_path, command) = parse_args(std::env::args_os().skip(1))?;
     let config: Config = serde_json::from_reader(
-        File::open(&config_path).map_err(|error| format!("open {config_path}: {error}"))?,
+        File::open(&config_path)
+            .map_err(|error| format!("open {}: {error}", config_path.display()))?,
     )
-    .map_err(|error| format!("parse {config_path}: {error}"))?;
+    .map_err(|error| format!("parse {}: {error}", config_path.display()))?;
     validate_config(&config)?;
+    if command == WorkerCommand::Probe {
+        let snapshot = probe::collect(&config)?;
+        println!(
+            "{}",
+            serde_json::to_string(&snapshot).map_err(|_| "encode worker probe")?
+        );
+        return Ok(());
+    }
     enter_worker_group(&config)?;
     ensure_state_layout(&config)?;
     let _queue_lock = queue::lock(&config)?;
 
-    match command.as_str() {
-        "drain" => {
-            reject_extra_args(args)?;
-            drain(&config)
-        }
-        "approve" => {
-            let job = required_job(args)?;
-            approve(&config, &job)
-        }
-        "deny" => {
-            let job = required_job(args)?;
-            deny(&config, &job)
-        }
-        _ => Err(format!("unknown command: {command}")),
+    match command {
+        WorkerCommand::Drain => drain(&config),
+        WorkerCommand::Approve(job) => approve(&config, &job),
+        WorkerCommand::Deny(job) => deny(&config, &job),
+        WorkerCommand::Probe => unreachable!("probe returns before queue mutation"),
     }
 }
 
@@ -233,21 +264,6 @@ fn worker_group_action(
         Err(format!(
             "worker must run as root or with effective group {container_gid}; current group is {effective_gid}"
         ))
-    }
-}
-
-fn required_job(mut args: impl Iterator<Item = String>) -> Result<String> {
-    let job = args.next().ok_or_else(|| "missing job id".to_string())?;
-    reject_extra_args(args)?;
-    validate_identifier("job id", &job, 64)?;
-    Ok(job)
-}
-
-fn reject_extra_args(mut args: impl Iterator<Item = String>) -> Result<()> {
-    if let Some(value) = args.next() {
-        Err(format!("unexpected argument: {value}"))
-    } else {
-        Ok(())
     }
 }
 
@@ -546,6 +562,9 @@ fn process_ready(config: &Config, workspace_fd: RawFd) -> Result<()> {
 }
 
 fn approve(config: &Config, job: &str) -> Result<()> {
+    // Approval can dispatch just like drain. An unrelated approval must never
+    // bypass the unresolved-dispatch barrier or consume another reservation.
+    queue::recover(config)?;
     let request = read_pending(config, job)?;
     if queue::terminal(config, &request)? {
         return Err("job is already terminal; drain the queue to retire its stale request".into());
@@ -608,6 +627,9 @@ fn job_exists(config: &Config, job: &str) -> bool {
 }
 
 fn execute(config: &Config, workspace_fd: RawFd, request: &JobRequest) -> Result<()> {
+    // Resolve once, then create by content identity. A tag change or missing
+    // image must never redirect this dispatch or trigger registry acquisition.
+    let image = runtime::local_image(config)?;
     let job_root = config.state_dir.join("jobs").join(&request.id);
     let snapshot = job_root.join("input");
     fs::create_dir(&job_root).map_err(|error| format!("create job state: {error}"))?;
@@ -630,18 +652,41 @@ fn execute(config: &Config, workspace_fd: RawFd, request: &JobRequest) -> Result
     }
 
     let container = format!("tfw-{}-{}", config.agent, request.id);
-    cleanup_existing_worker_container(config, &container)?;
+    // Publish intent before the daemon can observe create. A lost response or
+    // killed client cannot prove non-execution; keep the snapshot and claim.
+    queue::write_private(
+        &job_root.join("dispatch.json"),
+        &serde_json::to_vec(&serde_json::json!({
+            "schemaVersion": 1, "agent": config.agent, "job": request.id,
+            "image": image, "containerName": container,
+        }))
+        .map_err(|_| "cannot serialize worker dispatch intent")?,
+    )?;
+    queue::sync_directory(&config.state_dir.join("jobs"))?;
+    job_guard.preserve_on_error = true;
     let mut create = runtime(config);
     create.arg("create");
     append_runtime_policy(&mut create, config, &container, &snapshot);
     create
         .arg(format!("--label=io.tentaflake.worker={}", config.agent))
+        .arg("--pull=never")
         .arg("--entrypoint=/bin/bash")
-        .arg(&config.image)
+        .arg(&image)
         .args(["-ceu", WORKSPACE_INIT_SCRIPT, "tentaflake-worker-job"])
         .args(&request.argv);
-    command_ok(&mut create, "create disposable container")?;
+    let created = runtime::output(&mut create)?;
+    if !created.status.success() {
+        return Err("worker create did not confirm success; dispatch intent retained".into());
+    }
+    let container = runtime::container_id(&created.stdout)?;
     let mut container_guard = ContainerGuard::new(config, container.clone());
+    queue::write_private(
+        &job_root.join("container.json"),
+        &serde_json::to_vec(&serde_json::json!({
+            "schemaVersion": 1, "containerId": container,
+        }))
+        .map_err(|_| "cannot serialize worker container identity")?,
+    )?;
 
     let started = command_ok(
         runtime(config).args(["start", &container]),
@@ -683,19 +728,26 @@ fn execute(config: &Config, workspace_fd: RawFd, request: &JobRequest) -> Result
             }
             if Instant::now() >= deadline {
                 timed_out = true;
-                let _ = runtime(config).args(["kill", &container]).status();
+                let _ = runtime_output(config, ["kill", &container]);
                 break;
             }
             thread::sleep(Duration::from_millis(250));
         }
     }
 
-    let log_output = runtime_output(config, ["logs", &container]).unwrap_or_else(|error| Output {
-        status: failure_status(),
-        stdout: Vec::new(),
-        stderr: error.into_bytes(),
-    });
+    let (log_output, capture_truncated) =
+        runtime::logs(config, &container).unwrap_or_else(|error| {
+            (
+                Output {
+                    status: failure_status(),
+                    stdout: Vec::new(),
+                    stderr: error.into_bytes(),
+                },
+                true,
+            )
+        });
     let (mut log, mut log_truncated) = bounded_combined_log(log_output, config.max_log_bytes);
+    log_truncated |= capture_truncated;
     if let Some(diagnostic) = artifact_diagnostic {
         append_bounded_log_section(
             &mut log,
@@ -764,10 +816,10 @@ fn execute(config: &Config, workspace_fd: RawFd, request: &JobRequest) -> Result
 }
 
 fn read_completion_marker(config: &Config, container: &str) -> Result<Option<CompletionMarker>> {
-    let output = runtime(config)
-        .args(["exec", container, "head", "-c", "96", COMPLETION_MARKER])
-        .output()
-        .map_err(|error| format!("read disposable completion marker: {error}"))?;
+    let output = runtime_output(
+        config,
+        ["exec", container, "head", "-c", "96", COMPLETION_MARKER],
+    )?;
     if !output.status.success() {
         return Ok(None);
     }
@@ -1043,14 +1095,14 @@ fn cleanup_existing_worker_container(config: &Config, container: &str) -> Result
     {
         return Ok(());
     }
-    let output = runtime(config)
-        .args([
+    let output = runtime_output(
+        config,
+        [
             "inspect",
             "--format={{index .Config.Labels \"io.tentaflake.worker\"}}",
             container,
-        ])
-        .output()
-        .map_err(|error| format!("inspect stale worker container: {error}"))?;
+        ],
+    )?;
     if !output.status.success() {
         return Err(format!(
             "cannot inspect ownership of worker container {container}"
@@ -1070,7 +1122,7 @@ fn remove_worker_container(config: &Config, container: &str) -> Result<()> {
 }
 
 fn runtime(config: &Config) -> Command {
-    Command::new(&config.runtime)
+    runtime::command(config)
 }
 
 fn runtime_output<I, S>(config: &Config, args: I) -> Result<Output>
@@ -1078,22 +1130,16 @@ where
     I: IntoIterator<Item = S>,
     S: AsRef<OsStr>,
 {
-    Command::new(&config.runtime)
-        .args(args)
-        .output()
-        .map_err(|error| format!("run {}: {error}", config.runtime.display()))
+    runtime::output(runtime(config).args(args))
 }
 
 fn command_ok(command: &mut Command, operation: &str) -> Result<()> {
-    let output = command
-        .output()
-        .map_err(|error| format!("{operation}: {error}"))?;
+    let output = runtime::output(command).map_err(|error| format!("{operation}: {error}"))?;
     if output.status.success() {
         Ok(())
     } else {
         Err(format!(
-            "{operation} failed: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
+            "{operation} did not confirm success; outcome remains unknown"
         ))
     }
 }
@@ -1233,11 +1279,16 @@ struct CopyBudget {
 struct JobDirectoryGuard {
     path: PathBuf,
     active: bool,
+    preserve_on_error: bool,
 }
 
 impl JobDirectoryGuard {
     fn new(path: PathBuf) -> Self {
-        Self { path, active: true }
+        Self {
+            path,
+            active: true,
+            preserve_on_error: false,
+        }
     }
 
     fn cleanup(&mut self) -> Result<()> {
@@ -1251,7 +1302,7 @@ impl JobDirectoryGuard {
 
 impl Drop for JobDirectoryGuard {
     fn drop(&mut self) {
-        if self.active {
+        if self.active && !self.preserve_on_error {
             let _ = fs::remove_dir_all(&self.path);
         }
     }

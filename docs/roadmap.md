@@ -230,26 +230,38 @@ fixtures for public-access denial and existing-consumer access remain excluded
 from this lightweight-only run. No enrollment, remote grants or host activation
 is claimed; #106 remains open for that acceptance.
 
-#113 implementation is prepared on `feat/worker-durable-claims`. Owning files:
-`crates/tentaflake-worker/src/queue.rs`, worker dispatch, `modules/worker.nix`
-and the worker guide. Captured requests/approvals publish atomically; one
-operator/drain lock protects durable pending-to-running claims before dispatch.
-Abandoned claims retire as `interrupted` without replay, and terminal results
-preserve completed work. Aggregate inbox/private queue entry and byte ceilings
-reject overload without consuming unaccepted requests. Legacy migration and
-backup rollback review are documented. No worker authority or backup sources
-change.
+#113 Worker safety prerequisites are prepared on `feat/worker-runtime-safety`,
+directly on OCI parent `b6acfca`, without Model/Research admission dependencies.
+Owning files are `crates/tentaflake-worker`, `modules/worker.nix` and the worker
+guide. Existing durable queue claims and capacity limits remain. A root-only
+read-only probe reports bounded queue counts under an existing shared lock;
+it grants no readiness or dispatch authority. CLI parsing precedes mutation.
+Dispatch resolves a local immutable image ID, refuses pulls and inherited
+remote runtime settings, syncs an intent before create and a full CID before
+start, and uses only that CID afterward. Unknown create outcomes preserve the
+claim/snapshot and block automatic drain or approve recovery, even with a
+terminal result. Ordinary runtime output and client duration are bounded;
+client termination proves no daemon cancellation. The configured Podman package
+supplies its declared gVisor runtime. Legacy migration and backup rollback
+review remain documented; no worker authority or backup sources change.
 
-Verified locally: 27 worker unit tests, three actual-binary tests (competing
-commands, partial-write failure and SIGKILL/restart), worker Clippy, Rust
-formatting, focused module/image/CI-selection/package-source checks and Nix
-lint/formatting/ShellCheck. VM derivation/Python syntax passed; the added physical
-worker crash/cleanup fixture awaits CI. No local VM, ISO, full system or Research
-tool build ran. The verified #143 state-quota change is integrated. Worker-only
-module changes select package/image and runtime evidence, skipping separate
-Research preparation/suite and full flake/host gates; 21 real-Git routing
-regressions preserve shared/unknown coverage. Next: publish this worker PR and
-merge only its exact head after green CI. #113 remains open until delivery.
+The integration branch's fast gate passed 359 Rust tests and static/helper
+checks, plus scoped Nix lint/format, real Docker/Podman option projections with
+IFD disabled and compilation of the 2293-line rendered VM script. The standalone
+branch's fast gate is still pending. Worker package inputs are byte-identical
+to the tested feature: its actual offline Nix package
+passed 40 unit, three probe CLI and eight queue CLI tests. The package fixture
+uses supported 0750 result permissions because Nix forbids chmod setgid; the VM
+exercises the real tmpfiles layout. Standalone configuration and runtime
+verification remain pending. No local VM or system build ran for this split.
+
+Optional Worker requests still fail closed in owned OCI admission. Next: bind
+the collector and worker launcher inventory to the common maintenance fence,
+add daemon-generation recovery and bound the artifact stream. Replace the Worker
+read-only-mount validation skip with exact results-mount validation before
+enabling grants. Private worker data/retention remain outside admitted
+workspace/state volumes; worker compute still relies on explicit host reserves.
+#113 remains open until its relevant delivery gates pass.
 
 ## Initial environment delivery
 
