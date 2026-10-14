@@ -178,9 +178,10 @@ all revisions for at most 300 seconds; no preview authorizes dispatch. Focused
 checks pass 62 API and 11 template tests; Clippy passes. The full fast gate passes
 556 Rust tests, four intentional helpers ignored, plus static/helper checks. A
 new closed-request regression caught and fixed extra fields on Serde's tagged
-unit variant; the empty workspace variant now remains a closed object. Security
-currently stops on four new rustls 0.23.45 advisories (fixed in 0.23.46); dependency
-correction and a complete scan remain required. The existing creation VM covers
+unit variant; the empty workspace variant now remains a closed object. After
+integrating Rustls 0.23.46, the full fast gate passes again in this worktree's own
+target directory. Security passes both dependency scans and strict Semgrep
+(19 rules, 70 files) with no findings or parse warnings. The existing creation VM covers
 unchanged state and publication/Pending refusals. Its offline runtime projection
 passes `nix flake check --no-build` with IFD disabled; the rendered VM driver and
 guest probe compile. Actual package and VM acceptance remain pending. Public
