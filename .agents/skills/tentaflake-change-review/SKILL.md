@@ -55,6 +55,10 @@ For asynchronous HTTP work, bound queued blocking tasks as well as connections.
 A connection deadline can drop its task handle while `spawn_blocking` continues;
 hold the work permit inside that closure and test cancellation with real requests.
 Thread-count limits alone leave the pending task queue unbounded.
+Keep external work outside the session-state mutex. A real HTTP test must
+prove a blocked mutation leaves session reads responsive. Concurrent requests
+can acquire that mutex out of timestamp order: preserve the latest activity
+time and test reordered requests, pruning, idle expiry and poison recovery.
 Session-revocation fixtures must prove the saved cookie still succeeds immediately
 before restart or process death. The original HTTP fixture saved an already
 logged-out cookie, so its restart refusal could not detect missing revocation.

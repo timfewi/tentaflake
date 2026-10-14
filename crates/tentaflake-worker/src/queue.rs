@@ -16,6 +16,7 @@ pub(super) fn lock(config: &Config) -> Result<File> {
     if !file.metadata().map_err(|e| e.to_string())?.is_file() {
         return Err("queue lock must be a regular private file".into());
     }
+    // SAFETY: file owns the descriptor throughout this nonblocking flock call.
     if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
         return Err(format!(
             "queue is busy or cannot be locked: {}",
@@ -381,8 +382,8 @@ mod tests {
                 image: "fixture:offline".into(),
                 workspace,
                 state_dir: root.join("state"),
-                container_uid: unsafe { libc::geteuid() },
-                container_gid: unsafe { libc::getegid() },
+                container_uid: tentaflake_admission::effective_uid(),
+                container_gid: tentaflake_admission::effective_gid(),
                 max_request_bytes: 65536,
                 max_inbox_entries: 256,
                 max_inbox_bytes: 8 * 1024 * 1024,

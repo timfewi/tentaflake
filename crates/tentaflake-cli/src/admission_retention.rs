@@ -39,6 +39,7 @@ fn object(manifest: &Path) -> Result<PathBuf, String> {
 fn directory(parent: &File, owner: u32) -> Result<File, String> {
     protected_directory(parent, owner)?;
     let name = CString::new(DIRECTORY).expect("fixed name");
+    // SAFETY: parent stays live and name is NUL-terminated; mode is an integer.
     let created = unsafe { libc::mkdirat(parent.as_raw_fd(), name.as_ptr(), 0o700) } == 0;
     if !created && io::Error::last_os_error().raw_os_error() != Some(libc::EEXIST) {
         return Err("cannot create manifest retention directory".into());
@@ -50,6 +51,7 @@ fn directory(parent: &File, owner: u32) -> Result<File, String> {
     )?;
     let metadata = protected_directory(&directory, owner)?;
     if created {
+        // SAFETY: directory owns the newly created inode descriptor throughout fchmod.
         if unsafe { libc::fchmod(directory.as_raw_fd(), 0o700) } != 0 {
             return Err("cannot protect new manifest retention directory".into());
         }
@@ -67,6 +69,7 @@ fn directory(parent: &File, owner: u32) -> Result<File, String> {
 
 fn inspect(directory: &File, name: &OsStr, target: &Path, owner: u32) -> Result<bool, String> {
     let name = CString::new(name.as_bytes()).map_err(|_| "invalid retention root name")?;
+    // SAFETY: directory and name stay live; these non-creating open flags require no mode.
     let fd = unsafe {
         libc::openat(
             directory.as_raw_fd(),
@@ -81,6 +84,7 @@ fn inspect(directory: &File, name: &OsStr, target: &Path, owner: u32) -> Result<
             Err("cannot inspect manifest retention root".into())
         };
     }
+    // SAFETY: openat returned a new descriptor; File takes its sole ownership.
     let link = unsafe { File::from_raw_fd(fd) };
     let metadata = link
         .metadata()
@@ -89,6 +93,7 @@ fn inspect(directory: &File, name: &OsStr, target: &Path, owner: u32) -> Result<
         return Err("manifest retention root must be an owned single-link symlink".into());
     }
     let mut bytes = [0_u8; 4097];
+    // SAFETY: link stays live, the empty C string is valid and bytes is writable for its full length.
     let length = unsafe {
         libc::readlinkat(
             link.as_raw_fd(),
@@ -243,7 +248,7 @@ mod tests {
                 &directory,
                 &self.0.join(DIRECTORY),
                 &self.0.join("manifest"),
-                unsafe { libc::geteuid() },
+                tentaflake_admission::effective_uid(),
                 register,
             )
         }

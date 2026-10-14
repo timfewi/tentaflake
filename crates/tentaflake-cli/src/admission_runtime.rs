@@ -39,7 +39,7 @@ impl Action {
 }
 
 pub(crate) fn require_root() -> Result<(), String> {
-    if unsafe { libc::geteuid() } != 0 {
+    if tentaflake_admission::effective_uid() != 0 {
         return Err("host admission requires root".into());
     }
     // A mount made inside a private service namespace cannot authorize a host

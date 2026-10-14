@@ -18,6 +18,8 @@ pub fn open_at(directory: RawFd, name: &OsStr, flags: i32) -> Result<File, Strin
         return Err("unsupported protected path open flags".into());
     }
     let name = CString::new(name.as_bytes()).map_err(|_| "invalid quota path")?;
+    // SAFETY: name is NUL-terminated and lives through openat. Invalid directory
+    // descriptors fail in the kernel; these flags never require a mode argument.
     let fd = unsafe {
         libc::openat(
             directory,
@@ -31,6 +33,7 @@ pub fn open_at(directory: RawFd, name: &OsStr, flags: i32) -> Result<File, Strin
             io::Error::last_os_error()
         ));
     }
+    // SAFETY: successful openat returned a new descriptor owned only here.
     Ok(unsafe { File::from_raw_fd(fd) })
 }
 

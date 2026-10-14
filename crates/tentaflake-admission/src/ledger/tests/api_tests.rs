@@ -860,6 +860,8 @@ fn crash_entry() {
             })
             .unwrap();
     }
+    // SAFETY: _exit takes no pointers; this isolated crash helper intentionally
+    // skips Rust destructors after its durable writes to model process death.
     unsafe {
         libc::_exit(0);
     }

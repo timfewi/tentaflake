@@ -307,10 +307,12 @@ fn open_store_entry_at(root: &File, path: &Path, owner_uid: u32) -> Result<File,
             | libc::O_NONBLOCK
             | libc::O_CLOEXEC
             | if last { 0 } else { libc::O_DIRECTORY };
+        // SAFETY: directory and the NUL-terminated name stay live; these flags never create files.
         let fd = unsafe { libc::openat(directory.as_raw_fd(), name.as_ptr(), flags) };
         if fd < 0 {
             return Err("cannot open immutable input component".into());
         }
+        // SAFETY: openat returned a new descriptor; File takes its sole ownership.
         directory = unsafe { File::from_raw_fd(fd) };
     }
     let metadata = directory
@@ -369,7 +371,7 @@ pub(crate) fn load_plan(path: &Path) -> Result<HostPlan, String> {
 }
 
 pub(crate) fn inventory(path: &Path, mode: OutputMode) -> Result<u8, String> {
-    if unsafe { libc::geteuid() } != 0 {
+    if tentaflake_admission::effective_uid() != 0 {
         return Err("host admission inventory requires root".into());
     }
     let plan = load_plan(path)?;
@@ -795,6 +797,7 @@ pub(crate) mod tests {
         assert!(fixture.open(STORE).is_err());
         let fifo = format!("{STORE}/fifo");
         let name = CString::new(fixture.path(&fifo).as_os_str().as_encoded_bytes()).unwrap();
+        // SAFETY: name is a live NUL-terminated fixture path; mkfifo takes an integer mode.
         assert_eq!(unsafe { libc::mkfifo(name.as_ptr(), 0o444) }, 0);
         assert!(fixture.open(&fifo).is_err());
         let socket = format!("{STORE}/socket");

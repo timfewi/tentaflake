@@ -1,5 +1,6 @@
 //! Private HTTP transport for the host-owned management API.
 //! Authentication never grants lifecycle dispatch; admission owns durable state.
+mod accept_retry;
 mod capabilities;
 mod client;
 mod config;

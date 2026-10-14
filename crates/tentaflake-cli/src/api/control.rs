@@ -244,6 +244,9 @@ fn lookup_account() -> Result<(u32, u32), String> {
     let mut group_result = std::ptr::null_mut();
     let mut user_buffer = [0_u8; 16 * 1024];
     let mut group_buffer = [0_u8; 16 * 1024];
+    // SAFETY: both reentrant NSS calls receive live output structs and bounded
+    // buffers. Success plus exact result-pointer equality precedes initialization
+    // and C-string reads, whose storage remains alive through this block.
     unsafe {
         if libc::getpwnam_r(
             c"tentaflake-api".as_ptr(),
@@ -291,6 +294,8 @@ pub(super) fn frontend_uid() -> Result<u32, String> {
 fn socket_option(fd: std::os::fd::RawFd, option: libc::c_int) -> Result<libc::c_int, ()> {
     let mut value: libc::c_int = 0;
     let mut length = std::mem::size_of_val(&value) as libc::socklen_t;
+    // SAFETY: value/length are writable, correctly sized outputs. getsockopt
+    // validates the borrowed descriptor; no ownership is taken or pointer retained.
     if unsafe {
         libc::getsockopt(
             fd,
@@ -336,7 +341,10 @@ pub(super) fn take_listener() -> Result<UnixListener, String> {
     let (_, group) = account()?;
     let before = socket_path(group).map_err(|_| "invalid owner socket path")?;
     let fd = 3;
+    // SAFETY: F_GETFD takes no pointer and validates the systemd descriptor.
     let flags = unsafe { libc::fcntl(fd, libc::F_GETFD) };
+    // SAFETY: F_SETFD takes an integer flag mask, not a pointer. Ownership is
+    // still unique to startup; every error returns before adopting the descriptor.
     if flags < 0 || unsafe { libc::fcntl(fd, libc::F_SETFD, flags | libc::FD_CLOEXEC) } < 0 {
         return Err("invalid inherited owner socket".into());
     }
@@ -346,6 +354,9 @@ pub(super) fn take_listener() -> Result<UnixListener, String> {
     {
         return Err("inherited owner socket is not listening".into());
     }
+    // SAFETY: validated systemd activation transfers its sole listening FD to
+    // this one startup call. It has not been wrapped/closed elsewhere, and the
+    // returned listener now owns and closes it, including on later validation errors.
     let listener = unsafe { UnixListener::from_raw_fd(fd) };
     if listener
         .local_addr()
@@ -538,7 +549,7 @@ mod tests {
     fn peer_credentials_and_reply_limits_are_enforced() {
         runtime().block_on(async {
             let (mut peer, other) = UnixStream::pair().unwrap();
-            let uid = unsafe { libc::geteuid() };
+            let uid = tentaflake_admission::effective_uid();
             assert!(check_peer(&peer, uid).is_ok());
             assert!(check_peer(&peer, uid.wrapping_add(1)).is_err());
             assert!(
@@ -594,8 +605,8 @@ mod tests {
         let socket = path.join("owner.sock");
         let listener = UnixListener::bind(&socket).unwrap();
         fs::set_permissions(&socket, fs::Permissions::from_mode(0o660)).unwrap();
-        let uid = unsafe { libc::geteuid() };
-        let gid = unsafe { libc::getegid() };
+        let uid = tentaflake_admission::effective_uid();
+        let gid = tentaflake_admission::effective_gid();
         let held = socket_at(&directory, OsStr::new("owner.sock"), uid, gid).unwrap();
         assert_eq!(
             socket_option(listener.as_raw_fd(), libc::SO_TYPE),

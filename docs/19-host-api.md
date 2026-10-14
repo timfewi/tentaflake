@@ -87,12 +87,19 @@ token and restart the service explicitly, rather than deleting ledger history.
 Older binaries that reject the new private ledger field cannot safely be used
 to bypass this history during rollback.
 
+Only session-table and login-throttle updates hold the session-state mutex;
+credential reads, ledger operations and request handlers run outside it. If that
+state is poisoned by a panic, the next state access refuses the request, revokes
+all cookies and pending login commits, and blocks login for one minute. Later
+requests can continue; recovery does not open a fresh guessing window.
+
 HTTP headers, request bodies, connection lifetimes and active work are bounded.
 The private channel authenticates both peers, preserves header duplicates and
 accepts one closed, bounded request per connection. It accepts no caller-selected
 host command, plan, principal or authority. Owner failure returns `unavailable`
 without local authentication or replay. An aborted connection keeps its owner
-work charged until that work finishes.
+work charged until that work finishes. Both listeners retry transient accept
+failures after a 100 ms backoff; fatal listener errors still end the service.
 No request-body, credential or authenticated-resource access log is emitted.
 The VM fixture generates its own guest-only credentials and tests real HTTP
 requests, actual UID/filesystem boundaries, active-session revocation after restart

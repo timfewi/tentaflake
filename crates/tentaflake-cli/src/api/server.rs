@@ -18,7 +18,7 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::Semaphore;
 
 pub(super) fn serve(configuration: &Path) -> Result<(), String> {
-    if unsafe { libc::geteuid() } != control::frontend_uid()? {
+    if tentaflake_admission::effective_uid() != control::frontend_uid()? {
         return Err("host API HTTP transport requires its dedicated service user".into());
     }
     let config = Config::load(configuration)?;
@@ -53,8 +53,7 @@ pub(super) fn serve(configuration: &Path) -> Result<(), String> {
                 .map_err(|_| "cannot bind host API loopback listener")?;
             let capacity = Arc::new(Semaphore::new(MAX_CONNECTIONS));
             loop {
-                let (stream, _) = listener
-                    .accept()
+                let (stream, _) = super::accept_retry::accept(|| listener.accept())
                     .await
                     .map_err(|_| "host API listener failed")?;
                 let Ok(permit) = capacity.clone().try_acquire_owned() else {

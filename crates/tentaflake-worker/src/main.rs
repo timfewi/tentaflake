@@ -258,11 +258,15 @@ fn run() -> Result<()> {
     }
     if let Some(cli) = &config.admission_cli {
         if let Some(fd) = fence_fd {
-            if unsafe { libc::geteuid() } != 0 || unsafe { libc::fcntl(fd, libc::F_GETFD) } < 0 {
+            // SAFETY: F_GETFD only inspects the supplied descriptor and reports invalid descriptors.
+            if tentaflake_admission::effective_uid() != 0
+                || unsafe { libc::fcntl(fd, libc::F_GETFD) } < 0
+            {
                 return Err("guarded worker requires a valid root-owned maintenance fence".into());
             }
             // The private argument transfers this inherited descriptor. The
             // shared owner authenticates the fixed protected path and lock.
+            // SAFETY: The private launcher transfers this validated inherited descriptor, not a borrowed File.
             config.maintenance_fence = Some(HostFence::adopt(unsafe { File::from_raw_fd(fd) })?);
         } else {
             let error = delegation_command(cli, &config_path, &command)?.exec();
@@ -319,13 +323,14 @@ fn require_legacy_without_ledger(path: &Path) -> Result<()> {
 }
 
 fn enter_worker_group(config: &Config) -> Result<()> {
-    let effective_uid = unsafe { libc::geteuid() };
-    let effective_gid = unsafe { libc::getegid() };
+    let effective_uid = tentaflake_admission::effective_uid();
+    let effective_gid = tentaflake_admission::effective_gid();
     match worker_group_action(effective_uid, effective_gid, config.container_gid)? {
         WorkerGroupAction::Keep => Ok(()),
         WorkerGroupAction::Adopt => {
+            // SAFETY: setegid takes an integer GID; the kernel checks permission and the result is verified.
             let result = unsafe { libc::setegid(config.container_gid) };
-            if result == 0 && unsafe { libc::getegid() } == config.container_gid {
+            if result == 0 && tentaflake_admission::effective_gid() == config.container_gid {
                 Ok(())
             } else {
                 Err(format!(
@@ -534,7 +539,7 @@ fn ingest(config: &Config, inbox_fd: RawFd) -> Result<()> {
             }
             Err(error) => return Err(format!("open inbox entry {:?}: {error}", name)),
         };
-        let mut file = unsafe { File::from_raw_fd(file.into_raw_fd()) };
+        let mut file = File::from(file);
         if !file.metadata().map_err(|e| e.to_string())?.is_file() {
             return Err("inbox request must be a regular file".into());
         }
@@ -1498,7 +1503,7 @@ fn copy_directory_fd(
             libc::S_IFREG => {
                 let source_fd = open_file_at(fd, &name)
                     .map_err(|error| format!("open snapshot file: {error}"))?;
-                let mut source = unsafe { File::from_raw_fd(source_fd.into_raw_fd()) };
+                let mut source = File::from(source_fd);
                 let mut destination_file = OpenOptions::new()
                     .write(true)
                     .create_new(true)
@@ -1540,17 +1545,6 @@ fn set_snapshot_permissions(path: &Path, source_mode: u32) -> Result<()> {
         .map_err(|error| format!("set snapshot permissions for {}: {error}", path.display()))
 }
 
-trait IntoRawFdOwned {
-    fn into_raw_fd(self) -> RawFd;
-}
-
-impl IntoRawFdOwned for OwnedFd {
-    fn into_raw_fd(self) -> RawFd {
-        use std::os::fd::IntoRawFd;
-        IntoRawFd::into_raw_fd(self)
-    }
-}
-
 fn open_path_no_symlinks(path: &Path) -> Result<OwnedFd> {
     match open_path_with_openat2(path) {
         Ok(fd) => Ok(fd),
@@ -1574,6 +1568,7 @@ fn open_path_with_openat2(path: &Path) -> io::Result<OwnedFd> {
         mode: 0,
         resolve: RESOLVE_NO_MAGICLINKS | RESOLVE_NO_SYMLINKS,
     };
+    // SAFETY: c_path and the repr(C) OpenHow value remain live; their exact size is supplied.
     let fd = unsafe {
         libc::syscall(
             libc::SYS_openat2,
@@ -1586,6 +1581,7 @@ fn open_path_with_openat2(path: &Path) -> io::Result<OwnedFd> {
     if fd < 0 {
         Err(io::Error::last_os_error())
     } else {
+        // SAFETY: openat2 returned a new descriptor; OwnedFd takes sole ownership.
         Ok(unsafe { OwnedFd::from_raw_fd(fd) })
     }
 }
@@ -1636,10 +1632,12 @@ fn open_file_at(parent: RawFd, name: &OsStr) -> io::Result<OwnedFd> {
 fn open_at(parent: RawFd, name: &OsStr, flags: i32) -> io::Result<OwnedFd> {
     let name =
         CString::new(name.as_bytes()).map_err(|_| io::Error::from_raw_os_error(libc::EINVAL))?;
+    // SAFETY: name is NUL-terminated; all callers use non-creating flags, so no mode is needed.
     let fd = unsafe { libc::openat(parent, name.as_ptr(), flags) };
     if fd < 0 {
         Err(io::Error::last_os_error())
     } else {
+        // SAFETY: openat returned a new descriptor; OwnedFd takes sole ownership.
         Ok(unsafe { OwnedFd::from_raw_fd(fd) })
     }
 }
@@ -1659,6 +1657,7 @@ fn list_fd_dir(fd: RawFd) -> Result<Vec<OsString>> {
 fn fstatat_nofollow(parent: RawFd, name: &OsStr) -> Result<libc::stat> {
     let name = CString::new(name.as_bytes()).map_err(|_| "entry name contains NUL".to_string())?;
     let mut stat = std::mem::MaybeUninit::<libc::stat>::uninit();
+    // SAFETY: name is NUL-terminated and stat points to writable storage of the correct type.
     let result = unsafe {
         libc::fstatat(
             parent,
@@ -1668,6 +1667,7 @@ fn fstatat_nofollow(parent: RawFd, name: &OsStr) -> Result<libc::stat> {
         )
     };
     if result == 0 {
+        // SAFETY: A successful fstatat initialized stat before it is read.
         Ok(unsafe { stat.assume_init() })
     } else {
         Err(format!(
@@ -1680,6 +1680,7 @@ fn fstatat_nofollow(parent: RawFd, name: &OsStr) -> Result<libc::stat> {
 fn read_link_at(parent: RawFd, name: &OsStr) -> Result<OsString> {
     let name = CString::new(name.as_bytes()).map_err(|_| "entry name contains NUL".to_string())?;
     let mut buffer = vec![0_u8; 4097];
+    // SAFETY: name is NUL-terminated; buffer is writable for the supplied length.
     let size = unsafe {
         libc::readlinkat(
             parent,
@@ -1704,6 +1705,7 @@ fn read_link_at(parent: RawFd, name: &OsStr) -> Result<OsString> {
 
 fn unlink_at(parent: RawFd, name: &OsStr) -> Result<()> {
     let name = CString::new(name.as_bytes()).map_err(|_| "entry name contains NUL".to_string())?;
+    // SAFETY: name is a live NUL-terminated string; unlinkat takes no other pointers.
     let result = unsafe { libc::unlinkat(parent, name.as_ptr(), 0) };
     if result == 0 {
         Ok(())

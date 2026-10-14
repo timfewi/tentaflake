@@ -117,8 +117,10 @@ fn boot_ticks() -> Result<u64, String> {
         tv_sec: 0,
         tv_nsec: 0,
     };
+    // SAFETY: sysconf takes only a constant selector and has no pointer arguments.
     let ticks = unsafe { libc::sysconf(libc::_SC_CLK_TCK) };
     if ticks <= 0
+        // SAFETY: time is writable timespec storage and stays live throughout clock_gettime.
         || unsafe { libc::clock_gettime(libc::CLOCK_BOOTTIME, &mut time) } != 0
         || time.tv_sec < 0
         || !(0..1_000_000_000).contains(&time.tv_nsec)
@@ -282,6 +284,7 @@ fn stopped_socket_node(path: &Path, owner_uid: u32) -> Result<(), String> {
 }
 
 fn open_at(parent: &File, name: &CStr, flags: i32) -> io::Result<File> {
+    // SAFETY: parent and the NUL-terminated name stay live; the create mode is supplied.
     let fd = unsafe {
         libc::openat(
             parent.as_raw_fd(),
@@ -293,6 +296,7 @@ fn open_at(parent: &File, name: &CStr, flags: i32) -> io::Result<File> {
     if fd < 0 {
         Err(io::Error::last_os_error())
     } else {
+        // SAFETY: openat returned a new descriptor; File takes its sole ownership.
         Ok(unsafe { File::from_raw_fd(fd) })
     }
 }
@@ -300,6 +304,7 @@ fn open_at(parent: &File, name: &CStr, flags: i32) -> io::Result<File> {
 fn receipt_directory(create: bool) -> Result<File, String> {
     let run = open_root(Path::new("/run"), 0)?;
     if create
+        // SAFETY: run stays live and DIRECTORY is a static NUL-terminated name.
         && unsafe { libc::mkdirat(run.as_raw_fd(), DIRECTORY.as_ptr(), 0o700) } != 0
         && io::Error::last_os_error().kind() != io::ErrorKind::AlreadyExists
     {
@@ -328,7 +333,7 @@ fn read_receipt(directory: &File) -> Result<Barrier, String> {
         .metadata()
         .map_err(|_| "cannot inspect bootstrap receipt")?;
     if !metadata.is_file()
-        || metadata.uid() != unsafe { libc::geteuid() }
+        || metadata.uid() != tentaflake_admission::effective_uid()
         || metadata.mode() & 0o7777 != 0o600
         || metadata.nlink() != 1
         || metadata.len() > MAX_RECEIPT
@@ -369,12 +374,14 @@ fn write_receipt(directory: &File, receipt: &Barrier) -> Result<(), String> {
         .map_err(|_| "cannot create bootstrap receipt; review volatile staging proof or reboot before repeating maintenance; never remove the ledger")?;
     // Do not repair existing inodes. Only our newly created private inode gets
     // its exact mode, even when the caller supplied a more restrictive umask.
+    // SAFETY: file owns the newly created inode descriptor throughout fchmod.
     if unsafe { libc::fchmod(file.as_raw_fd(), 0o600) } != 0 {
         return Err("cannot protect bootstrap receipt".into());
     }
     file.write_all(&bytes)
         .and_then(|()| file.sync_all())
         .map_err(|_| "cannot sync bootstrap receipt")?;
+    // SAFETY: directory stays live and both entry names are static NUL-terminated strings.
     if unsafe {
         libc::renameat(
             directory.as_raw_fd(),
@@ -688,7 +695,7 @@ mod tests {
     fn stopped_socket_accepts_inert_node_but_refuses_substituted_or_unprotected_paths() {
         let fixture = Fixture::new();
         let path = fixture.path.join("docker.sock");
-        let owner = unsafe { libc::geteuid() };
+        let owner = tentaflake_admission::effective_uid();
         assert!(stopped_socket_node(&path, owner).is_ok());
         let listener = UnixListener::bind(&path).unwrap();
         fs::set_permissions(&path, fs::Permissions::from_mode(0o660)).unwrap();

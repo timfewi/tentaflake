@@ -99,8 +99,10 @@ impl Drop for RunningChild {
 }
 
 fn nonblocking(pipe: &impl AsRawFd) -> Result<()> {
+    // SAFETY: pipe keeps its descriptor live; F_GETFL takes no pointer argument.
     let flags = unsafe { libc::fcntl(pipe.as_raw_fd(), libc::F_GETFL) };
     if flags < 0
+        // SAFETY: pipe remains live; F_SETFL receives integer status flags.
         || unsafe { libc::fcntl(pipe.as_raw_fd(), libc::F_SETFL, flags | libc::O_NONBLOCK) } < 0
     {
         return Err("cannot bound runtime response".into());
@@ -466,6 +468,7 @@ mod tests {
             let pid = stream.child.0.id() as libc::pid_t;
             assert!(stream.finish().unwrap_err().contains(error), "{script}");
             assert_eq!(
+                // SAFETY: waitpid accepts a null status pointer; this PID identifies the test child.
                 unsafe { libc::waitpid(pid, std::ptr::null_mut(), libc::WNOHANG) },
                 -1
             );

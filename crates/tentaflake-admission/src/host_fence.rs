@@ -25,7 +25,7 @@ pub struct HostFence {
 }
 
 pub fn exclusive() -> Result<HostFence, String> {
-    if unsafe { libc::geteuid() } != 0 {
+    if crate::effective_uid() != 0 {
         return Err("host admission fence requires root".into());
     }
     let path = Path::new(FENCE_PATH);
@@ -73,7 +73,7 @@ impl HostFence {
     /// The owned descriptor becomes CLOEXEC immediately. Further trusted
     /// mutators receive their own explicit duplicate through `inherit`.
     pub fn adopt(file: File) -> Result<Self, String> {
-        if unsafe { libc::geteuid() } != 0 {
+        if crate::effective_uid() != 0 {
             return Err("host admission fence requires root".into());
         }
         let path = Path::new(FENCE_PATH);
@@ -98,6 +98,7 @@ fn inspect(file: &File, owner_uid: u32) -> Result<Metadata, String> {
 }
 
 fn open_at(parent: &File, name: &CString, flags: i32) -> Result<File, io::Error> {
+    // SAFETY: The held parent and NUL-terminated name remain live; the create mode is supplied.
     let fd = unsafe {
         libc::openat(
             parent.as_raw_fd(),
@@ -109,6 +110,7 @@ fn open_at(parent: &File, name: &CString, flags: i32) -> Result<File, io::Error>
     if fd < 0 {
         Err(io::Error::last_os_error())
     } else {
+        // SAFETY: openat returned a new descriptor; File takes its sole ownership.
         Ok(unsafe { File::from_raw_fd(fd) })
     }
 }
@@ -180,12 +182,15 @@ fn adopt_at(
     reopen_parent: impl Fn() -> Result<File, String>,
 ) -> Result<HostFence, String> {
     let fd = file.as_raw_fd();
+    // SAFETY: file holds this descriptor; F_GETFD takes no pointer argument.
     let descriptor_flags = unsafe { libc::fcntl(fd, libc::F_GETFD) };
     if descriptor_flags < 0
+        // SAFETY: file remains live and F_SETFD receives integer descriptor flags.
         || unsafe { libc::fcntl(fd, libc::F_SETFD, descriptor_flags | libc::FD_CLOEXEC) } < 0
     {
         return Err("cannot protect inherited host admission fence".into());
     }
+    // SAFETY: file holds this descriptor; F_GETFL takes no pointer argument.
     let open_flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
     if open_flags < 0 || open_flags & libc::O_ACCMODE != libc::O_RDWR {
         return Err("inherited host admission fence is not read-write".into());
@@ -197,6 +202,7 @@ fn adopt_at(
     // flock is attached to the open file description. An inherited duplicate
     // confirms the parent's exclusive lock; an unlocked exact descriptor can
     // establish synchronization, but never authenticates policy or authority.
+    // SAFETY: file keeps fd live; flock takes only a descriptor and lock flags.
     if unsafe { libc::flock(fd, libc::LOCK_EX | libc::LOCK_NB) } != 0 {
         return Err("inherited host admission fence is not exclusive".into());
     }
@@ -222,6 +228,7 @@ fn acquire(
             Ok(file) => {
                 // Only a newly created inode gets its mode established. Existing
                 // paths are never repaired, replaced, truncated or unlinked.
+                // SAFETY: file owns the newly created descriptor; fchmod takes an integer mode.
                 if unsafe { libc::fchmod(file.as_raw_fd(), 0o600) } != 0 {
                     return Err("cannot protect new host admission fence".into());
                 }
@@ -243,6 +250,7 @@ fn acquire(
         }
     };
     loop {
+        // SAFETY: file remains live throughout the nonblocking flock call.
         if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0 {
             break;
         }
@@ -311,22 +319,17 @@ mod tests {
         }
 
         fn open_parent(&self) -> Result<File, String> {
-            open_relative(&self.anchor, Path::new("fences"), unsafe {
-                libc::geteuid()
-            })
+            open_relative(&self.anchor, Path::new("fences"), crate::effective_uid())
         }
 
         fn acquire(&self) -> Result<HostFence, String> {
-            acquire(
-                &self.path(),
-                unsafe { libc::geteuid() },
-                Duration::ZERO,
-                || self.open_parent(),
-            )
+            acquire(&self.path(), crate::effective_uid(), Duration::ZERO, || {
+                self.open_parent()
+            })
         }
 
         fn adopt(&self, file: File) -> Result<HostFence, String> {
-            adopt_at(file, &self.path(), unsafe { libc::geteuid() }, || {
+            adopt_at(file, &self.path(), crate::effective_uid(), || {
                 self.open_parent()
             })
         }
@@ -372,14 +375,14 @@ mod tests {
 
         let guard = acquire(
             &fixture.path(),
-            unsafe { libc::geteuid() },
+            crate::effective_uid(),
             Duration::from_secs(2),
             || fixture.open_parent(),
         );
         let competing = fixture.acquire();
         let absent = acquire(
             &fixture.root.join("absent.lock"),
-            unsafe { libc::geteuid() },
+            crate::effective_uid(),
             Duration::ZERO,
             || fixture.open_parent(),
         );
@@ -426,6 +429,7 @@ mod tests {
         );
         fs::remove_file(fixture.path()).unwrap();
         let name = CString::new(fixture.path().as_os_str().as_bytes()).unwrap();
+        // SAFETY: name is a live NUL-terminated fixture path; mkfifo takes an integer mode.
         assert_eq!(unsafe { libc::mkfifo(name.as_ptr(), 0o600) }, 0);
         assert!(fixture.acquire().is_err());
     }
@@ -437,7 +441,7 @@ mod tests {
         fs::rename(fixture.path(), fixture.root.join("old.lock")).unwrap();
         fs::write(fixture.path(), b"").unwrap();
         fs::set_permissions(fixture.path(), fs::Permissions::from_mode(0o600)).unwrap();
-        let uid = unsafe { libc::geteuid() };
+        let uid = crate::effective_uid();
         let parent = fixture.open_parent().unwrap();
         let name = CString::new("admission.lock").unwrap();
         assert!(verify_path(&parent, &name, &guard.file, uid).is_err());
@@ -450,7 +454,7 @@ mod tests {
             let opens = Cell::new(0);
             let result = acquire(
                 &fixture.path(),
-                unsafe { libc::geteuid() },
+                crate::effective_uid(),
                 Duration::ZERO,
                 || {
                     opens.set(opens.get() + 1);
@@ -501,7 +505,7 @@ mod tests {
         drop(
             acquire(
                 &fixture.path(),
-                unsafe { libc::geteuid() },
+                crate::effective_uid(),
                 Duration::from_secs(2),
                 || fixture.open_parent(),
             )
@@ -515,11 +519,13 @@ mod tests {
         let original = fixture.acquire().unwrap();
         let file = original.file.try_clone().unwrap();
         assert_eq!(
+            // SAFETY: file owns this descriptor; F_SETFD receives integer flags.
             unsafe { libc::fcntl(file.as_raw_fd(), libc::F_SETFD, 0) },
             0
         );
         let adopted = fixture.adopt(file).unwrap();
         assert_ne!(
+            // SAFETY: adopted owns this descriptor; F_GETFD takes no pointer argument.
             unsafe { libc::fcntl(adopted.file.as_raw_fd(), libc::F_GETFD) } & libc::FD_CLOEXEC,
             0
         );
@@ -529,7 +535,7 @@ mod tests {
         drop(
             acquire(
                 &fixture.path(),
-                unsafe { libc::geteuid() },
+                crate::effective_uid(),
                 Duration::from_secs(2),
                 || fixture.open_parent(),
             )
@@ -550,8 +556,19 @@ mod tests {
         };
         assert!(fixture.adopt(open()).unwrap_err().contains("not exclusive"));
         drop(original);
-        let adopted = fixture.adopt(open()).unwrap();
-        assert!(fixture.acquire().unwrap_err().contains("busy"));
+        // Concurrent test forks can still hold the first description until
+        // exec. A fresh file tests genuinely unheld adoption without assuming
+        // that dropping the parent's reference released every inherited copy.
+        let unheld = Fixture::new();
+        let file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(unheld.path())
+            .unwrap();
+        let adopted = unheld.adopt(file).unwrap();
+        assert!(unheld.acquire().unwrap_err().contains("busy"));
         drop(adopted);
     }
 
@@ -569,7 +586,7 @@ mod tests {
             adopt_at(
                 original.file.try_clone().unwrap(),
                 &fixture.path(),
-                unsafe { libc::geteuid() }.wrapping_add(1),
+                crate::effective_uid().wrapping_add(1),
                 || fixture.open_parent()
             )
             .is_err()
@@ -608,7 +625,7 @@ mod tests {
         let result = adopt_at(
             original.file.try_clone().unwrap(),
             &fixture.path(),
-            unsafe { libc::geteuid() },
+            crate::effective_uid(),
             || {
                 opens.set(opens.get() + 1);
                 if opens.get() == 2 {
@@ -649,6 +666,7 @@ mod tests {
             command.env("TENTAFLAKE_FENCE_TEST_ADOPT", "1");
         }
         assert_ne!(
+            // SAFETY: guard owns this descriptor; F_GETFD takes no pointer argument.
             unsafe { libc::fcntl(guard.file.as_raw_fd(), libc::F_GETFD) } & libc::FD_CLOEXEC,
             0
         );
@@ -684,6 +702,7 @@ mod tests {
             .parse()
             .unwrap();
         assert_eq!(
+            // SAFETY: F_GETFD only inspects the inherited descriptor and reports invalid descriptors.
             unsafe { libc::fcntl(inherited_fd, libc::F_GETFD) } & libc::FD_CLOEXEC,
             0
         );
@@ -699,13 +718,14 @@ mod tests {
                 .unwrap();
             // The parent deliberately supplied this live owned descriptor by
             // inherit; no unvalidated integer becomes a File in production.
+            // SAFETY: The test parent transferred this live inherited descriptor; no File owns it yet.
             let file = unsafe { File::from_raw_fd(inherited_fd) };
             Some(
                 adopt_at(
                     file,
                     &root.join("admission.lock"),
-                    unsafe { libc::geteuid() },
-                    || open_relative(&anchor, Path::new("fences"), unsafe { libc::geteuid() }),
+                    crate::effective_uid(),
+                    || open_relative(&anchor, Path::new("fences"), crate::effective_uid()),
                 )
                 .unwrap(),
             )

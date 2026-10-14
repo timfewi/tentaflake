@@ -62,7 +62,7 @@ pub(crate) fn scan_recovery_inventory(specs: &[VolumeSpec]) -> Result<StorageInv
 }
 
 fn scan_fixed(specs: &[VolumeSpec], require_state: bool) -> Result<StorageInventory, String> {
-    if unsafe { libc::geteuid() } != 0 {
+    if tentaflake_admission::effective_uid() != 0 {
         return Err("quota inventory requires root".into());
     }
     let root = Path::new(VOLUME_ROOT);
@@ -72,7 +72,7 @@ fn scan_fixed(specs: &[VolumeSpec], require_state: bool) -> Result<StorageInvent
 /// Explicit bootstrap only. Create the two fixed roots without repairing any
 /// existing entry. The caller must fence other privileged quota mutators.
 pub fn ensure_backing_roots() -> Result<(), String> {
-    if unsafe { libc::geteuid() } != 0 {
+    if tentaflake_admission::effective_uid() != 0 {
         return Err("quota root initialization requires root".into());
     }
     ensure_roots_at(Path::new(VOLUME_ROOT), 0, |path| open_root(path, 0))
@@ -105,7 +105,7 @@ pub fn check_creation_space(
     targets: CreationTargets<'_>,
     headroom: u64,
 ) -> Result<(), String> {
-    if unsafe { libc::geteuid() } != 0 {
+    if tentaflake_admission::effective_uid() != 0 {
         return Err("quota creation-space inspection requires root".into());
     }
     check_creation_at(
@@ -209,6 +209,7 @@ struct PoolIdentity {
 
 fn pool_identity(file: &File) -> Result<PoolIdentity, String> {
     let mut stat = std::mem::MaybeUninit::<libc::statx>::zeroed();
+    // SAFETY: file stays live, the empty C string is valid and stat points to writable statx storage.
     if unsafe {
         libc::statx(
             file.as_raw_fd(),
@@ -221,6 +222,7 @@ fn pool_identity(file: &File) -> Result<PoolIdentity, String> {
     {
         return Err("cannot identify quota backing mount".into());
     }
+    // SAFETY: statx succeeded and initialized the requested output; the returned mask is checked below.
     let stat = unsafe { stat.assume_init() };
     if stat.stx_mask & libc::STATX_MNT_ID == 0 {
         return Err("quota backing mount identity is unavailable".into());
@@ -242,6 +244,7 @@ fn require_same_pool(expected: PoolIdentity, actual: PoolIdentity) -> Result<(),
 
 fn ensure_directory(parent: &File, name: &OsStr, owner_uid: u32) -> Result<File, String> {
     let encoded = CString::new(name.as_bytes()).map_err(|_| "invalid quota directory")?;
+    // SAFETY: parent stays live and encoded is a NUL-terminated name; mode is an integer.
     let created = unsafe { libc::mkdirat(parent.as_raw_fd(), encoded.as_ptr(), 0o700) } == 0;
     if !created && io::Error::last_os_error().raw_os_error() != Some(libc::EEXIST) {
         return Err("cannot create quota backing directory".into());
@@ -251,6 +254,7 @@ fn ensure_directory(parent: &File, name: &OsStr, owner_uid: u32) -> Result<File,
     if created {
         // Only our new inode is chmodded; an existing entry is never repaired.
         // This also establishes 0700 when the caller has an unusually strict umask.
+        // SAFETY: directory owns the new inode descriptor throughout fchmod.
         if unsafe { libc::fchmod(directory.as_raw_fd(), 0o700) } != 0 {
             return Err("cannot protect new quota backing directory".into());
         }
@@ -348,6 +352,7 @@ struct DirectoryStream(*mut libc::DIR);
 
 impl Drop for DirectoryStream {
     fn drop(&mut self) {
+        // SAFETY: Self owns the non-null DIR stream returned by fdopendir and closes it exactly once.
         unsafe { libc::closedir(self.0) };
     }
 }
@@ -361,8 +366,10 @@ impl DirectoryStream {
             libc::O_RDONLY | libc::O_DIRECTORY,
         )?
         .into_raw_fd();
+        // SAFETY: fd is an owned directory descriptor; successful fdopendir takes ownership.
         let stream = unsafe { libc::fdopendir(fd) };
         if stream.is_null() {
+            // SAFETY: fdopendir failed without taking ownership; close releases the still-owned fd.
             unsafe { libc::close(fd) };
             return Err("cannot enumerate quota directory".into());
         }
@@ -371,15 +378,20 @@ impl DirectoryStream {
 
     fn next(&mut self) -> Result<Option<OsString>, String> {
         // readdir uses null for both EOF and error; errno distinguishes them.
+        // SAFETY: __errno_location returns this thread's live errno slot.
         unsafe { *libc::__errno_location() = 0 };
+        // SAFETY: Self owns a live DIR stream; &mut self prevents concurrent enumeration.
         let entry = unsafe { libc::readdir(self.0) };
         if entry.is_null() {
+            // SAFETY: __errno_location returns this thread's live errno slot.
             return if unsafe { *libc::__errno_location() } == 0 {
                 Ok(None)
             } else {
                 Err("incomplete quota directory enumeration".into())
             };
         }
+        // SAFETY: Successful readdir returned a live entry with a NUL-terminated d_name;
+        // the bytes are copied before the next call or closing the stream.
         let name = unsafe { CStr::from_ptr((*entry).d_name.as_ptr()) };
         Ok(Some(OsStr::from_bytes(name.to_bytes()).to_owned()))
     }
@@ -628,9 +640,11 @@ fn available_bytes(blocks: u64, fragment_size: u64) -> Result<u64, String> {
 
 fn backing_available(directory: &File) -> Result<u64, String> {
     let mut stat = std::mem::MaybeUninit::<libc::statvfs>::zeroed();
+    // SAFETY: directory stays live and stat points to writable statvfs storage.
     if unsafe { libc::fstatvfs(directory.as_raw_fd(), stat.as_mut_ptr()) } != 0 {
         return Err("cannot observe available quota backing space".into());
     }
+    // SAFETY: A successful fstatvfs initialized stat before it is read.
     let stat = unsafe { stat.assume_init() };
     if stat.f_flag & libc::ST_RDONLY != 0 {
         return Err("quota backing filesystem is read-only".into());
@@ -736,7 +750,7 @@ mod tests {
                 libc::O_RDONLY | libc::O_DIRECTORY,
             )
             .unwrap();
-            protected_directory(&anchor, unsafe { libc::geteuid() }).unwrap();
+            protected_directory(&anchor, tentaflake_admission::effective_uid()).unwrap();
             let root = anchor_path.join("volumes");
             DirBuilder::new().mode(0o700).create(&root).unwrap();
             Self {
@@ -780,7 +794,7 @@ mod tests {
         }
 
         fn scan(&self, specs: &[VolumeSpec]) -> Result<StorageInventory, String> {
-            self.scan_path(specs, &self.root, unsafe { libc::geteuid() })
+            self.scan_path(specs, &self.root, tentaflake_admission::effective_uid())
         }
 
         fn open(&self, root: &Path, owner_uid: u32) -> Result<File, String> {
@@ -800,14 +814,14 @@ mod tests {
         }
 
         fn recovery_scan(&self, specs: &[VolumeSpec]) -> Result<StorageInventory, String> {
-            let owner_uid = unsafe { libc::geteuid() };
+            let owner_uid = tentaflake_admission::effective_uid();
             scan_at(specs, &self.root, owner_uid, true, || {
                 self.open(&self.root, owner_uid)
             })
         }
         fn initialize(&self) {
-            ensure_roots_at(&self.root, unsafe { libc::geteuid() }, |path| {
-                self.open(path, unsafe { libc::geteuid() })
+            ensure_roots_at(&self.root, tentaflake_admission::effective_uid(), |path| {
+                self.open(path, tentaflake_admission::effective_uid())
             })
             .unwrap();
         }
@@ -833,8 +847,8 @@ mod tests {
                 targets,
                 headroom,
                 &self.root,
-                unsafe { libc::geteuid() },
-                || self.open(&self.root, unsafe { libc::geteuid() }),
+                tentaflake_admission::effective_uid(),
+                || self.open(&self.root, tentaflake_admission::effective_uid()),
             )
         }
     }
@@ -959,7 +973,7 @@ mod tests {
     #[test]
     fn requires_existing_protected_root_and_ancestors() {
         let fixture = Fixture::new();
-        let uid = unsafe { libc::geteuid() };
+        let uid = tentaflake_admission::effective_uid();
         assert!(
             fixture
                 .scan_path(&[], &fixture.root.join("absent"), uid)
@@ -1006,7 +1020,7 @@ mod tests {
     #[test]
     fn relative_traversal_refuses_escape_and_non_directory_anchors() {
         let fixture = Fixture::new();
-        let uid = unsafe { libc::geteuid() };
+        let uid = tentaflake_admission::effective_uid();
         assert!(open_relative(&fixture.anchor, Path::new("volumes"), uid).is_ok());
         for path in ["/volumes", "../volumes", "volumes/../volumes", "./volumes"] {
             assert!(
@@ -1038,7 +1052,7 @@ mod tests {
     fn final_reopen_refuses_replaced_root_or_symlink() {
         for replace_with_symlink in [false, true] {
             let fixture = Fixture::new();
-            let uid = unsafe { libc::geteuid() };
+            let uid = tentaflake_admission::effective_uid();
             let opens = Cell::new(0);
             let result = scan_at(&[], &fixture.root, uid, false, || {
                 opens.set(opens.get() + 1);
@@ -1091,6 +1105,7 @@ mod tests {
         let fixture = Fixture::new();
         let fifo = fixture.root.join("agent-a.img");
         let name = CString::new(fifo.as_os_str().as_bytes()).unwrap();
+        // SAFETY: name is a live NUL-terminated fixture path; mkfifo takes an integer mode.
         assert_eq!(unsafe { libc::mkfifo(name.as_ptr(), 0o600) }, 0);
         assert!(fixture.scan(&[]).is_err());
         fs::remove_file(&fifo).unwrap();
@@ -1216,7 +1231,7 @@ mod tests {
     fn bootstrap_creates_only_private_roots_and_leaves_existing_modes_unchanged() {
         let fixture = Fixture::new();
         let root = fixture.root.join("volumes");
-        let uid = unsafe { libc::geteuid() };
+        let uid = tentaflake_admission::effective_uid();
         ensure_roots_at(&root, uid, |path| fixture.open(path, uid)).unwrap();
         for path in [&root, &root.join("state")] {
             assert_eq!(fs::metadata(path).unwrap().mode() & 0o7777, 0o700);
@@ -1232,7 +1247,7 @@ mod tests {
     fn bootstrap_reopens_root_after_creating_directories() {
         let fixture = Fixture::new();
         let root = fixture.root.join("volumes");
-        let uid = unsafe { libc::geteuid() };
+        let uid = tentaflake_admission::effective_uid();
         let opens = Cell::new(0);
         let result = ensure_roots_at(&root, uid, |path| {
             opens.set(opens.get() + 1);
@@ -1252,7 +1267,7 @@ mod tests {
     #[test]
     fn bootstrap_refuses_unsafe_existing_entries_without_repair() {
         let fixture = Fixture::new();
-        let uid = unsafe { libc::geteuid() };
+        let uid = tentaflake_admission::effective_uid();
         let root = fixture.root.join("volumes");
         fs::write(&root, b"preserve").unwrap();
         assert!(ensure_roots_at(&root, uid, |path| fixture.open(path, uid)).is_err());
@@ -1361,8 +1376,8 @@ mod tests {
                 CreationTargets::New(std::slice::from_ref(&changed)),
                 0,
                 &fixture.root,
-                unsafe { libc::geteuid() },
-                || fixture.open(&fixture.root, unsafe { libc::geteuid() }),
+                tentaflake_admission::effective_uid(),
+                || fixture.open(&fixture.root, tentaflake_admission::effective_uid()),
             )
             .is_err()
         );
@@ -1485,8 +1500,8 @@ mod tests {
                 CreationTargets::Reserved(&altered),
                 0,
                 &fixture.root,
-                unsafe { libc::geteuid() },
-                || fixture.open(&fixture.root, unsafe { libc::geteuid() })
+                tentaflake_admission::effective_uid(),
+                || fixture.open(&fixture.root, tentaflake_admission::effective_uid())
             )
             .is_err()
         );
@@ -1601,7 +1616,7 @@ mod tests {
         let fixture = Fixture::new();
         fixture.initialize();
         let root = fixture
-            .open(&fixture.root, unsafe { libc::geteuid() })
+            .open(&fixture.root, tentaflake_admission::effective_uid())
             .unwrap();
         let identity = pool_identity(&root).unwrap();
         let state = open_at(
@@ -1639,8 +1654,8 @@ mod tests {
                 CreationTargets::New(std::slice::from_ref(&new)),
                 u64::MAX - new.bytes,
                 &fixture.root,
-                unsafe { libc::geteuid() },
-                || fixture.open(&fixture.root, unsafe { libc::geteuid() }),
+                tentaflake_admission::effective_uid(),
+                || fixture.open(&fixture.root, tentaflake_admission::effective_uid()),
             )
             .is_err()
         );

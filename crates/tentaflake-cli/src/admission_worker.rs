@@ -230,7 +230,7 @@ pub(crate) fn observe_results(plan: &HostPlan, id: &str) -> Result<(), String> {
 fn require_root() -> Result<(), String> {
     // Worker services retain their private read-only mount namespace. This guard
     // changes no host mounts; the protected shared lock inodes remain identical.
-    if unsafe { libc::geteuid() } != 0 {
+    if tentaflake_admission::effective_uid() != 0 {
         return Err("Worker maintenance guard requires root".into());
     }
     Ok(())

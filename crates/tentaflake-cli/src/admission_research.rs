@@ -546,6 +546,7 @@ fn lease(spec: &ResearchSpec, expected_directory: (u64, u64)) -> Result<Lease, S
     if (directory.dev(), directory.ino()) != expected_directory {
         return Err("Research control directory changed".into());
     }
+    // SAFETY: parent stays live, the name is a static C string and these flags never create files.
     let fd = unsafe {
         libc::openat(
             parent.as_raw_fd(),
@@ -556,6 +557,7 @@ fn lease(spec: &ResearchSpec, expected_directory: (u64, u64)) -> Result<Lease, S
     if fd < 0 {
         return Err("Research controller lease unavailable".into());
     }
+    // SAFETY: openat returned a new descriptor; File takes its sole ownership.
     let mut file = unsafe { File::from_raw_fd(fd) };
     let before = file
         .metadata()
@@ -604,6 +606,7 @@ fn socket_node(spec: &ResearchSpec) -> Result<(File, (u64, u64)), String> {
             .ok_or("invalid relay path")?,
         0,
     )?;
+    // SAFETY: parent stays live, the name is a static C string and these flags never create files.
     let fd = unsafe {
         libc::openat(
             parent.as_raw_fd(),
@@ -614,6 +617,7 @@ fn socket_node(spec: &ResearchSpec) -> Result<(File, (u64, u64)), String> {
     if fd < 0 {
         return Err("Research relay socket unavailable".into());
     }
+    // SAFETY: openat returned a new descriptor; File takes its sole ownership.
     let file = unsafe { File::from_raw_fd(fd) };
     let m = file
         .metadata()
@@ -632,11 +636,13 @@ fn socket_node(spec: &ResearchSpec) -> Result<(File, (u64, u64)), String> {
 fn connect(parent: &File, deadline: Instant) -> Result<UnixStream, String> {
     remaining(deadline)?;
     let path = format!("/proc/self/fd/{}/socket", parent.as_raw_fd());
+    // SAFETY: sockaddr_un consists of integer fields and a byte array, all valid when zeroed.
     let mut address: libc::sockaddr_un = unsafe { std::mem::zeroed() };
     address.sun_family = libc::AF_UNIX as libc::sa_family_t;
     for (out, byte) in address.sun_path.iter_mut().zip(path.bytes()) {
         *out = byte as libc::c_char;
     }
+    // SAFETY: socket takes only integer domain/type/protocol values and returns a new descriptor.
     let fd = unsafe {
         libc::socket(
             libc::AF_UNIX,
@@ -647,7 +653,9 @@ fn connect(parent: &File, deadline: Instant) -> Result<UnixStream, String> {
     if fd < 0 {
         return Err("Research relay connection unavailable".into());
     }
+    // SAFETY: socket returned a new stream descriptor; UnixStream takes its sole ownership.
     let stream = unsafe { UnixStream::from_raw_fd(fd) };
+    // SAFETY: stream keeps fd live and address points to a live sockaddr_un of the supplied size.
     let result = unsafe {
         libc::connect(
             fd,
@@ -665,11 +673,13 @@ fn connect(parent: &File, deadline: Instant) -> Result<UnixStream, String> {
             events: libc::POLLOUT,
             revents: 0,
         };
+        // SAFETY: poll points to one writable pollfd; stream keeps its descriptor live.
         if unsafe { libc::poll(&mut poll, 1, timeout) } != 1 || poll.revents != libc::POLLOUT {
             return Err("Research relay connection timed out".into());
         }
         let mut error: libc::c_int = 0;
         let mut length = std::mem::size_of_val(&error) as libc::socklen_t;
+        // SAFETY: stream stays live; error and length are writable storage with the correct sizes.
         if unsafe {
             libc::getsockopt(
                 fd,
@@ -738,6 +748,7 @@ fn relay_process(
 fn interface(spec: &ResearchSpec) -> Result<u32, String> {
     let name = CString::new(spec.vpn_interface.as_bytes())
         .map_err(|_| "invalid Research VPN interface")?;
+    // SAFETY: name is a live NUL-terminated interface name.
     let index = unsafe { libc::if_nametoindex(name.as_ptr()) };
     let bytes = bounded(
         &Path::new("/sys/class/net")
@@ -819,6 +830,7 @@ fn listener(
             .ok_or("invalid Research backend socket path")?,
         0,
     )?;
+    // SAFETY: parent stays live, the name is a static C string and these flags never create files.
     let fd = unsafe {
         libc::openat(
             parent.as_raw_fd(),
@@ -829,6 +841,7 @@ fn listener(
     if fd < 0 {
         return Err("Research backend socket unavailable".into());
     }
+    // SAFETY: openat returned a new descriptor; File takes its sole ownership.
     let file = unsafe { File::from_raw_fd(fd) };
     let node = file
         .metadata()
@@ -947,7 +960,7 @@ pub(crate) fn collect(
     id: &str,
     spec: &ResearchSpec,
 ) -> Result<ReadyResearch, String> {
-    if unsafe { libc::geteuid() } != 0 {
+    if tentaflake_admission::effective_uid() != 0 {
         return Err("Research collection requires root".into());
     }
     validate(id, spec)?;

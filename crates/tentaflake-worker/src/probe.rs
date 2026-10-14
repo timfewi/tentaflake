@@ -99,7 +99,7 @@ fn open_root(path: &Path) -> Result<File> {
 }
 
 pub(super) fn collect(config: &Config) -> Result<Snapshot> {
-    if unsafe { libc::geteuid() } != 0 {
+    if tentaflake_admission::effective_uid() != 0 {
         return Err("worker probe requires the root state owner".into());
     }
     let state = open_root(&config.state_dir)?;
@@ -124,7 +124,7 @@ pub(super) struct Maintenance {
 }
 
 pub(super) fn maintenance(config: &Config) -> Result<Maintenance> {
-    if unsafe { libc::geteuid() } != 0 {
+    if tentaflake_admission::effective_uid() != 0 {
         return Err("worker maintenance requires the root state owner".into());
     }
     let reopen = || tentaflake_admission::protected_path::open_root(&config.state_dir, 0);
@@ -194,6 +194,7 @@ fn queue_lock(state: &File, owner: u32) -> Result<(File, Identity)> {
     {
         return Err("worker probe queue lock ownership or mode mismatch".into());
     }
+    // SAFETY: lock owns the descriptor throughout this nonblocking flock call.
     if unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_SH | libc::LOCK_NB) } != 0 {
         return Err("worker probe queue busy or unavailable".into());
     }
@@ -451,8 +452,8 @@ mod tests {
                 image: "fixture:offline".into(),
                 workspace,
                 state_dir,
-                container_uid: unsafe { libc::geteuid() },
-                container_gid: unsafe { libc::getegid() },
+                container_uid: tentaflake_admission::effective_uid(),
+                container_gid: tentaflake_admission::effective_gid(),
                 max_request_bytes: 65536,
                 max_inbox_entries: 256,
                 max_inbox_bytes: 8 * 1024 * 1024,
@@ -559,6 +560,7 @@ mod tests {
                     symlink(&f.config.workspace, &jobs).unwrap();
                 }
                 "busy" => assert_eq!(
+                    // SAFETY: lock owns the fixture descriptor throughout this nonblocking flock call.
                     unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) },
                     0
                 ),
@@ -595,7 +597,7 @@ mod tests {
                 )
             })
             .collect::<Vec<_>>();
-        let group = unsafe { libc::getegid() };
+        let group = tentaflake_admission::effective_gid();
         let snapshot = f.run().unwrap();
         assert_eq!(snapshot.pending.entries, 1);
         assert_eq!(snapshot.running.entries, 1);
@@ -635,7 +637,7 @@ mod tests {
             assert_eq!(fs::read(path).unwrap(), bytes);
             unchanged(&File::open(path).unwrap(), &identity).unwrap();
         }
-        assert_eq!(unsafe { libc::getegid() }, group);
+        assert_eq!(tentaflake_admission::effective_gid(), group);
         assert!(!f.config.state_dir.join("audit.jsonl").exists());
         assert!(
             fs::read_dir(f.config.state_dir.join("jobs"))
@@ -672,6 +674,7 @@ mod tests {
         let before = fs::read(&request).unwrap();
         let lock = File::open(f.config.state_dir.join(".queue.lock")).unwrap();
         assert_eq!(
+            // SAFETY: lock owns the fixture descriptor throughout this nonblocking flock call.
             unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) },
             0
         );
@@ -773,7 +776,7 @@ mod tests {
             requests(
                 &f.config,
                 &pending,
-                Some(unsafe { libc::geteuid() }),
+                Some(tentaflake_admission::effective_uid()),
                 Instant::now()
             )
             .unwrap_err()
@@ -781,6 +784,7 @@ mod tests {
         );
         let path = f.config.state_dir.join("pending/fifo.json");
         let name = CString::new(path.as_os_str().as_bytes()).unwrap();
+        // SAFETY: name is a live NUL-terminated fixture path; mkfifo takes an integer mode.
         assert_eq!(unsafe { libc::mkfifo(name.as_ptr(), 0o600) }, 0);
         assert!(f.run().is_err());
         fs::remove_file(path).unwrap();

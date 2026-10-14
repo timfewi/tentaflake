@@ -208,7 +208,9 @@ are already published or require access to another repository for public checks.
   Authentication never grants resource authority. Durable consumed-token
   fingerprints share the admission ledger and survive restart/publication. Keep
   HTTP work charged until owner blocking tasks finish, including after connection
-  cancellation. Discovery
+  cancellation. Hold the session-state mutex only for in-memory state, never
+  ledger or credential I/O; route additions belong in the shared route table.
+  Discovery
   and sessions are implemented; capacity reporting exposes published ceilings,
   never free resources, grants or live readiness. Remaining resource operations
   stay unsupported.

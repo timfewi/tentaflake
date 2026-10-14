@@ -206,6 +206,7 @@ fn environment_at(
     // Recheck the supplied anchor using the same traversal as production. Tests
     // supply an explicitly owned descriptor, never a weaker filesystem policy.
     let parent = tentaflake_admission::protected_path::open_relative(parent, Path::new(""), owner)?;
+    // SAFETY: parent stays live, the name is a static C string and these flags never create files.
     let fd = unsafe {
         libc::openat(
             parent.as_raw_fd(),
@@ -216,6 +217,7 @@ fn environment_at(
     if fd < 0 {
         return Err("model environment is unavailable".into());
     }
+    // SAFETY: openat returned a new descriptor; File takes its sole ownership.
     let mut file = unsafe { File::from_raw_fd(fd) };
     let metadata = file
         .metadata()
@@ -946,7 +948,7 @@ pub(crate) fn collect(
     spec: &ModelSpec,
     stage: Stage<'_>,
 ) -> Result<ReadyModel, String> {
-    if unsafe { libc::geteuid() } != 0 {
+    if tentaflake_admission::effective_uid() != 0 {
         return Err("model collection requires root".into());
     }
     validate(id, spec)?;
@@ -1154,7 +1156,7 @@ mod tests {
         let directory = Directory::new();
         let spec = spec();
         directory.write(&environment(&spec));
-        let uid = unsafe { libc::geteuid() };
+        let uid = tentaflake_admission::effective_uid();
         let (mut opened, identity, values) = environment_at(&directory.file, uid, &spec).unwrap();
         let mut bytes = Vec::new();
         opened.read_to_end(&mut bytes).unwrap();
@@ -1172,6 +1174,7 @@ mod tests {
         assert!(environment_at(&directory.file, uid, &spec).is_err());
         fs::remove_file(&path).unwrap();
         assert_eq!(
+            // SAFETY: The fixture directory stays live and the name is a static NUL-terminated string.
             unsafe { libc::mkfifoat(directory.file.as_raw_fd(), c"agent.env".as_ptr(), 0o400) },
             0
         );
@@ -1346,17 +1349,31 @@ mod tests {
         let mut spec = spec();
         spec.network.gateway = "127.0.0.1".into();
         spec.port = socket.local_addr().unwrap().port();
-        assert!(listener(std::process::id(), unsafe { libc::geteuid() }, &spec).is_ok());
         assert!(
             listener(
                 std::process::id(),
-                unsafe { libc::geteuid() }.wrapping_add(1),
+                tentaflake_admission::effective_uid(),
+                &spec
+            )
+            .is_ok()
+        );
+        assert!(
+            listener(
+                std::process::id(),
+                tentaflake_admission::effective_uid().wrapping_add(1),
                 &spec
             )
             .is_err()
         );
         drop(socket);
-        assert!(listener(std::process::id(), unsafe { libc::geteuid() }, &spec).is_err());
+        assert!(
+            listener(
+                std::process::id(),
+                tentaflake_admission::effective_uid(),
+                &spec
+            )
+            .is_err()
+        );
         let header = "sl local_address rem_address st tx_queue rx_queue tr tm->when retrnsmt uid timeout inode\n";
         let row =
             "0: 00000000:1E82 00000000:0000 0A 00000000:00000000 00:00000000 00000000 1000 0 123\n";

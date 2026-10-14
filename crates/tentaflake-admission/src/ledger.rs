@@ -256,6 +256,7 @@ impl Drop for LedgerLock {
         // Release our completed transaction explicitly; closing only this copy
         // can otherwise keep the lock until an unrelated child reaches exec.
         // File's drop still closes the descriptor if unlocking fails.
+        // SAFETY: self.file owns the live descriptor; flock takes no pointers.
         unsafe {
             libc::flock(self.file.as_raw_fd(), libc::LOCK_UN);
         }
@@ -365,6 +366,7 @@ impl Ledger {
         // remain truthful inventory; budget enforcement belongs to admission.
         state.validate()?;
         let encoded_name = cstring(name)?;
+        // SAFETY: parent is live and encoded_name remains NUL-terminated.
         if unsafe { libc::mkdirat(parent.as_raw_fd(), encoded_name.as_ptr(), 0o700) } != 0 {
             return Err(io::Error::last_os_error().into());
         }
@@ -1067,7 +1069,7 @@ impl Ledger {
     fn validate_directory(&self) -> Result<(), LedgerError> {
         let metadata = self.directory.metadata()?;
         if !metadata.is_dir()
-            || metadata.uid() != unsafe { libc::geteuid() }
+            || metadata.uid() != crate::effective_uid()
             || metadata.mode() & 0o7777 != 0o700
         {
             return Err(LedgerError::Invalid(
@@ -1086,6 +1088,7 @@ impl Ledger {
                 0
             };
         let file = self.open_file(LOCK, flags)?;
+        // SAFETY: file owns the live descriptor; flock takes no pointers.
         if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
             let error = io::Error::last_os_error();
             return Err(if error.kind() == io::ErrorKind::WouldBlock {
@@ -1101,7 +1104,7 @@ impl Ledger {
         let file = open_at(self.directory.as_raw_fd(), OsStr::new(name), flags)?;
         let metadata = file.metadata()?;
         if !metadata.is_file()
-            || metadata.uid() != unsafe { libc::geteuid() }
+            || metadata.uid() != crate::effective_uid()
             || metadata.mode() & 0o7777 != 0o600
             || metadata.nlink() != 1
         {
@@ -1143,6 +1146,7 @@ impl Ledger {
         pending.sync_all()?;
         let source = cstring(OsStr::new(STAGING))?;
         let target = cstring(OsStr::new(STATE))?;
+        // SAFETY: both names are live C strings and directory owns both dirfds.
         if unsafe {
             libc::renameat(
                 self.directory.as_raw_fd(),
@@ -1670,6 +1674,8 @@ fn cstring(value: &OsStr) -> Result<CString, LedgerError> {
 
 fn open_at(directory: RawFd, name: &OsStr, flags: i32) -> Result<File, LedgerError> {
     let name = cstring(name)?;
+    // SAFETY: name is a live C string; a mode is supplied for O_CREAT, and
+    // invalid directory descriptors are rejected by the kernel.
     let fd = unsafe {
         libc::openat(
             directory,
@@ -1681,6 +1687,7 @@ fn open_at(directory: RawFd, name: &OsStr, flags: i32) -> Result<File, LedgerErr
     if fd < 0 {
         return Err(io::Error::last_os_error().into());
     }
+    // SAFETY: successful openat returned a new descriptor owned only here.
     Ok(unsafe { File::from_raw_fd(fd) })
 }
 
@@ -1721,7 +1728,7 @@ fn trusted_directory(directory: &File) -> Result<(), LedgerError> {
     // so an attacker-owned child cannot smuggle in a second lock namespace.
     let root_sticky = metadata.uid() == 0 && metadata.mode() & 0o1000 != 0;
     if !metadata.is_dir()
-        || (metadata.uid() != 0 && metadata.uid() != unsafe { libc::geteuid() })
+        || (metadata.uid() != 0 && metadata.uid() != crate::effective_uid())
         || (metadata.mode() & 0o022 != 0 && !root_sticky)
     {
         return Err(LedgerError::Invalid("untrusted directory ancestry"));
@@ -2147,6 +2154,8 @@ mod tests {
                     rlim_cur: 64,
                     rlim_max: 64,
                 };
+                // SAFETY: this isolated subprocess installs only SIG_IGN and
+                // passes a live, initialized limit; no Rust signal handler runs.
                 unsafe {
                     assert_ne!(libc::signal(libc::SIGXFSZ, libc::SIG_IGN), libc::SIG_ERR);
                     assert_eq!(libc::setrlimit(libc::RLIMIT_FSIZE, &limit), 0);
@@ -3716,7 +3725,7 @@ mod tests {
         assert!(Ledger::open(Path::new("ledger")).is_err());
         let public_path = fixture.0.join("public-ledger");
         let root_uid = fs::metadata("/").unwrap().uid();
-        if root_uid != 0 && root_uid != unsafe { libc::geteuid() } {
+        if root_uid != 0 && root_uid != crate::effective_uid() {
             // In the actual Nix sandbox / belongs to an unmapped UID.
             // A fixture anchor must not make the public API accept it.
             assert!(matches!(
@@ -3766,13 +3775,15 @@ mod tests {
         ));
         assert!(!fixture.0.join("second").exists());
         fs::set_permissions(&fixture.0, fs::Permissions::from_mode(0o700)).unwrap();
-        if unsafe { libc::geteuid() } == 0 {
+        if crate::effective_uid() == 0 {
             let directory = File::open(&fixture.0).unwrap();
+            // SAFETY: directory owns the fixture descriptor; fchown takes integer IDs.
             assert_eq!(unsafe { libc::fchown(directory.as_raw_fd(), 65534, !0) }, 0);
             assert!(matches!(
                 fixture.open("ledger"),
                 Err(LedgerError::Invalid(_))
             ));
+            // SAFETY: directory still owns the fixture descriptor while restoring its owner.
             assert_eq!(unsafe { libc::fchown(directory.as_raw_fd(), 0, !0) }, 0);
         }
         assert!(fixture.open("ledger").is_ok());

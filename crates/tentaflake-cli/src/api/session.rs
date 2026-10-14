@@ -9,6 +9,7 @@ use ring::{
 use serde::Deserialize;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, MutexGuard};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tentaflake_admission::protected_path::open_root;
 
@@ -134,9 +135,9 @@ impl Session {
     fn active(&self, now: Instant) -> bool {
         now.checked_duration_since(self.issued.monotonic)
             .is_some_and(|age| age < ABSOLUTE)
-            && now
-                .checked_duration_since(self.touched)
-                .is_some_and(|age| age < IDLE)
+            // Requests can acquire the state lock out of capture order. A
+            // newer touch is still activity; issuance remains a hard lower bound.
+            && now.saturating_duration_since(self.touched) < IDLE
     }
 
     fn bound(&self, current: AuthContext<'_>) -> bool {
@@ -170,22 +171,76 @@ pub(crate) struct Sessions {
     authority: String,
     comparisons: hmac::Key,
     bearer_csrf: String,
+    state: Mutex<SessionState>,
+}
+
+struct SessionState {
+    generation: u64,
     sessions: BTreeMap<[u8; 32], Session>,
     login_window: Option<Instant>,
     login_attempts: u8,
 }
 
+impl SessionState {
+    fn can_insert(
+        &self,
+        generation: u64,
+        previous: Option<[u8; 32]>,
+        key: [u8; 32],
+    ) -> Result<(), AuthError> {
+        if self.generation != generation || self.sessions.contains_key(&key) {
+            return Err(AuthError::Unavailable);
+        }
+        if self.sessions.len() >= MAX_SESSIONS
+            && !previous.is_some_and(|key| self.sessions.contains_key(&key))
+        {
+            return Err(AuthError::Capacity);
+        }
+        Ok(())
+    }
+}
+
 impl Sessions {
     #[cfg(test)]
-    pub(super) fn fixture_login(&mut self, current: AuthContext<'_>) -> NewSession {
+    pub(super) fn fixture_login(&self, current: AuthContext<'_>) -> NewSession {
         let mut headers = HeaderMap::new();
         headers.insert("host", self.authority.parse().unwrap());
         headers.insert("origin", self.settings.origin.parse().unwrap());
         headers.insert("content-type", "application/json".parse().unwrap());
         let secret = b"synthetic-operation-login-0123456789";
-        self.login_with(&headers,
+        self.fixture_login_request(&headers,
             &serde_json::to_vec(&serde_json::json!({"method":"operator-token","secret":std::str::from_utf8(secret).unwrap()})).unwrap(),
-            current, Clock::now().unwrap(), |_| Ok(secret.to_vec()), |_| Ok(())).unwrap()
+            current, Clock::now().unwrap(), |_| Ok(())).unwrap()
+    }
+
+    #[cfg(test)]
+    pub(super) fn fixture_login_request(
+        &self,
+        headers: &HeaderMap,
+        body: &[u8],
+        current: AuthContext<'_>,
+        clock: Clock,
+        consume: impl FnOnce(&str) -> Result<(), AuthError>,
+    ) -> Result<NewSession, AuthError> {
+        self.login_with(
+            headers,
+            body,
+            current,
+            clock,
+            |_| Ok(b"synthetic-operation-login-0123456789".to_vec()),
+            consume,
+        )
+    }
+
+    #[cfg(test)]
+    pub(super) fn fixture_poison(&self) {
+        assert!(
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let _guard = self.state.lock().unwrap();
+                panic!("synthetic session-state panic");
+            }))
+            .is_err()
+        );
     }
 
     pub(crate) fn new(settings: AuthSettings) -> Result<Self, AuthError> {
@@ -228,9 +283,12 @@ impl Sessions {
             authority,
             comparisons: hmac::Key::new(hmac::HMAC_SHA256, &key),
             bearer_csrf: random_token()?,
-            sessions: BTreeMap::new(),
-            login_window: None,
-            login_attempts: 0,
+            state: Mutex::new(SessionState {
+                generation: 0,
+                sessions: BTreeMap::new(),
+                login_window: None,
+                login_attempts: 0,
+            }),
         })
     }
 
@@ -253,23 +311,48 @@ impl Sessions {
         Ok(())
     }
 
-    fn throttle(&mut self, now: Instant) -> Result<(), AuthError> {
-        if self.login_window.is_none_or(|start| {
+    /// No credential reads or external callbacks run while this guard is held.
+    /// A panic revokes every cookie and invalidates pending login commits, but
+    /// must not reset the throttle into a fresh credential-guessing window.
+    fn lock_state(&self, now: Instant) -> Result<MutexGuard<'_, SessionState>, AuthError> {
+        match self.state.lock() {
+            Ok(state) => Ok(state),
+            Err(poisoned) => {
+                let mut state = poisoned.into_inner();
+                let generation = state
+                    .generation
+                    .checked_add(1)
+                    .ok_or(AuthError::Unavailable)?;
+                *state = SessionState {
+                    generation,
+                    sessions: BTreeMap::new(),
+                    login_window: Some(Instant::now().max(now)),
+                    login_attempts: LOGIN_ATTEMPTS,
+                };
+                self.state.clear_poison();
+                Err(AuthError::Unavailable)
+            }
+        }
+    }
+
+    fn begin_login(&self, now: Instant) -> Result<u64, AuthError> {
+        let mut state = self.lock_state(now)?;
+        if state.login_window.is_none_or(|start| {
             now.checked_duration_since(start)
                 .is_some_and(|elapsed| elapsed >= LOGIN_WINDOW)
         }) {
-            self.login_window = Some(now);
-            self.login_attempts = 0;
+            state.login_window = Some(now);
+            state.login_attempts = 0;
         }
-        if self.login_attempts >= LOGIN_ATTEMPTS {
+        if state.login_attempts >= LOGIN_ATTEMPTS {
             return Err(AuthError::RateLimited);
         }
-        self.login_attempts += 1;
-        Ok(())
+        state.login_attempts += 1;
+        Ok(state.generation)
     }
 
     pub(crate) fn login(
-        &mut self,
+        &self,
         headers: &HeaderMap,
         body: &[u8],
         current: AuthContext<'_>,
@@ -280,7 +363,7 @@ impl Sessions {
     }
 
     fn login_with(
-        &mut self,
+        &self,
         headers: &HeaderMap,
         body: &[u8],
         current: AuthContext<'_>,
@@ -296,7 +379,7 @@ impl Sessions {
         if credentials.bearer.is_some() {
             return Err(AuthError::Invalid);
         }
-        self.throttle(clock.monotonic)?;
+        let generation = self.begin_login(clock.monotonic)?;
         #[derive(Deserialize)]
         #[serde(deny_unknown_fields)]
         struct Login {
@@ -320,18 +403,15 @@ impl Sessions {
         {
             return Err(AuthError::Unauthenticated);
         }
-        self.sessions
-            .retain(|_, session| session.active(clock.monotonic) && session.bound(current));
         let previous = credentials.cookie.map(|cookie| sha256(cookie.as_bytes()));
-        if self.sessions.len() >= MAX_SESSIONS
-            && !previous.is_some_and(|key| self.sessions.contains_key(&key))
-        {
-            return Err(AuthError::Capacity);
-        }
         let cookie = random_token()?;
         let key = sha256(cookie.as_bytes());
-        if self.sessions.contains_key(&key) {
-            return Err(AuthError::Unavailable);
+        {
+            let mut state = self.lock_state(clock.monotonic)?;
+            state
+                .sessions
+                .retain(|_, session| session.active(clock.monotonic));
+            state.can_insert(generation, previous, key)?;
         }
         let session = Session {
             principal: current.principal_id.into(),
@@ -351,15 +431,19 @@ impl Sessions {
         // A crash after this callback burns the credential. No success or new
         // in-memory session exists before its durable single-use tombstone.
         consume(&hex(digest.finish().as_ref()))?;
+        let mut state = self.lock_state(clock.monotonic)?;
+        // Consumption ran without the mutex. A reset or a concurrent login may
+        // have invalidated this candidate; burning the token is safe, minting is not.
+        state.can_insert(generation, previous, key)?;
         if let Some(previous) = previous {
-            self.sessions.remove(&previous);
+            state.sessions.remove(&previous);
         }
-        self.sessions.insert(key, session);
+        state.sessions.insert(key, session);
         Ok(result)
     }
 
     pub(crate) fn authenticate(
-        &mut self,
+        &self,
         headers: &HeaderMap,
         kind: RequestKind,
         current: AuthContext<'_>,
@@ -369,7 +453,7 @@ impl Sessions {
     }
 
     fn authenticate_with(
-        &mut self,
+        &self,
         headers: &HeaderMap,
         kind: RequestKind,
         current: AuthContext<'_>,
@@ -409,16 +493,17 @@ impl Sessions {
             self.require_origin(headers)?;
         }
         let key = sha256(cookie.as_bytes());
-        let session = self
+        let mut state = self.lock_state(clock.monotonic)?;
+        let session = state
             .sessions
             .get_mut(&key)
             .ok_or(AuthError::Unauthenticated)?;
         if !session.bound(current) {
-            self.sessions.remove(&key);
+            state.sessions.remove(&key);
             return Err(AuthError::SessionRevoked);
         }
         if !session.active(clock.monotonic) {
-            self.sessions.remove(&key);
+            state.sessions.remove(&key);
             return Err(AuthError::SessionExpired);
         }
         if kind == RequestKind::Mutation {
@@ -427,7 +512,7 @@ impl Sessions {
                 return Err(AuthError::Csrf);
             }
         }
-        session.touched = clock.monotonic;
+        session.touched = session.touched.max(clock.monotonic);
         Ok(session.authenticated(key))
     }
 
@@ -448,7 +533,8 @@ impl Sessions {
         }
         match &auth.identity {
             Identity::Cookie(key) => {
-                let session = self.sessions.get(key).ok_or(AuthError::SessionRevoked)?;
+                let state = self.lock_state(clock.monotonic)?;
+                let session = state.sessions.get(key).ok_or(AuthError::SessionRevoked)?;
                 if !session.bound(current) {
                     return Err(AuthError::SessionRevoked);
                 }
@@ -479,10 +565,10 @@ impl Sessions {
     }
 
     /// Idempotent local revocation; caller expires the protected browser cookie.
-    pub(crate) fn logout(&mut self, auth: &Authenticated) -> Result<(), AuthError> {
+    pub(crate) fn logout(&self, auth: &Authenticated) -> Result<(), AuthError> {
         match &auth.identity {
             Identity::Cookie(key) => {
-                self.sessions.remove(key);
+                self.lock_state(Instant::now())?.sessions.remove(key);
                 Ok(())
             }
             Identity::Bearer(_) => Err(AuthError::Unsupported),
@@ -697,7 +783,7 @@ mod tests {
         }
     }
 
-    fn issue(sessions: &mut Sessions, now: Clock) -> NewSession {
+    fn issue(sessions: &Sessions, now: Clock) -> NewSession {
         sessions
             .login_with(
                 &headers(),
@@ -731,7 +817,7 @@ mod tests {
 
     #[test]
     fn login_commits_only_a_fingerprint_before_returning_protected_session() {
-        let mut sessions = Sessions::new(settings()).unwrap();
+        let sessions = Sessions::new(settings()).unwrap();
         let now = clock();
         let committed = Cell::new(false);
         let result = sessions
@@ -750,7 +836,7 @@ mod tests {
             )
             .unwrap();
         assert!(committed.get());
-        assert_eq!(sessions.sessions.len(), 1);
+        assert_eq!(sessions.state.lock().unwrap().sessions.len(), 1);
         assert_eq!(result.auth.principal_id, "operator");
         assert_eq!(result.auth.expires_at, now.unix_seconds + IDLE.as_secs());
         assert!(opaque(&result.auth.csrf_token));
@@ -774,9 +860,9 @@ mod tests {
 
     #[test]
     fn durable_refusal_never_issues_or_rotates_a_session() {
-        let mut sessions = Sessions::new(settings()).unwrap();
+        let sessions = Sessions::new(settings()).unwrap();
         let now = clock();
-        let first = issue(&mut sessions, now);
+        let first = issue(&sessions, now);
         let result = sessions.login_with(
             &authenticated_headers(&first),
             &body(OPERATOR),
@@ -786,11 +872,11 @@ mod tests {
             |_| Err(AuthError::Unavailable),
         );
         assert!(matches!(result, Err(AuthError::Unavailable)));
-        assert_eq!(sessions.sessions.len(), 1);
+        assert_eq!(sessions.state.lock().unwrap().sessions.len(), 1);
         sessions.check_active(&first.auth, current(), now).unwrap();
         // A restarted process retains no browser sessions and must still ask
         // the durable owner; its prior-consumption refusal cannot be bypassed.
-        let mut restarted = Sessions::new(settings()).unwrap();
+        let restarted = Sessions::new(settings()).unwrap();
         assert!(matches!(
             restarted.authenticate(
                 &authenticated_headers(&first),
@@ -811,14 +897,14 @@ mod tests {
             ),
             Err(AuthError::Unauthenticated)
         ));
-        assert!(restarted.sessions.is_empty());
+        assert!(restarted.state.lock().unwrap().sessions.is_empty());
     }
 
     #[test]
     fn login_rotates_cookie_and_csrf_then_logout_revokes_held_attachment() {
-        let mut sessions = Sessions::new(settings()).unwrap();
+        let sessions = Sessions::new(settings()).unwrap();
         let now = clock();
-        let first = issue(&mut sessions, now);
+        let first = issue(&sessions, now);
         let second = sessions
             .login_with(
                 &authenticated_headers(&first),
@@ -831,7 +917,7 @@ mod tests {
             .unwrap();
         assert_ne!(first.set_cookie, second.set_cookie);
         assert_ne!(first.auth.csrf_token, second.auth.csrf_token);
-        assert_eq!(sessions.sessions.len(), 1);
+        assert_eq!(sessions.state.lock().unwrap().sessions.len(), 1);
         assert_eq!(
             sessions.check_active(&first.auth, current(), now),
             Err(AuthError::SessionRevoked)
@@ -861,7 +947,7 @@ mod tests {
             "bearer",
             "same-secret",
         ] {
-            let mut sessions = Sessions::new(settings()).unwrap();
+            let sessions = Sessions::new(settings()).unwrap();
             let mut headers = headers();
             let mut input = body(OPERATOR);
             match mode {
@@ -928,15 +1014,15 @@ mod tests {
                 |_| panic!("refused login reached durable consumption"),
             );
             assert!(result.is_err(), "{mode}");
-            assert!(sessions.sessions.is_empty());
+            assert!(sessions.state.lock().unwrap().sessions.is_empty());
         }
     }
 
     #[test]
     fn cookie_mutations_and_streams_require_origin_but_only_mutations_require_csrf() {
-        let mut sessions = Sessions::new(settings()).unwrap();
+        let sessions = Sessions::new(settings()).unwrap();
         let now = clock();
-        let session = issue(&mut sessions, now);
+        let session = issue(&sessions, now);
         let mut request = authenticated_headers(&session);
         request.remove("x-tentaflake-csrf");
         assert!(matches!(
@@ -976,9 +1062,9 @@ mod tests {
 
     #[test]
     fn independent_bearer_needs_no_csrf_and_cannot_mix_with_session() {
-        let mut sessions = Sessions::new(settings()).unwrap();
+        let sessions = Sessions::new(settings()).unwrap();
         let now = clock();
-        let cookie = issue(&mut sessions, now);
+        let cookie = issue(&sessions, now);
         let mut request = headers();
         request.remove("origin");
         request.insert(
@@ -1026,8 +1112,8 @@ mod tests {
     fn idle_absolute_and_current_authority_revocation_are_independent() {
         let now = clock();
         for mode in ["disabled", "principal", "binding", "epoch", "idle"] {
-            let mut sessions = Sessions::new(settings()).unwrap();
-            let session = issue(&mut sessions, now);
+            let sessions = Sessions::new(settings()).unwrap();
+            let session = issue(&sessions, now);
             let mut current = current();
             match mode {
                 "disabled" => current.enabled = false,
@@ -1057,8 +1143,8 @@ mod tests {
                     .is_err()
             );
         }
-        let mut sessions = Sessions::new(settings()).unwrap();
-        let session = issue(&mut sessions, now);
+        let sessions = Sessions::new(settings()).unwrap();
+        let session = issue(&sessions, now);
         let request = authenticated_headers(&session);
         for second in (600..ABSOLUTE.as_secs()).step_by(600) {
             sessions
@@ -1077,8 +1163,141 @@ mod tests {
     }
 
     #[test]
+    fn reordered_requests_do_not_revoke_sessions_or_move_activity_backwards() {
+        let sessions = Sessions::new(settings()).unwrap();
+        let now = clock();
+        let session = issue(&sessions, now);
+        let headers = authenticated_headers(&session);
+        let later_request = sessions
+            .authenticate(&headers, RequestKind::Read, current(), later(now, 10))
+            .unwrap();
+        let earlier_request = sessions
+            .authenticate(&headers, RequestKind::Read, current(), later(now, 5))
+            .unwrap();
+        assert_eq!(earlier_request.expires_at, later_request.expires_at);
+        // A login whose credential read took longer must not prune the newer activity.
+        let _other = issue(&sessions, later(now, 5));
+        sessions
+            .check_active(&session.auth, current(), later(now, 10))
+            .unwrap();
+        let Identity::Cookie(key) = &session.auth.identity else {
+            panic!("cookie fixture")
+        };
+        assert_eq!(
+            sessions
+                .state
+                .lock()
+                .unwrap()
+                .sessions
+                .get(key)
+                .unwrap()
+                .touched,
+            later(now, 10).monotonic
+        );
+        assert_eq!(
+            sessions.check_active(&session.auth, current(), later(now, 10 + IDLE.as_secs())),
+            Err(AuthError::SessionExpired)
+        );
+        // Request reordering does not relax the issuance lower bound.
+        let before_issue = Clock {
+            monotonic: now.monotonic - Duration::from_secs(1),
+            unix_seconds: now.unix_seconds - 1,
+        };
+        assert_eq!(
+            sessions.check_active(&session.auth, current(), before_issue),
+            Err(AuthError::SessionExpired)
+        );
+    }
+
+    #[test]
+    fn poisoned_state_revokes_cookies_and_preserves_throttle_before_relogin() {
+        let sessions = Sessions::new(settings()).unwrap();
+        let now = clock();
+        let old = issue(&sessions, now);
+        sessions.fixture_poison();
+        assert_eq!(
+            sessions.check_active(&old.auth, current(), now),
+            Err(AuthError::Unavailable)
+        );
+        assert_eq!(
+            sessions.check_active(&old.auth, current(), now),
+            Err(AuthError::SessionRevoked)
+        );
+        assert!(matches!(
+            sessions.authenticate(
+                &authenticated_headers(&old),
+                RequestKind::Read,
+                current(),
+                now
+            ),
+            Err(AuthError::Unauthenticated)
+        ));
+        assert!(matches!(
+            sessions.login_with(
+                &headers(),
+                &body(OPERATOR),
+                current(),
+                now,
+                |_| panic!("poison must not allow credential guessing"),
+                |_| panic!("no consumption")
+            ),
+            Err(AuthError::RateLimited)
+        ));
+        let after_window = Clock {
+            monotonic: sessions.state.lock().unwrap().login_window.unwrap() + LOGIN_WINDOW,
+            unix_seconds: now.unix_seconds + LOGIN_WINDOW.as_secs(),
+        };
+        let next = issue(&sessions, after_window);
+        sessions
+            .check_active(&next.auth, current(), after_window)
+            .unwrap();
+        assert_eq!(
+            sessions.check_active(&old.auth, current(), after_window),
+            Err(AuthError::SessionRevoked)
+        );
+    }
+
+    #[test]
+    fn login_cannot_commit_after_state_recovery_during_durable_consumption() {
+        let sessions = Sessions::new(settings()).unwrap();
+        let now = clock();
+        let old = issue(&sessions, now);
+        let consumed = Cell::new(false);
+        let result = sessions.login_with(
+            &headers(),
+            &body(OPERATOR),
+            current(),
+            now,
+            |path| {
+                assert!(
+                    sessions.state.try_lock().is_ok(),
+                    "credential I/O held the state lock"
+                );
+                fixture_secret(path)
+            },
+            |_| {
+                assert!(
+                    sessions.state.try_lock().is_ok(),
+                    "durable I/O held the state lock"
+                );
+                consumed.set(true);
+                sessions.fixture_poison();
+                // A different request performs recovery before this callback returns.
+                assert_eq!(
+                    sessions.check_active(&old.auth, current(), now),
+                    Err(AuthError::Unavailable)
+                );
+                Ok(())
+            },
+        );
+        assert!(consumed.get());
+        assert!(matches!(result, Err(AuthError::Unavailable)));
+        assert!(sessions.state.lock().unwrap().sessions.is_empty());
+    }
+
+    #[test]
     fn login_attempts_and_active_session_capacity_are_bounded() {
-        let mut sessions = Sessions::new(settings()).unwrap();
+        let sessions = Sessions::new(settings()).unwrap();
         let now = clock();
         for _ in 0..LOGIN_ATTEMPTS {
             assert!(matches!(
@@ -1104,11 +1323,11 @@ mod tests {
             ),
             Err(AuthError::RateLimited)
         ));
-        let recovered = issue(&mut sessions, later(now, LOGIN_WINDOW.as_secs()));
+        let recovered = issue(&sessions, later(now, LOGIN_WINDOW.as_secs()));
         assert!(opaque(&recovered.auth.csrf_token));
-        sessions.sessions.clear();
+        sessions.state.lock().unwrap().sessions.clear();
         for n in 0..MAX_SESSIONS {
-            sessions.sessions.insert(
+            sessions.state.lock().unwrap().sessions.insert(
                 sha256(&n.to_le_bytes()),
                 Session {
                     principal: "operator".into(),
@@ -1131,7 +1350,7 @@ mod tests {
             ),
             Err(AuthError::Capacity)
         ));
-        assert_eq!(sessions.sessions.len(), MAX_SESSIONS);
+        assert_eq!(sessions.state.lock().unwrap().sessions.len(), MAX_SESSIONS);
     }
 
     #[test]
@@ -1193,7 +1412,7 @@ mod tests {
             credential::read_at(
                 &self.directory,
                 "secret".as_ref(),
-                unsafe { libc::geteuid() },
+                tentaflake_admission::effective_uid(),
                 || File::open(&self.path).map_err(|_| credential::Error),
             )
             .map_err(|_| AuthError::Unavailable)

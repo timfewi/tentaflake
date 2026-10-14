@@ -682,7 +682,7 @@ fn read_credential(path: &Path) -> Result<Vec<u8>, String> {
     read_credential_at(
         &root,
         path.strip_prefix("/").map_err(|_| CREDENTIAL_ERROR)?,
-        unsafe { libc::geteuid() },
+        tentaflake_admission::effective_uid(),
     )
 }
 
@@ -884,7 +884,11 @@ mod tests {
             file.write_all(bytes).unwrap();
         }
         fn read(&self, name: &str) -> Result<Vec<u8>, String> {
-            read_credential_at(&self.anchor, Path::new(name), unsafe { libc::geteuid() })
+            read_credential_at(
+                &self.anchor,
+                Path::new(name),
+                tentaflake_admission::effective_uid(),
+            )
         }
     }
     impl Drop for Fixture {
@@ -902,7 +906,7 @@ mod tests {
             read_credential_at(
                 &fixture.anchor,
                 Path::new("token"),
-                unsafe { libc::geteuid() } + 1
+                tentaflake_admission::effective_uid() + 1
             )
             .is_err()
         );

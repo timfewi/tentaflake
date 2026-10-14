@@ -50,7 +50,7 @@ esac
         fs::write(&config, serde_json::to_vec(&serde_json::json!({
             "agent": "fixture", "backend": "docker", "runtime": runtime, "image": "fixture:offline",
             "workspace": root.join("workspace"), "state_dir": root.join("state"),
-            "container_uid": unsafe { libc::geteuid() }, "container_gid": unsafe { libc::getegid() },
+            "container_uid": tentaflake_admission::effective_uid(), "container_gid": tentaflake_admission::effective_gid(),
             "max_request_bytes": 65536, "max_snapshot_bytes": 65536, "max_snapshot_entries": 64,
             "max_log_bytes": 1024, "max_timeout_seconds": 5, "memory": "32m", "memory_swap": "32m",
             "cpus": "1", "pids_limit": 16, "workspace_tmpfs_size": "32m", "tmp_tmpfs_size": "16m"
@@ -133,6 +133,7 @@ fn actual_commands_reject_competing_queue_owner_without_mutation() {
     let f = Fixture::new();
     let lock = File::create(f.root.join("state/.queue.lock")).unwrap();
     assert_eq!(
+        // SAFETY: lock owns the fixture descriptor throughout this nonblocking flock call.
         unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) },
         0
     );
@@ -339,6 +340,8 @@ fn interrupted_private_write_keeps_inbox_and_restart_captures_complete_request()
     let mut command = f.command(&["drain"]);
     // Limit only this child, forcing a partial private staging write. Parent
     // tests and the host retain their limits; no filesystem is filled.
+    // SAFETY: The post-fork callback uses only async-signal-safe signal/setrlimit calls,
+    // with a valid rlimit pointer, and returns without allocation.
     unsafe {
         command.pre_exec(|| {
             libc::signal(libc::SIGXFSZ, libc::SIG_IGN);
@@ -411,6 +414,7 @@ fn assert_retained_artifact_dispatch(f: &Fixture) {
         .parse()
         .unwrap();
     assert_eq!(
+        // SAFETY: Signal zero only checks the test child PID; kill takes no pointers.
         unsafe { libc::kill(pid, 0) },
         -1,
         "archive client still exists"

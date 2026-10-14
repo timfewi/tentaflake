@@ -24,6 +24,18 @@ pub use decision::{
 use serde::{Deserialize, Serialize};
 pub use storage_decision::{authorize_storage, decide_storage};
 
+/// Effective identity of the calling thread for host-owned permission checks.
+pub fn effective_uid() -> libc::uid_t {
+    // SAFETY: geteuid has no pointer arguments or caller-side preconditions.
+    unsafe { libc::geteuid() }
+}
+
+/// Effective group used by the existing host and Worker permission checks.
+pub fn effective_gid() -> libc::gid_t {
+    // SAFETY: getegid has no pointer arguments or caller-side preconditions.
+    unsafe { libc::getegid() }
+}
+
 /// Version two accounts persistent volumes independently of startup receipts.
 /// Version-one ledgers require explicit migration; never reinterpret them empty.
 pub const SCHEMA_VERSION: u32 = 2;

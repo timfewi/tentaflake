@@ -586,8 +586,10 @@ pub(crate) fn mutate(
         .stdout
         .take()
         .ok_or("runtime mutation has no output pipe")?;
+    // SAFETY: stdout owns the live pipe descriptor; F_GETFL takes no pointer argument.
     let flags = unsafe { libc::fcntl(stdout.as_raw_fd(), libc::F_GETFL) };
     if flags < 0
+        // SAFETY: stdout remains live; F_SETFL receives integer status flags.
         || unsafe { libc::fcntl(stdout.as_raw_fd(), libc::F_SETFL, flags | libc::O_NONBLOCK) } < 0
     {
         let _ = child.kill();
@@ -2262,9 +2264,11 @@ pub(crate) mod tests {
             assert_eq!(path, Path::new(STORE_MOUNT));
             // Only this test maps the logical store name to its own protected
             // anchor. Production always uses open_store_entry's full root walk.
-            let parent = open_relative(&self.anchor, Path::new("parent"), unsafe {
-                libc::geteuid()
-            })?;
+            let parent = open_relative(
+                &self.anchor,
+                Path::new("parent"),
+                tentaflake_admission::effective_uid(),
+            )?;
             open_at(parent.as_raw_fd(), OsStr::new("source"), libc::O_RDONLY)
         }
 

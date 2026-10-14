@@ -32,7 +32,7 @@ impl Fixture {
             "agent": "fixture", "backend": "docker", "runtime": root.join("must-not-execute"),
             "image": "fixture:offline", "workspace": root.join("workspace"),
             "state_dir": root.join("state"),
-            "container_uid": unsafe { libc::geteuid() }, "container_gid": unsafe { libc::getegid() },
+            "container_uid": tentaflake_admission::effective_uid(), "container_gid": tentaflake_admission::effective_gid(),
             "max_request_bytes": 65536, "max_snapshot_bytes": 65536, "max_snapshot_entries": 64,
             "max_log_bytes": 1024, "max_timeout_seconds": 5, "memory": "32m", "memory_swap": "32m",
             "cpus": "1", "pids_limit": 16, "workspace_tmpfs_size": "32m", "tmp_tmpfs_size": "16m"
