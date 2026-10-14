@@ -14,11 +14,11 @@ alias list := default
 # ── The gates ────────────────────────────────────────────────
 
 # Full local gate: source checks, all flake checks and the installer ISO
-ci: formatter-test lint shellcheck rust ci-policy api-contract image-catalog local-image check generated-flake iso-installer
+ci: formatter-test lint shellcheck rust ci-policy api-contract image-catalog local-image codex-reference check generated-flake iso-installer
     @echo "==> all green"
 
 # Fast source checks; evaluation and all Nix package/runtime builds are explicit
-fast: formatter-test lint shellcheck rust ci-policy api-contract image-catalog local-image
+fast: formatter-test lint shellcheck rust ci-policy api-contract image-catalog local-image codex-reference
 
 # Validate the versioned host API and all offline contract exchanges
 api-contract:
@@ -31,6 +31,10 @@ image-catalog:
 # Validate bounded Docker archive descriptors without loading an image
 local-image:
     python3 scripts/test_describe_docker_archive.py
+
+# Check native-reference configuration and private paths without running Codex
+codex-reference:
+    python3 scripts/test_codex_reference.py
 
 # Check the generated Nix runtime plan through the real closed Rust loader
 # This explicit evaluator gate strips dependencies only from its read-only copy.

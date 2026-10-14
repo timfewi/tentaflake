@@ -4,8 +4,12 @@
     "checks": ["static"]
   },
   "base-image-catalog": {
-    "paths": ["images/**", "scripts/test_image_catalog.py"],
+    "paths": ["images/catalog.json", "images/catalog.schema.json", "images/evidence/**", "scripts/test_image_catalog.py"],
     "checks": ["static"]
+  },
+  "codex-reference": {
+    "paths": ["images/codex/**", "scripts/test_codex_reference.py"],
+    "checks": ["codex", "static"]
   },
   "local-image": {
     "paths": ["scripts/describe_docker_archive.py", "scripts/test_describe_docker_archive.py"],
@@ -180,6 +184,7 @@
       "worker",
       "rust",
       "devcontainer",
+      "codex",
       "selection",
       "static"
     ]

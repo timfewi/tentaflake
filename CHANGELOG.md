@@ -23,6 +23,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   budget reservation or upstream dispatch, omit session IDs from audit logs,
   and keep arbitrary client headers excluded. Clients still own ID propagation.
 ### Added
+- Experimental native Codex 0.162.1 reference image using the complete pinned
+  upstream package, persistent private state and a capsule-private app-server.
+  The wrapper selects an explicit broker model without writing credentials or
+  replacing user configuration; native runtime/provider acceptance is separate.
 - Experimental aggregate Docker admission for offline Generic workloads, with
   durable host/daemon/supervisor/image intent, exact container-ID binding before
   start, conservative uncertain outcomes and storage retention on stop. Local

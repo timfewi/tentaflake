@@ -149,6 +149,19 @@ module, image contract/helper and storage/OCI VM fixtures. The next step is the
 full remote runtime gate after the predecessor PRs; it must pass before merge.
 External capability collectors and automatic Unknown recovery remain unfinished.
 
+The native Codex reference now pins the official Linux x86_64 `0.162.1` full
+package. This independent branch inherits the verified artifact hash, package
+layout/content checks, image/descriptor builds, seven wrapper regressions and
+36 routing tests from the source integration. Its isolated native smoke passed
+WebSocket/Unix initialization, effective model/provider config and strict
+unknown-field refusal without replacing the config file. The fixture exposed
+only the exact image closure and scratch directories, with test credentials and
+no external network; optional plugin sync attempts were denied. This branch's
+fast gate remains pending. Live Model admission remains a separate feature. The
+operator's Generic definition must request its model grant; the image keeps
+`/state/.codex` and receives the virtual token through the environment. Actual
+admitted capsule, tool/session and provider acceptance remain pending.
+
 The [base-image catalog](20-base-images.md) adds Debian 13 and Ubuntu 26.04 LTS
 platform manifest selection with an offline metadata validator. The 2026-10-13
 registry collection verified 12 raw metadata files (45,878 bytes). Formatting,
