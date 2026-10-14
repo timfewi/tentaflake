@@ -151,6 +151,17 @@ An automatic diagnostics fixture returned an unexplained exit `2`; its retry at
 `32a66e0` and 50 focused parallel repeats passed. The assertions now retain
 bounded, redacted failure context without logging stdout or relaxing outcomes.
 
+The isolated catalog-read slice adds a default-denied installed catalog grant,
+safe template-owned image metadata, empty block inventory and scoped pagination.
+Sessions combine exact installed and durable resource grants without changing
+the private core CAS counter. Focused checks pass 28 ledger API tests and 53 CLI
+API tests, including HTTP/Unix owner pagination through the real HTTPS client;
+all-target Clippy passes. The full fast gate passes 538 Rust tests, four intentional
+helpers ignored, plus static/helper checks. Security passes OSV for both lockfiles
+and scoped Semgrep with no findings. The existing creation VM now covers the
+generated owner/publication path; its evaluation and actual runtime acceptance
+remain pending. Planning and public creation remain `501`.
+
 The isolated operation-read slice implements both GET routes using original
 host/principal ownership and stored timestamps/revisions/results. Pending or
 old-epoch missing keys remain Unknown; the owner rechecks auth/binding before

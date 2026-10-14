@@ -1,6 +1,7 @@
 //! Private HTTP transport for the host-owned management API.
 //! Authentication never grants lifecycle dispatch; admission owns durable state.
 mod capabilities;
+mod catalog;
 mod client;
 mod config;
 mod control;

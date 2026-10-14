@@ -121,6 +121,34 @@ fn claim(ledger: &Ledger) -> CreationPermit<'_> {
 }
 
 #[test]
+fn catalog_authority_cannot_be_issued_or_persisted_by_environment_creation() {
+    let fixture = Fixture::new();
+    let ledger = fixture.ledger_with(inventory(&[]));
+    let grant = ActionGrant {
+        id: "catalog-reader".into(),
+        action: ApiAction::CatalogRead,
+        target: ApiTarget::Catalog {
+            id: "catalog-one".into(),
+        },
+        expires_at: None,
+    };
+    grant.validate().unwrap();
+    let mut wanted = spec("env-a");
+    wanted.grants.push(grant);
+    let before = fs::read(fixture.path().join(STATE)).unwrap();
+    assert!(matches!(
+        ledger.api_queue_create(&api_context(), &mutation(), &wanted, 0, |_, _, _| panic!(
+            "catalog grant must refuse before observation"
+        )),
+        Err(LedgerError::Invalid(_))
+    ));
+    assert_eq!(before, fs::read(fixture.path().join(STATE)).unwrap());
+    let mut wrong = wanted.grants.pop().unwrap();
+    wrong.action = ApiAction::EnvironmentsRead;
+    assert!(wrong.validate().is_err());
+}
+
+#[test]
 fn stopped_creation_uses_native_storage_once_and_stable_resource_revisions() {
     let fixture = Fixture::new();
     let ledger = fixture.ledger_with(inventory(&[]));

@@ -47,7 +47,7 @@ pub(super) fn project(policy: &HostPolicy, revisions: Value) -> Result<Value, Au
         "revisions":revisions,
         // An omitted action is denied. Add actions only with their actual
         // lifecycle implementation; a published declaration supplies no grant.
-        "features":{},
+        "features":{"catalog.read":{"available":true,"state":"available"}},
         "isolation":[
             unavailable("container", "Container", "Dynamic environment dispatch is not implemented; containers share the host kernel."),
             unavailable("guest-kernel", "Separate guest kernel", "The host API has no accepted separate-kernel runtime backend."),
@@ -110,7 +110,10 @@ mod tests {
     fn declaration_exposes_reserve_adjusted_limits_without_granting_features() {
         let value = project(&policy(), json!({"host":"revision"})).unwrap();
         assert_eq!(value["revisions"], json!({"host":"revision"}));
-        assert_eq!(value["features"], json!({}));
+        assert_eq!(
+            value["features"],
+            json!({"catalog.read":{"available":true,"state":"available"}})
+        );
         assert!(value["isolation"].as_array().unwrap().iter().all(
             |item| item["availability"]["available"] == false && item["evidence"] == json!([])
         ));

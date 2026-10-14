@@ -70,6 +70,31 @@ let
   service = frontend.serviceConfig;
   owner = configured.config.systemd.services.tentaflake-api-owner;
   socket = configured.config.systemd.sockets.tentaflake-api-owner;
+  catalogGrant = {
+    id = "fixture-catalog-read";
+    action = "catalog.read";
+    target = {
+      kind = "catalog";
+      id = "fixture-catalog";
+    };
+    expiresAt = null;
+  };
+  catalogEnabled = configured.extendModules {
+    modules = [ { tentaflake.api.catalogReadGrant = catalogGrant; } ];
+  };
+  catalogConfiguration = catalogEnabled.config.tentaflake.api.configuration;
+  catalogDocument = builtins.fromJSON (builtins.unsafeDiscardStringContext catalogConfiguration.text);
+  catalogPlan = builtins.fromJSON (
+    builtins.unsafeDiscardStringContext catalogEnabled.config.tentaflake.admissionManifest.text
+  );
+  refusesCatalogGrant =
+    grant:
+    let
+      fixture = configured.extendModules {
+        modules = [ { tentaflake.api.catalogReadGrant = lib.mkForce grant; } ];
+      };
+    in
+    !(builtins.tryEval fixture.config.tentaflake.api.configuration.text).success;
   refuses =
     fragment: settings:
     let
@@ -88,6 +113,36 @@ assert
     builtins.unsafeDiscardStringContext base.config.tentaflake.admissionManifest.text
   )).apiConfig == null;
 assert plan.apiConfig == toString configuration;
+assert configured.config.tentaflake.api.catalogReadGrant == null;
+assert lib.all (entry: entry.assertion) catalogEnabled.config.assertions;
+assert catalogDocument == document // { catalogReadGrant = catalogGrant; };
+assert toString catalogConfiguration != toString configuration;
+assert catalogPlan.apiConfig == toString catalogConfiguration;
+assert catalogPlan.policy.revision != plan.policy.revision;
+assert lib.all refusesCatalogGrant [
+  (catalogGrant // { id = "invalid:id"; })
+  (catalogGrant // { action = "catalog.import"; })
+  (
+    catalogGrant
+    // {
+      target = {
+        kind = "host";
+        id = "fixture-catalog";
+      };
+    }
+  )
+  (
+    catalogGrant
+    // {
+      target = {
+        kind = "catalog";
+        id = "invalid:id";
+      };
+    }
+  )
+  (catalogGrant // { expiresAt = 1; })
+  (catalogGrant // { principal = "other-owner"; })
+];
 assert
   document == {
     schemaVersion = 1;
@@ -100,6 +155,7 @@ assert
     };
     operatorLogin = true;
     cliBearer = true;
+    catalogReadGrant = null;
   };
 assert
   service.ExecStart == lib.escapeShellArgs [

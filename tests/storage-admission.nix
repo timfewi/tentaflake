@@ -236,7 +236,7 @@ let
         request("GET", "/api/v1/session", 401, extra={"Authorization": "Bearer " + OPERATOR.read_text()})
         capabilities, _ = request("GET", "/api/v1/capabilities", 200, extra=cookie)
         assert capabilities["revisions"] == session["revisions"], "capability authority differs from session"
-        assert capabilities["features"] == {}, "declaration must not enable resource actions"
+        assert capabilities["features"] == {"catalog.read": {"available": True, "state": "available"}}, "catalog transport must not enable resource actions"
         assert all(not option["availability"]["available"] and option["evidence"] == []
                    for option in capabilities["isolation"]), "declaration must not invent runtime acceptance"
         plan = json.loads(pathlib.Path("/etc/tentaflake/admission.json").read_text())

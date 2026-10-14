@@ -2824,6 +2824,7 @@ fn print_help() {
            tentaflake api owner <generated-store-config> <generated-store-plan>\n\
            tentaflake api --origin https://HOST [--bearer-file FILE] [--ca-file FILE] <command>\n\
              meta|session|capabilities|environments [--cursor C --limit N]\n\
+             catalog images|blocks [--cursor C --limit N]\n\
              environment ID|plan FILE|operation ID\n\
              create FILE --epoch E --key UUID\n\
              start|stop ID --epoch E --key UUID --revision R\n\

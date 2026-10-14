@@ -20,7 +20,7 @@ use tentaflake_admission::protected_path::open_at;
 const MAX_RESPONSE: usize = 1024 * 1024;
 const CREDENTIAL_ERROR: &str = "cannot read protected current-user API bearer credential";
 const CA_ERROR: &str = "cannot read a protected valid API CA bundle";
-const USAGE: &str = "usage: tentaflake api --origin https://HOST [--bearer-file FILE] [--ca-file FILE] meta|session|capabilities|environments [--cursor C --limit N]|environment ID|plan FILE|create FILE --epoch E --key UUID|start|stop ID --epoch E --key UUID --revision R|operation ID|recover --epoch E --key UUID --method POST|PUT|PATCH|DELETE --target /api/v1/...";
+const USAGE: &str = "usage: tentaflake api --origin https://HOST [--bearer-file FILE] [--ca-file FILE] meta|session|capabilities|environments|catalog images|blocks [--cursor C --limit N]|environment ID|plan FILE|create FILE --epoch E --key UUID|start|stop ID --epoch E --key UUID --revision R|operation ID|recover --epoch E --key UUID --method POST|PUT|PATCH|DELETE --target /api/v1/...";
 
 struct Command {
     origin: Url,
@@ -141,9 +141,13 @@ impl Command {
             ["meta"] => request.target = "/api/meta".into(),
             ["session"] => request.target = "/api/v1/session".into(),
             ["capabilities"] => request.target = "/api/v1/capabilities".into(),
-            ["environments"] => {
+            ["environments"] | ["catalog", "images" | "blocks"] => {
                 request.response = ResponseKind::List;
-                let mut url = origin.join("/api/v1/environments").map_err(|_| USAGE)?;
+                let target = match positional.as_slice() {
+                    ["catalog", kind] => format!("/api/v1/catalog/{kind}"),
+                    _ => "/api/v1/environments".into(),
+                };
+                let mut url = origin.join(&target).map_err(|_| USAGE)?;
                 if let Some(cursor) = options.remove("--cursor") {
                     if cursor.is_empty()
                         || cursor.len() > 2048
@@ -1208,6 +1212,84 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn catalog_cli_paginates_actual_owner_arrays_over_https_and_keeps_denials() {
+        use crate::api::owner::operation_tests;
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let (api, cookie, _) = operation_tests::catalog_fixture(true);
+        let mut cursor = String::new();
+        let mut ids = Vec::new();
+        for page in 0..2 {
+            let args = if page == 0 {
+                vec!["catalog", "images", "--limit", "1"]
+            } else {
+                vec!["catalog", "images", "--cursor", &cursor, "--limit", "1"]
+            };
+            let command = parse(&args).unwrap();
+            let actual = runtime.block_on(operation_tests::http(
+                api.clone(),
+                &cookie,
+                &command.request.target,
+            ));
+            assert!(actual.starts_with("HTTP/1.1 200"));
+            let (origin, handle) = tls_fixture(Some(actual.into_bytes()));
+            let result = execute(
+                &trusted_client(),
+                &origin,
+                &command.request,
+                None,
+                Some(TOKEN),
+            )
+            .unwrap();
+            let requests = handle.join().unwrap();
+            assert_eq!(requests.len(), 1);
+            assert!(
+                requests[0]
+                    .starts_with(format!("GET {} HTTP/1.1\r\n", command.request.target).as_bytes())
+            );
+            ids.push(result.value[0]["id"].clone());
+            if page == 0 {
+                cursor = result.next_cursor.unwrap();
+            } else {
+                assert!(result.next_cursor.is_none());
+            }
+        }
+        assert_ne!(ids[0], ids[1]);
+        for (enabled, kind, tail, status) in [
+            (true, "blocks", None, 200),
+            (false, "images", None, 403),
+            (true, "images", Some("bad-cursor"), 409),
+        ] {
+            let (api, cookie, _) = operation_tests::catalog_fixture(enabled);
+            let mut args = vec!["catalog", kind];
+            if let Some(cursor) = tail {
+                args.extend(["--cursor", cursor]);
+            }
+            let command = parse(&args).unwrap();
+            let actual =
+                runtime.block_on(operation_tests::http(api, &cookie, &command.request.target));
+            let (origin, handle) = tls_fixture(Some(actual.into_bytes()));
+            let result = execute(
+                &trusted_client(),
+                &origin,
+                &command.request,
+                None,
+                Some(TOKEN),
+            );
+            if status == 200 {
+                assert_eq!(result.unwrap().value, json!([]));
+            } else {
+                assert!(result.unwrap_err().contains(&format!("HTTP {status}")));
+            }
+            assert_eq!(handle.join().unwrap().len(), 1);
+        }
+        assert!(parse(&["catalog", "unknown"]).is_err());
+        assert!(parse(&["catalog", "images", "--limit", "1", "--limit", "2"]).is_err());
     }
 
     #[test]

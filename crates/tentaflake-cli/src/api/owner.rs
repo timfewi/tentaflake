@@ -9,7 +9,7 @@ use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use tentaflake_admission::ledger::api::{ApiContext, ApiLookup};
+use tentaflake_admission::ledger::api::{ActionGrant, ApiContext, ApiLookup};
 use tentaflake_admission::ledger::{Ledger, LedgerError, PublishedAuthority};
 use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::Semaphore;
@@ -31,6 +31,7 @@ struct Current {
     binding: String,
     epoch: String,
     host_policy: tentaflake_admission::HostPolicy,
+    catalog: super::catalog::Catalog,
 }
 
 impl Current {
@@ -43,9 +44,9 @@ impl Current {
         }
     }
 
-    fn revisions(&self) -> Value {
-        json!({"policy":self.policy,"catalog":revision(crate::RUNTIME_CATALOG.as_bytes()),
-            "grants":self.binding,"host":self.epoch})
+    fn revisions(&self, grants: &str) -> Value {
+        json!({"policy":self.policy,"catalog":self.catalog.revision(),
+            "grants":grants,"host":self.epoch})
     }
 }
 
@@ -153,8 +154,48 @@ impl Api {
             epoch: revision(authority.generation.as_bytes()),
             authority,
             binding,
+            catalog: super::catalog::Catalog::project(&plan)?,
             host_policy: plan.policy,
         })
+    }
+
+    fn grants(&self, current: &Current, auth: &Authenticated) -> Result<Vec<Value>, AuthError> {
+        let context = ApiContext {
+            authority: current.authority.clone(),
+            host: self.config.host.clone(),
+            principal: auth.principal_id.clone(),
+            epoch: current.epoch.clone(),
+            now: Clock::now()?.unix_seconds,
+        };
+        super::catalog::grants(
+            self.config.catalog_read_grant.as_ref(),
+            self.durable_grants(&context)?,
+        )
+    }
+
+    fn durable_grants(&self, context: &ApiContext) -> Result<Vec<ActionGrant>, AuthError> {
+        #[cfg(test)]
+        if let Some(fixture) = &self.fixture {
+            return fixture.grants(context);
+        }
+        Ok(Ledger::open(Path::new(crate::admission_runtime::LEDGER))
+            .and_then(|ledger| ledger.api_snapshot(context))
+            .map_err(|_| AuthError::Unavailable)?
+            .grants)
+    }
+
+    fn public_authority(
+        &self,
+        current: &Current,
+        auth: &Authenticated,
+        sessions: &Sessions,
+    ) -> Result<(Vec<Value>, Value), AuthError> {
+        let grants = self.grants(current, auth)?;
+        let fresh = self.current()?;
+        sessions.check_active(auth, fresh.context(&self.config), Clock::now()?)?;
+        let revision =
+            super::catalog::grants_revision(&self.config.host, &auth.principal_id, &grants);
+        Ok((grants, fresh.revisions(&revision)))
     }
 
     fn operation(
@@ -219,7 +260,12 @@ impl Api {
         } else {
             None
         };
-        if request.uri.query().is_some() && operation.is_none() {
+        let catalog = if request.method == Method::GET {
+            super::catalog::parse(path, request.uri.query())?
+        } else {
+            None
+        };
+        if request.uri.query().is_some() && operation.is_none() && catalog.is_none() {
             return Err(AuthError::Invalid);
         }
         if request.method == Method::GET && path == "/api/meta" {
@@ -253,7 +299,7 @@ impl Api {
             // burns that token but must not return an already stale session.
             let fresh = self.current()?;
             sessions.check_active(&login.auth, fresh.context(&self.config), Clock::now()?)?;
-            let mut reply = self.session_reply(&login.auth, &fresh)?;
+            let mut reply = self.session_reply(&login.auth, &fresh, &sessions)?;
             reply.headers_mut().insert(
                 "set-cookie",
                 HeaderValue::from_str(&login.set_cookie).map_err(|_| AuthError::Unavailable)?,
@@ -275,10 +321,29 @@ impl Api {
             sessions.check_active(&auth, fresh.context(&self.config), Clock::now()?)?;
             return operation.reply(outcome?);
         }
+        if let Some(page) = catalog {
+            require_empty(body)?;
+            let grant = self
+                .config
+                .catalog_read_grant
+                .as_ref()
+                .ok_or(AuthError::Forbidden)?;
+            let (_, revisions) = self.public_authority(&current, &auth, &sessions)?;
+            return page.reply(
+                &current.catalog,
+                &json!([
+                    self.config.host,
+                    auth.principal_id,
+                    current.binding,
+                    grant.target,
+                    revisions["grants"]
+                ]),
+            );
+        }
         if path == "/api/v1/session" {
             if request.method == Method::GET {
                 require_empty(body)?;
-                return self.session_reply(&auth, &current);
+                return self.session_reply(&auth, &current, &sessions);
             }
             if request.method == Method::DELETE {
                 require_empty(body)?;
@@ -293,9 +358,10 @@ impl Api {
         }
         if path == "/api/v1/capabilities" && request.method == Method::GET {
             require_empty(body)?;
+            let (_, revisions) = self.public_authority(&current, &auth, &sessions)?;
             return Ok(json_reply(
                 StatusCode::OK,
-                super::capabilities::project(&current.host_policy, current.revisions())?,
+                super::capabilities::project(&current.host_policy, revisions)?,
             ));
         }
         // A valid login is not capability, resource or runtime acceptance.
@@ -303,15 +369,27 @@ impl Api {
         Err(AuthError::Unsupported)
     }
 
-    fn session_reply(&self, auth: &Authenticated, current: &Current) -> Result<Reply, AuthError> {
-        Ok(json_reply(
-            StatusCode::OK,
-            json!({
-                "user":{"id":auth.principal_id,"name":self.config.principal.name},
-                "csrfToken":auth.csrf_token,"expiresAt":timestamp(auth.expires_at)?,
-                "grants":[],"revisions":current.revisions(),"mutationEpoch":current.epoch,
-            }),
-        ))
+    fn session_reply(
+        &self,
+        auth: &Authenticated,
+        current: &Current,
+        sessions: &Sessions,
+    ) -> Result<Reply, AuthError> {
+        let (grants, revisions) = self.public_authority(current, auth, sessions)?;
+        // The wire session is bounded; do not truncate grants or prevent
+        // unrelated receipt reads when this particular response cannot fit.
+        if grants.len() > 256 {
+            return Err(AuthError::Unavailable);
+        }
+        let body = json!({
+            "user":{"id":auth.principal_id,"name":self.config.principal.name},
+            "csrfToken":auth.csrf_token,"expiresAt":timestamp(auth.expires_at)?,
+            "grants":grants,"revisions":revisions,"mutationEpoch":current.epoch,
+        });
+        if body.to_string().len() > super::MAX_BODY {
+            return Err(AuthError::Unavailable);
+        }
+        Ok(json_reply(StatusCode::OK, body))
     }
 }
 
@@ -333,7 +411,7 @@ fn require_empty(body: &[u8]) -> Result<(), AuthError> {
     }
 }
 
-fn revision(value: &[u8]) -> String {
+pub(super) fn revision(value: &[u8]) -> String {
     let mut result = String::from("sha256-");
     use std::fmt::Write;
     for byte in digest::digest(&digest::SHA256, value).as_ref() {

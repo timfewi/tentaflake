@@ -57,20 +57,57 @@ unchanged ancestry. It rejects Nix-store credential paths and equal operator/bea
 contents. Secrets do not appear in service arguments, responses or logs.
 
 The implemented routes are `GET /api/meta`, `GET/POST/DELETE /api/v1/session`,
-authenticated `GET /api/v1/capabilities` and both operation reads described below. Discovery
+authenticated `GET /api/v1/capabilities`, catalog image/block lists and both operation reads described below. Discovery
 reports an implemented backend because this service handles real requests; it
-does not assert that environment features exist. Sessions currently return an
-empty grant list. Capabilities report the installed policy's ceilings after host
+does not assert that environment features exist. Sessions return the configured
+catalog grant, if any, and the current principal's exact durable resource grants.
+Capabilities report the installed policy's ceilings after host
 and Research reserves, bounded by per-instance limits. These are declarations,
 not currently free capacity or live admission. Fractional ceilings that cannot
 fit the integer request protocol report zero. Resource actions remain disabled
 and both isolation choices explicitly lack API runtime acceptance. Other
-authenticated operations, including catalog and environment lists, return
+authenticated operations, including planning and environment lists, return
 `unsupported`; the real UI remains blocked on those
 implementations. Bearer authentication uses its independently configured file;
 cookie logout does not revoke that operator-managed credential.
 Public OIDC negotiation routes also return `unsupported`; no provider or redirect
 flow is enabled.
+
+Catalog reads default to denied. To grant the single configured principal access
+to the exact installed catalog, declare and publish an explicit grant:
+
+```nix
+tentaflake.api.catalogReadGrant = {
+  id = "catalog-reader";
+  action = "catalog.read";
+  target = { kind = "catalog"; id = "installed-catalog"; };
+  expiresAt = null;
+};
+```
+
+This nonexpiring grant belongs to the immutable published API configuration, not
+to an environment or a login. It grants neither planning nor creation. Creation
+template principal lists remain the separate owner of future creation authority.
+The catalog exposes only deduplicated public image metadata from installed
+creation templates, validated against their retained original catalog. Private
+source names, commands, environment, paths and principal lists are never returned.
+An installation without templates returns empty lists. Blocks are currently empty;
+image availability remains unsupported and evidence empty while public creation
+is unavailable. Listing does not pull an image or probe a provider.
+
+`revisions.catalog` hashes the actual public image/block projection;
+`revisions.grants` hashes the canonical effective grants for this host/principal.
+Login consumption and unrelated ledger changes do not alter those revisions.
+The private core grant revision used for creation CAS is unchanged. Sessions
+refuse with `unavailable` when their grant list exceeds 256 entries or the bounded
+response size; they never truncate it. This does not disable receipt reads.
+Catalog lists accept `limit` and opaque `cursor`, return arrays and optionally
+`Next-Cursor`, and expose the quoted catalog revision as `ETag`. Cursors bind to
+the principal, published configuration, effective grants and catalog contents;
+stale or mismatched cursors return `cursor_expired`. The still-installed published
+catalog remains readable during Pending maintenance; an installation/authority
+mismatch fails closed. Configuration publication and service restart revoke old
+sessions as before.
 
 Sessions expire after 15 minutes idle or eight hours absolute and are revoked by
 HTTP service restart/failure, owner restart or a changed authority/configuration
@@ -242,11 +279,13 @@ tentaflake api --origin https://host.example.invalid \
 tentaflake api --origin https://host.example.invalid \
   --bearer-file "$XDG_RUNTIME_DIR/tentaflake/cli-bearer" capabilities
 tentaflake api --origin https://host.example.invalid \
+  --bearer-file "$XDG_RUNTIME_DIR/tentaflake/cli-bearer" catalog images --limit 25
+tentaflake api --origin https://host.example.invalid \
   --ca-file "$XDG_RUNTIME_DIR/tentaflake/ca.pem" \
   --bearer-file "$XDG_RUNTIME_DIR/tentaflake/cli-bearer" operation operation-id
 ```
 
-The client also provides `environments`, `environment ID`, `plan FILE`,
+The client also provides `catalog blocks`, `environments`, `environment ID`, `plan FILE`,
 `create FILE`, `start ID`, `stop ID`, `operation ID` and `recover`. These commands
 use the v1 contract; the current authentication service still refuses the
 unimplemented resource routes. JSON request files preserve their exact bytes.
@@ -255,7 +294,7 @@ and a UUID `--key`; start/stop also require the unquoted `--revision` of the
 environment. The client sends a quoted `If-Match` header itself. It does not
 generate new intent keys after a failure.
 
-Successful JSON goes to stdout. Environment lists remain arrays; a returned
+Successful JSON goes to stdout. Catalog and environment lists remain arrays; a returned
 `Next-Cursor` is JSON-quoted on stderr and can be passed with `--cursor` to obtain
 the next page. `--limit` accepts 1–500. `--json` is accepted; `--hide` is refused
 because API JSON is not a redacted diagnostic format. Remote error messages and

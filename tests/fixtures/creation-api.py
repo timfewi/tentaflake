@@ -20,6 +20,7 @@ def seed():
     ROOT.mkdir(mode=0o700)
     os.umask(0o077)
     (ROOT / "bearer").write_text(secrets.token_hex(32))
+    (ROOT / "operator").write_text(secrets.token_hex(32))
     (ROOT / "unsupported-create.json").write_text('{"planId":"fixture","startAfterCreate":false}')
     commands = [
         ["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-sha256", "-days", "2",
@@ -112,12 +113,15 @@ class Handler(http.server.BaseHTTPRequestHandler):
             connection.close()
 
 
-def request(method, target, body=None):
+def request(method, target, body=None, *, cookie=None, login=False, catalog=False):
     context = ssl.create_default_context(cafile=str(ROOT / "ca.pem"))
     connection = http.client.HTTPSConnection(HOST, PORT, context=context, timeout=15)
     try:
-        token = (ROOT / "bearer").read_text()
-        headers = {"Authorization": "Bearer " + token}
+        headers = {"Origin": ORIGIN}
+        if cookie is not None:
+            headers["Cookie"] = cookie
+        elif not login:
+            headers["Authorization"] = "Bearer " + (ROOT / "bearer").read_text()
         if body is not None:
             headers["Content-Type"] = "application/json"
         connection.request(method, target, body=body, headers=headers)
@@ -125,7 +129,12 @@ def request(method, target, body=None):
         data = reply.read(MAX_RESPONSE + 1)
         assert len(data) <= MAX_RESPONSE
         assert reply.getheader("Cache-Control") == "no-store"
-        return {"status": reply.status, "etag": reply.getheader("ETag"), "body": json.loads(data)}
+        result = {"status": reply.status, "etag": reply.getheader("ETag"), "body": json.loads(data)}
+        if login:
+            result["cookie"] = reply.getheader("Set-Cookie")
+        if catalog:
+            result["nextCursor"] = reply.getheader("Next-Cursor")
+        return result
     finally:
         connection.close()
 
@@ -143,6 +152,27 @@ def main():
     elif sys.argv[1:] == ["unsupported"]:
         response = request("POST", "/api/v1/environments", b'{"planId":"fixture","startAfterCreate":false}')
         assert response["status"] == 501 and response["body"]["error"]["code"] == "unsupported"
+    elif sys.argv[1:] == ["catalog"]:
+        print(json.dumps(request("GET", "/api/v1/catalog/images?limit=1", catalog=True)))
+    elif sys.argv[1:] == ["login"]:
+        payload = json.dumps({"method": "operator-token", "secret": (ROOT / "operator").read_text()}).encode()
+        response = request("POST", "/api/v1/session", payload, login=True)
+        assert response["status"] == 200
+        assert isinstance(response["cookie"], str)
+        parts = response["cookie"].split("; ")
+        assert parts[0].startswith("__Host-tentaflake-session=")
+        assert set(parts[1:]) == {"Secure", "HttpOnly", "SameSite=Strict", "Path=/"}
+        cookie = parts[0]
+        value = cookie.split("=", 1)[1]
+        assert len(value) == 64 and all(char in "0123456789abcdef" for char in value)
+        os.umask(0o077)
+        (ROOT / "cookie").write_text(cookie)
+        assert request("GET", "/api/v1/session", cookie=cookie)["status"] == 200
+    elif sys.argv[1:] in (["cookie-active"], ["cookie-revoked"]):
+        response = request("GET", "/api/v1/session", cookie=(ROOT / "cookie").read_text())
+        assert response["status"] == (200 if sys.argv[1] == "cookie-active" else 401)
+        if sys.argv[1] == "cookie-revoked":
+            assert response["body"]["error"]["code"] in ("unauthenticated", "session_revoked")
     else:
         raise ValueError("unknown creation API fixture phase")
 

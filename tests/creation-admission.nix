@@ -14,6 +14,7 @@
     creation.wait_for_unit("docker.service")
     creation.wait_for_unit("register-nix-paths.service")
     creation_plan = creation.succeed("readlink -f /etc/tentaflake/admission.json").strip()
+    original_creation_plan = creation_plan
     creation_manifest = json.loads(creation.succeed("cat " + shlex.quote(creation_plan)))
     creation_ledger = "/var/lib/tentaflake-admission/ledger.json"
     creation_owners = [volume["units"]["owner"] for volume in creation_manifest["volumes"]]
@@ -97,13 +98,32 @@
         assert creation_fingerprint() == before, "receipt read changed the actual ledger"
         return value
 
+    def creation_api_probe(phase):
+        return creation.succeed(shlex.join(["timeout", "--kill-after=3s", "25s", "python3", api_probe, phase]), timeout=30)
+
+    def creation_catalog_denied():
+        before = creation_fingerprint()
+        for kind in ("images", "blocks"):
+            status, output = creation.execute(creation_api_command(["catalog", kind, "--limit", "1"]) + " 2>&1", timeout=30)
+            assert status == 2 and "HTTP 403, forbidden" in output
+        assert creation_fingerprint() == before
+
     def creation_api_start(seed=False):
         if seed:
             creation.succeed(shlex.join(["timeout", "--kill-after=3s", "100s", "python3", api_probe, "seed"]), timeout=105)
         creation.succeed("systemctl start tentaflake-api.service creation-api-relay.service")
         creation.wait_until_succeeds(creation_api_command(["session"]), timeout=40)
         session = creation_api(["session"])
-        assert session["user"]["id"] == "creation-operator" and session["grants"] == []
+        assert session["user"]["id"] == "creation-operator"
+        expected = [grant for environment in creation_snapshot()["api"]["environments"]
+                    if environment["state"] != "aborted"
+                    and environment["host"] == "creation-fixture"
+                    and environment["spec"]["instance"]["ownerId"] == "creation-operator"
+                    for grant in environment["spec"]["grants"]]
+        configured = json.loads(creation.succeed("cat " + shlex.quote(creation_manifest["apiConfig"])))
+        if configured["catalogReadGrant"] is not None:
+            expected.append(configured["catalogReadGrant"])
+        assert sorted(session["grants"], key=lambda grant: grant["id"]) == sorted(expected, key=lambda grant: grant["id"])
         return session["mutationEpoch"]
 
     def creation_api_stop():
@@ -171,6 +191,7 @@
         creation.fail(creation_api_command(["session"], trust=False), timeout=30)
         assert creation_fingerprint() == before
         creation_api_missing("absent")
+        creation_catalog_denied()
         creation.succeed(shlex.join(["timeout", "--kill-after=3s", "25s", "python3", api_probe, "unsupported"]), timeout=30)
         status, output = creation.execute(creation_api_command(["create", api_root + "/unsupported-create.json", "--epoch", current_epoch,
             "--key", "12345678-1234-4234-8234-123456789abc"]) + " 2>&1", timeout=30)
@@ -361,18 +382,72 @@
             creation_api_read(operation)
         creation_stopped()
 
-    with subtest("publication removes templates without losing historical maintenance or retry receipts"):
+    with subtest("published explicit grant enables only installed catalog reads"):
         system = creation.succeed("readlink -f /run/current-system").strip()
+        catalog_system = creation.succeed("readlink -f " + shlex.quote(system + "/specialisation/with-catalog")).strip()
+        catalog_plan = creation.succeed("readlink -f " + shlex.quote(catalog_system + "/etc/tentaflake/admission.json")).strip()
+        catalog_manifest = json.loads(creation.succeed("cat " + shlex.quote(catalog_plan)))
+        assert catalog_manifest["creationTemplates"] == creation_manifest["creationTemplates"]
+        assert catalog_manifest["apiConfig"] != creation_manifest["apiConfig"]
+        previous_revisions = creation_api(["session"])["revisions"]
+        publication = json.loads(creation.succeed(shlex.join(["tentaflake", "admission", "publication", "begin",
+            catalog_plan, "enable-creation-catalog", str(creation_snapshot()["revision"])])))
+        creation_catalog_denied()
+        creation_api_stop()
+        creation.succeed(shlex.join([catalog_system + "/bin/switch-to-configuration", "test"]), timeout=180)
+        assert creation.succeed("readlink -f /etc/tentaflake/admission.json").strip() == catalog_plan
+        creation.succeed(shlex.join(["tentaflake", "admission", "publication", "finish",
+            "enable-creation-catalog", str(publication["begunRevision"])]))
+        creation_plan = catalog_plan
+        creation_manifest = catalog_manifest
+        creation_nix_evidence(original_creation_plan, creation_plan)
+        creation_api_start()
+        catalog_session = creation_api(["session"])
+        assert catalog_session["revisions"]["grants"] != previous_revisions["grants"]
+        assert catalog_session["revisions"]["catalog"] == previous_revisions["catalog"]
+        images = creation_api(["catalog", "images", "--limit", "1"])
+        assert len(images) == 1
+        image = images[0]
+        template_image = creation_manifest["creationTemplates"]["fixture"]["image"]
+        assert {key: image[key] for key in ("id", "distro", "release", "label", "digest")} == template_image
+        assert set(image) == {"id", "distro", "release", "label", "digest", "availability", "evidence"}
+        assert image["availability"]["available"] is False and image["availability"]["state"] == "unsupported"
+        assert image["evidence"] == []
+        assert creation_api(["catalog", "blocks", "--limit", "1"]) == []
+        # One installed image exercises the actual limit/terminal-page path;
+        # real multi-item/cursor pagination is covered by focused HTTP/CLI tests.
+        before = creation_fingerprint()
+        wire = json.loads(creation_api_probe("catalog"))
+        assert wire == {"status": 200, "etag": '"' + catalog_session["revisions"]["catalog"] + '"',
+                        "body": images, "nextCursor": None}
+        assert creation_fingerprint() == before
+        before_login = creation_snapshot()
+        creation_api_probe("login")
+        after_login = creation_snapshot()
+        assert after_login["revision"] == before_login["revision"] + 1
+        assert len(after_login["operatorLogins"]) == len(before_login["operatorLogins"]) + 1
+        assert after_login["operatorLogins"][:-1] == before_login["operatorLogins"]
+        assert after_login["operatorLogins"][-1]["consumedRevision"] == after_login["revision"]
+        assert {key: value for key, value in after_login.items() if key not in ("revision", "operatorLogins")} == {
+            key: value for key, value in before_login.items() if key not in ("revision", "operatorLogins")}
+        assert creation_api(["session"])["revisions"] == catalog_session["revisions"]
+        assert json.loads(creation_api_probe("catalog")) == wire
+        assert creation_api_read("op-supervised") == supervised_receipt
+        creation_api_probe("cookie-active")
+
+    with subtest("publication removes templates and catalog grant without losing historical receipts"):
         candidate = creation.succeed("readlink -f " + shlex.quote(system + "/specialisation/without-template")).strip()
         candidate_plan = creation.succeed("readlink -f " + shlex.quote(candidate + "/etc/tentaflake/admission.json")).strip()
         candidate_manifest = json.loads(creation.succeed("cat " + shlex.quote(candidate_plan)))
         assert candidate_manifest["creationTemplates"] == {}
-        assert candidate_manifest["apiConfig"] == creation_manifest["apiConfig"]
+        assert candidate_manifest["apiConfig"] != creation_manifest["apiConfig"]
+        creation_api_probe("cookie-active")
         revision = creation_snapshot()["revision"]
         publication = json.loads(creation.succeed(shlex.join(["tentaflake", "admission", "publication", "begin", candidate_plan, "remove-creation-template", str(revision)])))
         creation_api_missing("unknown")
         assert creation_api_read("op-supervised") == supervised_receipt
         assert creation_api_read("op-queued-abort") == aborted_receipt
+        creation_api_probe("cookie-active")
         creation_api_stop()
         creation.succeed(shlex.join([candidate + "/bin/switch-to-configuration", "test"]), timeout=180)
         assert creation.succeed("readlink -f /etc/tentaflake/admission.json").strip() == candidate_plan
@@ -380,8 +455,15 @@
         # template catalog. Activation never starts a source quota owner here.
         creation.succeed(shlex.join(["tentaflake", "admission", "publication", "finish",
             "remove-creation-template", str(publication["begunRevision"])]))
-        creation_nix_evidence(creation_plan, candidate_plan)
+        creation_nix_evidence(original_creation_plan, creation_plan, candidate_plan)
+        creation_plan = candidate_plan
+        creation_manifest = candidate_manifest
         creation_api_start()
+        creation_api_probe("cookie-revoked")
+        creation_catalog_denied()
+        final_session = creation_api(["session"])
+        assert final_session["revisions"]["catalog"] != catalog_session["revisions"]["catalog"]
+        assert final_session["revisions"]["grants"] != catalog_session["revisions"]["grants"]
         creation_api_missing("absent")
         assert creation_api_read("op-supervised") == supervised_receipt
         assert creation_api_read("op-queued-abort") == aborted_receipt

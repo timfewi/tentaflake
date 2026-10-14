@@ -214,6 +214,11 @@ are already published or require access to another repository for public checks.
   original host/principal receipt and stored revisions. Pending/old-epoch missing
   keys remain Unknown; recheck auth/binding after ledger reads. Never serialize
   private authority or supervisor fields. Resource mutations stay unsupported.
+  Catalog reads require the exact installed principal/catalog grant. Project only
+  safe installed-template image metadata; no private source details or inferred
+  creation permission. Public catalog/grant revisions bind their actual content,
+  independently of login consumption and the private core CAS counter. Preserve
+  bounded session refusal and scope-bound pagination without truncating grants.
   The HTTPS client uses protected caller-owned bearer files and the same wire
   contract. Explicit `--ca-file` accepts bounded protected public CA material;
   preserve default trust, certificate/hostname verification and credential rules.

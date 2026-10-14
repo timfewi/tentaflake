@@ -153,6 +153,7 @@ in
         name = "Creation fixture operator";
       };
       cliBearerFile = "/run/tentaflake-creation-api/bearer";
+      operatorTokenFile = "/run/tentaflake-creation-api/operator";
     };
     hostName = "creation-host";
     adminUser = "admin";
@@ -200,6 +201,15 @@ in
   specialisation.without-template.configuration.tentaflake.security.admission.creationTemplates =
     lib.mkForce
       { };
+  specialisation.with-catalog.configuration.tentaflake.api.catalogReadGrant = {
+    id = "creation-catalog-read";
+    action = "catalog.read";
+    target = {
+      kind = "catalog";
+      id = "creation-catalog";
+    };
+    expiresAt = null;
+  };
   assertions = [
     {
       assertion =

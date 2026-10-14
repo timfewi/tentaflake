@@ -64,6 +64,31 @@ in
         description = "Operator display name; no deployment identity is supplied by the template.";
       };
     };
+    catalogReadGrant = lib.mkOption {
+      type = lib.types.nullOr (
+        lib.types.submodule {
+          options = {
+            id = lib.mkOption { type = identity; };
+            action = lib.mkOption { type = lib.types.enum [ "catalog.read" ]; };
+            target = {
+              kind = lib.mkOption { type = lib.types.enum [ "catalog" ]; };
+              id = lib.mkOption { type = identity; };
+            };
+            expiresAt = lib.mkOption {
+              type = lib.types.enum [ null ];
+              default = null;
+            };
+          };
+        }
+      );
+      default = null;
+      description = ''
+        Explicit nonexpiring catalog.read grant for the configured principal and
+        exact catalog identifier. Omitted grants deny catalog access. Publication
+        binds this grant into the installed API configuration; authentication
+        alone grants no catalog or environment authority.
+      '';
+    };
     operatorTokenFile = lib.mkOption {
       type = lib.types.nullOr credentialPath;
       default = null;
@@ -95,6 +120,7 @@ in
               origin
               listen
               principal
+              catalogReadGrant
               ;
             operatorLogin = cfg.operatorTokenFile != null;
             cliBearer = cfg.cliBearerFile != null;

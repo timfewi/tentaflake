@@ -16,9 +16,24 @@ struct State {
     pending: bool,
     unavailable: bool,
     revoke_on_read: bool,
+    grants: Vec<ActionGrant>,
 }
 
 impl Fixture {
+    pub(super) fn grants(&self, context: &ApiContext) -> Result<Vec<ActionGrant>, AuthError> {
+        let mut state = self.state.lock().unwrap();
+        assert_eq!(context.principal, "operator");
+        assert_eq!(context.host, "host-fixture");
+        assert_eq!(context.authority, state.current.authority);
+        if state.unavailable {
+            return Err(AuthError::Unavailable);
+        }
+        let grants = state.grants.clone();
+        if state.revoke_on_read {
+            state.current.binding.push_str("-changed");
+        }
+        Ok(grants)
+    }
     pub(in crate::api) fn reads(&self) -> usize {
         self.state.lock().unwrap().reads
     }
@@ -97,6 +112,7 @@ pub(in crate::api) fn fixture(state: ApiOperationState) -> (Arc<Api>, String, Ar
         binding: "binding-fixture".into(),
         epoch: EPOCH.into(),
         host_policy: serde_json::from_value(recorded["snapshot"]["policy"].clone()).unwrap(),
+        catalog: super::super::catalog::Catalog::default(),
     };
     let claimed = state != ApiOperationState::Queued;
     let operation: ApiOperation = serde_json::from_value(json!({
@@ -123,6 +139,7 @@ pub(in crate::api) fn fixture(state: ApiOperationState) -> (Arc<Api>, String, Ar
             pending: false,
             unavailable: false,
             revoke_on_read: false,
+            grants: vec![],
         }),
     });
     let config: Config = serde_json::from_value(json!({
@@ -160,6 +177,115 @@ pub(in crate::api) async fn http(api: Arc<Api>, cookie: &str, target: &str) -> S
             .into_bytes(),
     )
     .await
+}
+
+pub(in crate::api) fn catalog_fixture(enabled: bool) -> (Arc<Api>, String, Arc<Fixture>) {
+    let (mut api, cookie, backend) = fixture(ApiOperationState::Succeeded);
+    if enabled {
+        Arc::get_mut(&mut api).unwrap().config.catalog_read_grant = Some(serde_json::from_value(json!({
+            "id":"catalog-reader","action":"catalog.read","target":{"kind":"catalog","id":"fixture-catalog"},"expiresAt":null
+        })).unwrap());
+    }
+    backend.state.lock().unwrap().current.catalog = crate::api::catalog::Catalog::fixture();
+    (api, cookie, backend)
+}
+
+#[test]
+fn catalog_http_requires_exact_installed_grant_and_pages_without_leaking_authority() {
+    tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap().block_on(async {
+        let (denied, cookie, backend) = catalog_fixture(false);
+        body(&http(denied, &cookie, "/api/v1/catalog/images").await, 403);
+        assert_eq!(backend.reads(), 0);
+        let (api, cookie, backend) = catalog_fixture(true);
+        let session = body(&http(api.clone(), &cookie, "/api/v1/session").await, 200);
+        assert_eq!(session["grants"], json!([{"id":"catalog-reader","action":"catalog.read","target":{"kind":"catalog","id":"fixture-catalog"},"expiresAt":null}]));
+        let before = serde_json::to_vec(&backend.state.lock().unwrap().operation).unwrap();
+        let first = http(api.clone(), &cookie, "/api/v1/catalog/images?limit=1").await;
+        let page = body(&first, 200);
+        assert_eq!(page.as_array().unwrap().len(), 1);
+        let cursor = first.lines().find_map(|line| line.strip_prefix("next-cursor: ")).unwrap();
+        assert!(first.contains(&format!("etag: \"{}\"\r\n", session["revisions"]["catalog"].as_str().unwrap())));
+        let second = http(api.clone(), &cookie, &format!("/api/v1/catalog/images?cursor={cursor}&limit=1")).await;
+        assert_ne!(body(&second, 200)[0]["id"], page[0]["id"]);
+        assert!(!second.contains("next-cursor:"));
+        assert_eq!(body(&http(api.clone(), &cookie, "/api/v1/catalog/blocks").await, 200), json!([]));
+        for target in [format!("/api/v1/catalog/blocks?cursor={cursor}"), "/api/v1/catalog/images?cursor=unknown".into()] {
+            assert_eq!(body(&http(api.clone(), &cookie, &target).await, 409)["error"]["code"], "cursor_expired");
+        }
+        for target in ["/api/v1/catalog/images?limit=0", "/api/v1/catalog/images?limit=1&limit=2", "/api/v1/catalog/images?principal=other", "/api/v1/catalog/images?cursor=%00"] {
+            body(&http(api.clone(), &cookie, target).await, 400);
+        }
+        for secret in ["private-authority", "private-supervisor", "private-storage", "sourceInstance", "principals", "command", "environmentFile"] {
+            assert!(!first.contains(secret));
+        }
+        // Pending does not revoke the still-installed published catalog.
+        backend.state.lock().unwrap().pending = true;
+        body(&http(api.clone(), &cookie, "/api/v1/catalog/images").await, 200);
+        assert_eq!(before, serde_json::to_vec(&backend.state.lock().unwrap().operation).unwrap());
+        let after = body(&http(api.clone(), &cookie, "/api/v1/session").await, 200);
+        assert_eq!(session["revisions"], after["revisions"]);
+        backend.state.lock().unwrap().revoke_on_read = true;
+        body(&http(api, &cookie, "/api/v1/catalog/images").await, 401);
+    });
+}
+
+#[test]
+fn public_grants_change_content_revision_and_overflow_only_blocks_session_output() {
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap()
+        .block_on(async {
+            let (api, cookie, backend) = catalog_fixture(true);
+            let initial = body(&http(api.clone(), &cookie, "/api/v1/session").await, 200);
+            let page = http(api.clone(), &cookie, "/api/v1/catalog/images?limit=1").await;
+            let cursor = page
+                .lines()
+                .find_map(|line| line.strip_prefix("next-cursor: "))
+                .unwrap();
+            backend.state.lock().unwrap().grants = (0..256)
+                .map(|index| {
+                    serde_json::from_value(json!({
+            "id":format!("environment-reader-{index}"),"action":"environments.read",
+            "target":{"kind":"environment","id":format!("environment-{index}")},"expiresAt":null
+        })).unwrap()
+                })
+                .collect();
+            body(&http(api.clone(), &cookie, "/api/v1/session").await, 503);
+            body(
+                &http(api.clone(), &cookie, "/api/v1/operations/operation-fixture").await,
+                200,
+            );
+            body(
+                &http(api.clone(), &cookie, "/api/v1/catalog/images").await,
+                200,
+            );
+            body(
+                &http(
+                    api.clone(),
+                    &cookie,
+                    &format!("/api/v1/catalog/images?cursor={cursor}"),
+                )
+                .await,
+                409,
+            );
+            backend.state.lock().unwrap().grants.truncate(1);
+            let changed = body(&http(api.clone(), &cookie, "/api/v1/session").await, 200);
+            assert_eq!(changed["grants"].as_array().unwrap().len(), 2);
+            assert_ne!(
+                changed["revisions"]["grants"],
+                initial["revisions"]["grants"]
+            );
+            assert_eq!(
+                changed["revisions"]["catalog"],
+                initial["revisions"]["catalog"]
+            );
+            backend.state.lock().unwrap().grants.clear();
+            assert_eq!(
+                body(&http(api, &cookie, "/api/v1/session").await, 200)["revisions"],
+                initial["revisions"]
+            );
+        });
 }
 
 fn body(reply: &str, status: u16) -> Value {

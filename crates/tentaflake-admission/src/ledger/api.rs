@@ -53,6 +53,8 @@ pub struct ApiContext {
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq, PartialOrd, Ord)]
 pub enum ApiAction {
+    #[serde(rename = "catalog.read")]
+    CatalogRead,
     #[serde(rename = "environments.create")]
     EnvironmentsCreate,
     #[serde(rename = "environments.read")]
@@ -70,6 +72,7 @@ pub enum ApiAction {
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields, tag = "kind", rename_all = "kebab-case")]
 pub enum ApiTarget {
+    Catalog { id: String },
     Host { id: String },
     Environment { id: String },
     Workspace { id: String },
@@ -341,13 +344,20 @@ impl ApiMutation {
 }
 
 impl ActionGrant {
-    fn validate(&self) -> Result<(), LedgerError> {
+    /// Shared shape validation; the caller still owns principal/action authority.
+    pub fn validate(&self) -> Result<(), LedgerError> {
         let target = match &self.target {
-            ApiTarget::Host { id }
+            ApiTarget::Catalog { id }
+            | ApiTarget::Host { id }
             | ApiTarget::Environment { id }
             | ApiTarget::Workspace { id } => id,
         };
-        if !id(&self.id) || !id(target) || self.expires_at == Some(0) {
+        if !id(&self.id)
+            || !id(target)
+            || self.expires_at == Some(0)
+            || (self.action == ApiAction::CatalogRead)
+                != matches!(self.target, ApiTarget::Catalog { .. })
+        {
             return Err(LedgerError::Invalid("API action grant"));
         }
         Ok(())
@@ -413,8 +423,8 @@ impl EnvironmentSpec {
                 ApiAction::WorkspacesRead | ApiAction::WorkspacesRetain => ApiTarget::Workspace {
                     id: self.workspace_id.clone(),
                 },
-                ApiAction::EnvironmentsCreate => {
-                    return Err(LedgerError::Invalid("inherited host creation grant"));
+                ApiAction::EnvironmentsCreate | ApiAction::CatalogRead => {
+                    return Err(LedgerError::Invalid("inherited installed grant"));
                 }
             };
             if grant.expires_at.is_some()

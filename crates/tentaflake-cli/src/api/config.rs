@@ -1,6 +1,7 @@
 use serde::Deserialize;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
+use tentaflake_admission::ledger::api::{ActionGrant, ApiAction, ApiTarget};
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -12,6 +13,8 @@ pub(super) struct Config {
     pub principal: Principal,
     pub operator_login: bool,
     pub cli_bearer: bool,
+    #[serde(default)]
+    pub catalog_read_grant: Option<ActionGrant>,
 }
 
 #[derive(Deserialize)]
@@ -55,6 +58,14 @@ impl Config {
                 "invalid host API identity, loopback listener or authentication settings".into(),
             );
         }
+        if let Some(grant) = &value.catalog_read_grant
+            && (grant.validate().is_err()
+                || grant.action != ApiAction::CatalogRead
+                || !matches!(grant.target, ApiTarget::Catalog { .. })
+                || grant.expires_at.is_some())
+        {
+            return Err("invalid installed catalog read grant".into());
+        }
         Ok(value)
     }
 
@@ -95,6 +106,37 @@ mod tests {
         ] {
             let mut value = valid.clone();
             value[field] = bad;
+            assert!(
+                Config::parse(&serde_json::to_vec(&value).unwrap()).is_err(),
+                "{field}"
+            );
+        }
+    }
+
+    #[test]
+    fn catalog_grant_is_optional_exact_and_cannot_grant_creation() {
+        let mut value = json!({"schemaVersion":1,"host":"host-fixture","origin":"https://host.example.invalid",
+            "listen":"127.0.0.1:8181","principal":{"id":"operator","name":"Operator"},
+            "operatorLogin":true,"cliBearer":false});
+        assert!(
+            Config::parse(&serde_json::to_vec(&value).unwrap())
+                .unwrap()
+                .catalog_read_grant
+                .is_none()
+        );
+        let grant = json!({"id":"catalog-reader","action":"catalog.read","target":{"kind":"catalog","id":"installed-catalog"},"expiresAt":null});
+        value["catalogReadGrant"] = grant.clone();
+        assert!(Config::parse(&serde_json::to_vec(&value).unwrap()).is_ok());
+        for (field, bad) in [
+            ("action", json!("environments.create")),
+            ("target", json!({"kind":"host","id":"host-fixture"})),
+            ("target", json!({"kind":"catalog","id":"*"})),
+            ("expiresAt", json!(1800000000)),
+            ("principal", json!("other")),
+            ("id", json!("")),
+        ] {
+            value["catalogReadGrant"] = grant.clone();
+            value["catalogReadGrant"][field] = bad;
             assert!(
                 Config::parse(&serde_json::to_vec(&value).unwrap()).is_err(),
                 "{field}"

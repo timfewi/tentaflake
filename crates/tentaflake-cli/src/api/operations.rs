@@ -20,7 +20,7 @@ pub(super) enum Read {
 
 /// Decode the outer query exactly once. Invalid escapes/UTF-8 and duplicate
 /// fields are errors; the target's own semantic query is not reinterpreted.
-fn decode(value: &str) -> Result<String, AuthError> {
+pub(super) fn decode(value: &str) -> Result<String, AuthError> {
     let mut bytes = Vec::with_capacity(value.len());
     let mut input = value.bytes();
     while let Some(byte) = input.next() {
