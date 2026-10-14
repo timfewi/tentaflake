@@ -168,8 +168,9 @@ because their Research closure is unavailable. The model fixture now extends
 the existing OCI node; its no-build evaluation and rendered Python compile pass.
 Its explicit local-mock broker package also passes all 40 tests. `just fast`
 passes formatting, lint, workspace Rust and the declared helper/contract checks.
-Parent mount-observation repair `d482fa7` is integrated at `74d6da7`;
-93 focused admission tests and CLI Clippy pass. Next: obtain remote VM evidence.
+Parent mount-inventory repair `674c3b2` is integrated at `cb5f3c8`; pinned formatting,
+CLI all-target Clippy and 94 focused admission tests pass for this merge.
+Next: obtain remote VM evidence.
 Provider/vendor acceptance remains
 separate. Optional workers also need their dispatcher migrated
 into maintenance fencing.
