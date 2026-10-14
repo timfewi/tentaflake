@@ -102,6 +102,112 @@ let
         runtime = runtimes.${name} or null;
       };
     };
+  instances = lib.genAttrs instanceNames instance;
+  baseImages = import ../lib/baseImages.nix { inherit lib; };
+  quotaHelpers = import ../lib/quotaHelpers.nix { inherit pkgs lib; };
+  templateId = lib.types.strMatching "[A-Za-z0-9][A-Za-z0-9_.-]{0,95}";
+  issuedActions = [
+    "environments.read"
+    "workspaces.read"
+    "workspaces.retain"
+  ];
+  creationTemplate =
+    id: entry:
+    let
+      source = instances.${entry.sourceInstance} or null;
+      metadata = config.tentaflake.agentInstances.${entry.sourceInstance} or null;
+      spec = runtimes.${entry.sourceInstance} or null;
+      owned = lib.filter (volume: volume.spec.instanceId == entry.sourceInstance) volumes;
+      image = baseImages.catalog.images.${entry.imageId};
+      platform = image.platforms.${pkgs.stdenv.hostPlatform.system};
+      reference = baseImages.image {
+        id = entry.imageId;
+        system = pkgs.stdenv.hostPlatform.system;
+      };
+      body = {
+        inherit (entry) sourceInstance;
+        sourceRevision = source.revision;
+        inherit reference;
+        image = {
+          id = entry.imageId;
+          inherit (image) distro release label;
+          digest = platform.manifestDigest;
+        };
+        inherit (entry) principals issuedActions;
+        helpers = builtins.listToAttrs (
+          map (
+            volume:
+            lib.nameValuePair volume.spec.kind (
+              lib.mapAttrs (_: toString) (quotaHelpers {
+                name = "template-${id}";
+                inherit (volume.spec) kind ownerUid ownerGid;
+                bytes = volume.spec.bytes;
+                stateDirectories = lib.optionals (volume.spec.kind == "state") metadata.stateDirectories;
+                dynamic = true;
+              })
+            )
+          ) owned
+        );
+      };
+      mib = 1024 * 1024;
+    in
+    assert lib.assertMsg
+      (
+        builtins.match "[A-Za-z0-9][A-Za-z0-9_.-]{0,95}" id != null
+        && source != null
+        && metadata != null
+        && spec != null
+        && metadata.adapter == "generic"
+        && metadata.requestedCapabilities == [ ]
+        && source.isolation == "container"
+        && spec.image.kind == "registry"
+        && spec.image.reference == reference
+        && spec.provenance == null
+        && !spec.container.autoStart
+        && spec.container.dependsOn == [ ]
+        && spec.container.hostname == null
+        && spec.container.networks == [ ]
+        && spec.container.environmentFiles == [ ]
+        && builtins.length owned == 2
+        &&
+          lib.sort builtins.lessThan (map (volume: volume.spec.kind) owned) == [
+            "state"
+            "workspace"
+          ]
+        && builtins.length spec.container.volumes == 2
+        && lib.all (
+          volume:
+          lib.any (
+            mount: lib.hasPrefix "${volume.spec.mountPath}:" mount && lib.hasSuffix ":rw" mount
+          ) spec.container.volumes
+        ) owned
+        && source.resources.nanoCpus >= 1000000000
+        && source.resources.nanoCpus <= 1024000000000
+        && lib.mod source.resources.nanoCpus 1000000000 == 0
+        && lib.all (bytes: bytes >= 128 * mib && bytes <= 1048576 * mib && lib.mod bytes mib == 0) [
+          source.resources.memoryBytes
+          source.resources.workspaceBytes
+        ]
+        && entry.principals != [ ]
+        && builtins.length entry.principals <= 128
+        && lib.unique entry.principals == entry.principals
+        && entry.issuedActions != [ ]
+        && lib.unique entry.issuedActions == entry.issuedActions
+      )
+      "tentaflake creation template ${id} requires an exact reviewed offline Generic source with two quotas and representable fixed resources.";
+    body // { revision = revision body; };
+  creationTemplates = lib.mapAttrs creationTemplate cfg.creationTemplates;
+  templateSignature =
+    template:
+    let
+      resources = instances.${template.sourceInstance}.resources;
+    in
+    builtins.toJSON {
+      image = template.image.id;
+      cpu = resources.nanoCpus;
+      memory = resources.memoryBytes;
+      storage = resources.workspaceBytes;
+    };
   plan = {
     schemaVersion = 3;
     inherit (cfg) physicalSpaceHeadroomBytes;
@@ -124,7 +230,8 @@ let
       };
       grants = [ ];
     };
-    instances = lib.genAttrs instanceNames instance;
+    inherit instances creationTemplates;
+    creationCatalog = if creationTemplates == { } then null else "${../images/catalog.json}";
     inherit volumes runtimes;
     inherit (config.tentaflake.worker.maintenance) workers;
     workerImage = config.tentaflake.worker.maintenance.image;
@@ -138,6 +245,7 @@ let
       blkid = "${pkgs.util-linux}/bin/blkid";
       btrfs = "${pkgs.btrfs-progs}/bin/btrfs";
       docker = "${config.virtualisation.docker.package}/bin/docker";
+      nixStore = "${config.nix.package}/bin/nix-store";
     };
   };
   manifest = plan // {
@@ -159,6 +267,20 @@ in
       type = lib.types.nullOr (
         lib.types.submodule {
           options = {
+            creationTemplates = lib.mkOption {
+              default = { };
+              description = "Explicit private stopped-environment templates; declarations do not enable HTTP creation or authorize helpers.";
+              type = lib.types.attrsOf (
+                lib.types.submodule {
+                  options = {
+                    sourceInstance = lib.mkOption { type = templateId; };
+                    imageId = lib.mkOption { type = lib.types.enum (lib.attrNames baseImages.catalog.images); };
+                    principals = lib.mkOption { type = lib.types.listOf templateId; };
+                    issuedActions = lib.mkOption { type = lib.types.listOf (lib.types.enum issuedActions); };
+                  };
+                }
+              );
+            };
             authorityEpoch = lib.mkOption {
               type = lib.types.strMatching "[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}";
               description = "Durable host authority identity; never rotate it to reset existing claims.";
@@ -198,6 +320,30 @@ in
     };
     assertions =
       lib.optionals (cfg != null) [
+        {
+          assertion =
+            let
+              signatures = map templateSignature (lib.attrValues creationTemplates);
+            in
+            builtins.length signatures <= 128 && lib.unique signatures == signatures;
+          message = "tentaflake creation templates must have unique public configurations and a bounded inventory.";
+        }
+        {
+          assertion =
+            creationTemplates == { }
+            || (
+              lib.all (name: builtins.match "env-[0-9a-f]{32}" name == null) instanceNames
+              && lib.all (
+                volume:
+                let
+                  path = volume.spec.mountPath;
+                  root = "/var/lib/tentaflake-environments";
+                in
+                path != root && !(lib.hasPrefix "${root}/" path) && !(lib.hasPrefix "${path}/" root)
+              ) volumes
+            );
+          message = "tentaflake creation templates reserve their generated slot and mount namespace.";
+        }
         {
           assertion = security.profile == "balanced";
           message = "tentaflake host admission currently requires the balanced container profile.";

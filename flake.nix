@@ -172,6 +172,11 @@
               quotaCreate = tests.quotaHelpers.create;
               quotaVerify = tests.quotaHelpers.verify;
               quotaOwner = tests.quotaHelpers.owner;
+              dynamicCreate = tests.creationTemplateHelpers.create;
+              dynamicVerify = tests.creationTemplateHelpers.verify;
+              dynamicOwner = tests.creationTemplateHelpers.owner;
+              dynamicMount = tests.creationTemplateHelpers.mount;
+              dynamicUnmount = tests.creationTemplateHelpers.unmount;
               deniedStart = pkgs.writeText "generic-admission-refusal" tests.deniedStartScript;
               src = lib.fileset.toSource {
                 root = ./.;
@@ -186,6 +191,7 @@
             ''
               python3 "$src/scripts/runtime-catalog-docs.py" --check --root "$src"
               python3 "$src/scripts/state-quota-test.py" "$quotaCreate" "$quotaVerify" "$quotaOwner"
+              python3 "$src/scripts/state-quota-test.py" --dynamic "$dynamicCreate" "$dynamicVerify" "$dynamicOwner" "$dynamicMount" "$dynamicUnmount"
               status=0
               bash "$deniedStart" > admission.log 2>&1 || status=$?
               test "$status" -eq 1

@@ -32,6 +32,10 @@ pub(crate) struct HostPlan {
     pub worker_image: Option<crate::admission_worker::ImageSpec>,
     #[serde(default)]
     pub api_config: Option<PathBuf>,
+    #[serde(default)]
+    pub creation_templates: BTreeMap<String, crate::admission_template::CreationTemplate>,
+    #[serde(default)]
+    pub creation_catalog: Option<PathBuf>,
     pub tools: Tools,
 }
 
@@ -72,6 +76,8 @@ pub(crate) struct Tools {
     pub blkid: PathBuf,
     pub btrfs: PathBuf,
     pub docker: PathBuf,
+    #[serde(default)]
+    pub nix_store: Option<PathBuf>,
 }
 
 pub(crate) fn store_path(path: &Path) -> bool {
@@ -231,6 +237,15 @@ impl HostPlan {
         {
             return Err("host admission tools must use immutable store paths".into());
         }
+        if self
+            .tools
+            .nix_store
+            .as_ref()
+            .is_some_and(|path| !store_path(path))
+        {
+            return Err("Nix retention tool must be immutable".into());
+        }
+        crate::admission_template::validate_plan(self)?;
         Ok(())
     }
 }

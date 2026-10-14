@@ -160,9 +160,15 @@ are already published or require access to another repository for public checks.
   then binds one supervisor claim before helpers run. Preserve exact scoped
   operation identity, nonexpiring grants and stable resource/grant revisions.
   Native entrypoints cannot bypass dynamic ownership; unresolved work fences
-  publication and keeps both charges. Recovery observes existing stopped images
-  only. Public create remains `501` until helper and queued-abort/absent-allocation
-  recovery integration; see `docs/19-host-api.md` for migration limits.
+  publication and keeps both charges. Operator abort releases only proven-absent
+  slots and preserves tombstones; retained images stay charged. Public create
+  remains `501` until actual helpers and trusted recovery collectors are connected;
+  see `docs/19-host-api.md` for migration limits. Creation templates retain their
+  original catalog and private source details; never validate old authorities
+  against a newer catalog or serialize private template configuration publicly.
+  Bootstrap/publication retain authority closures through official Nix GC-root
+  registration with builds/substitutes disabled. Retention grants no authority;
+  preserve roots after uncertain registration and never replace conflicting entries.
 - CLI help is configuration-free; management commands require generated
   host configuration and inventory.
 - `crates/tentaflake-cli/src/api` and `modules/api.nix` own the optional private

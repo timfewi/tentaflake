@@ -865,6 +865,7 @@ assert rejects
     })
   ]).virtualisation.oci-containers.containers.hermes-mutable.image;
 (import ./agent-state-quota.nix { inherit pkgs eval builders; })
+// (import ./creation-templates.nix { inherit pkgs eval builders; })
 // {
   deniedStartScript = genericMissing.systemd.services.docker-generic-coding.preStart;
   admissionPlan = localGeneric.tentaflake.admissionManifest;

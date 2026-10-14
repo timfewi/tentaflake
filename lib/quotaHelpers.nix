@@ -7,10 +7,55 @@
   ownerUid,
   ownerGid,
   stateDirectories,
-  imagePath,
-  mountPath,
+  imagePath ? null,
+  mountPath ? null,
+  dynamic ? false,
 }:
+assert
+  (dynamic && imagePath == null && mountPath == null)
+  || (!dynamic && imagePath != null && mountPath != null);
+assert
+  !dynamic
+  || (
+    lib.elem kind [
+      "workspace"
+      "state"
+    ]
+    && lib.all (
+      directory:
+      builtins.match "[A-Za-z0-9_-][A-Za-z0-9._/-]*" directory != null
+      && lib.all (part: part != "" && part != "." && part != "..") (lib.splitString "/" directory)
+    ) stateDirectories
+  );
 let
+  slotArguments = lib.optionalString dynamic ''
+    if [ "$#" -lt 1 ] || [[ ! "$1" =~ ^env-[0-9a-f]{32}$ ]]; then
+      echo "tentaflake: invalid dynamic quota slot" >&2
+      exit 1
+    fi
+    slot="$1"
+    shift
+  '';
+  mutatorArguments =
+    slotArguments
+    + lib.optionalString dynamic ''
+      if [ "$#" -ne 0 ]; then
+        echo "tentaflake: invalid dynamic quota arguments" >&2
+        exit 1
+      fi
+    '';
+  imageDirectory =
+    if dynamic then
+      "/var/lib/tentaflake-workspace-volumes" + lib.optionalString (kind == "state") "/state"
+    else
+      builtins.dirOf imagePath;
+  imageArgument = if dynamic then ''"${imageDirectory}/$slot.img"'' else lib.escapeShellArg imagePath;
+  stagingArgument = if dynamic then ''"$image.new"'' else lib.escapeShellArg "${imagePath}.new";
+  targetArgument =
+    if dynamic then
+      ''"/var/lib/tentaflake-environments/$slot/${kind}"''
+    else
+      lib.escapeShellArg mountPath;
   directoryGuard = ''
     check_directory() {
       directory="$1"
@@ -64,14 +109,21 @@ let
 
   target = mountPath;
   directories = map (directory: "${target}/${directory}") stateDirectories;
+  directoryArguments =
+    if dynamic then
+      lib.concatMapStringsSep " " (
+        directory: ''"$workspace"/${lib.escapeShellArg directory}''
+      ) stateDirectories
+    else
+      lib.escapeShellArgs directories;
   preparePrelude =
     directoryGuard
     + imageMountGuard
     + ''
-      image=${lib.escapeShellArg imagePath}
-      image_tmp=${lib.escapeShellArg "${imagePath}.new"}
-      image_directory=${lib.escapeShellArg (builtins.dirOf imagePath)}
-      workspace=${lib.escapeShellArg target}
+      image=${imageArgument}
+      image_tmp=${stagingArgument}
+      image_directory=${lib.escapeShellArg imageDirectory}
+      workspace=${targetArgument}
       expected=${toString bytes}
       check_directory "$workspace"
       check_directory "$image_directory"
@@ -122,7 +174,8 @@ let
     fi
   '';
   verify = writeQuotaHelper "tentaflake-${kind}-quota-verify-${name}" (
-    ''
+    slotArguments
+    + ''
       require_mounted=false
       case "$#:$*" in
         0:) ;;
@@ -179,15 +232,17 @@ let
       fi
     ''
   );
+  verifyCommand = "${verify}" + lib.optionalString dynamic " \"$slot\"";
 in
 {
   inherit verify;
   mount = writeQuotaHelper "tentaflake-${kind}-quota-mount-${name}" (
-    preparePrelude
+    mutatorArguments
+    + preparePrelude
     + ''
-      ${verify}
+      ${verifyCommand}
       if image_mounted_here; then
-        exec ${verify} --mounted
+        exec ${verifyCommand} --mounted
       fi
       if findmnt --noheadings --raw --mountpoint "$workspace" --output TARGET >/dev/null; then
         echo "tentaflake: refusing to replace a different quota mount" >&2
@@ -196,15 +251,16 @@ in
       install -d -m 0700 "$workspace"
       check_directory "$workspace"
       mount --types btrfs --options loop,nodev,nosuid,noatime -- "$image" "$workspace"
-      exec ${verify} --mounted
+      exec ${verifyCommand} --mounted
     ''
   );
   unmount = writeQuotaHelper "tentaflake-${kind}-quota-unmount-${name}" (
-    preparePrelude
+    mutatorArguments
+    + preparePrelude
     + refuseStaging
     + ''
       if image_mounted_here; then
-        ${verify} --mounted
+        ${verifyCommand} --mounted
         umount -- "$workspace"
       elif findmnt --noheadings --raw --mountpoint "$workspace" --output TARGET >/dev/null; then
         echo "tentaflake: refusing to unmount a different quota image" >&2
@@ -217,7 +273,8 @@ in
     ''
   );
   create = writeQuotaHelper "tentaflake-${kind}-quota-create-${name}" (
-    preparePrelude
+    mutatorArguments
+    + preparePrelude
     + refuseStaging
     + ''
       if [ -e "$image" ] || [ -L "$image" ]; then
@@ -244,18 +301,19 @@ in
       sync "$image_directory"
       rm -- "$image_tmp"
       sync "$image_directory"
-      exec ${verify}
+      exec ${verifyCommand}
     ''
   );
   owner = writeQuotaHelper "tentaflake-${kind}-quota-owner-${name}" (
-    directoryGuard
+    mutatorArguments
+    + directoryGuard
     + imageMountGuard
     + ''
-      workspace=${lib.escapeShellArg target}
-      image=${lib.escapeShellArg imagePath}
+      workspace=${targetArgument}
+      image=${imageArgument}
       expected=${toString bytes}
       check_directory "$workspace"
-      for path in ${lib.escapeShellArgs directories}; do
+      for path in ${directoryArguments}; do
         check_directory "$path"
       done
       if ! image_mounted_here; then
@@ -289,10 +347,10 @@ in
     + ''
       ${pkgs.coreutils}/bin/chown ${toString ownerUid}:${toString ownerGid} "$workspace"
       ${pkgs.coreutils}/bin/chmod 0700 "$workspace"
-      ${lib.optionalString (directories != [ ]) ''
+      ${lib.optionalString (stateDirectories != [ ]) ''
         ${pkgs.coreutils}/bin/install -d -m 0700 \
           -o ${toString ownerUid} -g ${toString ownerGid} \
-          ${lib.escapeShellArgs directories}
+          ${directoryArguments}
       ''}
     ''
   );

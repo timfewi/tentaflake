@@ -23,8 +23,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Bound Worker artifact pipes, raw TAR metadata, trailer and client exit under
   one deadline without buffering the archive. Retain dispatch identity on
   uncertain transfer outcomes; fully observed invalid archives remain unavailable.
-- Keep guest Nix's store-mutating registration out of prebuilt, read-only
-  admission VM fixtures, including publication specialisations.
+- Isolate real Nix registration and the daemon in private mount namespaces in
+  read-only admission VM fixtures, with builds/downloads disabled and assertions
+  for retained manifests and the unchanged host-namespace store mount.
 - Pin each worker dispatch to a complete locally resolved image ID with pulls
   disabled, exclude inherited remote runtime settings, and bound ordinary
   runtime responses and log capture before allocation grows without limit.
@@ -48,8 +49,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - Add private ledger transactions for stopped dynamic environments, exact action
   grants and scoped operation recovery, with atomic workspace/state charges and
-  once-only supervisor claims. Partial outcomes retain charges; public creation
-  remains unsupported pending lifecycle and absent-allocation recovery.
+  once-only supervisor claims. Explicit operator abort retains stopped images and
+  releases only proven-absent slots while preserving identities and history.
+  Public creation remains unsupported pending actual lifecycle/recovery collectors.
+- Project opt-in offline creation templates with their original reviewed catalog
+  and shared dynamic quota helpers; private source settings remain host-owned.
+- Retain bootstrap and publication manifests through official Nix GC-root
+  registration before recording their authority; preserve roots after uncertain
+  outcomes and refuse conflicting entries without replacement.
 - Add a private HTTPS API client with protected file-backed bearer credentials,
   exact mutation keys/revisions and explicit operation recovery; requests are
   never automatically retried or redirected.

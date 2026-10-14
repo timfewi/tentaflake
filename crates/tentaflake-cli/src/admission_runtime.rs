@@ -585,7 +585,7 @@ fn allocation_matches(allocation: &StorageAllocation, volume: &Volume) -> bool {
 pub(crate) fn bootstrap(path: &Path) -> Result<u8, String> {
     require_root()?;
     let plan = load_plan(path)?;
-    let _fence = admission_fence::exclusive()?;
+    let fence = admission_fence::exclusive()?;
     installed(path)?;
     match fs::symlink_metadata(LEDGER) {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
@@ -613,6 +613,17 @@ pub(crate) fn bootstrap(path: &Path) -> Result<u8, String> {
     offline_workloads(&plan)?;
     // Only this fenced path may assert completeness. Diagnostic inventory never
     // supplies this flag, and callers cannot submit an inventory JSON file.
+    crate::admission_retention::retain(
+        &authority(&plan, path),
+        plan.tools
+            .nix_store
+            .as_deref()
+            .ok_or("bootstrap requires a plan with the Nix retention tool")?,
+        &fence,
+    )?;
+    installed(path)?;
+    crate::admission_bootstrap::verify(&plan, path)?;
+    offline_workloads(&plan)?;
     inventory.complete = true;
     Ledger::initialize(Path::new(LEDGER), authority(&plan, path), inventory).map_err(
         |_| "cannot initialize admission ledger; preserve any partial state for recovery",

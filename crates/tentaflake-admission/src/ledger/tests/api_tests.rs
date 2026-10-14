@@ -857,3 +857,690 @@ fn request_uuid_case_is_one_identity_and_nil_is_valid_but_boot_identity_stays_st
         }
     }
 }
+
+fn abort_observation(
+    op: &ApiOperation,
+    rows: &[StorageReceipt],
+    states: [CreateAbortStorageState; 2],
+) -> CreateAbortObservation {
+    assert_eq!(rows.len(), 2);
+    CreateAbortObservation {
+        fenced_execution: op.execution.clone(),
+        allocations: std::array::from_fn(|index| CreateAbortStorageObservation {
+            allocation_id: rows[index].allocation.id.clone(),
+            state: states[index],
+        }),
+    }
+}
+
+#[test]
+fn queued_abort_releases_once_revokes_effective_grants_and_preserves_history() {
+    let fixture = Fixture::new();
+    let ledger = fixture.ledger_with(inventory(&[]));
+    let queued = queue(&ledger);
+    let old = ledger.read().unwrap().storage;
+    let aborted = ledger
+        .api_abort_create(
+            &authority("policy-1"),
+            "api-op-1",
+            queued.updated_revision,
+            101,
+            |op, spec, rows| {
+                assert_eq!(op, &queued);
+                assert_eq!(spec.instance.id, "env-a");
+                assert_eq!(rows, old);
+                assert!(matches!(ledger.snapshot(), Err(LedgerError::Busy)));
+                Ok(abort_observation(
+                    op,
+                    rows,
+                    [CreateAbortStorageState::Absent; 2],
+                ))
+            },
+        )
+        .unwrap();
+    assert_eq!(aborted.state, ApiOperationState::Aborted);
+    assert!(aborted.execution.is_none());
+    assert!(aborted.result.is_none());
+    let reopened = fixture.open("ledger").unwrap();
+    assert!(reopened.snapshot().unwrap().storage.is_empty());
+    let state = reopened.read().unwrap();
+    assert_eq!(state.storage.len(), 2);
+    for (before, after) in old.iter().zip(&state.storage) {
+        assert_eq!(before.allocation, after.allocation);
+        assert_eq!(before.request, after.request);
+        assert_eq!(before.claimed_revision, after.claimed_revision);
+        assert_eq!(after.release.as_ref().unwrap().operation_id, "api-op-1");
+    }
+    let visible = reopened.api_snapshot(&api_context()).unwrap();
+    assert!(visible.grants.is_empty());
+    assert!(visible.environments.is_empty());
+    assert!(visible.workspaces.is_empty());
+    assert_eq!(visible.grants_revision, aborted.updated_revision);
+    let history = reopened.api_environments(&authority("policy-1")).unwrap();
+    assert_eq!(history[0].0.state, EnvironmentState::Aborted);
+    assert_eq!(history[0].0.spec.grants, spec("env-a").grants);
+    assert!(matches!(
+        reopened.api_claim_create(
+            &api_context(),
+            "api-op-1",
+            &execution(),
+            |_, _, _, _| panic!("abort is not a permit")
+        ),
+        Ok(CreateClaim::Existing(_))
+    ));
+    assert_eq!(
+        reopened
+            .api_queue_create(
+                &api_context(),
+                &mutation(),
+                &spec("env-a"),
+                0,
+                |_, _, _| panic!("history is not dispatch")
+            )
+            .unwrap(),
+        ApiQueued::Existing(Box::new(aborted.clone()))
+    );
+
+    let request = publication(&reopened, "after-abort", "policy-2");
+    reopened.begin_publication(&request).unwrap();
+    reopened
+        .finish_publication(
+            "after-abort",
+            reopened.snapshot().unwrap().revision,
+            |_, snapshot| {
+                assert!(snapshot.storage.is_empty());
+                installed(&request.candidate)
+            },
+        )
+        .unwrap();
+    reopened
+        .consume_operator_login(&request.candidate, &"c".repeat(64))
+        .unwrap();
+    let before_retry = fs::read(fixture.path().join(STATE)).unwrap();
+    assert_eq!(
+        reopened
+            .api_abort_create(
+                &request.candidate,
+                "api-op-1",
+                queued.updated_revision,
+                200,
+                |_, _, _| panic!("terminal retry must not observe")
+            )
+            .unwrap(),
+        aborted
+    );
+    assert!(matches!(
+        reopened.api_abort_create(
+            &request.candidate,
+            "api-op-1",
+            queued.updated_revision + 1,
+            200,
+            |_, _, _| panic!("changed CAS")
+        ),
+        Err(LedgerError::StaleRevision)
+    ));
+    assert!(matches!(
+        reopened.api_abort_create(
+            &authority("policy-1"),
+            "api-op-1",
+            queued.updated_revision,
+            200,
+            |_, _, _| panic!("stale authority")
+        ),
+        Err(LedgerError::StaleAuthority)
+    ));
+    assert_eq!(fs::read(fixture.path().join(STATE)).unwrap(), before_retry);
+}
+
+#[test]
+fn abort_requires_exact_complete_observation_and_fresh_maintenance_cas() {
+    for unknown in [false, true] {
+        let fixture = Fixture::new();
+        let ledger = fixture.ledger_with(inventory(&[]));
+        queue(&ledger);
+        if unknown {
+            drop(claim(&ledger));
+        }
+        let revision = ledger.snapshot().unwrap().revision;
+        let before = fs::read(fixture.path().join(STATE)).unwrap();
+        for case in 0..7 {
+            let result = ledger.api_abort_create(
+                &authority("policy-1"),
+                "api-op-1",
+                revision,
+                101,
+                |op, _, rows| {
+                    let mut observation =
+                        abort_observation(op, rows, [CreateAbortStorageState::Absent; 2]);
+                    match case {
+                        0 => return Err("staging file or active loop prevents proof".into()),
+                        1 => observation.allocations[0].allocation_id = "foreign".into(),
+                        2 => {
+                            observation.allocations[1].allocation_id =
+                                observation.allocations[0].allocation_id.clone()
+                        }
+                        3 if unknown => {
+                            observation
+                                .fenced_execution
+                                .as_mut()
+                                .unwrap()
+                                .supervisor
+                                .pid += 1
+                        }
+                        3 => observation.fenced_execution = Some(execution()),
+                        4 if unknown => observation.fenced_execution = None,
+                        4 => {
+                            observation.allocations[0].state =
+                                CreateAbortStorageState::PresentStopped
+                        }
+                        5 if unknown => {
+                            observation.fenced_execution.as_mut().unwrap().boot_id =
+                                "00000000-0000-4000-8000-000000000002".into()
+                        }
+                        5 => {
+                            observation.allocations[1].state =
+                                CreateAbortStorageState::PresentStopped
+                        }
+                        _ => {
+                            observation.fenced_execution = Some(execution());
+                            observation
+                                .fenced_execution
+                                .as_mut()
+                                .unwrap()
+                                .supervisor
+                                .invocation_id = "b".repeat(32);
+                        }
+                    }
+                    Ok(observation)
+                },
+            );
+            assert!(
+                matches!(result, Err(LedgerError::Context)),
+                "accepted case {case}, unknown {unknown}"
+            );
+            assert_eq!(fs::read(fixture.path().join(STATE)).unwrap(), before);
+        }
+        assert!(matches!(
+            ledger.api_abort_create(
+                &authority("policy-2"),
+                "api-op-1",
+                revision,
+                101,
+                |_, _, _| panic!("wrong authority")
+            ),
+            Err(LedgerError::StaleAuthority)
+        ));
+        assert!(
+            ledger
+                .api_abort_create(
+                    &authority("policy-1"),
+                    "api-op-1",
+                    revision,
+                    99,
+                    |_, _, _| panic!("backdated evidence")
+                )
+                .is_err()
+        );
+        ledger
+            .consume_operator_login(&authority("policy-1"), &"a".repeat(64))
+            .unwrap();
+        assert!(matches!(
+            ledger.api_abort_create(
+                &authority("policy-1"),
+                "api-op-1",
+                revision,
+                101,
+                |_, _, _| panic!("login changed global CAS")
+            ),
+            Err(LedgerError::StaleRevision)
+        ));
+        assert_eq!(ledger.snapshot().unwrap().storage.len(), 2);
+    }
+}
+
+#[test]
+fn process_death_before_or_between_helpers_can_abort_only_with_fenced_exact_slots() {
+    for phase in ["claim", "partial"] {
+        let fixture = Fixture::new();
+        let ledger = fixture.ledger_with(inventory(&[]));
+        queue(&ledger);
+        let status = Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "ledger::tests::api_tests::crash_entry",
+                "--ignored",
+            ])
+            .env("TENTAFLAKE_API_TEST_ROOT", &fixture.0)
+            .env("TENTAFLAKE_API_CRASH_PHASE", phase)
+            .status()
+            .unwrap();
+        assert!(status.success());
+        let reopened = fixture.open("ledger").unwrap();
+        let revision = reopened.snapshot().unwrap().revision;
+        let aborted = reopened
+            .api_abort_create(
+                &authority("policy-1"),
+                "api-op-1",
+                revision,
+                101,
+                |op, _, rows| {
+                    // The real child has exited and was reaped. These fixtures dispatch
+                    // no daemon work; production proof must additionally fence helpers.
+                    assert_eq!(op.execution, Some(execution()));
+                    assert_eq!(
+                        rows.iter()
+                            .filter(|r| r.allocation.state == StorageState::Present)
+                            .count(),
+                        usize::from(phase == "partial")
+                    );
+                    let states = if phase == "partial" {
+                        [
+                            CreateAbortStorageState::PresentStopped,
+                            CreateAbortStorageState::Absent,
+                        ]
+                    } else {
+                        [CreateAbortStorageState::Absent; 2]
+                    };
+                    Ok(abort_observation(op, rows, states))
+                },
+            )
+            .unwrap();
+        assert_eq!(aborted.execution, Some(execution()));
+        let storage = reopened.snapshot().unwrap().storage;
+        assert_eq!(storage.len(), usize::from(phase == "partial"));
+        assert!(
+            storage
+                .iter()
+                .all(|row| row.state == StorageState::Present && row.bytes == MIN_STORAGE_BYTES)
+        );
+        if phase == "partial" {
+            assert_eq!(
+                fs::read(fixture.0.join("created-workspace")).unwrap(),
+                b"created exactly once"
+            );
+        }
+        assert_eq!(reopened.read().unwrap().storage.len(), 2);
+        assert!(matches!(
+            reopened.api_recover_create(
+                &api_context(),
+                "api-op-1",
+                aborted.updated_revision,
+                |_, _, _| panic!("aborted cannot recreate")
+            ),
+            Err(LedgerError::Conflict)
+        ));
+        let request = publication(&reopened, "after-crash-abort", "policy-2");
+        reopened.begin_publication(&request).unwrap();
+        reopened
+            .finish_publication(
+                "after-crash-abort",
+                reopened.snapshot().unwrap().revision,
+                |_, _| installed(&request.candidate),
+            )
+            .unwrap();
+    }
+}
+
+#[test]
+fn abort_retains_both_observed_images_and_never_aborts_completed_creation() {
+    for (complete, prepared) in [(false, false), (false, true), (true, true)] {
+        let fixture = Fixture::new();
+        let ledger = fixture.ledger_with(inventory(&[]));
+        queue(&ledger);
+        let mut permit = claim(&ledger);
+        if prepared {
+            for kind in [StorageKind::Workspace, StorageKind::State] {
+                permit.provision(kind, |_| Ok(())).unwrap();
+            }
+        }
+        if complete {
+            permit.complete(101).unwrap();
+        } else {
+            drop(permit);
+        }
+        let revision = ledger.snapshot().unwrap().revision;
+        let result = ledger.api_abort_create(
+            &authority("policy-1"),
+            "api-op-1",
+            revision,
+            102,
+            |op, _, rows| {
+                assert!(
+                    !complete,
+                    "completed creation must refuse before observation"
+                );
+                Ok(abort_observation(
+                    op,
+                    rows,
+                    [CreateAbortStorageState::PresentStopped; 2],
+                ))
+            },
+        );
+        if complete {
+            assert!(matches!(result, Err(LedgerError::Conflict)));
+        } else {
+            assert_eq!(result.unwrap().state, ApiOperationState::Aborted);
+            assert!(
+                ledger
+                    .api_snapshot(&api_context())
+                    .unwrap()
+                    .grants
+                    .is_empty()
+            );
+        }
+        let snapshot = ledger.snapshot().unwrap();
+        assert_eq!(snapshot.storage.len(), 2);
+        assert_eq!(
+            snapshot.storage.iter().map(|row| row.bytes).sum::<u64>(),
+            2 * MIN_STORAGE_BYTES
+        );
+        assert!(
+            ledger
+                .read()
+                .unwrap()
+                .storage
+                .iter()
+                .all(|row| row.release.is_none())
+        );
+    }
+}
+
+#[test]
+fn abort_write_failure_commits_neither_release_nor_grant_revocation() {
+    for unknown in [false, true] {
+        let fixture = Fixture::new();
+        let ledger = fixture.ledger_with(inventory(&[]));
+        queue(&ledger);
+        if unknown {
+            drop(claim(&ledger));
+        }
+        let revision = ledger.snapshot().unwrap().revision;
+        let before = fs::read(fixture.path().join(STATE)).unwrap();
+        fs::create_dir(fixture.path().join(STAGING)).unwrap();
+        assert!(matches!(
+            ledger.api_abort_create(
+                &authority("policy-1"),
+                "api-op-1",
+                revision,
+                101,
+                |op, _, rows| Ok(abort_observation(
+                    op,
+                    rows,
+                    [CreateAbortStorageState::Absent; 2]
+                ))
+            ),
+            Err(LedgerError::Io(_))
+        ));
+        assert_eq!(fs::read(fixture.path().join(STATE)).unwrap(), before);
+        let reopened = fixture.open("ledger").unwrap();
+        assert_eq!(reopened.snapshot().unwrap().storage.len(), 2);
+        assert_eq!(
+            reopened.api_snapshot(&api_context()).unwrap().grants.len(),
+            2
+        );
+        assert!(matches!(
+            reopened.begin_publication(&publication(&reopened, "still-blocked", "policy-2")),
+            Err(LedgerError::NotQuiescent)
+        ));
+        fs::remove_dir(fixture.path().join(STAGING)).unwrap();
+        reopened
+            .api_abort_create(
+                &authority("policy-1"),
+                "api-op-1",
+                revision,
+                102,
+                |op, _, rows| {
+                    Ok(abort_observation(
+                        op,
+                        rows,
+                        [CreateAbortStorageState::Absent; 2],
+                    ))
+                },
+            )
+            .unwrap();
+        assert!(reopened.snapshot().unwrap().storage.is_empty());
+    }
+}
+
+#[test]
+fn released_capacity_is_reusable_but_retired_ids_and_native_entrypoints_are_not() {
+    let fixture = Fixture::new();
+    let ledger = fixture.ledger_with(inventory(&[]));
+    let queued = queue(&ledger);
+    let aborted = ledger
+        .api_abort_create(
+            &authority("policy-1"),
+            "api-op-1",
+            queued.updated_revision,
+            101,
+            |op, _, rows| {
+                Ok(abort_observation(
+                    op,
+                    rows,
+                    [CreateAbortStorageState::Absent; 2],
+                ))
+            },
+        )
+        .unwrap();
+    let (_, mut native) = context("env-a", aborted.updated_revision);
+    native.operation_id = "native-bypass".into();
+    assert!(matches!(
+        ledger.claim(&native, |_| panic!("retired instance")),
+        Err(LedgerError::Conflict)
+    ));
+    assert!(matches!(
+        ledger.reconcile("native-bypass", aborted.updated_revision, |_| panic!(
+            "retired runtime"
+        )),
+        Err(LedgerError::Conflict)
+    ));
+    for slot in &spec("env-a").instance.storage {
+        let request = StorageRequest {
+            request: native.clone(),
+            allocation_id: slot.id.clone(),
+        };
+        assert!(matches!(
+            ledger.reserve_storage(&request, |_| panic!("retired slot")),
+            Err(LedgerError::Conflict)
+        ));
+        assert!(matches!(
+            ledger.with_present_storage(
+                &authority("policy-1"),
+                &request,
+                |_| panic!("retired policy"),
+                |_| -> Result<(), String> { panic!("retired mutation") }
+            ),
+            Err(LedgerError::Conflict)
+        ));
+        assert!(matches!(
+            ledger.reconcile_storage(&slot.id, aborted.updated_revision, |_| panic!(
+                "retired reconcile"
+            )),
+            Err(LedgerError::Conflict)
+        ));
+    }
+    let mut next = mutation();
+    next.operation_id = "api-op-2".into();
+    next.key.key = "00000000-0000-4000-8000-000000000002".into();
+    assert!(matches!(
+        ledger.api_queue_create(
+            &api_context(),
+            &next,
+            &spec("env-a"),
+            aborted.updated_revision,
+            |_, _, _| panic!("retired IDs cannot be reused")
+        ),
+        Err(LedgerError::Conflict)
+    ));
+    let mut borrowed = spec("env-b");
+    borrowed.instance.storage[0].id = spec("env-a").instance.storage[0].id.clone();
+    assert!(
+        ledger
+            .api_queue_create(
+                &api_context(),
+                &next,
+                &borrowed,
+                aborted.updated_revision,
+                |_, _, _| panic!("retired allocation cannot be rebound")
+            )
+            .is_err()
+    );
+    assert!(matches!(
+        ledger.api_queue_create(
+            &api_context(),
+            &next,
+            &spec("env-b"),
+            aborted.updated_revision,
+            |_, snapshot, spec| {
+                assert!(snapshot.storage.is_empty());
+                let mut policy = policy(spec);
+                policy.policy.capacity.workspace_bytes = MIN_STORAGE_BYTES;
+                policy.policy.capacity.state_bytes = MIN_STORAGE_BYTES;
+                Ok(policy)
+            }
+        ),
+        Ok(ApiQueued::New(_))
+    ));
+    assert_eq!(ledger.snapshot().unwrap().storage.len(), 2);
+    assert_eq!(ledger.read().unwrap().storage.len(), 4);
+}
+
+#[test]
+fn release_tombstone_forgery_and_inconsistent_abort_history_are_rejected() {
+    let fixture = Fixture::new();
+    let ledger = fixture.ledger_with(inventory(&[]));
+    let queued = queue(&ledger);
+    ledger
+        .api_abort_create(
+            &authority("policy-1"),
+            "api-op-1",
+            queued.updated_revision,
+            101,
+            |op, _, rows| {
+                Ok(abort_observation(
+                    op,
+                    rows,
+                    [CreateAbortStorageState::Absent; 2],
+                ))
+            },
+        )
+        .unwrap();
+    let path = fixture.path().join(STATE);
+    let original: serde_json::Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    for case in 0..12 {
+        let mut bad = original.clone();
+        match case {
+            0 => bad["storage"][0]["release"]["operationId"] = "foreign".into(),
+            1 => bad["storage"][0]["release"]["releasedRevision"] = 1.into(),
+            2 => bad["storage"][0]["release"] = serde_json::Value::Null,
+            3 => bad["api"]["operations"][0]["abort"] = serde_json::Value::Null,
+            4 => bad["api"]["operations"][0]["state"] = "queued".into(),
+            5 => bad["api"]["operations"][0]["abort"]["expectedLedgerRevision"] = 999.into(),
+            6 => bad["api"]["environments"][0]["state"] = "stopped".into(),
+            7 => bad["api"]["grantsRevision"] = queued.updated_revision.into(),
+            8 => {
+                bad["storage"][1]["updatedRevision"] = bad["storage"][0]["updatedRevision"].clone();
+                bad["storage"][1]["release"]["releasedRevision"] =
+                    bad["storage"][0]["release"]["releasedRevision"].clone();
+            }
+            9 => {
+                let mut row = bad["storage"][0].clone();
+                row["allocation"]["id"] = "orphan".into();
+                row["allocation"]["binding"] = serde_json::Value::Null;
+                row["request"] = serde_json::Value::Null;
+                row["claimedRevision"] = 1.into();
+                bad["storage"].as_array_mut().unwrap().push(row);
+            }
+            10 => {
+                bad["api"]["operations"][0]["result"] = serde_json::json!({"environmentId":"env-a","environmentRevision":7,"workspaceId":"workspace-id-env-a","workspaceRevision":7})
+            }
+            _ => bad["storage"][0]["allocation"]["bytes"] = (MIN_STORAGE_BYTES * 2).into(),
+        }
+        fs::write(&path, serde_json::to_vec(&bad).unwrap()).unwrap();
+        assert!(
+            fixture.open("ledger").is_err(),
+            "accepted forged abort case {case}"
+        );
+    }
+}
+
+#[test]
+fn old_v3_creation_rows_without_abort_or_release_fields_remain_charged() {
+    let fixture = Fixture::new();
+    let ledger = fixture.ledger_with(inventory(&[]));
+    queue(&ledger);
+    let path = fixture.path().join(STATE);
+    let mut old: serde_json::Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    old["api"]["operations"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("abort");
+    for row in old["storage"].as_array_mut().unwrap() {
+        row.as_object_mut().unwrap().remove("release");
+    }
+    fs::write(path, serde_json::to_vec(&old).unwrap()).unwrap();
+    let reopened = fixture.open("ledger").unwrap();
+    assert_eq!(reopened.snapshot().unwrap().storage.len(), 2);
+    assert!(
+        reopened
+            .read()
+            .unwrap()
+            .storage
+            .iter()
+            .all(|row| row.release.is_none())
+    );
+    assert!(matches!(
+        reopened.begin_publication(&publication(&reopened, "blocked-legacy-create", "policy-2")),
+        Err(LedgerError::NotQuiescent)
+    ));
+}
+
+#[test]
+fn release_cannot_alias_an_unrelated_native_row_revision() {
+    let fixture = Fixture::new();
+    let ledger = fixture.ledger_with(inventory(&["orphan"]));
+    let queued = match ledger
+        .api_queue_create(
+            &api_context(),
+            &mutation(),
+            &spec("env-a"),
+            0,
+            |_, _, spec| {
+                let mut policy = policy(spec);
+                policy.policy.capacity.workspace_bytes *= 4;
+                policy.policy.capacity.state_bytes *= 4;
+                Ok(policy)
+            },
+        )
+        .unwrap()
+    {
+        ApiQueued::New(op) => op,
+        _ => panic!("new operation"),
+    };
+    ledger
+        .api_abort_create(
+            &authority("policy-1"),
+            "api-op-1",
+            queued.updated_revision,
+            101,
+            |op, _, rows| {
+                Ok(abort_observation(
+                    op,
+                    rows,
+                    [CreateAbortStorageState::Absent; 2],
+                ))
+            },
+        )
+        .unwrap();
+    let path = fixture.path().join(STATE);
+    let mut value: serde_json::Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    let release_revision = value["storage"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find_map(|row| row["release"]["releasedRevision"].as_u64())
+        .unwrap();
+    value["storage"][0]["updatedRevision"] = release_revision.into();
+    fs::write(path, serde_json::to_vec(&value).unwrap()).unwrap();
+    assert!(fixture.open("ledger").is_err());
+}

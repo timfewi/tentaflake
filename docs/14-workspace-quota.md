@@ -182,6 +182,17 @@ and records verified exact declared Btrfs images as Present. Other images remain
 Unknown and charged. It never stops foreign workloads or converts images.
 Do not delete a ledger or change its authority epoch to retry bootstrap.
 
+Before recording its first authority, bootstrap retains the immutable plan and
+its referenced catalog, tools and helpers through Nix's GC-root registration.
+Publication begin retains both original and candidate plans before recording
+Pending. The declared `nix-store` tool uses the local daemon with downloads and
+builds disabled; failed or uncertain registration refuses the ledger change and
+preserves any root already created. Roots live under the root-owned mode-0700
+`/nix/var/nix/gcroots/tentaflake` directory. Conflicting entries are refused,
+never replaced. No command removes these roots or retroactively roots older
+historical receipts. Preserve existing generations needed to recover old history;
+automatic pruning is not implemented.
+
 Start the generated quota service through systemd. Internal `volume-start` and
 `volume-stop` commands require its exact current invocation, executable, command
 arguments, PID, cgroup, cleanup policy and host mount namespace. An exclusive

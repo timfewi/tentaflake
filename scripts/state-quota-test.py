@@ -18,6 +18,7 @@ def run(
     expected: str | None = None,
     evidence: str | None = None,
     foreign_owner: Path | None = None,
+    arguments: tuple[str, ...] = (),
 ) -> None:
     """Require success, or refusal containing the supplied diagnostic."""
     tools = root.parent / "queries"
@@ -83,7 +84,7 @@ def run(
             relocated, f"exec {helpers['verify']}", f"exec {shlex.quote(str(verify))}"
         )
     result = subprocess.run(
-        ["bash", "-eu", "-c", relocated], capture_output=True, text=True, timeout=15
+        ["bash", "-eu", "-c", relocated, "quota-helper", *arguments], capture_output=True, text=True, timeout=15
     )
     if expected is None:
         assert result.returncode == 0, result.stderr
@@ -171,7 +172,7 @@ def check(helpers: dict[str, Path], kind: str, case: str, expected: str) -> None
             assert image.stat().st_size == (128 * 1024 * 1024 if case in {"wrong-format", "existing-image", "final-and-staging"} else 1024)
 
 
-def check_create_and_readonly_verify(helpers: dict[str, Path]) -> None:
+def check_create_and_readonly_verify(helpers: dict[str, Path], slot: str | None = None) -> None:
     with tempfile.TemporaryDirectory(prefix="tentaflake-quota-create-") as temporary:
         root = Path(temporary) / "host"
         root.mkdir(mode=0o700)
@@ -181,8 +182,9 @@ def check_create_and_readonly_verify(helpers: dict[str, Path]) -> None:
         marker.write_bytes(b"preserve unrelated data\n")
         before_other = (other.stat().st_mode, other.stat().st_mtime_ns)
         before_marker = (marker.stat().st_mode, marker.stat().st_mtime_ns, marker.read_bytes())
-        source = root / "var/lib/generic-quota/state"
-        image = root / "var/lib/tentaflake-workspace-volumes/state/generic-quota.img"
+        source = root / (f"var/lib/tentaflake-environments/{slot}/state" if slot else "var/lib/generic-quota/state")
+        image = root / f"var/lib/tentaflake-workspace-volumes/state/{slot or 'generic-quota'}.img"
+        arguments = (slot,) if slot else ()
         staging = image.with_suffix(".img.new")
         expected_bytes = 128 * 1024 * 1024
 
@@ -213,7 +215,7 @@ def check_create_and_readonly_verify(helpers: dict[str, Path]) -> None:
 
         # No command substitution for mkfs, blkid, Btrfs check, sync or size:
         # create also executes its actual relocated verification helper.
-        run(helpers, "create", root)
+        run(helpers, "create", root, arguments=arguments)
         assert source.is_dir() and list(source.iterdir()) == []
         assert not staging.exists() and not staging.is_symlink()
         created = fingerprint()
@@ -221,16 +223,46 @@ def check_create_and_readonly_verify(helpers: dict[str, Path]) -> None:
             if missing_mount_directory:
                 source.rmdir()
             paths_before = set(root.rglob("*"))
-            run(helpers, "verify", root)
+            run(helpers, "verify", root, arguments=arguments)
             assert fingerprint() == created, "readonly verification changed the image"
             assert set(root.rglob("*")) == paths_before, "verification changed paths"
             assert source.exists() != missing_mount_directory
             assert not staging.exists() and not staging.is_symlink()
+        if slot:
+            sibling = "env-" + "b" * 32
+            run(helpers, "verify", root, "state image is missing", arguments=(sibling,))
+            assert fingerprint() == created, "another slot changed the existing image"
+            assert not image.with_name(f"{sibling}.img").exists()
         assert (other.stat().st_mode, other.stat().st_mtime_ns) == before_other
         assert (marker.stat().st_mode, marker.stat().st_mtime_ns, marker.read_bytes()) == before_marker
 
 
+def check_dynamic(helpers: dict[str, Path]) -> None:
+    slot = "env-" + "a" * 32
+    invalid = [(), ("",), ("env-" + "a" * 31,), ("env-" + "A" * 32,),
+               ("../escape",), (slot + "/child",), (slot + "\n",)]
+    with tempfile.TemporaryDirectory(prefix="tentaflake-quota-arguments-") as temporary:
+        root = Path(temporary) / "host"
+        root.mkdir(mode=0o700)
+        for action in helpers:
+            for arguments in invalid:
+                run(helpers, action, root, "invalid dynamic quota slot", arguments=arguments)
+                assert list(root.iterdir()) == [], "invalid slot touched the filesystem"
+            for arguments in [(slot, "unexpected"), (slot, "--mounted", "--mounted")]:
+                expected = "invalid quota verification arguments" if action == "verify" else "invalid dynamic quota arguments"
+                run(helpers, action, root, expected, arguments=arguments)
+                assert list(root.iterdir()) == [], "invalid arguments touched the filesystem"
+        run(helpers, "verify", root, "state image is missing", arguments=(slot, "--mounted"))
+        assert list(root.iterdir()) == [], "readonly verification created paths"
+    check_create_and_readonly_verify(helpers, slot)
+    print("45 dynamic quota argument refusals, mounted verification refusal and real create/readonly/slot-isolation checks passed")
+
+
 def main() -> None:
+    if sys.argv[1:2] == ["--dynamic"]:
+        helpers = dict(zip(["create", "verify", "owner", "mount", "unmount"], map(Path, sys.argv[2:]), strict=True))
+        check_dynamic(helpers)
+        return
     helpers = dict(zip(["create", "verify", "owner"], map(Path, sys.argv[1:]), strict=True))
     cases = [
         ("create", "source-link", "refusing symlink"),

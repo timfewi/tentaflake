@@ -1,7 +1,7 @@
 ---
 name: tentaflake-repo-guidance
 description: Locate the owning source, guide and checks before changing Tentaflake modules, adapters, CLI or installer.
-version: 2.6.11
+version: 2.6.12
 ---
 
 # Tentaflake repository guidance
@@ -23,6 +23,7 @@ relevant source and guide. Avoid loading unrelated references.
 | Host API contract | `api/v1/openapi.json`, fixtures, `scripts/test_api_contract.py` | [Host API](../../../docs/19-host-api.md) |
 | Private API service and client | `crates/tentaflake-cli/src/api/`, `modules/api.nix` | [Host API](../../../docs/19-host-api.md) |
 | Dynamic environment ledger transactions | `crates/tentaflake-admission/src/ledger/api.rs` | [Host API](../../../docs/19-host-api.md#private-ledger-foundation) |
+| Creation templates and authority retention | CLI `admission_template.rs`, `admission_retention.rs`, `modules/admission.nix` | [Host API](../../../docs/19-host-api.md), [Quota](../../../docs/14-workspace-quota.md) |
 | Offline execution | `modules/worker.nix`, `crates/tentaflake-worker/` | [Worker](../../../docs/13-disposable-worker.md) |
 | Workspace/state limits | `modules/workspace-quota.nix`, `lib/quotaHelpers.nix`, adapter metadata, `modules/backup.nix` | [Quota](../../../docs/14-workspace-quota.md) |
 | Containment and provenance | `lib/containerSecurity.nix`, `lib/pinnedImage.nix`, `modules/image-provenance.nix` | [Security](../../../docs/10-security-profiles.md) |
@@ -56,6 +57,11 @@ relevant source and guide. Avoid loading unrelated references.
   check, not an extent reservation. Publication begin requires stopped workloads
   and certain retained claims; finish/cancel inspect both plans' mutators under
   the fence. Keep installation explicit and terminal retries historical.
+  Retain immutable plans through official Nix GC-root registration before their
+  first durable reference; root strings and open files alone do not prevent GC.
+  Preserve Nix dependency contexts and validate retained plans against their
+  original catalog. Fixture daemons must support real registration without
+  remounting the shared store in PID 1's mount namespace.
   OCI gating and automatic installation remain unfinished.
 - Base images select reviewed platform manifests, separate from native presets.
   Preserve raw metadata bytes and run `just image-catalog`. Acquisition is separate

@@ -416,6 +416,49 @@ pub(crate) fn validate_runtime(
     Ok(())
 }
 
+/// Restrict an installed source to the exact offline configuration supported by
+/// stopped creation. Identity/path rebinding happens separately; no dependencies
+/// or additional source mounts may be inherited by a new environment.
+pub(crate) fn validate_template_source(plan: &HostPlan, id: &str) -> Result<(), String> {
+    let spec = plan
+        .runtimes
+        .get(id)
+        .ok_or("creation source has no runtime")?;
+    validate_runtime(plan, id, spec)?;
+    let instance = &plan.instances[id];
+    let container = &spec.container;
+    let volumes: Vec<_> = plan
+        .volumes
+        .iter()
+        .filter(|v| v.spec.instance_id == id)
+        .collect();
+    if !instance.requested_capabilities.is_empty()
+        || spec.provenance.is_some()
+        || container.auto_start
+        || container.hostname.is_some()
+        || !container.depends_on.is_empty()
+        || !container.environment_files.is_empty()
+        || !container.networks.is_empty()
+        || volumes.len() != 2
+        || container.volumes.len() != 2
+        || !volumes.iter().all(|volume| {
+            let destination = match volume.spec.kind {
+                tentaflake_admission::StorageKind::State => "/state",
+                tentaflake_admission::StorageKind::Workspace => {
+                    container.workdir.as_deref().unwrap_or("")
+                }
+            };
+            container.volumes.contains(&format!(
+                "{}:{destination}:rw",
+                volume.spec.mount_path.display()
+            ))
+        })
+    {
+        return Err("unsupported creation source configuration".into());
+    }
+    Ok(())
+}
+
 fn docker(plan: &HostPlan) -> Command {
     let mut command = Command::new(&plan.tools.docker);
     command
@@ -1524,7 +1567,7 @@ fn stop_runtime(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use serde_json::json;
     use tentaflake_admission::ledger::RuntimeDispatch;
@@ -1619,6 +1662,52 @@ mod tests {
             "State":{"Running":false,"Paused":false,"Restarting":false,"Dead":false,"Status":"created"}
         });
         (plan, spec, receipt, image_config, observed)
+    }
+
+    pub(crate) fn template_plan_fixture() -> HostPlan {
+        let (mut plan, mut spec, _, _, _) = fixture();
+        plan.instances
+            .get_mut("agent-fixture")
+            .unwrap()
+            .resources
+            .nano_cpus = 1_000_000_000;
+        let cpus = spec
+            .container
+            .extra_options
+            .iter_mut()
+            .find(|option| option.starts_with("--cpus="))
+            .unwrap();
+        *cpus = "--cpus=1".into();
+        spec.image = RuntimeImage::Registry {
+            reference: format!("docker.io/library/debian@sha256:{}", "a".repeat(64)),
+        };
+        spec.container
+            .volumes
+            .iter_mut()
+            .for_each(|mount| mount.push_str(":rw"));
+        plan.runtimes.insert("agent-fixture".into(), spec);
+        plan
+    }
+
+    #[test]
+    fn templates_refuse_source_dependencies_and_extra_mounts() {
+        let plan = template_plan_fixture();
+        validate_template_source(&plan, "agent-fixture").unwrap();
+        for case in 0..5 {
+            let mut plan = template_plan_fixture();
+            let spec = plan.runtimes.get_mut("agent-fixture").unwrap();
+            match case {
+                0 => spec.container.depends_on.push("source-seed".into()),
+                1 => spec.container.auto_start = true,
+                2 => spec.container.hostname = Some("private-source".into()),
+                3 => spec
+                    .container
+                    .volumes
+                    .push("/nix/store/private:/private:ro".into()),
+                _ => spec.container.volumes[0] = "/var/lib/foreign:/workspace:rw".into(),
+            }
+            assert!(validate_template_source(&plan, "agent-fixture").is_err());
+        }
     }
 
     #[test]

@@ -40,8 +40,11 @@ Current integration work:
   normal shutdown. Run `38520514416` then exposed a quota-owner start-limit after
   repeated intentional refusals. Commit `4156c23` proves fresh CLI refusals and
   clears only those counters after stopped/no-job evidence. Focused lint,
-  no-build rendering and helper replay pass. Replacement run `38524860586` is
-  pending; runtime and previously unreached Research VM evidence remain required.
+  no-build rendering and helper replay pass. Replacement run `38524860586`
+  passed the original VM and all storage/publication assertions, then timed out
+  during storage-VM shutdown: the early store unmount removed the shutdown
+  executable. A narrow fixture correction is being prepared; OCI/crash and
+  Research VM evidence remain outstanding.
 - **Model/Research integration:** PR #167 and the upstream Research readiness
   work still need their relevant runtime gates and final public pin integration.
   Exact requested capabilities and live evidence remain prerequisites; neither
@@ -78,17 +81,24 @@ Current integration work:
 exact nonexpiring grants and stopped creation: both native volume charges are
 atomic, only a new exact supervisor claim permits helpers, and partial outcomes
 retain charges. Native entrypoints refuse unlinked dynamic identities; publication
-fences unresolved work. `just fast` passes **400 Rust tests** plus the static and
-helper gates; the actual Nix CLI package passes **295 tests**, including all 117
-admission tests. Three intentional subprocess helpers are ignored in each full
-test inventory. Runtime acceptance remains unverified; HTTP creation still
-returns `501`. Existing-image
-recovery cannot replace required queued-abort/absent-allocation reconciliation.
+fences unresolved work. Operator abort releases only proven-absent slots, preserves
+history and keeps stopped images charged. Installed templates bind the original
+reviewed catalog and share the static quota-helper implementation; bootstrap and
+publication retain their authority closures through official Nix registration.
+`just fast` passes **419 Rust tests** plus static/helper gates; the actual offline
+Nix CLI package passes **314 tests**, including all 126 admission tests. Three
+intentional subprocess helpers are ignored in each full test inventory. All 20
+static helper paths are unchanged; actual rendered dynamic-helper tests pass
+argument refusals, Btrfs creation/verification and sibling-slot isolation. Offline
+no-build fixture evaluation and the 2397-line rendered VM driver pass. Actual
+daemon/GC registration and runtime acceptance remain unverified; HTTP creation
+still returns `501`.
 New code reads old v3 files; older binaries reject the new field once written.
 
 Resume here: connect the verified receipts, exact grants and dynamic environments
-to that same admission/runtime owner, including actual helpers and explicit abort
-and absence recovery before enabling creation. It must stay within installed policy
+to that same admission/runtime owner, including the actual supervisor, retained
+template reconstruction and trusted abort/absence collectors before enabling creation.
+It must stay within installed policy
 without rebuilding the host. Follow with workspace/files/streams and the matching
 CLI, then actual client and coding-agent acceptance. Preserve private v3 ledger
 history; consumed login tokens and uncertain resource claims must never become

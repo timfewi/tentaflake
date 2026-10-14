@@ -2,9 +2,9 @@
 //! no filesystem or runtime authority until a newly claimed permit is returned.
 //!
 //! This first stopped-create foundation supports only nonexpiring installed
-//! creation/issued grants. It has no queued-abort or absent-allocation release:
-//! production dynamic creation must not be enabled until its complete operator
-//! lifecycle is integrated. Unknown recovery proves existing images only.
+//! creation/issued grants. Operator abort releases only allocations whose exact
+//! absence has been proven under the host fence. Production dynamic creation
+//! still requires actual helper and recovery collector integration.
 use super::*;
 use crate::{HostPolicy, Instance, Isolation, StorageKind};
 
@@ -107,6 +107,7 @@ pub enum EnvironmentState {
     Provisioning,
     Stopped,
     Unknown,
+    Aborted,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -137,6 +138,7 @@ pub enum ApiOperationState {
     Queued,
     Unknown,
     Succeeded,
+    Aborted,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -163,6 +165,38 @@ pub struct ApiOperation {
     pub storage_operations: Vec<String>,
     /// Success identifies exact newly created resources after a lost response.
     pub result: Option<CreateResult>,
+    #[serde(default)]
+    pub abort: Option<CreateAbortReceipt>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct CreateAbortReceipt {
+    /// Exact original CAS for historical retries; no new release permission.
+    pub expected_ledger_revision: u64,
+}
+
+/// Trusted read-only observation, never deserialized API request data. Absent
+/// means both final AND staging paths are absent, with no mount, loop mapping
+/// or writer retaining the backing image. PresentStopped means the exact final
+/// image/binding is verified, unmounted, and has no staging data or live writer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CreateAbortStorageState {
+    Absent,
+    PresentStopped,
+}
+
+pub struct CreateAbortStorageObservation {
+    pub allocation_id: String,
+    pub state: CreateAbortStorageState,
+}
+
+/// The observer holds the outer host fence and performs no helpers/mutations.
+/// Unknown requires proof that the exact stored supervisor and all descendants
+/// cannot still dispatch. Queued has never had a permit and requires None.
+pub struct CreateAbortObservation {
+    pub fenced_execution: Option<ApiExecution>,
+    pub allocations: [CreateAbortStorageObservation; 2],
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -512,6 +546,7 @@ impl Ledger {
             .collect();
         let grants: Vec<_> = owned
             .iter()
+            .filter(|env| env.state != EnvironmentState::Aborted)
             .flat_map(|env| env.spec.grants.iter())
             .filter(|grant| grant.active(context.now))
             .cloned()
@@ -750,6 +785,7 @@ impl Ledger {
             state.advance()?;
             state.storage.push(StorageReceipt {
                 request: Some(request),
+                release: None,
                 allocation,
                 claimed_revision: state.revision,
                 updated_revision: state.revision,
@@ -770,6 +806,7 @@ impl Ledger {
             execution: None,
             storage_operations,
             result: None,
+            abort: None,
         };
         state.api.workspaces.push(WorkspaceRecord {
             id: spec.workspace_id.clone(),
@@ -1019,6 +1056,147 @@ impl Ledger {
         self.write(&state)?;
         Ok(state.api.operations[operation].clone())
     }
+
+    /// Terminal operator cleanup, never dispatch authority. The caller holds the
+    /// outer host fence and authenticates the current installed maintenance plan.
+    /// The observer must fence the exact recorded supervisor and all descendants,
+    /// then inspect BOTH original slots (including staging, mounts, loops and
+    /// open writers). It must not create, delete, unmount or run helpers. Failure
+    /// leaves all charges unchanged. A queued operation has never had a permit,
+    /// but still requires exact absence; Unknown may retain stopped images.
+    pub fn api_abort_create(
+        &self,
+        authority: &PublishedAuthority,
+        operation_id: &str,
+        expected_ledger_revision: u64,
+        now: u64,
+        observe: impl FnOnce(
+            &ApiOperation,
+            &EnvironmentSpec,
+            &[StorageReceipt],
+        ) -> Result<CreateAbortObservation, String>,
+    ) -> Result<ApiOperation, LedgerError> {
+        let _lock = self.lock(false)?;
+        let mut state = self.read()?;
+        authority.validate()?;
+        if *authority != state.published {
+            return Err(LedgerError::StaleAuthority);
+        }
+        if !id(operation_id) || now == 0 {
+            return Err(LedgerError::Invalid("API abort identity or time"));
+        }
+        let operation = state
+            .api
+            .operations
+            .iter()
+            .position(|op| op.mutation.operation_id == operation_id)
+            .ok_or(LedgerError::Conflict)?;
+        let op = &state.api.operations[operation];
+        if let Some(abort) = &op.abort {
+            if abort.expected_ledger_revision != expected_ledger_revision {
+                return Err(LedgerError::StaleRevision);
+            }
+            return Ok(op.clone());
+        }
+        state.require_stable()?;
+        if state.revision != expected_ledger_revision {
+            return Err(LedgerError::StaleRevision);
+        }
+        if !matches!(
+            op.state,
+            ApiOperationState::Queued | ApiOperationState::Unknown
+        ) || now < op.updated_at
+        {
+            return Err(LedgerError::Conflict);
+        }
+        let environment = state
+            .api
+            .environments
+            .iter()
+            .position(|env| env.operation_id == operation_id)
+            .expect("validated environment");
+        let spec = &state.api.environments[environment].spec;
+        let indexes: Vec<_> = spec
+            .instance
+            .storage
+            .iter()
+            .map(|wanted| {
+                state
+                    .storage
+                    .iter()
+                    .position(|row| row.allocation.id == wanted.id)
+                    .expect("validated allocation")
+            })
+            .collect();
+        let rows: Vec<_> = indexes
+            .iter()
+            .map(|index| state.storage[*index].clone())
+            .collect();
+        let observation = observe(op, spec, &rows).map_err(|_| LedgerError::Context)?;
+        if observation.fenced_execution != op.execution {
+            return Err(LedgerError::Context);
+        }
+        let mut seen = BTreeSet::new();
+        for observed in &observation.allocations {
+            if !seen.insert(&observed.allocation_id)
+                || !rows
+                    .iter()
+                    .any(|row| row.allocation.id == observed.allocation_id)
+                || (op.state == ApiOperationState::Queued
+                    && observed.state != CreateAbortStorageState::Absent)
+            {
+                return Err(LedgerError::Context);
+            }
+        }
+        // Validate the whole pair before changing even the in-memory state.
+        // A single durable write commits releases, retained images and grants.
+        for index in indexes {
+            let observed = observation
+                .allocations
+                .iter()
+                .find(|observed| observed.allocation_id == state.storage[index].allocation.id)
+                .expect("validated complete pair");
+            match observed.state {
+                CreateAbortStorageState::Absent => {
+                    state.advance()?;
+                    state.storage[index].updated_revision = state.revision;
+                    state.storage[index].release = Some(StorageRelease {
+                        operation_id: operation_id.into(),
+                        released_revision: state.revision,
+                    });
+                }
+                CreateAbortStorageState::PresentStopped => {
+                    if state.storage[index].allocation.state != StorageState::Present {
+                        state.advance()?;
+                        state.storage[index].allocation.state = StorageState::Present;
+                        state.storage[index].updated_revision = state.revision;
+                    }
+                }
+            }
+        }
+        state.advance()?;
+        let env = &mut state.api.environments[environment];
+        env.state = EnvironmentState::Aborted;
+        env.revision = state.revision;
+        let workspace_id = env.spec.workspace_id.clone();
+        state
+            .api
+            .workspaces
+            .iter_mut()
+            .find(|row| row.id == workspace_id)
+            .expect("validated workspace")
+            .revision = state.revision;
+        state.api.grants_revision = state.revision;
+        let op = &mut state.api.operations[operation];
+        op.state = ApiOperationState::Aborted;
+        op.updated_at = now;
+        op.updated_revision = state.revision;
+        op.abort = Some(CreateAbortReceipt {
+            expected_ledger_revision,
+        });
+        self.write(&state)?;
+        Ok(state.api.operations[operation].clone())
+    }
 }
 
 impl State {
@@ -1101,7 +1279,13 @@ impl State {
                     .api
                     .operations
                     .iter()
-                    .map(|op| op.queued_revision)
+                    .map(|op| {
+                        if op.state == ApiOperationState::Aborted {
+                            op.updated_revision
+                        } else {
+                            op.queued_revision
+                        }
+                    })
                     .max()
                     .unwrap_or(0)
         {
@@ -1196,7 +1380,10 @@ impl State {
                         .expect("validated requirements")
                         .id
                 || workspace.revision
-                    != if op.state == ApiOperationState::Succeeded {
+                    != if matches!(
+                        op.state,
+                        ApiOperationState::Succeeded | ApiOperationState::Aborted
+                    ) {
                         op.updated_revision
                     } else {
                         op.queued_revision
@@ -1207,7 +1394,12 @@ impl State {
             if op.storage_operations.len() != 2 {
                 return Err(LedgerError::Invalid("API allocation references"));
             }
+            if (op.state == ApiOperationState::Aborted) != op.abort.is_some() {
+                return Err(LedgerError::Invalid("API abort outcome"));
+            }
             let mut all_present = true;
+            let mut all_released = true;
+            let mut abort_updates = BTreeSet::new();
             for (offset, (wanted, operation)) in spec
                 .instance
                 .storage
@@ -1247,28 +1439,91 @@ impl State {
                             && binding.owner_id == spec.instance.owner_id
                             && binding.revision == wanted.binding_revision
                     })
-                    || (row.allocation.state == StorageState::Unknown
+                    || (row.release.is_none()
+                        && row.allocation.state == StorageState::Unknown
                         && row.updated_revision != row.claimed_revision)
                     || (row.allocation.state == StorageState::Present
                         && op
                             .claimed_revision
                             .is_none_or(|claim| row.updated_revision <= claim))
-                    || (op.state == ApiOperationState::Succeeded
-                        && row.updated_revision >= op.updated_revision)
+                    || (matches!(
+                        op.state,
+                        ApiOperationState::Succeeded | ApiOperationState::Aborted
+                    ) && row.updated_revision >= op.updated_revision)
                     || (op.state == ApiOperationState::Queued
                         && (row.allocation.state != StorageState::Unknown
                             || row.updated_revision != row.claimed_revision))
                 {
                     return Err(LedgerError::Invalid("API native allocation binding"));
                 }
-                all_present &= row.allocation.state == StorageState::Present;
+                if let Some(release) = &row.release {
+                    let abort = op
+                        .abort
+                        .as_ref()
+                        .ok_or(LedgerError::Invalid("release without API abort"))?;
+                    if release.operation_id != op.mutation.operation_id
+                        || release.released_revision <= abort.expected_ledger_revision
+                    {
+                        return Err(LedgerError::Invalid("API release ownership"));
+                    }
+                } else if op.state == ApiOperationState::Aborted
+                    && row.allocation.state != StorageState::Present
+                {
+                    return Err(LedgerError::Invalid("unresolved aborted allocation"));
+                }
+                if let Some(abort) = &op.abort
+                    && row.updated_revision > abort.expected_ledger_revision
+                    && !abort_updates.insert(row.updated_revision)
+                {
+                    return Err(LedgerError::Invalid(
+                        "API abort allocation revision collision",
+                    ));
+                }
+                all_present &=
+                    row.release.is_none() && row.allocation.state == StorageState::Present;
+                all_released &= row.release.is_some();
             }
-            if op.state != ApiOperationState::Succeeded
-                && (self.pending().is_some() || op.authority != self.published)
+            if matches!(
+                op.state,
+                ApiOperationState::Queued | ApiOperationState::Unknown
+            ) && (self.pending().is_some() || op.authority != self.published)
             {
                 return Err(LedgerError::Invalid("unresolved API publication"));
             }
             match op.state {
+                ApiOperationState::Aborted => {
+                    let abort = op.abort.as_ref().expect("validated abort outcome");
+                    if abort.expected_ledger_revision
+                        < op.claimed_revision.unwrap_or(op.queued_revision)
+                        || abort.expected_ledger_revision >= op.updated_revision
+                        || op.result.is_some()
+                        || env.state != EnvironmentState::Aborted
+                    {
+                        return Err(LedgerError::Invalid("API abort revision or result"));
+                    }
+                    let mut expected = abort.expected_ledger_revision;
+                    for update in &abort_updates {
+                        expected = expected
+                            .checked_add(1)
+                            .ok_or(LedgerError::Invalid("API abort revision overflow"))?;
+                        if *update != expected {
+                            return Err(LedgerError::Invalid("API abort transaction revisions"));
+                        }
+                    }
+                    if expected.checked_add(1) != Some(op.updated_revision) {
+                        return Err(LedgerError::Invalid("API abort terminal revision"));
+                    }
+                    match (&op.execution, op.claimed_revision) {
+                        (None, None) if all_released => {}
+                        (Some(execution), Some(claim))
+                            if claim > op.queued_revision
+                                && claim <= abort.expected_ledger_revision =>
+                        {
+                            execution.validate()?
+                        }
+                        _ => return Err(LedgerError::Invalid("API abort dispatch identity")),
+                    }
+                }
                 ApiOperationState::Queued => {
                     if op.execution.is_some()
                         || op.claimed_revision.is_some()
@@ -1312,6 +1567,13 @@ impl State {
                     }
                 }
             }
+        }
+        if self
+            .storage
+            .iter()
+            .any(|row| row.release.is_some() && !slots.contains(&row.allocation.id))
+        {
+            return Err(LedgerError::Invalid("unlinked storage release"));
         }
         if self.storage.iter().any(|row| {
             row.allocation

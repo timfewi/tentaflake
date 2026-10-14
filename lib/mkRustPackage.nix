@@ -26,6 +26,7 @@ rustPlatform.buildRustPackage {
       ]
       ++ lib.optionals (pname == "tentaflake-cli") [
         ../adapters/catalog.json
+        ../images/catalog.json
         # TLS client regressions consume the authoritative wire exchanges.
         ../api/v1/fixtures.json
       ]

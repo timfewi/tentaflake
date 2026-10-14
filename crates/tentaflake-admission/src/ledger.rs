@@ -109,12 +109,23 @@ pub struct StorageInventory {
     pub allocations: Vec<StorageAllocation>,
 }
 
+/// Terminal absence proof for one API-owned allocation. Its original receipt,
+/// identity and size remain historical; this marker never permits recreation.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct StorageRelease {
+    pub operation_id: String,
+    pub released_revision: u64,
+}
+
 /// Exactly one immutable provision intent per allocation. Imported inventory
 /// has no create request and can never yield permission to recreate its image.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct StorageReceipt {
     pub request: Option<StorageRequest>,
+    #[serde(default)]
+    pub release: Option<StorageRelease>,
     pub allocation: StorageAllocation,
     pub claimed_revision: u64,
     pub updated_revision: u64,
@@ -343,6 +354,7 @@ impl Ledger {
                 .into_iter()
                 .map(|allocation| StorageReceipt {
                     request: None,
+                    release: None,
                     allocation,
                     claimed_revision: 1,
                     updated_revision: 1,
@@ -825,6 +837,7 @@ impl Ledger {
         let mut state = self.read()?;
         if state.dynamic_instance(&request.request.instance_id)
             || state.dynamic_allocation(&request.allocation_id)
+            || state.released_allocation(&request.allocation_id)
             || state.api_operation_exists(&request.request.operation_id)
         {
             return Err(LedgerError::Conflict);
@@ -883,6 +896,7 @@ impl Ledger {
         state.advance()?;
         state.storage.push(StorageReceipt {
             request: Some(request.clone()),
+            release: None,
             allocation,
             claimed_revision: state.revision,
             updated_revision: state.revision,
@@ -912,6 +926,7 @@ impl Ledger {
         let state = self.read()?;
         if state.dynamic_instance(&request.request.instance_id)
             || state.dynamic_allocation(&request.allocation_id)
+            || state.released_allocation(&request.allocation_id)
         {
             return Err(LedgerError::Conflict);
         }
@@ -948,7 +963,7 @@ impl Ledger {
     ) -> Result<StorageReceipt, LedgerError> {
         let _lock = self.lock(false)?;
         let mut state = self.read()?;
-        if state.dynamic_allocation(allocation_id) {
+        if state.dynamic_allocation(allocation_id) || state.released_allocation(allocation_id) {
             return Err(LedgerError::Conflict);
         }
         if state.revision != expected_ledger_revision {
@@ -1037,6 +1052,9 @@ impl Ledger {
         index: usize,
         observed: StorageState,
     ) -> Result<StorageReceipt, LedgerError> {
+        if state.storage[index].release.is_some() {
+            return Err(LedgerError::Conflict);
+        }
         if state.storage[index].allocation.state != observed {
             state.advance()?;
             state.storage[index].allocation.state = observed;
@@ -1300,6 +1318,12 @@ impl State {
         Ok(())
     }
 
+    fn released_allocation(&self, allocation_id: &str) -> bool {
+        self.storage
+            .iter()
+            .any(|row| row.allocation.id == allocation_id && row.release.is_some())
+    }
+
     fn check_policy(&self, policy: &HostPolicy) -> Result<(), LedgerError> {
         if policy.generation != self.published.generation
             || policy.revision != self.published.revision
@@ -1344,6 +1368,7 @@ impl State {
             storage: self
                 .storage
                 .iter()
+                .filter(|receipt| receipt.release.is_none())
                 .map(|receipt| receipt.allocation.clone())
                 .collect(),
         }
@@ -1360,7 +1385,16 @@ impl State {
             return Err(LedgerError::Invalid("header or receipt limit"));
         }
         self.published.validate()?;
-        if !validate_reservations(&self.snapshot()).is_empty() {
+        // Released rows stay bounded and structurally valid even though they
+        // no longer contribute to current reservation accounting.
+        let mut inventory = self.snapshot();
+        inventory.storage.extend(
+            self.storage
+                .iter()
+                .filter(|row| row.release.is_some())
+                .map(|row| row.allocation.clone()),
+        );
+        if !validate_reservations(&inventory).is_empty() {
             return Err(LedgerError::Invalid("reservations"));
         }
         let current = self.current();
@@ -1492,6 +1526,13 @@ impl State {
             {
                 return Err(LedgerError::Invalid("storage receipt revision"));
             }
+            if receipt.release.as_ref().is_some_and(|release| {
+                !identifier(&release.operation_id)
+                    || release.released_revision != receipt.updated_revision
+                    || release.released_revision <= receipt.claimed_revision
+            }) {
+                return Err(LedgerError::Invalid("storage release revision"));
+            }
             match &receipt.request {
                 None if receipt.claimed_revision == 1 => {}
                 Some(request) => {
@@ -1569,7 +1610,7 @@ impl State {
         }) {
             return Err(LedgerError::Invalid("image-load authority history"));
         }
-        let mut revisions: BTreeSet<_> = self
+        let native_revisions: Vec<_> = self
             .receipts
             .iter()
             .map(|receipt| [receipt.claimed_revision, receipt.updated_revision])
@@ -1590,6 +1631,21 @@ impl State {
             )
             .flatten()
             .collect();
+        if self
+            .storage
+            .iter()
+            .filter_map(|row| row.release.as_ref())
+            .any(|release| {
+                native_revisions
+                    .iter()
+                    .filter(|revision| **revision == release.released_revision)
+                    .count()
+                    != 1
+            })
+        {
+            return Err(LedgerError::Invalid("storage release revision collision"));
+        }
+        let mut revisions: BTreeSet<_> = native_revisions.into_iter().collect();
         self.validate_api(&mut revisions)?;
         let mut fingerprints = BTreeSet::new();
         let mut previous = 1;

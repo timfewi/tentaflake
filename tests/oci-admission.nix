@@ -66,8 +66,20 @@ let
         inherit name definition;
       }
     ) names;
-    # These prebuilt-only guests do not need Nix's store-mutating registration.
-    nix.enable = false;
+    # Real Nix database/root registration for prebuilt closures only. Empty
+    # build-users-group avoids changing ownership of the shared store; Nix's
+    # internal remount is confined to each service's private mount namespace.
+    nix = {
+      enable = true;
+      nrBuildUsers = 0;
+      settings = {
+        build-users-group = lib.mkForce "";
+        max-jobs = lib.mkForce 0;
+        builders = lib.mkForce "";
+        substituters = lib.mkForce [ ];
+        substitute = false;
+      };
+    };
     virtualisation = {
       # Use prebuilt closures through the harness's read-only bind mount; an
       # overlay store has backing options outside the maintenance contract.
@@ -81,12 +93,28 @@ let
     };
     # Only the immutable shared store gets lazy unmounting at VM shutdown.
     # Runtime and persistent quota services retain their normal stop checks.
-    systemd.units."nix-store.mount" = {
-      overrideStrategy = "asDropin";
-      text = ''
-        [Mount]
-        LazyUnmount=true
-      '';
+    systemd = {
+      services = {
+        register-nix-paths = {
+          preStart = ''
+            test -d /nix/store/.links && test ! -L /nix/store/.links
+          '';
+          serviceConfig.PrivateMounts = true;
+        };
+        nix-daemon = {
+          preStart = ''
+            test -d /nix/store/.links && test ! -L /nix/store/.links
+          '';
+          serviceConfig.PrivateMounts = true;
+        };
+      };
+      units."nix-store.mount" = {
+        overrideStrategy = "asDropin";
+        text = ''
+          [Mount]
+          LazyUnmount=true
+        '';
+      };
     };
     environment.systemPackages = [ pkgs.util-linux ];
     tentaflake = {
@@ -186,7 +214,21 @@ in
         jobs = node.succeed("systemctl list-jobs --no-legend --no-pager --full")
         assert all(unit not in line.split() for line in jobs.splitlines()), jobs
 
+    def oci_nix_evidence(node, plan=None):
+        node.wait_for_unit("register-nix-paths.service")
+        node.wait_for_unit("nix-daemon.socket")
+        assert node.succeed("systemctl show --value --property=Result register-nix-paths.service").strip() == "success"
+        options = node.succeed("findmnt --task 1 --first-only --direction backward -n -o OPTIONS --mountpoint /nix/store").strip().split(",")
+        assert "ro" in options and "rw" not in options, options
+        node.succeed("test -d /nix/store/.links && test ! -L /nix/store/.links")
+        if plan is not None:
+            assert plan.startswith("/nix/store/") and "/" not in plan[len("/nix/store/"):], plan
+            root = "/nix/var/nix/gcroots/tentaflake/" + plan.rsplit("/", 1)[1]
+            assert node.succeed("readlink -- " + shlex.quote(root)).strip() == plan
+            assert node.succeed("test -L " + shlex.quote(root) + " && stat -c %u:%h -- " + shlex.quote(root)).strip() == "0:1"
+
     def oci_prepare_unbootstrapped(node, manifest):
+        oci_nix_evidence(node)
         node.succeed("test ! -e /var/lib/tentaflake-admission")
         for runtime in manifest["runtimes"].values():
             oci_stop_unit(runtime["unit"], node=node)
@@ -234,6 +276,7 @@ in
         node.succeed("timeout 150s systemctl start docker.service")
         node.wait_for_unit("docker.service")
         node.succeed(shlex.join(["tentaflake", "admission", "bootstrap", plan]))
+        oci_nix_evidence(node, plan)
 
     def oci_assert_active(name):
         receipt = oci_current(name)

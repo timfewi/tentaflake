@@ -225,9 +225,20 @@ in
         }
       ) names;
 
-      # No guest Nix operations: its closure-registration service attempts to
-      # change store ownership, which the read-only shared store cannot support.
-      nix.enable = false;
+      # Real Nix database/root registration for prebuilt closures only. Empty
+      # build-users-group avoids changing ownership of the shared store; Nix's
+      # internal remount is confined to each service's private mount namespace.
+      nix = {
+        enable = true;
+        nrBuildUsers = 0;
+        settings = {
+          build-users-group = lib.mkForce "";
+          max-jobs = lib.mkForce 0;
+          builders = lib.mkForce "";
+          substituters = lib.mkForce [ ];
+          substitute = false;
+        };
+      };
       virtualisation = {
         # These tests execute prebuilt closures; admission does not support the
         # VM harness's writable-store overlay with unobserved backing options.
@@ -265,6 +276,18 @@ in
       # activation only for the existing guarded quota services.
       systemd = {
         services = {
+          register-nix-paths = {
+            preStart = ''
+              test -d /nix/store/.links && test ! -L /nix/store/.links
+            '';
+            serviceConfig.PrivateMounts = true;
+          };
+          nix-daemon = {
+            preStart = ''
+              test -d /nix/store/.links && test ! -L /nix/store/.links
+            '';
+            serviceConfig.PrivateMounts = true;
+          };
           tentaflake-worker-generic-storage.wantedBy = lib.mkForce [ ];
           tentaflake-worker-image.wantedBy = lib.mkForce [ ];
           tentaflake-api.wantedBy = lib.mkForce [ ];
@@ -346,6 +369,21 @@ in
     storage_worker_image = storage_manifest["workerImage"]
     storage_worker_units = [storage_worker["watcher"], storage_worker["unit"], storage_worker_image["unit"]]
     storage_worker_pending = storage_worker["stateDir"] + "/pending/maintenance_pending.json"
+
+    def storage_nix_evidence(*plans):
+        storage.wait_for_unit("register-nix-paths.service")
+        storage.wait_for_unit("nix-daemon.socket")
+        assert storage.succeed("systemctl show --value --property=Result register-nix-paths.service").strip() == "success"
+        options = storage.succeed("findmnt --task 1 --first-only --direction backward -n -o OPTIONS --mountpoint /nix/store").strip().split(",")
+        assert "ro" in options and "rw" not in options, options
+        storage.succeed("test -d /nix/store/.links && test ! -L /nix/store/.links")
+        for plan in plans:
+            assert plan.startswith("/nix/store/") and "/" not in plan[len("/nix/store/"):], plan
+            root = "/nix/var/nix/gcroots/tentaflake/" + plan.rsplit("/", 1)[1]
+            assert storage.succeed("readlink -- " + shlex.quote(root)).strip() == plan
+            assert storage.succeed("test -L " + shlex.quote(root) + " && stat -c %u:%h -- " + shlex.quote(root)).strip() == "0:1"
+
+    storage_nix_evidence()
 
     def worker_command(action, *arguments):
         return shlex.join([storage_worker["executable"], "--config", storage_worker["config"], action, *arguments])
@@ -471,6 +509,7 @@ in
         storage.succeed("timeout 150s systemctl start docker.service")
         storage.wait_for_unit("docker.service")
         storage.succeed(storage_command("bootstrap"))
+        storage_nix_evidence(storage_plan)
         initial = storage_snapshot()
         assert initial["storage"] == [] and initial["receipts"] == [], initial
         assert initial["published"]["manifestPath"] == storage_plan, initial
@@ -781,6 +820,7 @@ in
         publication("begin", candidate_plan, "publish-capacity", stable["ledgerRevision"] - 1, success=False)
         assert publication("status") == stable
         begun = publication("begin", candidate_plan, "publish-capacity", stable["ledgerRevision"])
+        storage_nix_evidence(storage_plan, candidate_plan)
         assert begun["outcome"] == "pending"
         pending = publication("status")
         assert pending["pending"] == begun and pending["published"] == stable["published"]
@@ -796,8 +836,10 @@ in
         assert publication("status") == pending
         assert storage_snapshot()["storage"] == charged["storage"]
         install_storage_generation(candidate_system, candidate_plan)
+        storage_nix_evidence(storage_plan, candidate_plan)
         assert publication("status") == pending
         finished = publication("finish", "publish-capacity", pending["ledgerRevision"])
+        storage_nix_evidence(storage_plan, candidate_plan)
         assert finished["outcome"] == "published"
         published = publication("status")
         assert published["pending"] is None and published["published"]["manifestPath"] == candidate_plan
@@ -816,12 +858,15 @@ in
 
     with subtest("publication cancellation requires the old generation restored"):
         begun = publication("begin", storage_plan, "rollback-capacity", published["ledgerRevision"])
+        storage_nix_evidence(storage_plan, candidate_plan)
         pending = publication("status")
         assert pending["pending"] == begun
         install_storage_generation(base_system, storage_plan)
+        storage_nix_evidence(storage_plan, candidate_plan)
         publication("cancel", "rollback-capacity", pending["ledgerRevision"], success=False)
         assert publication("status") == pending
         install_storage_generation(candidate_system, candidate_plan)
+        storage_nix_evidence(storage_plan, candidate_plan)
         publication("cancel", "rollback-capacity", pending["ledgerRevision"] - 1, success=False)
         cancelled = publication("cancel", "rollback-capacity", pending["ledgerRevision"])
         assert cancelled["outcome"] == "cancelled"

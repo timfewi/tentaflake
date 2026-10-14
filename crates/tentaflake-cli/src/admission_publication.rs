@@ -110,7 +110,7 @@ fn begin(
     if !identifier(operation) {
         return Err("invalid publication operation identifier".into());
     }
-    let _fence = admission_fence::exclusive()?;
+    let fence = admission_fence::exclusive()?;
     if let Some(receipt) = ledger
         .publication_receipt(operation)
         .map_err(|error| error.to_string())?
@@ -120,8 +120,8 @@ fn begin(
         // request from today's published authority or repeat host actions.
         return Ok(receipt);
     }
-    let candidate = load_plan(candidate_path)?;
-    let candidate = authority(&candidate, candidate_path);
+    let candidate_plan = load_plan(candidate_path)?;
+    let candidate = authority(&candidate_plan, candidate_path);
     let status = ledger
         .publication_status()
         .map_err(|error| error.to_string())?;
@@ -139,6 +139,15 @@ fn begin(
     // Once Pending exists, normal storage recovery is intentionally blocked.
     // Refuse uncertain claims now, rather than creating an unfinishable change.
     quiescent(&snapshot, expected)?;
+    observe_offline(&current, current_path, None)?;
+    let nix_store = current
+        .tools
+        .nix_store
+        .as_deref()
+        .or(candidate_plan.tools.nix_store.as_deref())
+        .ok_or("publication requires a plan with the Nix retention tool")?;
+    crate::admission_retention::retain(&status.published, nix_store, &fence)?;
+    crate::admission_retention::retain(&candidate, nix_store, &fence)?;
     observe_offline(&current, current_path, None)?;
     let request = PublicationRequest {
         operation_id: operation.into(),

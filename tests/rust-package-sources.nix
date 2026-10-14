@@ -26,6 +26,9 @@ assert builtins.pathExists (
   packages.tentaflake-cli.src + "/crates/tentaflake-admission/src/lib.rs"
 );
 assert builtins.pathExists (packages.tentaflake-cli.src + "/adapters/catalog.json");
+assert builtins.pathExists (packages.tentaflake-cli.src + "/images/catalog.json");
+assert !(builtins.pathExists (packages.tentaflake-broker.src + "/images/catalog.json"));
+assert !(builtins.pathExists (packages.tentaflake-worker.src + "/images/catalog.json"));
 assert !(builtins.pathExists (packages.tentaflake-broker.src + "/adapters/catalog.json"));
 assert !(builtins.pathExists (packages.tentaflake-worker.src + "/adapters/catalog.json"));
 assert packages.tentaflake-worker-image.imageTag == packages.tentaflake-worker.version;

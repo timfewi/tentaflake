@@ -100,14 +100,29 @@ This slice accepts only nonexpiring installed creation and issued grants.
 Ordinary native runtime/storage entrypoints refuse these dynamic identities;
 publication refuses queued or unresolved work. Partial creation retains both
 charges. Explicit recovery can recognize exact existing, stopped images after
-helpers are fenced; it cannot recreate missing images or release allocations.
-Actual helper integration, queued-abort and absent-allocation reconciliation are
-required before enabling public creation. These are library guarantees and host
-collector obligations, not evidence of a working HTTP create or VM lifecycle.
+helpers are fenced. A separate operator abort releases only slots proven absent,
+retains exact stopped images, and revokes effective grants. Queued work requires
+both slots absent; claimed work additionally binds the fenced original supervisor.
+Missing staging, mount, loop and writer evidence refuses the whole abort. Durable
+release markers preserve all original IDs and history; nothing authorizes their
+reuse or recreation. Exact terminal retries perform no observation or mutation.
+Actual helpers and trusted absence/fence collectors are still required before
+enabling public creation. These are library guarantees and collector obligations,
+not evidence of a working HTTP create or VM lifecycle.
 
 Existing private v3 ledgers without the new API field remain readable. Once a
 new writer persists that field, older binaries reject it; rollback must preserve
 the operation, grant and allocation history rather than remove the field.
+
+The default-empty `security.admission.creationTemplates` policy selects installed
+Generic source instances, reviewed base-image IDs, explicit principals and issued
+actions. The initial mapping is offline, with fixed whole-CPU/MiB resources, two
+volumes, no agent runtime, tools or skills. Ambiguous selections refuse. Each
+manifest retains its original image catalog; updating today's catalog must not
+invalidate historical cleanup. Source commands, environment and paths remain
+private, and new filesystems do not copy source state or seed services.
+The shared quota helpers accept only server-generated slot IDs for dynamic paths.
+This installed policy and helper projection does not enable HTTP creation.
 
 ## HTTPS CLI client
 
