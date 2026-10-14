@@ -241,6 +241,17 @@ pub struct ApiSnapshot {
     pub grants: Vec<ActionGrant>,
 }
 
+/// Original accepted-create metadata for its authenticated owner, including
+/// aborted history. This is neither general resource-read nor dispatch authority.
+/// Effective grants come from the same locked state as the three linked records.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct OwnedCreate {
+    pub operation: ApiOperation,
+    pub environment: EnvironmentRecord,
+    pub workspace: WorkspaceRecord,
+    pub grants: Vec<ActionGrant>,
+}
+
 /// Current creation policy and exact proposed grants, authenticated by the host
 /// while the ledger is locked. The callback must also prove space for BOTH new
 /// allocations and reject any source instance/path/slot collision. It checks
@@ -331,16 +342,17 @@ impl ApiKey {
 impl ApiMutation {
     fn validate(&self) -> Result<(), LedgerError> {
         self.key.validate()?;
-        if !id(&self.operation_id)
-            || !self
-                .request_digest
-                .strip_prefix("sha256:")
-                .is_some_and(operator_fingerprint)
-        {
+        if !id(&self.operation_id) || !request_digest(&self.request_digest) {
             return Err(LedgerError::Invalid("API operation digest"));
         }
         Ok(())
     }
+}
+
+fn request_digest(value: &str) -> bool {
+    value
+        .strip_prefix("sha256:")
+        .is_some_and(operator_fingerprint)
 }
 
 impl ActionGrant {
@@ -467,6 +479,24 @@ impl ApiExecution {
 }
 
 impl State {
+    fn api_owned<'a>(
+        &'a self,
+        context: &'a ApiContext,
+    ) -> impl Iterator<Item = &'a EnvironmentRecord> {
+        self.api.environments.iter().filter(move |env| {
+            env.host == context.host && env.spec.instance.owner_id == context.principal
+        })
+    }
+
+    fn api_grants(&self, context: &ApiContext) -> Vec<ActionGrant> {
+        self.api_owned(context)
+            .filter(|env| env.state != EnvironmentState::Aborted)
+            .flat_map(|env| env.spec.grants.iter())
+            .filter(|grant| grant.active(context.now))
+            .cloned()
+            .collect()
+    }
+
     fn api_context(&self, context: &ApiContext) -> Result<(), LedgerError> {
         context.authority.validate()?;
         if !id(&context.host) || !id(&context.principal) || !id(&context.epoch) || context.now == 0
@@ -722,21 +752,8 @@ impl Ledger {
         let _lock = self.lock(false)?;
         let state = self.read()?;
         state.api_context(context)?;
-        let owned: Vec<_> = state
-            .api
-            .environments
-            .iter()
-            .filter(|env| {
-                env.host == context.host && env.spec.instance.owner_id == context.principal
-            })
-            .collect();
-        let grants: Vec<_> = owned
-            .iter()
-            .filter(|env| env.state != EnvironmentState::Aborted)
-            .flat_map(|env| env.spec.grants.iter())
-            .filter(|grant| grant.active(context.now))
-            .cloned()
-            .collect();
+        let owned: Vec<_> = state.api_owned(context).collect();
+        let grants = state.api_grants(context);
         let environments = owned
             .iter()
             .filter(|env| {
@@ -775,6 +792,55 @@ impl Ledger {
             workspaces,
             grants,
         })
+    }
+
+    /// Read one exact accepted create without granting another queue/dispatch.
+    /// The key may belong to an old epoch and history remains readable during
+    /// publication. None means only that no matching receipt was found: unlike
+    /// api_lookup's Absent, it never proves safe current-epoch absence.
+    pub fn api_create_receipt(
+        &self,
+        context: &ApiContext,
+        key: &ApiKey,
+        digest: &str,
+    ) -> Result<Option<OwnedCreate>, LedgerError> {
+        let key = key.canonicalized()?;
+        if key.method != ApiMethod::Post
+            || key.canonical_target != "/api/v1/environments"
+            || !request_digest(digest)
+        {
+            return Err(LedgerError::Invalid("create receipt request binding"));
+        }
+        let _lock = self.lock(false)?;
+        let state = self.read()?;
+        state.api_key_owner(context, &key)?;
+        let Some(operation) = state
+            .api
+            .operations
+            .iter()
+            .find(|op| op.mutation.key == key)
+        else {
+            return Ok(None);
+        };
+        if operation.mutation.request_digest != digest {
+            return Err(LedgerError::Conflict);
+        }
+        let environment = state
+            .api_owned(context)
+            .find(|env| env.operation_id == operation.mutation.operation_id)
+            .ok_or(LedgerError::Invalid("create receipt environment"))?;
+        let workspace = state
+            .api
+            .workspaces
+            .iter()
+            .find(|workspace| workspace.id == environment.spec.workspace_id)
+            .ok_or(LedgerError::Invalid("create receipt workspace"))?;
+        Ok(Some(OwnedCreate {
+            operation: operation.clone(),
+            environment: environment.clone(),
+            workspace: workspace.clone(),
+            grants: state.api_grants(context),
+        }))
     }
 
     /// Root maintenance view under the shared host fence. Not an HTTP list;

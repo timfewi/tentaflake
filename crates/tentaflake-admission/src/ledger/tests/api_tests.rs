@@ -648,6 +648,190 @@ fn stopped_creation_uses_native_storage_once_and_stable_resource_revisions() {
 }
 
 #[test]
+fn owned_create_receipt_tracks_durable_lifecycle_without_writes() {
+    for phase in 0..3 {
+        let fixture = Fixture::new();
+        let ledger = fixture.ledger_with(inventory(&[]));
+        let queued = queue(&ledger);
+        let request = mutation();
+        let expected = if phase == 0 {
+            queued.clone()
+        } else {
+            let mut permit = claim(&ledger);
+            assert!(matches!(
+                ledger.api_create_receipt(&api_context(), &request.key, &request.request_digest),
+                Err(LedgerError::Busy)
+            ));
+            if phase == 1 {
+                let claimed = permit.operation().clone();
+                drop(permit);
+                claimed
+            } else {
+                for kind in [StorageKind::State, StorageKind::Workspace] {
+                    permit.provision(kind, |_| Ok(())).unwrap();
+                }
+                permit.complete(101).unwrap()
+            }
+        };
+        let reopened = fixture.open("ledger").unwrap();
+        let before = persisted_files(&fixture);
+        let receipt = reopened
+            .api_create_receipt(&api_context(), &request.key, &request.request_digest)
+            .unwrap()
+            .unwrap();
+        assert_eq!(receipt.operation, expected);
+        assert_eq!(receipt.environment.spec, spec("env-a"));
+        assert_eq!(receipt.environment.operation_id, request.operation_id);
+        assert_eq!(receipt.environment.created_at, queued.created_at);
+        assert_eq!(receipt.environment.revision, expected.updated_revision);
+        assert_eq!(
+            receipt.environment.state,
+            match phase {
+                0 => EnvironmentState::Provisioning,
+                1 => EnvironmentState::Unknown,
+                _ => EnvironmentState::Stopped,
+            }
+        );
+        assert_eq!(receipt.workspace.id, "workspace-id-env-a");
+        assert_eq!(receipt.workspace.environment_id, "env-a");
+        assert_eq!(receipt.workspace.owner_id, "owner-1");
+        assert_eq!(
+            receipt.workspace.allocation_id,
+            spec("env-a")
+                .instance
+                .storage
+                .iter()
+                .find(|row| row.kind == StorageKind::Workspace)
+                .unwrap()
+                .id
+        );
+        assert_eq!(
+            receipt.workspace.revision,
+            if phase == 2 {
+                expected.updated_revision
+            } else {
+                queued.queued_revision
+            }
+        );
+        assert_eq!(receipt.grants, spec("env-a").grants);
+        assert_eq!(persisted_files(&fixture), before);
+        reopened
+            .consume_operator_login(&authority("policy-1"), &"a".repeat(64))
+            .unwrap();
+        let after_login = persisted_files(&fixture);
+        assert_eq!(
+            reopened
+                .api_create_receipt(&api_context(), &request.key, &request.request_digest)
+                .unwrap(),
+            Some(receipt)
+        );
+        assert_eq!(persisted_files(&fixture), after_login);
+    }
+}
+
+#[test]
+fn owned_create_receipt_scopes_key_digest_and_original_owner() {
+    let fixture = Fixture::new();
+    let ledger = fixture.ledger_with(inventory(&[]));
+    let mut request = mutation();
+    request.key.key = "00000000-0000-4000-8000-0000000000ab".into();
+    ledger
+        .api_queue_create(&api_context(), &request, &spec("env-a"), 0, |_, _, spec| {
+            Ok(policy(spec))
+        })
+        .unwrap();
+    let before = persisted_files(&fixture);
+    let mut upper = request.key.clone();
+    upper.key.make_ascii_uppercase();
+    assert_eq!(
+        ledger
+            .api_create_receipt(&api_context(), &upper, &request.request_digest)
+            .unwrap(),
+        ledger
+            .api_create_receipt(&api_context(), &request.key, &request.request_digest)
+            .unwrap()
+    );
+    assert!(matches!(
+        ledger.api_create_receipt(
+            &api_context(),
+            &request.key,
+            &format!("sha256:{}", "b".repeat(64))
+        ),
+        Err(LedgerError::Conflict)
+    ));
+    for digest in [
+        String::new(),
+        "a".repeat(64),
+        format!("sha256:{}", "A".repeat(64)),
+    ] {
+        assert!(matches!(
+            ledger.api_create_receipt(&api_context(), &request.key, &digest),
+            Err(LedgerError::Invalid(_))
+        ));
+    }
+    for method in [ApiMethod::Put, ApiMethod::Patch, ApiMethod::Delete] {
+        let mut changed = request.key.clone();
+        changed.method = method;
+        assert!(matches!(
+            ledger.api_create_receipt(&api_context(), &changed, &request.request_digest),
+            Err(LedgerError::Invalid(_))
+        ));
+    }
+    for target in [
+        "/api/v1/environments/",
+        "/api/v1/environments?ignored=true",
+        "/api/v1/workspaces",
+    ] {
+        let mut changed = request.key.clone();
+        changed.canonical_target = target.into();
+        assert!(matches!(
+            ledger.api_create_receipt(&api_context(), &changed, &request.request_digest),
+            Err(LedgerError::Invalid(_))
+        ));
+    }
+    for foreign_host in [false, true] {
+        let mut foreign = api_context();
+        if foreign_host {
+            foreign.host = "other-host".into();
+        } else {
+            foreign.principal = "other-owner".into();
+        }
+        assert!(matches!(
+            ledger.api_create_receipt(&foreign, &request.key, &request.request_digest),
+            Err(LedgerError::Conflict)
+        ));
+        let mut own_key = request.key.clone();
+        own_key.host = foreign.host.clone();
+        own_key.principal = foreign.principal.clone();
+        assert!(
+            ledger
+                .api_create_receipt(&foreign, &own_key, &request.request_digest)
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            ledger
+                .api_operation(&foreign, &request.operation_id)
+                .unwrap()
+                .is_none()
+        );
+    }
+    let mut stale = api_context();
+    stale.authority = authority("policy-2");
+    assert!(matches!(
+        ledger.api_create_receipt(&stale, &request.key, &request.request_digest),
+        Err(LedgerError::StaleAuthority)
+    ));
+    let mut malformed = request.key.clone();
+    malformed.key = "not-a-uuid".into();
+    assert!(matches!(
+        ledger.api_create_receipt(&api_context(), &malformed, &request.request_digest),
+        Err(LedgerError::Invalid(_))
+    ));
+    assert_eq!(persisted_files(&fixture), before);
+}
+
+#[test]
 fn lookup_preserves_history_but_never_claims_absence_during_publication() {
     let fixture = Fixture::new();
     let ledger = fixture.ledger_with(inventory(&[]));
@@ -657,6 +841,11 @@ fn lookup_preserves_history_but_never_claims_absence_during_publication() {
         permit.provision(kind, |_| Ok(())).unwrap();
     }
     let completed = permit.complete(101).unwrap();
+    let request_digest = mutation().request_digest;
+    let original = ledger
+        .api_create_receipt(&api_context(), &mutation().key, &request_digest)
+        .unwrap()
+        .unwrap();
     let mut absent = mutation().key;
     absent.key = "00000000-0000-4000-8000-000000000002".into();
     assert_eq!(
@@ -688,6 +877,23 @@ fn lookup_preserves_history_but_never_claims_absence_during_publication() {
         reopened.api_lookup(&next_epoch, &absent).unwrap(),
         ApiLookup::Unknown
     );
+    let before_read = persisted_files(&fixture);
+    for context in [api_context(), next_epoch] {
+        assert_eq!(
+            reopened
+                .api_create_receipt(&context, &mutation().key, &request_digest)
+                .unwrap(),
+            Some(original.clone())
+        );
+        // None carries no absence proof: api_lookup above remains Unknown.
+        assert!(
+            reopened
+                .api_create_receipt(&context, &absent, &request_digest)
+                .unwrap()
+                .is_none()
+        );
+    }
+    assert_eq!(persisted_files(&fixture), before_read);
     assert_eq!(reopened.snapshot().unwrap().revision, pending_revision);
 
     reopened
@@ -697,6 +903,10 @@ fn lookup_preserves_history_but_never_claims_absence_during_publication() {
         .unwrap();
     assert!(matches!(
         reopened.api_lookup(&api_context(), &mutation().key),
+        Err(LedgerError::StaleAuthority)
+    ));
+    assert!(matches!(
+        reopened.api_create_receipt(&api_context(), &mutation().key, &request_digest),
         Err(LedgerError::StaleAuthority)
     ));
     let mut published = api_context();
@@ -713,6 +923,12 @@ fn lookup_preserves_history_but_never_claims_absence_during_publication() {
     assert_eq!(
         reopened.api_lookup(&published, &mutation().key).unwrap(),
         ApiLookup::Found(Box::new(completed))
+    );
+    assert_eq!(
+        reopened
+            .api_create_receipt(&published, &mutation().key, &request_digest)
+            .unwrap(),
+        Some(original)
     );
 }
 
@@ -1688,6 +1904,118 @@ fn abort_observation(
             state: states[index],
         }),
     }
+}
+
+#[test]
+fn owned_create_receipt_retains_aborted_metadata_but_only_effective_owned_grants() {
+    let fixture = Fixture::new();
+    let ledger = fixture.ledger_with(inventory(&[]));
+    let mut first = spec("env-a");
+    first.grants = vec![ActionGrant {
+        id: "retain-env-a".into(),
+        action: ApiAction::WorkspacesRetain,
+        target: ApiTarget::Workspace {
+            id: first.workspace_id.clone(),
+        },
+        expires_at: None,
+    }];
+    let request = mutation();
+    ledger
+        .api_queue_create(&api_context(), &request, &first, 0, |_, _, spec| {
+            Ok(policy(spec))
+        })
+        .unwrap();
+    // Create receipt metadata does not confer a general resource-read grant.
+    let visible = ledger.api_snapshot(&api_context()).unwrap();
+    assert!(visible.environments.is_empty() && visible.workspaces.is_empty());
+    assert_eq!(
+        ledger
+            .api_create_receipt(&api_context(), &request.key, &request.request_digest)
+            .unwrap()
+            .unwrap()
+            .environment
+            .spec,
+        first
+    );
+    let mut second = mutation();
+    second.operation_id = "api-op-2".into();
+    second.key.key = "00000000-0000-4000-8000-000000000002".into();
+    second.request_digest = format!("sha256:{}", "b".repeat(64));
+    ledger
+        .api_queue_create(
+            &api_context(),
+            &second,
+            &spec("env-b"),
+            visible.grants_revision,
+            |_, _, spec| Ok(policy(spec)),
+        )
+        .unwrap();
+    let revision = ledger.snapshot().unwrap().revision;
+    let aborted = ledger
+        .api_abort_create(
+            &authority("policy-1"),
+            &request.operation_id,
+            revision,
+            101,
+            |op, _, rows| {
+                Ok(abort_observation(
+                    op,
+                    rows,
+                    [CreateAbortStorageState::Absent; 2],
+                ))
+            },
+        )
+        .unwrap();
+    let reopened = fixture.open("ledger").unwrap();
+    let before = persisted_files(&fixture);
+    let history = reopened
+        .api_create_receipt(&api_context(), &request.key, &request.request_digest)
+        .unwrap()
+        .unwrap();
+    assert_eq!(history.operation, aborted);
+    assert_eq!(history.environment.state, EnvironmentState::Aborted);
+    assert_eq!(history.environment.spec, first);
+    assert_eq!(history.workspace.id, first.workspace_id);
+    assert_eq!(history.workspace.revision, aborted.updated_revision);
+    assert_eq!(history.grants, spec("env-b").grants);
+    let owned = reopened.api_snapshot(&api_context()).unwrap();
+    assert_eq!(history.grants, owned.grants);
+    assert_eq!(owned.environments.len(), 1);
+    assert_eq!(owned.environments[0].spec.instance.id, "env-b");
+    assert_eq!(owned.workspaces.len(), 1);
+    assert_eq!(persisted_files(&fixture), before);
+
+    let mut foreign = api_context();
+    foreign.principal = "other-owner".into();
+    let mut foreign_spec = spec("env-c");
+    foreign_spec.instance.owner_id = foreign.principal.clone();
+    let mut third = mutation();
+    third.operation_id = "api-op-3".into();
+    third.key.principal = foreign.principal.clone();
+    third.key.key = "00000000-0000-4000-8000-000000000003".into();
+    reopened
+        .api_queue_create(
+            &foreign,
+            &third,
+            &foreign_spec,
+            owned.grants_revision,
+            |_, _, spec| Ok(policy(spec)),
+        )
+        .unwrap();
+    let before = persisted_files(&fixture);
+    assert_eq!(
+        reopened
+            .api_create_receipt(&api_context(), &request.key, &request.request_digest)
+            .unwrap(),
+        Some(history)
+    );
+    let foreign_receipt = reopened
+        .api_create_receipt(&foreign, &third.key, &third.request_digest)
+        .unwrap()
+        .unwrap();
+    assert_eq!(foreign_receipt.grants, foreign_spec.grants);
+    assert_eq!(foreign_receipt.workspace.owner_id, foreign.principal);
+    assert_eq!(persisted_files(&fixture), before);
 }
 
 #[test]
