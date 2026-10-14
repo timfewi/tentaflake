@@ -432,6 +432,28 @@
         )
         return unit + "\n" + node.succeed("cat " + exec_start)
 
+    def security_posture(node):
+        status, output = node.execute("tentaflake doctor --security --json")
+        assert status == 1, output
+        report = json.loads(output)
+        assert report["profile"] == "balanced", report
+        # These stopped definitions intentionally lack their requested grants.
+        # The aggregate doctor must refuse them while individual healthy
+        # subsystems remain inspectable. Unexpected severe findings still fail.
+        severe = {
+            (finding["agent"], finding["id"])
+            for finding in report["findings"]
+            if finding["severity"] in ("high", "critical")
+        }
+        assert severe == {
+            ("generic-missing-model", "TFSEC-040"),
+            ("hermes-test", "TFSEC-040"),
+            ("hermes-test", "TFSEC-041"),
+            ("zeroclaw-assistant", "TFSEC-040"),
+            ("zeroclaw-assistant", "TFSEC-041"),
+        }, report
+        return report
+
     def wait_for_broker_health(node, endpoint, diagnostic):
         try:
             node.wait_until_succeeds(
@@ -553,15 +575,10 @@
         assert json.loads(report)["unknown_agents"] == ["agent-1"], report
 
     with subtest("security doctor reports exact missing grants for stopped capsules"):
-        status, report = machine.execute("tentaflake doctor --security --json")
-        assert status == 1, report
-        posture = json.loads(report)
-        assert posture["profile"] == "balanced", posture
+        posture = security_posture(machine)
         findings = {finding["id"] for finding in posture["findings"]}
-        assert {"TFSEC-040", "TFSEC-041"} <= findings, report
-        assert "TFSEC-013" not in findings, report
-        assert "TFSEC-002" not in report, report
-        assert "TFSEC-011" not in report, report
+        assert {"TFSEC-040", "TFSEC-041"} <= findings, posture
+        assert {"TFSEC-013", "TFSEC-002", "TFSEC-011"}.isdisjoint(findings), posture
 
     with subtest("declared agent produced its systemd unit"):
         # oci-containers names the unit docker-<container>.service.
@@ -905,11 +922,9 @@
             "journalctl --no-pager -b -u "
             "tentaflake-broker-fetch-zeroclaw-assistant.service -n 100",
         )
-        broker_report = machine.succeed(
-            "tentaflake doctor --security --json"
-        )
-        assert "TFSEC-035" not in broker_report, broker_report
-        assert "TFSEC-036" not in broker_report, broker_report
+        broker_report = security_posture(machine)
+        broker_findings = {finding["id"] for finding in broker_report["findings"]}
+        assert {"TFSEC-035", "TFSEC-036"}.isdisjoint(broker_findings), broker_report
         machine.succeed(
             "docker network inspect tf-zeroclaw-assistant | "
             "jq -e '.[0].Internal == true and "
@@ -1578,10 +1593,8 @@
             "tentaflake-backup-success.service; "
             "exit 1; }"
         )
-        fresh_report = machine.succeed(
-            "tentaflake doctor --security --json"
-        )
-        assert "TFSEC-027" not in fresh_report, fresh_report
+        fresh_report = security_posture(machine)
+        assert all(finding["id"] != "TFSEC-027" for finding in fresh_report["findings"]), fresh_report
         machine.succeed(
             "restic -r /var/lib/tentaflake-test-restic "
             "--password-file "
