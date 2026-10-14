@@ -78,6 +78,9 @@ pub(crate) struct Tools {
     pub docker: PathBuf,
     #[serde(default)]
     pub nix_store: Option<PathBuf>,
+    // Offline schema-v3 plans predate the live model collector.
+    pub nft: Option<PathBuf>,
+    pub ip: Option<PathBuf>,
 }
 
 pub(crate) fn store_path(path: &Path) -> bool {
@@ -233,6 +236,9 @@ impl HostPlan {
             &self.tools.docker,
         ]
         .iter()
+        .copied()
+        .chain(self.tools.nft.iter())
+        .chain(self.tools.ip.iter())
         .any(|path| !store_path(path))
         {
             return Err("host admission tools must use immutable store paths".into());

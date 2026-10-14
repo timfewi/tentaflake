@@ -3,13 +3,15 @@
 use crate::admission_host::{
     HostPlan, load_plan, open_store_entry, open_store_file, read_store_document, store_path,
 };
+use crate::admission_model::{self, ModelSpec, ReadyModel, Stage};
+use crate::admission_research::{self, ReadyResearch, ResearchSpec};
 use crate::admission_runtime::{LEDGER, authority, installed, require_root};
 use crate::admission_systemd::{self, ExecCommand, UnitObservation};
 use serde::Deserialize;
 use serde_json::{Map, Value};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, File};
-use std::io::{self, Read};
+use std::io::{self, Read, Seek};
 use std::os::fd::AsRawFd;
 use std::os::unix::fs::{FileTypeExt, MetadataExt};
 use std::os::unix::net::UnixDatagram;
@@ -22,7 +24,7 @@ use tentaflake_admission::ledger::{
     RuntimeIntent, SupervisorIdentity,
 };
 use tentaflake_admission::{
-    AdmissionRequest, AdmissionSnapshot, EvidenceKind, EvidenceSource, EvidenceStatus,
+    AdmissionRequest, AdmissionSnapshot, Capability, EvidenceKind, EvidenceSource, EvidenceStatus,
     ExpectedRevisions, ReadinessEvidence, ReadinessGeneration, ReadinessSnapshot, ReservationState,
     SCHEMA_VERSION, StorageKind,
 };
@@ -39,6 +41,8 @@ pub(crate) struct RuntimeSpec {
     pub unit: String,
     pub container: ContainerSpec,
     pub provenance: Option<Provenance>,
+    pub model: Option<ModelSpec>,
+    pub research: Option<ResearchSpec>,
 }
 
 /// Closed projection of the final upstream OCI container, after the shared
@@ -397,20 +401,105 @@ pub(crate) fn validate_runtime(
         return Err("invalid image provenance policy".into());
     }
     let limits = containment(plan, id, spec)?;
-    crate::admission_worker::validate_results_mounts(plan, id, &limits.mounts)?;
-    if instance.requested_capabilities.is_empty()
-        && (!c.networks.is_empty()
-            || !c.environment_files.is_empty()
-            || !c.extra_options.iter().any(|v| v == "--network=none")
-            || c.extra_options
-                .iter()
-                .any(|v| v.starts_with("--dns") || v.starts_with("--sysctl"))
-            || limits
-                .mounts
-                .iter()
-                .any(|m| !m.writable && !store_path(Path::new(&m.source))))
+    let worker_results =
+        crate::admission_worker::validate_results_mounts(plan, id, &limits.mounts)?;
+    let network_options: Vec<_> = c
+        .extra_options
+        .iter()
+        .filter(|option| {
+            option.starts_with("--network")
+                || option.starts_with("--dns")
+                || option.starts_with("--sysctl")
+        })
+        .map(String::as_str)
+        .collect();
+    if let Some(model) = &spec.model {
+        admission_model::validate(id, model)?;
+        if !instance.requested_capabilities.contains(&Capability::Model)
+            || plan.tools.nft.is_none()
+            || plan.tools.ip.is_none()
+            || c.networks != [model.network.name.clone()]
+            || c.environment_files != [model.environment_file.to_string_lossy().into_owned()]
+            || network_options
+                != [
+                    "--dns=127.0.0.1",
+                    "--dns-option=attempts:1",
+                    "--sysctl=net.ipv6.conf.all.disable_ipv6=1",
+                ]
+            || c.environment.keys().any(|key| model_environment_key(key))
+        {
+            return Err("model OCI transport differs from its owned broker declaration".into());
+        }
+    } else if !c.networks.is_empty()
+        || !c.environment_files.is_empty()
+        || network_options != ["--network=none"]
     {
-        return Err("offline OCI definition has an external transport".into());
+        return Err("OCI external transport has no live capability collector".into());
+    }
+    if let Some(research) = &spec.research {
+        admission_research::validate(id, research)?;
+        if !instance
+            .requested_capabilities
+            .contains(&Capability::Research)
+            || c.environment
+                .get("TENTAFLAKE_RESEARCH_COMMAND")
+                .map(String::as_str)
+                != research.client.executable.to_str()
+            || c.environment
+                .get("TENTAFLAKE_RESEARCH_SOCKET")
+                .map(String::as_str)
+                != research.client.socket_destination.to_str()
+        {
+            return Err("Research OCI transport differs from its owned declaration".into());
+        }
+        let mut required: Vec<_> = research
+            .client
+            .closure_paths
+            .iter()
+            .map(|path| (path.as_path(), path.as_path()))
+            .collect();
+        required.push((
+            research
+                .relay
+                .socket_path
+                .parent()
+                .ok_or("invalid Research relay path")?,
+            Path::new("/run/tentaflake-research"),
+        ));
+        for (source, destination) in required {
+            if !limits.mounts.iter().any(|mount| {
+                !mount.writable
+                    && Path::new(&mount.source) == source
+                    && Path::new(&mount.destination) == destination
+            }) || limits.mounts.iter().any(|mount| {
+                let path = Path::new(&mount.destination);
+                path != destination
+                    && (path.starts_with(destination) || destination.starts_with(path))
+            }) {
+                return Err(
+                    "Research client or relay mount differs from its owned declaration".into(),
+                );
+            }
+        }
+    } else if c.environment.contains_key("TENTAFLAKE_RESEARCH_COMMAND")
+        || c.environment.contains_key("TENTAFLAKE_RESEARCH_SOCKET")
+    {
+        return Err("Research OCI environment has no owned transport declaration".into());
+    }
+    // Every read-only source needs its concrete owner, regardless of requested
+    // capabilities. Worker validation above supplies its one exact result pair.
+    if limits.mounts.iter().any(|mount| {
+        !mount.writable
+            && !store_path(Path::new(&mount.source))
+            && spec.research.as_ref().is_none_or(|research| {
+                research.relay.socket_path.parent() != Some(Path::new(&mount.source))
+                    || mount.destination != "/run/tentaflake-research"
+            })
+            && worker_results.is_none_or(|expected| {
+                expected.source != mount.source || expected.destination != mount.destination
+            })
+    }) {
+        return Err("OCI read-only mount has no immutable source or owned capability".into());
     }
     // autoStart is systemd policy, but remains revision-bound with every field.
     let _ = c.auto_start;
@@ -879,6 +968,7 @@ fn readiness(
     id: &str,
     generation: &str,
     now: u64,
+    collected: &StartEvidence,
 ) -> Result<ReadinessSnapshot, String> {
     let instance = &plan.instances[id];
     crate::admission_worker::observe_results(plan, id)?;
@@ -887,7 +977,7 @@ fn readiness(
         sources: Vec::new(),
         evidence: Vec::new(),
     };
-    let mut add = |kind, source_generation: String| {
+    let mut add = |kind, source_generation: String, expires_at| {
         result.sources.push(ReadinessGeneration {
             kind,
             generation: source_generation.clone(),
@@ -901,10 +991,28 @@ fn readiness(
             instance_revision: instance.revision.clone(),
             generation: source_generation,
             observed_at: now,
-            expires_at: now.saturating_add(5),
+            expires_at,
         });
     };
-    add(EvidenceKind::Runtime, generation.into());
+    add(
+        EvidenceKind::Runtime,
+        generation.into(),
+        now.saturating_add(5),
+    );
+    if let Some(model) = &collected.model {
+        add(
+            EvidenceKind::Model,
+            model.generation.clone(),
+            now.saturating_add(5),
+        );
+    }
+    if let Some(research) = &collected.research {
+        add(
+            EvidenceKind::Research,
+            research.generation.clone(),
+            research.valid_until,
+        );
+    }
     for volume in plan.volumes.iter().filter(|v| v.spec.instance_id == id) {
         let unit = admission_systemd::inspect_unit(&plan.tools.busctl, &volume.units.owner)?;
         let service = unit.service.as_ref().ok_or("quota owner unavailable")?;
@@ -970,10 +1078,10 @@ fn readiness(
                 StorageKind::State => EvidenceKind::StateQuota,
             },
             source_generation,
+            now.saturating_add(5),
         );
     }
-    // No synthetic Model/Research/Worker evidence: the core denies requested
-    // capabilities until their independently generation-bound collectors exist.
+    // Worker still requires an independently generation-bound collector.
     Ok(result)
 }
 fn current_authority(
@@ -999,6 +1107,7 @@ fn create_args(
     spec: &RuntimeSpec,
     intent: &RuntimeIntent,
     operation: &str,
+    model: Option<&ReadyModel>,
 ) -> Vec<String> {
     let c = &spec.container;
     let mut args: Vec<String> = [
@@ -1027,6 +1136,13 @@ fn create_args(
     }
     for (key, value) in &c.environment {
         args.extend(["--env".into(), format!("{key}={value}")]);
+    }
+    if let Some(model) = model {
+        args.extend([
+            "--network".into(),
+            model.network_id.clone(),
+            "--env-file=/proc/self/fd/0".into(),
+        ]);
     }
     for (flag, value) in [
         ("--user", &c.user),
@@ -1078,28 +1194,164 @@ fn env_map(values: Vec<String>) -> Result<BTreeMap<String, String>, String> {
     }
     Ok(map)
 }
+
+fn model_environment_key(key: &str) -> bool {
+    matches!(
+        key,
+        "TENTAFLAKE_BROKER_TOKEN"
+            | "OPENAI_API_KEY"
+            | "OPENAI_BASE_URL"
+            | "TENTAFLAKE_LLM_BASE_URL"
+    )
+}
+
+#[derive(Clone, Copy)]
+enum ModelExpectation<'a> {
+    Admit(Option<&'a ReadyModel>),
+    // Exact owned-CID retirement must remain possible when its broker is down.
+    Retire,
+}
+
+#[derive(Clone, Copy)]
+struct ContainerExpectation<'a> {
+    cid: &'a str,
+    running: bool,
+    model: ModelExpectation<'a>,
+}
+
+fn projected_environment(
+    spec: &RuntimeSpec,
+    image: &Map<String, Value>,
+    observed: &Map<String, Value>,
+    expectation: ModelExpectation<'_>,
+) -> Result<BTreeMap<String, String>, String> {
+    let mut environment = env_map(string_array(image.get("Env"))?)?;
+    environment.extend(spec.container.environment.clone());
+    match (&spec.model, expectation) {
+        (Some(_), ModelExpectation::Admit(Some(model))) => {
+            environment.extend(model.environment.clone())
+        }
+        (Some(spec), ModelExpectation::Retire) => {
+            let actual = env_map(string_array(observed.get("Env"))?)?;
+            let token = actual
+                .get("TENTAFLAKE_BROKER_TOKEN")
+                .ok_or("owned model environment unavailable")?;
+            if token.len() != 64
+                || !token
+                    .bytes()
+                    .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+                || actual.get("OPENAI_API_KEY") != Some(token)
+            {
+                return Err("owned model environment changed".into());
+            }
+            environment.insert("TENTAFLAKE_BROKER_TOKEN".into(), token.clone());
+            environment.insert("OPENAI_API_KEY".into(), token.clone());
+            let endpoint = format!("http://{}:{}/v1", spec.network.gateway, spec.port);
+            environment.insert("OPENAI_BASE_URL".into(), endpoint.clone());
+            environment.insert("TENTAFLAKE_LLM_BASE_URL".into(), endpoint);
+        }
+        (None, ModelExpectation::Admit(None) | ModelExpectation::Retire) => {}
+        _ => return Err("model launch has no prepared transport".into()),
+    }
+    Ok(environment)
+}
+
+fn model_attachment(
+    spec: &ModelSpec,
+    object: &Map<String, Value>,
+    host: &Map<String, Value>,
+    expected: ContainerExpectation<'_>,
+) -> Result<(), String> {
+    let mode = host
+        .get("NetworkMode")
+        .and_then(Value::as_str)
+        .ok_or("model network mode unavailable")?;
+    if mode.len() != 64
+        || !mode
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+    {
+        return Err("model network is not bound by full ID".into());
+    }
+    if let ModelExpectation::Admit(prepared) = expected.model
+        && prepared.is_none_or(|ready| ready.network_id != mode)
+    {
+        return Err("model network differs from the collected identity".into());
+    }
+    let networks = object
+        .get("NetworkSettings")
+        .and_then(|s| s.get("Networks"))
+        .and_then(Value::as_object)
+        .ok_or("model network attachment unavailable")?;
+    let endpoint = networks
+        .get(&spec.network.name)
+        .and_then(Value::as_object)
+        .ok_or("model endpoint unavailable")?;
+    let network_id = endpoint
+        .get("NetworkID")
+        .and_then(Value::as_str)
+        .ok_or("model network ID unavailable")?;
+    if networks.len() != 1
+        || (network_id != mode && (expected.running || !network_id.is_empty()))
+        || string_array(host.get("Dns"))? != ["127.0.0.1"]
+        || string_array(host.get("DnsOptions"))? != ["attempts:1"]
+        || !string_array(host.get("DnsSearch"))?.is_empty()
+        || host.get("Sysctls") != Some(&serde_json::json!({"net.ipv6.conf.all.disable_ipv6":"1"}))
+        || endpoint.get("GlobalIPv6Address").and_then(Value::as_str) != Some("")
+        || endpoint.get("IPv6Gateway").and_then(Value::as_str) != Some("")
+    {
+        return Err("model network boundary differs from its declaration".into());
+    }
+    if expected.running {
+        let gateway = spec
+            .network
+            .gateway
+            .parse::<std::net::Ipv4Addr>()
+            .map_err(|_| "invalid model gateway")?;
+        let address = std::net::Ipv4Addr::from(
+            u32::from(gateway)
+                .checked_add(1)
+                .ok_or("invalid model subnet")?,
+        )
+        .to_string();
+        let endpoint_id = endpoint
+            .get("EndpointID")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        if endpoint_id.len() != 64
+            || !endpoint_id
+                .bytes()
+                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+            || endpoint.get("IPAddress").and_then(Value::as_str) != Some(address.as_str())
+            || endpoint.get("IPPrefixLen").and_then(Value::as_u64) != Some(30)
+            || endpoint.get("Gateway").and_then(Value::as_str)
+                != Some(spec.network.gateway.as_str())
+        {
+            return Err("running model endpoint differs from its isolated subnet".into());
+        }
+    }
+    Ok(())
+}
+
 fn exact_container(
     plan: &HostPlan,
     id: &str,
     spec: &RuntimeSpec,
     receipt: &Receipt,
     image_config: &Map<String, Value>,
-    cid: &str,
-    running: bool,
+    expected: ContainerExpectation<'_>,
 ) -> Result<(), String> {
     let observed = docker_json(
         plan,
-        &["container", "inspect", "--format", "{{json .}}", cid],
+        &[
+            "container",
+            "inspect",
+            "--format",
+            "{{json .}}",
+            expected.cid,
+        ],
     )?;
-    validate_container(
-        plan,
-        id,
-        spec,
-        receipt,
-        image_config,
-        (cid, running),
-        &observed,
-    )
+    validate_container(plan, id, spec, receipt, image_config, expected, &observed)
 }
 
 fn validate_container(
@@ -1108,10 +1360,10 @@ fn validate_container(
     spec: &RuntimeSpec,
     receipt: &Receipt,
     image_config: &Map<String, Value>,
-    expected: (&str, bool),
+    expected: ContainerExpectation<'_>,
     observed: &Value,
 ) -> Result<(), String> {
-    let (cid, running) = expected;
+    let ContainerExpectation { cid, running, .. } = expected;
     let object = observed
         .as_object()
         .ok_or("invalid container observation")?;
@@ -1166,8 +1418,7 @@ fn validate_container(
     ] {
         labels.insert(key.into(), Value::String(value.into()));
     }
-    let mut environment = env_map(string_array(image_config.get("Env"))?)?;
-    environment.extend(c.environment.clone());
+    let environment = projected_environment(spec, image_config, config, expected.model)?;
     let expected_cmd = if c.cmd.is_empty() {
         if c.entrypoint.is_some() {
             vec![]
@@ -1225,12 +1476,15 @@ fn validate_container(
         || host.get("ReadonlyRootfs").and_then(Value::as_bool) != Some(true)
         || host.get("Privileged").and_then(Value::as_bool) != Some(false)
         || host.get("Runtime").and_then(Value::as_str) != Some("runsc")
-        || host.get("NetworkMode").and_then(Value::as_str) != Some("none")
+        || (spec.model.is_none() && host.get("NetworkMode").and_then(Value::as_str) != Some("none"))
         || crate::live_security_options_security(Some(host)) != crate::LiveContainerState::Secure
         || crate::live_capabilities_security(object, Some(host), "docker")
             != crate::LiveContainerState::Secure
     {
         return Err("created container containment differs from the declared boundary".into());
+    }
+    if let Some(model) = &spec.model {
+        model_attachment(model, object, host, expected)?;
     }
     if host
         .get("Tmpfs")
@@ -1248,7 +1502,9 @@ fn validate_container(
         && crate::live_observed_security_drift(
             object,
             "docker",
-            "none",
+            spec.model
+                .as_ref()
+                .map_or("none", |model| &model.network.name),
             &declared.mounts,
             &declared.tmpfs,
             &declared.resources,
@@ -1408,21 +1664,30 @@ fn start_runtime(
             },
         });
     let mut image_config = Map::new();
-    let mut sources = Vec::new();
-    let mut immutable_mounts = Vec::new();
+    let mut evidence = StartEvidence::default();
     let outcome = ledger
         .claim(&request, |published| {
             current_authority(plan, path, published)?;
             if caller(plan, path, id, spec, Lifecycle::Start)? != supervisor {
                 return Err("runtime supervisor identity changed".into());
             }
-            immutable_mounts =
+            evidence.immutable_mounts =
                 capture_store_mounts(&containment(plan, id, spec)?.mounts, open_store_entry)?;
-            let now = timestamp()?;
             let (boot_id, daemon) = daemon(plan)?;
             let runtime_generation = format!("{boot_id}:{}", daemon.invocation_id);
-            let readiness = readiness(plan, path, id, &runtime_generation, now)?;
-            sources = readiness.sources.clone();
+            evidence.model = spec
+                .model
+                .as_ref()
+                .map(|model| admission_model::collect(plan, id, model, Stage::BeforeCreate))
+                .transpose()?;
+            evidence.research = spec
+                .research
+                .as_ref()
+                .map(|research| admission_research::collect(plan, id, research))
+                .transpose()?;
+            let now = timestamp()?;
+            let readiness = readiness(plan, path, id, &runtime_generation, now, &evidence)?;
+            evidence.sources = readiness.sources.clone();
             let (image_id, config) = image(plan, spec)?;
             image_config = config;
             if spec.provenance.is_some() {
@@ -1470,10 +1735,34 @@ fn start_runtime(
         .ok_or("new runtime permit has no intent")?
         .intent
         .clone();
-    unchanged(plan, &intent)?;
-    let args = create_args(id, spec, &intent, &request.operation_id);
-    recheck_store_mounts(&immutable_mounts, open_store_entry)?;
-    let output = mutate(docker(plan).args(&args), &fence, Duration::from_secs(60))?;
+    let args = create_args(
+        id,
+        spec,
+        &intent,
+        &request.operation_id,
+        evidence.model.as_ref(),
+    );
+    let mut create = docker(plan);
+    create.args(&args);
+    if let Some(model) = &evidence.model {
+        let mut file = model
+            .environment_file
+            .try_clone()
+            .map_err(|_| "cannot retain prepared model environment")?;
+        file.rewind()
+            .map_err(|_| "cannot rewind prepared model environment")?;
+        create.stdin(Stdio::from(file));
+    }
+    refresh_prerequisites(
+        plan,
+        path,
+        id,
+        spec,
+        &intent,
+        &evidence,
+        Stage::BeforeCreate,
+    )?;
+    let output = mutate(&mut create, &fence, Duration::from_secs(60))?;
     let cid = std::str::from_utf8(&output)
         .ok()
         .map(str::trim)
@@ -1483,22 +1772,51 @@ fn start_runtime(
                     .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
         })
         .ok_or("create did not return one exact container ID; claim remains charged")?;
-    exact_container(plan, id, spec, permit.receipt(), &image_config, cid, false)?;
+    let created = ContainerExpectation {
+        cid,
+        running: false,
+        model: ModelExpectation::Admit(evidence.model.as_ref()),
+    };
+    exact_container(plan, id, spec, permit.receipt(), &image_config, created)?;
     permit.bind_container(cid).map_err(|e| e.to_string())?;
-    refresh_prerequisites(plan, path, id, spec, &intent, &sources)?;
-    recheck_store_mounts(&immutable_mounts, open_store_entry)?;
+    refresh_prerequisites(
+        plan,
+        path,
+        id,
+        spec,
+        &intent,
+        &evidence,
+        Stage::Created(cid),
+    )?;
     mutate(
         docker(plan).args(["container", "start", cid]),
         &fence,
         Duration::from_secs(60),
     )?;
-    exact_container(plan, id, spec, permit.receipt(), &image_config, cid, true)?;
-    refresh_prerequisites(plan, path, id, spec, &intent, &sources)?;
-    recheck_store_mounts(&immutable_mounts, open_store_entry)?;
+    exact_container(
+        plan,
+        id,
+        spec,
+        permit.receipt(),
+        &image_config,
+        ContainerExpectation {
+            running: true,
+            ..created
+        },
+    )?;
+    refresh_prerequisites(
+        plan,
+        path,
+        id,
+        spec,
+        &intent,
+        &evidence,
+        Stage::Running(cid),
+    )?;
     permit
         .complete(Observation::Running)
         .map_err(|e| e.to_string())?;
-    drop(immutable_mounts);
+    drop(evidence);
     drop(fence);
     notify_ready()?;
     // Readers inherit no admission locks. Journal forwarding has ordinary child
@@ -1559,23 +1877,90 @@ fn parse_wait_exit(value: &str) -> Result<u8, String> {
         .map_err(|_| "invalid container wait exit status; claim remains charged".into())
 }
 
+#[derive(Default)]
+struct StartEvidence {
+    immutable_mounts: Vec<StoreMount>,
+    sources: Vec<ReadinessGeneration>,
+    model: Option<ReadyModel>,
+    research: Option<ReadyResearch>,
+}
+
 fn refresh_prerequisites(
     plan: &HostPlan,
     path: &Path,
     id: &str,
     spec: &RuntimeSpec,
     intent: &RuntimeIntent,
-    original: &[ReadinessGeneration],
+    original: &StartEvidence,
+    stage: Stage<'_>,
 ) -> Result<(), String> {
     installed(path)?;
     if caller(plan, path, id, spec, Lifecycle::Start)? != intent.supervisor {
         return Err("runtime supervisor changed during dispatch".into());
     }
-    let fresh = readiness(plan, path, id, &intent.runtime_generation, timestamp()?)?;
-    if fresh.sources != original {
-        return Err("quota generation changed during dispatch; claim remains charged".into());
+    let model = spec
+        .model
+        .as_ref()
+        .map(|model| admission_model::collect(plan, id, model, stage))
+        .transpose()?;
+    match (&original.model, &model) {
+        (Some(original), Some(fresh)) if original.same_source(fresh) => {}
+        (None, None) => {}
+        _ => return Err("model transport changed during dispatch; claim remains charged".into()),
     }
-    unchanged(plan, intent)
+    let research = spec
+        .research
+        .as_ref()
+        .map(|research| admission_research::collect(plan, id, research))
+        .transpose()?;
+    match (&original.research, &research) {
+        (Some(original), Some(fresh)) if original.same_source(fresh) => {}
+        (None, None) => {}
+        _ => {
+            return Err("Research transport changed during dispatch; claim remains charged".into());
+        }
+    }
+    let collected = StartEvidence {
+        model,
+        research,
+        ..Default::default()
+    };
+    let fresh = readiness(
+        plan,
+        path,
+        id,
+        &intent.runtime_generation,
+        timestamp()?,
+        &collected,
+    )?;
+    if fresh.sources != original.sources {
+        return Err("readiness generation changed during dispatch; claim remains charged".into());
+    }
+    unchanged(plan, intent)?;
+    // Source reopens can consume a short Research lease, just like daemon
+    // observations. The timestamp must be sampled only after those reads.
+    finish_prerequisites(
+        &fresh,
+        || recheck_store_mounts(&original.immutable_mounts, open_store_entry),
+        timestamp,
+    )
+}
+
+fn finish_prerequisites(
+    fresh: &ReadinessSnapshot,
+    recheck_sources: impl FnOnce() -> Result<(), String>,
+    now: impl FnOnce() -> Result<u64, String>,
+) -> Result<(), String> {
+    recheck_sources()?;
+    let now = now()?;
+    if fresh
+        .evidence
+        .iter()
+        .any(|evidence| evidence.expires_at <= now)
+    {
+        return Err("readiness expired during dispatch; claim remains charged".into());
+    }
+    Ok(())
 }
 
 fn ledger_snapshot_placeholder(plan: &HostPlan) -> tentaflake_admission::ReservationSnapshot {
@@ -1669,14 +2054,36 @@ fn stop_runtime(
                 )?
                 .as_bool()
                 .ok_or("container running state unavailable")?;
-                exact_container(plan, id, spec, recorded, &config, cid, state)?;
+                exact_container(
+                    plan,
+                    id,
+                    spec,
+                    recorded,
+                    &config,
+                    ContainerExpectation {
+                        cid,
+                        running: state,
+                        model: ModelExpectation::Retire,
+                    },
+                )?;
                 // A successful finite stop is needed even when wait already saw exit.
                 mutate(
                     docker(plan).args(["container", "stop", "--time", "30", cid]),
                     &fence,
                     Duration::from_secs(45),
                 )?;
-                exact_container(plan, id, spec, recorded, &config, cid, false)?;
+                exact_container(
+                    plan,
+                    id,
+                    spec,
+                    recorded,
+                    &config,
+                    ContainerExpectation {
+                        cid,
+                        running: false,
+                        model: ModelExpectation::Retire,
+                    },
+                )?;
                 unchanged(plan, &dispatch.intent)?;
                 mutate(
                     docker(plan).args(["container", "rm", cid]),
@@ -2238,6 +2645,439 @@ pub(crate) mod tests {
         }
     }
 
+    fn enable_model(plan: &mut HostPlan, spec: &mut RuntimeSpec) -> ReadyModel {
+        let model: ModelSpec = serde_json::from_value(json!({
+            "schemaVersion":1,"unit":"tentaflake-broker-llm-agent-fixture.service",
+            "executable":"/nix/store/00000000000000000000000000000000-broker/bin/tentaflake-broker",
+            "configuration":"/nix/store/00000000000000000000000000000000-broker.json",
+            "environmentFile":"/run/tentaflake-broker/agent-fixture/agent.env",
+            "network":{"name":"tf-agent-fixture","bridge":"tfb-12345678","subnet":"10.203.40.0/30","gateway":"10.203.40.1"},
+            "port":7810,"firewallTable":"tentaflake-broker-12345678","firewallPorts":[7810]
+        })).unwrap();
+        spec.container.networks = vec![model.network.name.clone()];
+        spec.container.environment_files = vec![model.environment_file.to_str().unwrap().into()];
+        spec.container
+            .extra_options
+            .retain(|option| option != "--network=none");
+        spec.container.extra_options.extend(
+            [
+                "--dns=127.0.0.1",
+                "--dns-option=attempts:1",
+                "--sysctl=net.ipv6.conf.all.disable_ipv6=1",
+            ]
+            .map(str::to_string),
+        );
+        plan.instances
+            .get_mut("agent-fixture")
+            .unwrap()
+            .requested_capabilities = vec![Capability::Model];
+        plan.tools.nft = Some("/nix/store/00000000000000000000000000000000-nft/bin/nft".into());
+        plan.tools.ip = Some("/nix/store/00000000000000000000000000000000-ip/bin/ip".into());
+        let ready = admission_model::fixture(&model);
+        spec.model = Some(model);
+        ready
+    }
+
+    fn enable_research(plan: &mut HostPlan, runtime: &mut RuntimeSpec) {
+        let research = admission_research::tests::spec();
+        plan.instances
+            .get_mut("agent-fixture")
+            .unwrap()
+            .requested_capabilities
+            .push(Capability::Research);
+        runtime.container.environment.insert(
+            "TENTAFLAKE_RESEARCH_COMMAND".into(),
+            research.client.executable.to_string_lossy().into_owned(),
+        );
+        runtime.container.environment.insert(
+            "TENTAFLAKE_RESEARCH_SOCKET".into(),
+            research
+                .client
+                .socket_destination
+                .to_string_lossy()
+                .into_owned(),
+        );
+        for path in &research.client.closure_paths {
+            runtime
+                .container
+                .volumes
+                .push(format!("{0}:{0}:ro", path.display()));
+        }
+        runtime
+            .container
+            .volumes
+            .push("/run/tentaflake-research/agent-fixture:/run/tentaflake-research:ro".into());
+        runtime.research = Some(research);
+    }
+
+    #[test]
+    fn research_projection_requires_the_exact_client_and_relay_mounts() {
+        for change in 0..10 {
+            let (mut plan, mut runtime, _, _, _) = fixture();
+            enable_research(&mut plan, &mut runtime);
+            validate_runtime(&plan, "agent-fixture", &runtime).unwrap();
+            match change {
+                0 => runtime.research = None,
+                1 => plan.instances.get_mut("agent-fixture").unwrap().requested_capabilities.clear(),
+                2 => { runtime.container.environment.remove("TENTAFLAKE_RESEARCH_COMMAND"); }
+                3 => { runtime.container.environment.insert("TENTAFLAKE_RESEARCH_SOCKET".into(), "/run/foreign/socket".into()); }
+                4 => { runtime.container.volumes.pop(); }
+                5 => { *runtime.container.volumes.last_mut().unwrap() = "/run/tentaflake-research/foreign:/run/tentaflake-research:ro".into(); }
+                6 => { runtime.container.volumes.remove(2); }
+                7 => runtime.container.volumes.push("/nix/store/00000000000000000000000000000000-shadow:/run/tentaflake-research/socket:ro".into()),
+                8 => runtime.container.volumes.push("/run/private:/private:ro".into()),
+                _ => {
+                    let destination = runtime.research.as_ref().unwrap().client.executable.display().to_string();
+                    runtime.container.volumes.push(format!("/nix/store/00000000000000000000000000000000-shadow:{destination}:ro"));
+                }
+            }
+            assert!(
+                validate_runtime(&plan, "agent-fixture", &runtime).is_err(),
+                "change {change}"
+            );
+        }
+    }
+
+    #[test]
+    fn readonly_authority_is_closed_for_every_capability_combination() {
+        for requested in 0..8 {
+            for extra in [
+                "/srv/private:/private:ro",
+                "/nix/store:/all-store:ro",
+                "/nix/store/00000000000000000000000000000000-source/../other:/alias:ro",
+                "/run/tentaflake-research/foreign:/foreign-relay:ro",
+                "/run/tentaflake-research/agent-fixture:/relay-alias:ro",
+                "/var/lib/tentaflake-worker-agent-fixture/results:/results-alias:ro",
+            ] {
+                let (mut plan, mut spec) = if requested & 4 != 0 {
+                    worker_results_fixture()
+                } else {
+                    let (plan, spec, _, _, _) = fixture();
+                    (plan, spec)
+                };
+                if requested & 1 != 0 {
+                    enable_model(&mut plan, &mut spec);
+                    if requested & 4 != 0 {
+                        plan.instances
+                            .get_mut("agent-fixture")
+                            .unwrap()
+                            .requested_capabilities
+                            .push(Capability::Worker);
+                    }
+                }
+                if requested & 2 != 0 {
+                    enable_research(&mut plan, &mut spec);
+                }
+                spec.container
+                    .volumes
+                    .push(format!("{STORE_MOUNT}:/reference:ro"));
+                validate_runtime(&plan, "agent-fixture", &spec).unwrap();
+                // A valid mount declaration creates neither grants nor live
+                // Worker evidence; aggregate admission still owns those gates.
+                assert!(plan.policy.grants.is_empty());
+                spec.container.volumes.push(extra.into());
+                assert!(
+                    validate_runtime(&plan, "agent-fixture", &spec).is_err(),
+                    "capability bits {requested}, source {extra}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn final_lease_sample_follows_held_source_revalidation() {
+        let fixture = StoreFixture::new(false);
+        let mounts = fixture.capture();
+        let fresh = ReadinessSnapshot {
+            generation: "fixture".into(),
+            sources: vec![],
+            evidence: vec![ReadinessEvidence {
+                instance_id: "agent-fixture".into(),
+                kind: EvidenceKind::Research,
+                status: EvidenceStatus::Ready,
+                source: EvidenceSource::Live,
+                policy_revision: "fixture".into(),
+                instance_revision: "fixture".into(),
+                generation: "lease".into(),
+                observed_at: 10,
+                expires_at: 11,
+            }],
+        };
+        let clock = Cell::new(10);
+        let rechecked = Cell::new(false);
+        let result = finish_prerequisites(
+            &fresh,
+            || {
+                recheck_store_mounts(&mounts, |path| fixture.open(path))?;
+                rechecked.set(true);
+                clock.set(11);
+                Ok(())
+            },
+            || {
+                assert!(rechecked.get());
+                Ok(clock.get())
+            },
+        );
+        assert_eq!(
+            result.unwrap_err(),
+            "readiness expired during dispatch; claim remains charged"
+        );
+        finish_prerequisites(
+            &fresh,
+            || recheck_store_mounts(&mounts, |path| fixture.open(path)),
+            || Ok(10),
+        )
+        .unwrap();
+        fs::rename(
+            fixture.root.join("parent/source"),
+            fixture.root.join("parent/previous"),
+        )
+        .unwrap();
+        fs::write(fixture.root.join("parent/source"), b"replacement").unwrap();
+        assert!(
+            finish_prerequisites(
+                &fresh,
+                || { recheck_store_mounts(&mounts, |path| fixture.open(path)) },
+                || panic!("source refusal must precede the clock sample")
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn model_projection_requires_request_and_exact_owned_transport() {
+        for alter in 0..9 {
+            let (mut plan, mut spec, receipt, _, _) = fixture();
+            let ready = enable_model(&mut plan, &mut spec);
+            validate_runtime(&plan, "agent-fixture", &spec).unwrap();
+            let args = create_args(
+                "agent-fixture",
+                &spec,
+                &receipt.runtime.as_ref().unwrap().intent,
+                &receipt.request.operation_id,
+                Some(&ready),
+            );
+            assert!(
+                args.windows(2)
+                    .any(|pair| pair == ["--network", &ready.network_id])
+            );
+            assert!(args.iter().any(|arg| arg == "--env-file=/proc/self/fd/0"));
+            assert!(
+                !args
+                    .iter()
+                    .any(|arg| arg.contains(&ready.environment["TENTAFLAKE_BROKER_TOKEN"]))
+            );
+            match alter {
+                0 => spec.model = None,
+                1 => plan
+                    .instances
+                    .get_mut("agent-fixture")
+                    .unwrap()
+                    .requested_capabilities
+                    .clear(),
+                2 => spec.container.networks[0] = "foreign-network".into(),
+                3 => {
+                    spec.container.environment_files[0] =
+                        "/run/tentaflake-broker/foreign/agent.env".into()
+                }
+                4 => {
+                    spec.container
+                        .environment
+                        .insert("OPENAI_API_KEY".into(), "declarative-secret".into());
+                }
+                5 => spec
+                    .container
+                    .extra_options
+                    .push("--dns-search=example.test".into()),
+                6 => plan.tools.nft = None,
+                7 => spec.model.as_mut().unwrap().unit = "foreign.service".into(),
+                _ => spec
+                    .container
+                    .volumes
+                    .push("/run/private:/private:ro".into()),
+            }
+            assert!(
+                validate_runtime(&plan, "agent-fixture", &spec).is_err(),
+                "alteration {alter}"
+            );
+        }
+    }
+
+    #[test]
+    fn model_start_binds_prepared_secret_and_network_but_retirement_needs_no_broker() {
+        let (mut plan, mut spec, receipt, image, mut observed) = fixture();
+        let ready = enable_model(&mut plan, &mut spec);
+        let model = spec.model.as_ref().unwrap();
+        let mut env = vec!["BASE=1".to_owned(), "FIXTURE=yes".to_owned()];
+        env.extend(
+            ready
+                .environment
+                .iter()
+                .map(|(key, value)| format!("{key}={value}")),
+        );
+        observed["Config"]["Env"] = json!(env);
+        observed["AppArmorProfile"] = json!("docker-default");
+        observed["HostConfig"]["NetworkMode"] = json!(ready.network_id);
+        observed["HostConfig"]["Dns"] = json!(["127.0.0.1"]);
+        observed["HostConfig"]["DnsOptions"] = json!(["attempts:1"]);
+        observed["HostConfig"]["DnsSearch"] = json!([]);
+        observed["HostConfig"]["Sysctls"] = json!({"net.ipv6.conf.all.disable_ipv6":"1"});
+        observed["HostConfig"]["PublishAllPorts"] = json!(false);
+        observed["HostConfig"]["PortBindings"] = json!({});
+        observed["NetworkSettings"] = json!({"Ports":{},"Networks":{model.network.name.clone():{
+            "NetworkID":ready.network_id,"EndpointID":"c".repeat(64),"IPAddress":"10.203.40.2","IPPrefixLen":30,
+            "Gateway":model.network.gateway,"GlobalIPv6Address":"","IPv6Gateway":""
+        }}});
+        let cid = "b".repeat(64);
+        let created = ContainerExpectation {
+            cid: &cid,
+            running: false,
+            model: ModelExpectation::Admit(Some(&ready)),
+        };
+        validate_container(
+            &plan,
+            "agent-fixture",
+            &spec,
+            &receipt,
+            &image,
+            created,
+            &observed,
+        )
+        .unwrap();
+        let unprepared = ContainerExpectation {
+            model: ModelExpectation::Admit(None),
+            ..created
+        };
+        assert!(
+            validate_container(
+                &plan,
+                "agent-fixture",
+                &spec,
+                &receipt,
+                &image,
+                unprepared,
+                &observed
+            )
+            .is_err()
+        );
+        observed["State"]["Running"] = json!(true);
+        observed["State"]["Status"] = json!("running");
+        let running = ContainerExpectation {
+            running: true,
+            ..created
+        };
+        validate_container(
+            &plan,
+            "agent-fixture",
+            &spec,
+            &receipt,
+            &image,
+            running,
+            &observed,
+        )
+        .unwrap();
+        let retiring = ContainerExpectation {
+            model: ModelExpectation::Retire,
+            ..running
+        };
+        validate_container(
+            &plan,
+            "agent-fixture",
+            &spec,
+            &receipt,
+            &image,
+            retiring,
+            &observed,
+        )
+        .unwrap();
+        for (pointer, value) in [
+            ("/HostConfig/NetworkMode", json!("d".repeat(64))),
+            (
+                "/NetworkSettings/Networks/tf-agent-fixture/NetworkID",
+                json!("d".repeat(64)),
+            ),
+            (
+                "/NetworkSettings/Networks/tf-agent-fixture/IPAddress",
+                json!("10.203.40.1"),
+            ),
+            (
+                "/NetworkSettings/Networks/tf-agent-fixture/Gateway",
+                json!("10.203.41.1"),
+            ),
+            (
+                "/HostConfig/Sysctls/net.ipv6.conf.all.disable_ipv6",
+                json!("0"),
+            ),
+            ("/HostConfig/Dns", json!(["10.203.40.1"])),
+            ("/Config/Env", json!(["BASE=1", "OPENAI_API_KEY=wrong"])),
+        ] {
+            let mut changed = observed.clone();
+            *changed.pointer_mut(pointer).unwrap() = value;
+            assert!(
+                validate_container(
+                    &plan,
+                    "agent-fixture",
+                    &spec,
+                    &receipt,
+                    &image,
+                    running,
+                    &changed
+                )
+                .is_err(),
+                "{pointer}"
+            );
+            assert!(
+                validate_container(
+                    &plan,
+                    "agent-fixture",
+                    &spec,
+                    &receipt,
+                    &image,
+                    retiring,
+                    &changed
+                )
+                .is_err(),
+                "{pointer}"
+            );
+        }
+        let mut rotated = observed.clone();
+        let old_token = &ready.environment["TENTAFLAKE_BROKER_TOKEN"];
+        let replacement = if old_token == &"a".repeat(64) {
+            "d".repeat(64)
+        } else {
+            "a".repeat(64)
+        };
+        for value in rotated["Config"]["Env"].as_array_mut().unwrap() {
+            let entry = value.as_str().unwrap();
+            if entry.starts_with("TENTAFLAKE_BROKER_TOKEN=") || entry.starts_with("OPENAI_API_KEY=")
+            {
+                *value = json!(entry.replace(old_token, &replacement));
+            }
+        }
+        assert!(
+            validate_container(
+                &plan,
+                "agent-fixture",
+                &spec,
+                &receipt,
+                &image,
+                running,
+                &rotated
+            )
+            .is_err()
+        );
+        validate_container(
+            &plan,
+            "agent-fixture",
+            &spec,
+            &receipt,
+            &image,
+            retiring,
+            &rotated,
+        )
+        .unwrap();
+    }
+
     #[test]
     fn final_projection_binds_resources_and_never_adds_pull_or_remove() {
         let (plan, spec, receipt, _, _) = fixture();
@@ -2247,6 +3087,7 @@ pub(crate) mod tests {
             &spec,
             &receipt.runtime.as_ref().unwrap().intent,
             &receipt.request.operation_id,
+            None,
         );
         assert!(args.contains(&"--pull=never".into()));
         assert!(args.contains(&"--restart=no".into()));
@@ -2315,7 +3156,11 @@ pub(crate) mod tests {
             &spec,
             &receipt,
             &image,
-            (&cid, false),
+            ContainerExpectation {
+                cid: &cid,
+                running: false,
+                model: ModelExpectation::Admit(None),
+            },
             &observed,
         )
         .unwrap();
@@ -2342,7 +3187,11 @@ pub(crate) mod tests {
                     &spec,
                     &receipt,
                     &image,
-                    (&cid, false),
+                    ContainerExpectation {
+                        cid: &cid,
+                        running: false,
+                        model: ModelExpectation::Admit(None)
+                    },
                     &changed
                 )
                 .is_err(),

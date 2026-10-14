@@ -49,8 +49,13 @@ impl Broker {
     }
 
     pub fn handle(&self, request: Request) -> Response {
-        if request.method == "GET" && route_without_query(&request.path) == "/healthz" {
-            return match self.health() {
+        let probe = match (request.method.as_str(), route_without_query(&request.path)) {
+            ("GET", "/healthz") => Some(self.health()),
+            (_, "/readyz") => Some(self.readiness(&request)),
+            _ => None,
+        };
+        if let Some(result) = probe {
+            return match result {
                 Ok(()) => Response::json(200, json!({ "status": "ready" })),
                 Err(failure) => Response::json(failure.status, json!({ "error": failure.public })),
             };
@@ -84,6 +89,21 @@ impl Broker {
         self.audit
             .check_ready()
             .map_err(|_| Failure::new(503, "health", "audit log is unavailable"))
+    }
+
+    fn readiness(&self, request: &Request) -> Result<(), Failure> {
+        if request.method != "GET" {
+            return Err(Failure::new(405, "request", "only GET is accepted"));
+        }
+        if request.path != "/readyz" || !request.body.is_empty() {
+            return Err(Failure::new(
+                400,
+                "request",
+                "readiness requires an empty body and no query",
+            ));
+        }
+        self.require_auth(request)?;
+        self.health()
     }
 
     fn handle_llm(&self, request: Request) -> Result<Response, Failure> {
@@ -426,16 +446,7 @@ impl Broker {
         if request.method != "POST" {
             return Err(Failure::new(405, "request", "only POST is accepted"));
         }
-        let expected = read_secret(&self.config.token_file)
-            .map_err(|_| Failure::new(503, "auth", "broker credential is unavailable"))?;
-        let supplied = request
-            .headers
-            .get("authorization")
-            .and_then(|value| value.strip_prefix("Bearer "))
-            .ok_or_else(|| Failure::new(401, "auth", "bearer credential is required"))?;
-        if !crate::state::constant_time_eq(supplied.as_bytes(), expected.as_bytes()) {
-            return Err(Failure::new(401, "auth", "bearer credential is invalid"));
-        }
+        self.require_auth(request)?;
         if request
             .headers
             .get("content-type")
@@ -448,6 +459,20 @@ impl Broker {
                 "request",
                 "content-type must be application/json",
             ));
+        }
+        Ok(())
+    }
+
+    fn require_auth(&self, request: &Request) -> Result<(), Failure> {
+        let expected = read_secret(&self.config.token_file)
+            .map_err(|_| Failure::new(503, "auth", "broker credential is unavailable"))?;
+        let supplied = request
+            .headers
+            .get("authorization")
+            .and_then(|value| value.strip_prefix("Bearer "))
+            .ok_or_else(|| Failure::new(401, "auth", "bearer credential is required"))?;
+        if !crate::state::constant_time_eq(supplied.as_bytes(), expected.as_bytes()) {
+            return Err(Failure::new(401, "auth", "bearer credential is invalid"));
         }
         Ok(())
     }
@@ -638,6 +663,186 @@ mod tests {
             })
     }
 
+    fn fixture_config(address: std::net::SocketAddr) -> Config {
+        let directory =
+            test_temp_root().join(format!("tentaflake-broker-test-{}", quarantine_id()));
+        fs::create_dir_all(test_temp_root()).unwrap();
+        fs::create_dir(&directory).unwrap();
+        fs::set_permissions(&directory, fs::Permissions::from_mode(0o700)).unwrap();
+        let token_file = directory.join("agent-token");
+        let provider_file = directory.join("provider-token");
+        write_secret(&token_file, "virtual-agent-key");
+        write_secret(&provider_file, "real-provider-key");
+        Config {
+            agent: "coding".into(),
+            listen: "127.0.0.1:7810".parse().unwrap(),
+            token_file,
+            audit_file: directory.join("audit.jsonl"),
+            budget_state_file: directory.join("budget.json"),
+            max_request_bytes: 1024 * 1024,
+            max_response_bytes: 1024 * 1024,
+            max_header_bytes: 32 * 1024,
+            timeout_seconds: 5,
+            connect_timeout_seconds: 2,
+            max_concurrency: 2,
+            rate_window_seconds: 60,
+            max_requests_per_window: 10,
+            daily_request_budget: 100,
+            daily_token_budget: 100_000,
+            daily_cost_microusd: 100_000,
+            max_audit_bytes: 1024 * 1024,
+            llm: Some(LlmPolicy {
+                upstream_base_url: format!("http://{address}/v1/"),
+                provider_credential_file: provider_file,
+                allowed_models: vec![ModelPolicy {
+                    name: "example/model".into(),
+                    input_microusd_per_million: 1000,
+                    output_microusd_per_million: 2000,
+                }],
+                max_completion_tokens: 32,
+                streaming: crate::config::StreamingPolicy::default(),
+                allow_plain_http_for_tests: true,
+            }),
+            fetch: None,
+        }
+    }
+
+    #[test]
+    fn readiness_authenticates_without_dispatching_or_charging() {
+        let upstream = TcpListener::bind("127.0.0.1:0").unwrap();
+        upstream.set_nonblocking(true).unwrap();
+        let config = fixture_config(upstream.local_addr().unwrap());
+        let directory = config.budget_state_file.parent().unwrap().to_path_buf();
+        // Repeated probes exceed the configured rate allowance, but must not
+        // consume it or change an existing, still available model budget.
+        let budget = serde_json::to_string(&json!({
+            "day": unix_seconds() / 86_400,
+            "requests": 7,
+            "tokens": 17,
+            "cost_microusd": 23,
+        }))
+        .unwrap();
+        write_secret(&config.budget_state_file, &budget);
+        let broker = Broker::new(config).unwrap();
+        let audit_before = fs::read(&broker.config.audit_file).unwrap();
+        let send = |method: &str, path: &str, authorization: Option<&str>, body: &[u8]| {
+            let response = broker.handle(Request {
+                method: method.into(),
+                path: path.into(),
+                headers: authorization
+                    .map(|value| HashMap::from([("authorization".into(), value.into())]))
+                    .unwrap_or_default(),
+                body: body.to_vec(),
+            });
+            assert_eq!(response.content_type, "application/json");
+            assert!(response.streaming.is_none());
+            let text = std::str::from_utf8(&response.body).unwrap();
+            for excluded in [
+                "virtual-agent-key",
+                "real-provider-key",
+                "wrong-readiness-key",
+                "READINESS_PROMPT_FIXTURE",
+            ] {
+                assert!(!text.contains(excluded));
+            }
+            response
+        };
+        let bearer = Some("Bearer virtual-agent-key");
+        for _ in 0..20 {
+            let response = send("GET", "/readyz", bearer, b"");
+            assert_eq!(response.status, 200);
+            assert_eq!(response.body, br#"{"status":"ready"}"#);
+        }
+        for authorization in [
+            None,
+            Some("Bearer wrong-readiness-key"),
+            Some("Bearer real-provider-key"),
+            Some("virtual-agent-key"),
+        ] {
+            assert_eq!(send("GET", "/readyz", authorization, b"").status, 401);
+        }
+        for method in ["POST", "HEAD", "PUT", "DELETE", "OPTIONS"] {
+            assert_eq!(send(method, "/readyz", bearer, b"").status, 405);
+        }
+        for (path, body) in [
+            ("/readyz?", b"".as_slice()),
+            ("/readyz?probe=READINESS_PROMPT_FIXTURE", b"".as_slice()),
+            ("/readyz", b"READINESS_PROMPT_FIXTURE".as_slice()),
+        ] {
+            assert_eq!(send("GET", path, bearer, body).status, 400);
+        }
+        // The diagnostic route retains its existing unauthenticated behavior,
+        // including its treatment of query strings and unrelated auth headers.
+        for path in ["/healthz", "/healthz?diagnostic=1"] {
+            for authorization in [None, Some("Bearer wrong-readiness-key")] {
+                let response = send("GET", path, authorization, b"");
+                assert_eq!(response.status, 200);
+                assert_eq!(response.body, br#"{"status":"ready"}"#);
+            }
+        }
+        let dependencies = [
+            (
+                &broker.config.token_file,
+                "broker credential is unavailable",
+            ),
+            (
+                &broker.config.llm.as_ref().unwrap().provider_credential_file,
+                "provider credential is unavailable",
+            ),
+            (&broker.config.audit_file, "audit log is unavailable"),
+        ];
+        for (path, message) in dependencies {
+            let unavailable = path.with_extension("unavailable");
+            fs::rename(path, &unavailable).unwrap();
+            // A missing audit file can legitimately be created by check_ready;
+            // an occupied non-file slot instead proves that opening it fails.
+            if path == &broker.config.audit_file {
+                fs::create_dir(path).unwrap();
+            }
+            for (endpoint, authorization) in [("/readyz", bearer), ("/healthz", None)] {
+                let response = send("GET", endpoint, authorization, b"");
+                assert_eq!(response.status, 503);
+                assert_eq!(
+                    serde_json::from_slice::<Value>(&response.body).unwrap(),
+                    json!({"error": message})
+                );
+            }
+            if path == &broker.config.audit_file {
+                fs::remove_dir(path).unwrap();
+            }
+            fs::rename(unavailable, path).unwrap();
+            fs::set_permissions(path, fs::Permissions::from_mode(0o644)).unwrap();
+            assert_eq!(send("GET", "/readyz", bearer, b"").status, 503);
+            fs::set_permissions(path, fs::Permissions::from_mode(0o600)).unwrap();
+            assert_eq!(send("GET", "/readyz", bearer, b"").status, 200);
+        }
+        assert_eq!(fs::read(&broker.config.audit_file).unwrap(), audit_before);
+        assert_eq!(
+            fs::read(&broker.config.budget_state_file).unwrap(),
+            budget.as_bytes()
+        );
+        let mut upstream_connections = 0;
+        loop {
+            match upstream.accept() {
+                Ok(_) => upstream_connections += 1,
+                Err(error) => {
+                    assert_eq!(error.kind(), std::io::ErrorKind::WouldBlock);
+                    break;
+                }
+            }
+        }
+        assert_eq!(upstream_connections, 0);
+        let audit = std::str::from_utf8(&audit_before).unwrap();
+        for excluded in [
+            "virtual-agent-key",
+            "real-provider-key",
+            "READINESS_PROMPT_FIXTURE",
+        ] {
+            assert!(!audit.contains(excluded));
+        }
+        fs::remove_dir_all(directory).unwrap();
+    }
+
     #[test]
     fn substitutes_provider_credential_without_logging_prompt() {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -675,47 +880,9 @@ mod tests {
             }
         });
 
-        let directory =
-            test_temp_root().join(format!("tentaflake-broker-test-{}", quarantine_id()));
-        fs::create_dir_all(test_temp_root()).unwrap();
-        fs::create_dir(&directory).unwrap();
-        let token_file = directory.join("agent-token");
-        let provider_file = directory.join("provider-token");
-        let audit_file = directory.join("audit.jsonl");
-        write_secret(&token_file, "virtual-agent-key");
-        write_secret(&provider_file, "real-provider-key");
-        let config = Config {
-            agent: "coding".into(),
-            listen: "127.0.0.1:7810".parse().unwrap(),
-            token_file,
-            audit_file: audit_file.clone(),
-            budget_state_file: directory.join("budget.json"),
-            max_request_bytes: 1024 * 1024,
-            max_response_bytes: 1024 * 1024,
-            max_header_bytes: 32 * 1024,
-            timeout_seconds: 5,
-            connect_timeout_seconds: 2,
-            max_concurrency: 2,
-            rate_window_seconds: 60,
-            max_requests_per_window: 10,
-            daily_request_budget: 100,
-            daily_token_budget: 100_000,
-            daily_cost_microusd: 100_000,
-            max_audit_bytes: 1024 * 1024,
-            llm: Some(LlmPolicy {
-                upstream_base_url: format!("http://{address}/v1/"),
-                provider_credential_file: provider_file,
-                allowed_models: vec![ModelPolicy {
-                    name: "example/model".into(),
-                    input_microusd_per_million: 1000,
-                    output_microusd_per_million: 2000,
-                }],
-                max_completion_tokens: 32,
-                streaming: crate::config::StreamingPolicy::default(),
-                allow_plain_http_for_tests: true,
-            }),
-            fetch: None,
-        };
+        let config = fixture_config(address);
+        let directory = config.budget_state_file.parent().unwrap().to_path_buf();
+        let audit_file = config.audit_file.clone();
         config.validate().unwrap();
         let broker = Broker::new(config).unwrap();
         let body = br#"{"model":"example/model","messages":[{"role":"user","content":"SENSITIVE_PROMPT_FIXTURE"}],"max_tokens":8,"tools":[{"type":"function","function":{"name":"research_fetch","parameters":{"type":"object","properties":{}}}}],"tool_choice":{"type":"function","function":{"name":"research_fetch"}}}"#.to_vec();

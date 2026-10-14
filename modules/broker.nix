@@ -13,7 +13,9 @@ let
   serviceRecovery = import ../lib/serviceRecovery.nix;
   enabledAgents = lib.filterAttrs (_: agent: agent.enable) cfg.agents;
   containerNames = lib.attrNames config.virtualisation.oci-containers.containers;
-  bridgeName = name: "tfb-${builtins.substring 0 8 (builtins.hashString "sha256" name)}";
+  agentHash = name: builtins.substring 0 8 (builtins.hashString "sha256" name);
+  bridgeName = name: "tfb-${agentHash name}";
+  firewallTableName = name: "tentaflake-broker-${agentHash name}";
 
   modelType = lib.types.submodule {
     options = {
@@ -427,7 +429,47 @@ let
   withinTotal = limit: value: limit == null || value <= limit;
   brokerPorts =
     agent:
-    lib.optional agent.llm.enable agent.llm.port ++ lib.optional agent.fetch.enable agent.fetch.port;
+    lib.sort builtins.lessThan (
+      lib.unique (
+        lib.optional agent.llm.enable agent.llm.port ++ lib.optional agent.fetch.enable agent.fetch.port
+      )
+    );
+  firewallTables = lib.mapAttrs' (
+    name: agent:
+    lib.nameValuePair (firewallTableName name) {
+      family = "inet";
+      # Independent base-chain drops cannot be bypassed by earlier accepts in
+      # the NixOS firewall, including its temporary-port and DNAT rules.
+      content = ''
+        chain input {
+          type filter hook input priority -10; policy accept;
+          iifname "${bridgeName name}" ip saddr ${agent.subnet} ip daddr ${agent.gateway} tcp dport { ${
+            lib.concatMapStringsSep ", " toString (brokerPorts agent)
+          } } accept
+          iifname "${bridgeName name}" drop
+        }
+        chain forward {
+          type filter hook forward priority -10; policy accept;
+          iifname "${bridgeName name}" drop
+        }
+      '';
+    }
+  ) enabledAgents;
+  admissionModels = lib.mapAttrs (name: agent: {
+    schemaVersion = 1;
+    unit = "tentaflake-broker-llm-${name}.service";
+    executable = lib.getExe brokerPackage;
+    configuration = toString (llmConfig name agent);
+    environmentFile = "/run/tentaflake-broker/${name}/agent.env";
+    network = {
+      name = agent.networkName;
+      bridge = bridgeName name;
+      inherit (agent) subnet gateway;
+    };
+    port = agent.llm.port;
+    firewallTable = firewallTableName name;
+    firewallPorts = brokerPorts agent;
+  }) (lib.filterAttrs (_: agent: agent.llm.enable) enabledAgents);
   firewallInputRules = lib.concatStringsSep "\n" (
     lib.mapAttrsToList (name: agent: ''
       iifname "${bridgeName name}" ip saddr ${agent.subnet} tcp dport { ${
@@ -465,6 +507,12 @@ let
 in
 {
   options.tentaflake.broker = {
+    admissionModels = lib.mkOption {
+      type = lib.types.attrsOf lib.types.raw;
+      readOnly = true;
+      internal = true;
+      description = "Broker-owned non-secret model transport, process and firewall expectations for host admission; not live readiness evidence.";
+    };
     package = lib.mkOption {
       type = lib.types.package;
       default = pkgs.callPackage ../pkgs/tentaflake-broker { };
@@ -519,6 +567,8 @@ in
   };
 
   config = {
+    tentaflake.broker.admissionModels = admissionModels;
+
     assertions = [
       {
         assertion = enabledAgents == { } || config.tentaflake.security.profile != "dev";
@@ -560,6 +610,10 @@ in
       {
         assertion = unique (map bridgeName (lib.attrNames enabledAgents));
         message = "tentaflake broker agent names collide on their deterministic bridge interface; rename one agent.";
+      }
+      {
+        assertion = unique (map firewallTableName (lib.attrNames enabledAgents));
+        message = "tentaflake broker agent names collide on their deterministic firewall table; rename one agent.";
       }
     ]
     ++ lib.concatLists (
@@ -662,6 +716,8 @@ in
     );
 
     systemd.services = allServices;
+
+    networking.nftables.tables = firewallTables;
 
     networking.firewall = lib.mkIf (enabledAgents != { }) {
       filterForward = true;

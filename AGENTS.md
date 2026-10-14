@@ -160,8 +160,16 @@ are already published or require access to another repository for public checks.
   automatic restart. Persist exact boot/daemon/supervisor/image identity before
   create and the full CID before start; unknown outcomes retain charges without
   replay. Local `mkLocalImage` descriptors prove content identity, not registry
-  provenance. Real lifecycle VM evidence and external capability collectors
-  remain required. See `docs/agent-adapters.md` and `docs/14-workspace-quota.md`.
+  provenance. `admission_model` owns live process/listener, protected environment,
+  dedicated network and independent firewall evidence, bracketing authenticated
+  `/readyz`. Keep secrets out of receipts/argv and stop independent of broker
+  health. `admission_research` binds each held relay peer to exact live relay and
+  backend processes, configuration, and a fresh controller generation. Renewals
+  never extend an observed response's expiry. Recheck immutable sources before
+  the final lease check immediately before dispatch; preserve the exact Worker
+  results exception without granting Worker readiness. Worker collection and
+  combined lifecycle VM acceptance remain required. See `docs/16-research.md`,
+  `docs/agent-adapters.md` and `docs/14-workspace-quota.md`.
   Its private `ledger::api` foundation reserves workspace and state together,
   then binds one supervisor claim before helpers run. Preserve exact scoped
   operation identity, nonexpiring grants and stable resource/grant revisions.

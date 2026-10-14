@@ -40,14 +40,25 @@ Current integration work:
   lifecycle, conflict refusal, storage/publication, shutdown, the unchanged crash
   assertion and Research VM. Main merge `5c37324` also includes PRs #159/#164/#165;
   no local host activation or deployment acceptance is implied.
-- **Model/Research integration:** PR #167 and the upstream Research readiness
-  work still need their relevant runtime gates and final public pin integration.
-  Exact requested capabilities and live evidence remain prerequisites; neither
-  a configured endpoint nor a declaration grants access.
+- **Model/Research integration:** `feat/capability-collectors` combines PR #167
+  and the scoped Research collector/lifecycle work with the current API, Worker
+  results and immutable-source owners. One read-only source policy applies to
+  every capability combination, and final Research lease checks follow store
+  observations. Upstream Research PR #10 tests the required authenticated
+  readiness RPC; its accepted public pin and combined downstream runtime gates
+  remain pending. The integrated source passes `just fast` with **517 Rust
+  tests**, four intentional helpers ignored, and generated offline/Model plans
+  through the actual CLI loader. Independent boundary and VM-source reviews pass;
+  combined package/VM execution remains outstanding. Upstream PR #10's original
+  client, source and package gates pass, but OSV found three Hickory advisories.
+  A scoped update to the verified stable 0.26.3 is being tested before that merge
+  or downstream pin update. Exact requested capabilities and live evidence remain
+  prerequisites; a configured endpoint or declaration alone grants no access.
 - **Reference coding agent, merged PR #168:** native Codex 0.162.1 package,
   immutable image descriptor and seven wrapper regressions pass at `51a8f49`.
-  Main merge `919d270` preserves the reviewed pins and package/image artifacts. An actual model turn, tool use, file change and lifecycle acceptance are
-  still required (#136).
+  Main merge `919d270` preserves the reviewed pins and package/image artifacts.
+  An actual model turn, tool use, file change and lifecycle acceptance are still
+  required (#136).
 - **Worker safety/maintenance, PRs #169/#170:** bounded artifact transport and
   exact CID handling precede shared admission fencing. Guarded image loading
   journals uncertainty in the existing ledger; explicit recovery requires the

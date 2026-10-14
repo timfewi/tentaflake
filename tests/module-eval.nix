@@ -466,6 +466,28 @@ let
   brokerManifest = brokerCapsule.config.environment.etc."tentaflake/security.tsv".text;
   brokerAttempt = builtins.tryEval brokerCapsule.config.system.build.toplevel.drvPath;
 
+  brokerProjection =
+    (brokerCapsule.extendModules {
+      modules = [
+        {
+          networking.firewall.allowedTCPPorts = [ 2222 ];
+          tentaflake.broker.agents = {
+            hermes-brokered = {
+              llm.port = 7910;
+              fetch.port = 7810;
+            };
+            disabled = {
+              subnet = "10.203.72.0/30";
+              gateway = "10.203.72.1";
+              llm.enable = true;
+            };
+          };
+        }
+      ];
+    }).config;
+  brokerModel = brokerProjection.tentaflake.broker.admissionModels.hermes-brokered;
+  brokerBoundary = brokerProjection.networking.nftables.tables.${brokerModel.firewallTable};
+
   streamingCapsule = brokerCapsule.extendModules {
     modules = [
       {
@@ -1281,6 +1303,76 @@ assert lib.hasInfix "ip saddr 10.203.20.0/30 counter drop"
   brokerCapsule.config.networking.firewall.extraForwardRules;
 assert lib.hasInfix "iifname \"${brokerBridge}\" ip saddr 10.203.20.0/30"
   brokerCapsule.config.networking.firewall.extraInputRules;
+assert brokerCapsule.options.tentaflake.broker.admissionModels.readOnly;
+assert brokerCapsule.options.tentaflake.broker.admissionModels.internal;
+assert
+  builtins.attrNames brokerProjection.tentaflake.broker.admissionModels == [ "hermes-brokered" ];
+assert podmanCapsule.config.tentaflake.broker.admissionModels == { };
+assert core.config.tentaflake.broker.admissionModels == { };
+assert
+  builtins.attrNames brokerModel == [
+    "configuration"
+    "environmentFile"
+    "executable"
+    "firewallPorts"
+    "firewallTable"
+    "network"
+    "port"
+    "schemaVersion"
+    "unit"
+  ];
+assert brokerModel.schemaVersion == 1;
+assert brokerModel.unit == "tentaflake-broker-llm-hermes-brokered.service";
+assert brokerModel.executable == lib.getExe brokerProjection.tentaflake.broker.package;
+assert brokerModel.environmentFile == builtins.head brokerContainer.environmentFiles;
+assert brokerModel.port == 7910;
+assert
+  brokerModel.firewallPorts == [
+    7810
+    7910
+  ];
+assert
+  brokerModel.network == {
+    name = "tf-hermes-brokered";
+    bridge = brokerBridge;
+    subnet = "10.203.20.0/30";
+    gateway = "10.203.20.1";
+  };
+assert builtins.hasContext brokerModel.configuration;
+assert
+  brokerProjection.systemd.services.tentaflake-broker-llm-hermes-brokered.serviceConfig.ExecStart
+  == "${brokerModel.executable} --config ${brokerModel.configuration}";
+assert !(lib.hasInfix "/run/agenix/example-provider" (builtins.toJSON brokerModel));
+assert
+  lib.filter (lib.hasPrefix "tentaflake-broker-") (
+    builtins.attrNames brokerProjection.networking.nftables.tables
+  ) == [ brokerModel.firewallTable ];
+assert brokerBoundary.enable;
+assert brokerBoundary.family == "inet";
+assert brokerBoundary.name == brokerModel.firewallTable;
+assert lib.elem 2222 brokerProjection.networking.firewall.allowedTCPPorts;
+# This exact standalone table must retain its own hooks and terminal bridge
+# drops even when NixOS accepts a configured host port or DNAT earlier.
+assert
+  brokerBoundary.content == ''
+    chain input {
+      type filter hook input priority -10; policy accept;
+      iifname "${brokerBridge}" ip saddr 10.203.20.0/30 ip daddr 10.203.20.1 tcp dport { 7810, 7910 } accept
+      iifname "${brokerBridge}" drop
+    }
+    chain forward {
+      type filter hook forward priority -10; policy accept;
+      iifname "${brokerBridge}" drop
+    }
+  '';
+assert
+  let
+    tables = lib.filterAttrs (
+      name: _: lib.hasPrefix "tentaflake-broker-" name
+    ) podmanCapsule.config.networking.nftables.tables;
+  in
+  builtins.length (builtins.attrNames tables) == 1
+  && lib.hasInfix "tcp dport { 7811 } accept" (builtins.head (builtins.attrValues tables)).content;
 assert lib.hasInfix "com.docker.network.bridge.name=\"$bridge\""
   brokerCapsule.config.systemd.services.tentaflake-broker-network-hermes-brokered.script;
 assert lib.all

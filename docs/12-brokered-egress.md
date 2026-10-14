@@ -15,7 +15,8 @@ Each enabled agent gets:
 - no container DNS and no IPv6;
 - host INPUT access only when both the exact bridge interface and agent source
   subnet match its own broker ports;
-- a host FORWARD drop for the whole agent subnet;
+- an independent per-agent nftables table that drops all other INPUT and FORWARD
+  traffic arriving from that bridge, including IPv6, before broader host accepts;
 - one random virtual key generated under `/run` on every boot;
 - optional LLM and fetch broker processes with separate state and budgets.
 
@@ -162,6 +163,25 @@ useful audit history merely by probing. Audit files also reject symlink
 targets. LLM input-token reservation uses request bytes as a conservative
 upper bound rather than an optimistic characters-per-token estimate;
 provider-reported usage remains separately recorded.
+
+`GET /readyz` performs the same local health checks after authenticating the
+agent's virtual Bearer credential and returns exactly `{"status":"ready"}` on
+success. It requires an empty body and no query string; other methods are
+rejected. Successful and refused probes append no audit events, reserve no
+model budget, and make no upstream request. This proves local credential and
+audit availability, not provider acceptance or remaining model budget.
+`GET /healthz` remains unauthenticated for host diagnostics.
+
+With host resource admission enabled, a requested model grant is bound to this
+broker's generated configuration, process, listener, private environment file,
+Docker network and firewall table. The collector rejects extra network peers,
+extra rules in that table and nftables flowtables that could bypass forwarding
+hooks. It checks the generated Docker/nftables path under trusted host
+administration; arbitrary host TC, eBPF or XDP routing programs are outside this
+attestation.
+It repeats authenticated readiness before dispatch transitions; an unchanged
+generation never overrides a failed readiness probe. This is startup evidence,
+not continuous monitoring or a provider request.
 
 Host-side `tentaflake doctor` and VM probes reach `/healthz` through the exact
 agent gateway address. VM readiness probes stop after 30 seconds and print the

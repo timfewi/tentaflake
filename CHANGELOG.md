@@ -28,6 +28,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   both initial OCI admission VM fixtures.
 - Keep the read-only shared Nix store available until admission VMs enter their
   final shutdown ramfs, preserving ordinary runtime and persistent-volume cleanup.
+- Enforce broker bridge isolation before broader host INPUT and FORWARD accepts
+  using independent per-agent nftables tables.
 - Capture CLI refusal diagnostics from stderr in publication VM assertions.
 - Bound Worker artifact pipes, raw TAR metadata, trailer and client exit under
   one deadline without buffering the archive. Retain dispatch identity on
@@ -56,6 +58,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   budget reservation or upstream dispatch, omit session IDs from audit logs,
   and keep arbitrary client headers excluded. Clients still own ID propagation.
 ### Added
+- Authenticate requested Research admission through held relay peers, exact backend
+  processes and bounded controller leases, alongside local Model prerequisites.
+  Read-only sources require immutable store entries or their exact capability
+  owner; Worker readiness remains unavailable.
 - Separate unprivileged HTTP framing from the root authentication/state owner
   over a bounded private Unix channel. Credentials and ledger access remain with
   the owner; stopped frontends revoke sessions and cannot trigger automatic replay.
@@ -89,6 +95,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   upstream package, persistent private state and a capsule-private app-server.
   The wrapper selects an explicit broker model without writing credentials or
   replacing user configuration; native runtime/provider acceptance is separate.
+- Live local Model admission for Generic workloads: authenticated broker readiness,
+  exact process/listener, private credential projection, network and firewall
+  evidence. Credentials pass to Docker through a retained descriptor; provider
+  acceptance and remaining model budget are separate checks.
 - Experimental aggregate Docker admission for offline Generic workloads, with
   durable host/daemon/supervisor/image intent, exact container-ID binding before
   start, conservative uncertain outcomes and storage retention on stop. Local

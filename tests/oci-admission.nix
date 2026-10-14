@@ -1,4 +1,4 @@
-# Actual offline OCI admission through the installed CLI, ledger and systemd.
+# Actual offline and model OCI admission through the installed CLI and systemd.
 # The locally built archive has content identity, not registry/publisher proof.
 # Storage publication and physical-headroom cases stay in storage-admission.nix.
 { self }:
@@ -20,6 +20,30 @@ let
     };
   };
   descriptor = builders.mkLocalImage archive;
+  # Only this explicit VM package maps one reserved provider URL to the local
+  # mock after normal config validation. The real executable/config identity,
+  # scoped credentials and admission path remain intact. This exercises local
+  # model dispatch, not provider TLS or vendor acceptance; production is unpatched.
+  modelBroker = (pkgs.callPackage ../pkgs/tentaflake-broker { }).overrideAttrs (old: {
+    postPatch = (old.postPatch or "") + ''
+      ${pkgs.python3}/bin/python3 - <<'PY'
+      from pathlib import Path
+      path = Path("crates/tentaflake-broker/src/config.rs")
+      source = path.read_text()
+      marker = "        config.validate()?;\n        Ok(config)"
+      assert source.count(marker) == 1, "broker fixture patch target changed"
+      replacement = """        config.validate()?;
+              if let Some(policy) = &mut config.llm {
+                  if policy.upstream_base_url == "https://model-fixture.invalid/v1/" {
+                      policy.upstream_base_url = "http://127.0.0.1:18080/v1/".into();
+                      policy.allow_plain_http_for_tests = true;
+                  }
+              }
+              Ok(config)"""
+      path.write_text(source.replace(marker, replacement))
+      PY
+    '';
+  });
   names = [
     "oci-a"
     "oci-b"
@@ -55,7 +79,7 @@ let
       runTmpfsSize = "8m";
     };
   };
-  node = { lib, ... }: {
+  baseNode = { lib, ... }: {
     imports = [
       self.nixosModules.default
     ]
@@ -175,12 +199,113 @@ let
     };
     system.stateVersion = "26.05";
   };
+  modelNode = { lib, ... }: {
+    imports = [
+      baseNode
+      (builders.mkAgent {
+        adapter = "generic";
+        name = "oci-model";
+        definition = definition // {
+          capabilities = definition.capabilities ++ [ "model" ];
+        };
+      })
+    ];
+    environment.systemPackages = [
+      pkgs.curl
+      pkgs.python3
+    ];
+    networking.firewall.allowedTCPPorts = [ 18082 ];
+    tentaflake = {
+      networking.enable = true;
+      security.admission = {
+        # Reserve the broker/mock/forwarding target in addition to the existing
+        # host allowance; the remaining compute budget still fits one agent.
+        capacity = {
+          memoryBytes = lib.mkForce 671088640;
+          memorySwapBytes = lib.mkForce 671088640;
+          workspaceBytes = lib.mkForce 402653184;
+          stateBytes = lib.mkForce 402653184;
+        };
+        hostReserve = {
+          memoryBytes = lib.mkForce 402653184;
+          memorySwapBytes = lib.mkForce 402653184;
+        };
+      };
+      workspaceQuota.agents.generic-oci-model = {
+        enable = true;
+        workspace = "/var/lib/generic-oci-model/workspace";
+        sizeMiB = 128;
+        ownerUid = 65534;
+        ownerGid = 65534;
+        state = {
+          path = "/var/lib/generic-oci-model/state";
+          sizeMiB = 128;
+        };
+      };
+      broker = {
+        package = modelBroker;
+        agents.generic-oci-model = {
+          enable = true;
+          networkName = "tf-generic-oci-model";
+          subnet = "10.203.74.0/30";
+          gateway = "10.203.74.1";
+          llm = {
+            enable = true;
+            upstreamBaseUrl = "https://model-fixture.invalid/v1/";
+            providerCredentialFile = "/run/tentaflake-model-fixture/provider";
+            allowedModels = [
+              {
+                name = "fixture/model";
+                inputMicrousdPerMillion = 1;
+                outputMicrousdPerMillion = 1;
+              }
+            ];
+          };
+        };
+      };
+    };
+    systemd.services = {
+      tentaflake-model-fixture-secret = {
+        serviceConfig = {
+          Type = "oneshot";
+          RemainAfterExit = true;
+        };
+        script = ''
+          install -d -m 0700 /run/tentaflake-model-fixture
+          printf '%s\n' fixture-provider-key > /run/tentaflake-model-fixture/provider
+          chmod 0400 /run/tentaflake-model-fixture/provider
+        '';
+      };
+      tentaflake-broker-llm-generic-oci-model = {
+        requires = [
+          "tentaflake-model-fixture-secret.service"
+          "tentaflake-model-fixture-upstream.service"
+        ];
+        after = [
+          "tentaflake-model-fixture-secret.service"
+          "tentaflake-model-fixture-upstream.service"
+        ];
+      };
+      tentaflake-model-fixture-upstream = {
+        serviceConfig = {
+          ExecStart = "${pkgs.python3}/bin/python3 ${./fixtures/model-admission-http.py} ${./fixtures/llm-upstream.py} 127.0.0.1 18080";
+          DynamicUser = true;
+        };
+      };
+      tentaflake-model-fixture-host-http = {
+        serviceConfig = {
+          ExecStart = "${pkgs.python3}/bin/python3 ${./fixtures/model-admission-http.py} ${./fixtures/llm-upstream.py} 0.0.0.0 18082";
+          DynamicUser = true;
+        };
+      };
+    };
+  };
 in
 {
-  inherit node;
+  node = modelNode;
   # A separate clean ledger makes both terminal Unknown cases independent.
-  # The caller starts this identical node only after `oci` has shut down.
-  crashNode = node;
+  # Reuse the offline base and archive after the model-enabled node shuts down.
+  crashNode = baseNode;
 
   testScript = ''
     import json
@@ -193,8 +318,9 @@ in
     oci_plan = oci.succeed("readlink -f /etc/tentaflake/admission.json").strip()
     oci_manifest = json.loads(oci.succeed("cat " + shlex.quote(oci_plan)))
     oci_ids = ["generic-oci-a", "generic-oci-b"]
+    model_id = "generic-oci-model"
     oci_ledger = "/var/lib/tentaflake-admission/ledger.json"
-    oci_units = {name: oci_manifest["runtimes"][name]["unit"] for name in oci_ids}
+    oci_units = {name: oci_manifest["runtimes"][name]["unit"] for name in oci_ids + [model_id]}
     oci_volumes = {item["spec"]["allocationId"]: item for item in oci_manifest["volumes"]}
 
     def oci_command(action, name=None):
@@ -284,7 +410,7 @@ in
         node.succeed(shlex.join(["tentaflake", "admission", "bootstrap", plan]))
         oci_nix_evidence(node, plan)
 
-    def oci_assert_active(name):
+    def oci_assert_active(name, model=False):
         receipt = oci_current(name)
         assert receipt["reservation"]["state"] == "active", receipt
         assert receipt["reservation"]["resources"] == oci_manifest["instances"][name]["resources"], receipt
@@ -310,8 +436,21 @@ in
         assert labels["io.tentaflake.instance"] == name
         assert labels["io.tentaflake.spec-revision"] == intent["specRevision"]
         host = observed["HostConfig"]
-        assert host["Runtime"] == "runsc" and host["NetworkMode"] == "none", host
-        assert set(observed["NetworkSettings"]["Networks"]) <= {"none"}
+        assert host["Runtime"] == "runsc", host
+        if model:
+            transport = oci_manifest["runtimes"][name]["model"]
+            network = json.loads(oci.succeed(oci_docker("network", "inspect", transport["network"]["name"])))[0]
+            assert network["Internal"] and not network["EnableIPv6"]
+            assert set(network["Containers"]) == {cid}
+            assert host["NetworkMode"] == network["Id"]
+            assert set(observed["NetworkSettings"]["Networks"]) == {network["Name"]}
+            endpoint = observed["NetworkSettings"]["Networks"][network["Name"]]
+            assert endpoint["NetworkID"] == network["Id"] and endpoint["Gateway"] == transport["network"]["gateway"]
+            assert host["Dns"] == ["127.0.0.1"]
+            assert host["Sysctls"]["net.ipv6.conf.all.disable_ipv6"] == "1"
+        else:
+            assert host["NetworkMode"] == "none", host
+            assert set(observed["NetworkSettings"]["Networks"]) <= {"none"}
         assert host["ReadonlyRootfs"] and not host["Privileged"] and not host["AutoRemove"]
         assert observed["Config"]["User"] == "65534:65534"
         assert set(host["CapDrop"]) == {"ALL"} and not host["CapAdd"]
@@ -335,7 +474,12 @@ in
             "/workspace": ("/var/lib/" + name + "/workspace", True),
         }, mounts
         environment = {item.split("=", 1)[0] for item in observed["Config"]["Env"]}
-        assert not environment.intersection({"OPENAI_API_KEY", "OPENAI_BASE_URL", "TENTAFLAKE_BROKER_TOKEN", "TENTAFLAKE_LLM_BASE_URL", "TENTAFLAKE_RESEARCH_COMMAND", "TENTAFLAKE_RESEARCH_SOCKET"})
+        model_keys = {"OPENAI_API_KEY", "OPENAI_BASE_URL", "TENTAFLAKE_BROKER_TOKEN", "TENTAFLAKE_LLM_BASE_URL"}
+        if model:
+            assert model_keys.issubset(environment)
+        else:
+            assert not environment.intersection(model_keys)
+        assert not environment.intersection({"TENTAFLAKE_RESEARCH_COMMAND", "TENTAFLAKE_RESEARCH_SOCKET"})
         oci.succeed(oci_docker("exec", cid, "/bin/sh", "-c",
             "test $(id -u) = 65534 && test $(pwd) = /workspace && "
             "test ! -e /run/docker.sock && test ! -e /run/tentaflake-research && test ! -e /run/tentaflake-worker && "
@@ -412,6 +556,154 @@ in
         oci_stop_unit(oci_units[oci_ids[1]])
         oci.fail(oci_docker("container", "inspect", second["runtime"]["containerId"]))
         assert oci_current(oci_ids[1])["reservation"]["state"] == "retained"
+        assert oci_snapshot()["storage"] == oci_storage
+
+    with subtest("model prerequisites reject unready or changed authority before dispatch"):
+        model = oci_manifest["runtimes"][model_id]["model"]
+        assert model["schemaVersion"] == 1 and model["port"] == 7810
+        assert oci_manifest["instances"][model_id]["requestedCapabilities"] == ["model"]
+        assert oci_manifest["policy"]["grants"] == [{
+            "instanceId": model_id, "ownerId": "host-root", "capability": "model", "expiresAt": None,
+        }]
+        for kind in ("state", "workspace"):
+            oci.succeed("systemctl start " + shlex.quote(oci_volumes[kind + ":" + model_id]["units"]["owner"]))
+        oci_storage = oci_snapshot()["storage"]
+        assert len(oci_storage) == 6 and all(item["allocation"]["state"] == "present" for item in oci_storage)
+        assert sum(item["allocation"]["bytes"] for item in oci_storage) == 805306368
+        oci.succeed("systemctl start " + shlex.quote(model["unit"]))
+        oci.wait_until_succeeds("curl --max-time 2 -fsS http://10.203.74.1:7810/healthz >/dev/null", timeout=30)
+        generated = json.loads(oci.succeed("cat " + shlex.quote(model["configuration"])))
+        assert generated["llm"]["upstream_base_url"] == "https://model-fixture.invalid/v1/"
+        assert "allow_plain_http_for_tests" not in generated["llm"]
+        assert model["executable"] in oci.succeed("systemctl show --value --property=ExecStart " + shlex.quote(model["unit"]))
+        before_model = oci_snapshot()
+
+        def model_denied_without_dispatch():
+            unit = oci_units[model_id]
+            previous = oci.succeed("systemctl show --value --property=InvocationID " + shlex.quote(unit)).strip()
+            oci_start(model_id, succeeds=False)
+            invocation = oci.succeed("systemctl show --value --property=InvocationID " + shlex.quote(unit)).strip()
+            assert invocation != previous and len(invocation) == 32 and all(c in "0123456789abcdef" for c in invocation), invocation
+            for property_name, expected in [("ActiveState", "failed"), ("Result", "exit-code"), ("ExecMainStatus", "2")]:
+                actual = oci.succeed("systemctl show --value --property=" + property_name + " " + shlex.quote(unit)).strip()
+                assert actual == expected, (property_name, actual)
+            assert oci_snapshot() == before_model
+            oci.fail(oci_docker("container", "inspect", model_id))
+            # Clear only this fresh, observed refusal before stopping unloads
+            # the unit. Rate limits must not substitute for collector evidence.
+            oci.succeed("systemctl reset-failed " + shlex.quote(unit))
+            oci_stop_unit(unit)
+
+        # A live listening broker with an unavailable audit channel is unready.
+        audit_path = "/var/lib/tentaflake-broker-llm-" + model_id + "/audit.jsonl"
+        oci.succeed("chmod 0644 " + shlex.quote(audit_path))
+        try:
+            oci.fail("curl --max-time 2 -fsS http://10.203.74.1:7810/healthz")
+            model_denied_without_dispatch()
+        finally:
+            oci.succeed("chmod 0600 " + shlex.quote(audit_path))
+
+        # The private projected token must authenticate against the real broker;
+        # keeping the expected key names and 64-hex shape cannot fake readiness.
+        env_path = model["environmentFile"]
+        oci.succeed("cp -p " + shlex.quote(env_path) + " " + shlex.quote(env_path + ".saved"))
+        try:
+            oci.succeed("python3 - <<'PY'\nfrom pathlib import Path\np = Path(" + repr(env_path) + ")\ns = p.read_text()\nold = next(line.split('=', 1)[1] for line in s.splitlines() if line.startswith('OPENAI_API_KEY='))\nnew = ('1' if old == '0' * 64 else '0') * 64\np.write_text(s.replace(old, new))\nPY")
+            model_denied_without_dispatch()
+        finally:
+            oci.succeed("mv " + shlex.quote(env_path + ".saved") + " " + shlex.quote(env_path))
+
+        # Even an unreachable extra accept after the terminal drop invalidates
+        # the closed installed ruleset. Restore only the test's own rule.
+        table = model["firewallTable"]
+        bridge = model["network"]["bridge"]
+        oci.succeed(shlex.join(["nft", "add", "rule", "inet", table, "input", "iifname", bridge, "accept"]))
+        rules = json.loads(oci.succeed(shlex.join(["nft", "-j", "list", "table", "inet", table])))["nftables"]
+        added = [item["rule"]["handle"] for item in rules if "rule" in item and item["rule"]["chain"] == "input"][-1]
+        try:
+            model_denied_without_dispatch()
+        finally:
+            oci.succeed(shlex.join(["nft", "delete", "rule", "inet", table, "input", "handle", str(added)]))
+
+    with subtest("generated model transport authenticates and dispatches without direct network authority"):
+        oci_start(model_id)
+        model_receipt = oci_assert_active(model_id, model=True)
+        model_cid = model_receipt["runtime"]["containerId"]
+        ready = oci.succeed(oci_docker("exec", model_cid, "/bin/sh", "-c",
+            'wget -T 3 -qO- --header "Authorization: Bearer $OPENAI_API_KEY" http://10.203.74.1:7810/readyz'))
+        assert json.loads(ready) == {"status": "ready"}
+        oci.fail(oci_docker("exec", model_cid, "/bin/wget", "-T", "3", "-qO-", "http://10.203.74.1:7810/readyz"))
+        completion = oci.succeed(oci_docker("exec", model_cid, "/bin/sh", "-c",
+            'wget -T 5 -qO- --header "Authorization: Bearer $OPENAI_API_KEY" '
+            '--header "Content-Type: application/json" --header "X-OpenCode-Session: conversation-vm" '
+            '--post-data=\'{"model":"fixture/model","messages":[{"role":"user","content":"MODEL_ADMISSION_PROMPT"}],"max_tokens":8}\' '
+            '"$OPENAI_BASE_URL/chat/completions"'))
+        assert json.loads(completion) == {"id": "completion-fixture"}
+        audit = oci.succeed("cat " + shlex.quote(audit_path))
+        assert "MODEL_ADMISSION_PROMPT" not in audit and "fixture-provider-key" not in audit
+        before_denial = oci_snapshot()
+        oci_start(oci_ids[0], succeeds=False)
+        assert oci_snapshot() == before_denial
+        oci_stop_unit(oci_units[oci_ids[0]], allow_failed=True)
+
+        def model_assert_boundary(chain, command, expected):
+            oci.fail(command)
+            rules = json.loads(oci.succeed(shlex.join(["nft", "-j", "list", "table", "inet", table])))["nftables"]
+            drops = [item["rule"]["handle"] for item in rules if "rule" in item
+                     and item["rule"]["chain"] == chain and item["rule"]["expr"][-1] == {"drop": None}]
+            assert len(drops) == 1
+            oci.succeed(shlex.join(["nft", "delete", "rule", "inet", table, chain, "handle", str(drops[0])]))
+            try:
+                # A positive control ensures another firewall did not make the
+                # denied probe pass without our own boundary. Only this trusted
+                # VM's sleeping fixture runs during the temporary relaxation.
+                assert oci.succeed(command) == expected
+            finally:
+                oci.succeed(shlex.join(["nft", "add", "rule", "inet", table, chain, "iifname", bridge, "drop"]))
+            oci.fail(command)
+
+        oci.succeed("systemctl start tentaflake-model-fixture-host-http.service")
+        oci.wait_until_succeeds("curl --max-time 2 -fsS http://10.203.74.1:18082 | grep -Fx model-admission-http-control", timeout=30)
+        model_assert_boundary("input", oci_docker("exec", model_cid, "/bin/wget", "-T", "2", "-qO-", "http://10.203.74.1:18082"), "model-admission-http-control")
+
+        # This bounded trusted target belongs to the host fixture reserve, not
+        # the admission workload set. Docker publishes a real DNAT route to it.
+        forward_cid = oci.succeed(oci_docker("run", "--detach", "--pull=never", "--name", "model-forward-control",
+            "--network=bridge", "--publish", "10.203.74.1:18083:8080", "--read-only", "--user=65534:65534",
+            "--cap-drop=ALL", "--security-opt=no-new-privileges:true", "--memory=32m", "--memory-swap=32m",
+            "--cpus=0.1", "--pids-limit=16", "--tmpfs=/tmp:rw,nosuid,nodev,noexec,size=1m",
+            oci_image_id, "/bin/sh", "-c", "mkdir /tmp/www; printf model-forward-control > /tmp/www/index.html; exec httpd -f -p 8080 -h /tmp/www")).strip()
+        forward = oci_inspect(forward_cid)
+        forward_ip = forward["NetworkSettings"]["Networks"]["bridge"]["IPAddress"]
+        iptables = "${pkgs.iptables}/bin/iptables"
+        forwarding_rules = [
+            ("nat", ["PREROUTING", "-i", bridge, "-d", "10.203.74.1", "-p", "tcp", "--dport", "18083", "-j", "DNAT", "--to-destination", forward_ip + ":8080"]),
+            ("filter", ["FORWARD", "-i", bridge, "-d", forward_ip, "-p", "tcp", "--dport", "8080", "-j", "ACCEPT"]),
+            ("filter", ["FORWARD", "-o", bridge, "-s", forward_ip, "-p", "tcp", "--sport", "8080", "-m", "conntrack", "--ctstate", "ESTABLISHED", "-j", "ACCEPT"]),
+        ]
+        installed_rules = []
+        try:
+            for family, rule in forwarding_rules:
+                oci.succeed(shlex.join([iptables, "-t", family, "-I", *rule]))
+                installed_rules.append((family, rule))
+            oci.wait_until_succeeds("curl --max-time 2 -fsS http://10.203.74.1:18083 | grep -Fx model-forward-control", timeout=30)
+            forwarded_get = oci_docker("exec", model_cid, "/bin/wget", "-T", "2", "-qO-", "http://10.203.74.1:18083")
+            model_assert_boundary("forward", forwarded_get, "model-forward-control")
+        finally:
+            for family, rule in reversed(installed_rules):
+                oci.succeed(shlex.join([iptables, "-t", family, "-D", *rule]))
+            oci.succeed(oci_docker("stop", "--time", "2", forward_cid))
+            oci.succeed(oci_docker("rm", forward_cid))
+
+        # Loss of the model service must not strand an owned running container:
+        # Requires stops its supervisor, whose exact-CID retirement needs no
+        # fresh broker health, token, or model grant.
+        oci_stop_unit(model["unit"])
+        oci.wait_until_succeeds("test $(systemctl show --value --property=ActiveState " + shlex.quote(oci_units[model_id]) + ") = inactive", timeout=150)
+        oci.fail(oci_docker("container", "inspect", model_cid))
+        retired = oci_current(model_id)
+        assert retired["reservation"]["state"] == "retained"
+        assert retired["runtime"] == model_receipt["runtime"]
         assert oci_snapshot()["storage"] == oci_storage
 
     with subtest("failed create preserves foreign same-name container and Unknown charge"):

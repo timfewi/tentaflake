@@ -162,7 +162,7 @@
           in
           pkgs.runCommand "tentaflake-agent-adapters"
             {
-              passthru.admissionPlan = tests.admissionPlan;
+              passthru = { inherit (tests) admissionPlan modelAdmissionPlan; };
               nativeBuildInputs = [
                 pkgs.python3
                 pkgs.bash

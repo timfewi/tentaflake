@@ -18,13 +18,17 @@ mod admission_creation;
 mod admission_creation_recovery;
 mod admission_evidence;
 mod admission_host;
+mod admission_model;
 mod admission_oci;
 mod admission_publication;
+mod admission_research;
+mod admission_research_rpc;
 mod admission_retention;
 mod admission_runtime;
 mod admission_storage;
 mod admission_systemd;
 mod admission_template;
+mod admission_unix;
 mod admission_worker;
 mod api;
 mod onboarding;
@@ -1817,6 +1821,22 @@ fn live_observed_security_drift(
             LiveContainerState::Secure
         }
         Some(network) if expected_network != "none" && network == expected_network => {
+            LiveContainerState::Secure
+        }
+        Some(network)
+            if backend == "docker"
+                && expected_network != "none"
+                && network.len() == 64
+                && network
+                    .bytes()
+                    .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+                && network_settings
+                    .and_then(|settings| settings.get("Networks"))
+                    .and_then(|networks| networks.get(expected_network))
+                    .and_then(|endpoint| endpoint.get("NetworkID"))
+                    .and_then(serde_json::Value::as_str)
+                    == Some(network) =>
+        {
             LiveContainerState::Secure
         }
         Some(_) => LiveContainerState::Unsafe,
@@ -3917,6 +3937,58 @@ mod tests {
             ),
             LiveContainerState::Secure
         );
+
+        // Docker preserves an explicitly selected full network ID in NetworkMode.
+        // It is valid only when the sole declared attachment resolves to that ID.
+        for (mode, attached_id, attachment, expected) in [
+            (
+                "a".repeat(64),
+                "a".repeat(64),
+                "tf-coding",
+                LiveContainerState::Secure,
+            ),
+            (
+                "a".repeat(64),
+                "b".repeat(64),
+                "tf-coding",
+                LiveContainerState::Unsafe,
+            ),
+            (
+                "a".repeat(12),
+                "a".repeat(12),
+                "tf-coding",
+                LiveContainerState::Unsafe,
+            ),
+            (
+                "g".repeat(64),
+                "g".repeat(64),
+                "tf-coding",
+                LiveContainerState::Unsafe,
+            ),
+            (
+                "a".repeat(64),
+                "a".repeat(64),
+                "tf-foreign",
+                LiveContainerState::Unsafe,
+            ),
+        ] {
+            let mut selected_network = inspect.clone();
+            selected_network[0]["HostConfig"]["NetworkMode"] = serde_json::json!(mode);
+            selected_network[0]["NetworkSettings"]["Networks"] =
+                serde_json::json!({attachment: {"NetworkID": attached_id}});
+            assert_eq!(
+                live_container_security(
+                    &selected_network,
+                    "docker",
+                    "tf-coding",
+                    &declared_mounts,
+                    &declared_tmpfs,
+                    &declared_live_resources,
+                ),
+                expected,
+                "unexpected network identity result for {mode} on {attachment}"
+            );
+        }
 
         let mut multiple_containers = inspect.clone();
         multiple_containers

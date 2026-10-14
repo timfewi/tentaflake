@@ -259,6 +259,20 @@ let
     capabilities = [ "model" ];
   } genericModelPolicy;
   genericModelContainer = genericWithModel.virtualisation.oci-containers.containers.generic-coding;
+  admittedModel =
+    genericEval
+      {
+        image = localImage;
+        capabilities = [ "model" ];
+      }
+      (
+        lib.recursiveUpdate genericModelPolicy {
+          tentaflake.security.admission = admissionPolicy;
+        }
+      );
+  modelManifest = builtins.fromJSON (
+    builtins.unsafeDiscardStringContext admittedModel.tentaflake.admissionManifest.text
+  );
   exceedsHost = {
     memory = "3g";
     memorySwap = "3g";
@@ -616,6 +630,22 @@ assert lib.all (value: value == null) (lib.attrValues localContainer.login);
 assert
   localGeneric.tentaflake.agentInstances.generic-coding.runtimeImage == localDefinition.runtimeImage;
 assert localManifest.schemaVersion == 3;
+assert localManifest.runtimes.generic-coding.model == null;
+assert localManifest.runtimes.generic-coding.research == null;
+assert localManifest.policy.grants == [ ];
+assert failures admittedModel == [ ];
+assert
+  modelManifest.runtimes.generic-coding.model
+  == admittedModel.tentaflake.broker.admissionModels.generic-coding;
+assert
+  modelManifest.policy.grants == [
+    {
+      instanceId = "generic-coding";
+      ownerId = "host-root";
+      capability = "model";
+      expiresAt = null;
+    }
+  ];
 assert localManifest.runtimes.generic-coding.image == localDefinition.runtimeImage;
 assert localManifest.runtimes.generic-coding.unit == "docker-generic-coding.service";
 assert localManifest.runtimes.generic-coding.container.cmd == localContainer.cmd;
@@ -879,4 +909,5 @@ assert rejects
 // {
   deniedStartScript = genericMissing.systemd.services.docker-generic-coding.preStart;
   admissionPlan = localGeneric.tentaflake.admissionManifest;
+  modelAdmissionPlan = admittedModel.tentaflake.admissionManifest;
 }

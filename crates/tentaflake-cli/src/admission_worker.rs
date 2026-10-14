@@ -107,16 +107,17 @@ fn results_worker<'a>(plan: &'a HostPlan, id: &str) -> Result<Option<&'a WorkerS
         .ok_or_else(|| "requested Worker has no owned declaration".into())
 }
 
-/// Pure declaration check; neither a capability grant nor live Worker evidence.
-pub(crate) fn validate_results_mounts(
+/// Return the exact validated result mount for the common source policy. This
+/// pure declaration check grants no capability and supplies no live evidence.
+pub(crate) fn validate_results_mounts<'a>(
     plan: &HostPlan,
     id: &str,
-    mounts: &[crate::DeclaredMount],
-) -> Result<(), String> {
+    mounts: &'a [crate::DeclaredMount],
+) -> Result<Option<&'a crate::DeclaredMount>, String> {
     let worker = results_worker(plan, id)?;
     let expected = worker.map(|spec| spec.state_dir.join("results"));
     let destination = Path::new(RESULTS_DESTINATION);
-    let mut found = false;
+    let mut found = None;
     for mount in mounts {
         let source = Path::new(&mount.source);
         let target = Path::new(&mount.destination);
@@ -134,20 +135,20 @@ pub(crate) fn validate_results_mounts(
                         .starts_with(b"tentaflake-worker-")
                 });
         if worker_source || target.starts_with(destination) || destination.starts_with(target) {
-            if found
+            if found.is_some()
                 || expected.as_deref() != Some(source)
                 || target != destination
                 || mount.writable
             {
                 return Err("Worker results require one exact owned read-only mount".into());
             }
-            found = true;
+            found = Some(mount);
         }
     }
-    if found != worker.is_some() {
+    if found.is_some() != worker.is_some() {
         return Err("requested Worker results mount is missing".into());
     }
-    Ok(())
+    Ok(found)
 }
 
 fn check_results_config(

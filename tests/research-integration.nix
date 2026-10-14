@@ -1,4 +1,5 @@
-# Real capsule transport; vendor agent images and live providers are not used.
+# Real capsule transport and owned Generic admission. The test-only observation
+# producer/dummy interface exercise local readiness, not VPN/provider acceptance.
 { self, pkgs }:
 let
   inherit (pkgs) lib;
@@ -16,6 +17,117 @@ let
       pathsToLink = [ "/bin" ];
     };
   };
+  descriptor = builders.mkLocalImage image;
+  fixtureObserver = pkgs.writeText "research-admission-observer.py" ''
+    import json
+    import os
+    from pathlib import Path
+    import tempfile
+    import time
+
+    directory = Path("/run/research-vpn")
+    while True:
+        try:
+            mode = (directory / "fixture-mode").read_text().strip()
+        except FileNotFoundError:
+            mode = "ready"
+        assert mode in {"ready", "draining", "offline"}
+        # Operator input only: the real controller owns its distinct generation
+        # and its three-second output lease. No Internet request is made here.
+        observation = {"version": 1, "generation": "d57b890f-6996-41fb-bd08-431c83477815",
+                       "mode": mode, "valid_until": int(time.time()) + 10}
+        with tempfile.NamedTemporaryFile(mode="w", dir=directory, delete=False) as stream:
+            os.fchmod(stream.fileno(), 0o644)
+            json.dump(observation, stream)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(stream.name, directory / "observation.json")
+        time.sleep(0.25)
+  '';
+  readinessProbe = pkgs.writeText "research-admitted-readiness.py" ''
+    import json
+    import os
+    from pathlib import Path
+    import signal
+    import socket
+    import subprocess
+    import sys
+    import time
+
+    if len(sys.argv) == 1:
+        assert os.getuid() == 10000 and os.getcwd() == "/workspace"
+        command = os.environ["TENTAFLAKE_RESEARCH_COMMAND"]
+        research_socket = os.environ["TENTAFLAKE_RESEARCH_SOCKET"]
+        assert research_socket == "/run/tentaflake-research/socket"
+        for path in ["/run/docker.sock", "/run/agent-research/socket", "/run/tentaflake-worker"]:
+            assert not os.path.exists(path), path
+        assert "OPENAI_API_KEY" not in os.environ
+        Path("/workspace/research-proof").write_text("workspace")
+        Path("/state/research-proof").write_text("state")
+        try:
+            Path("/root-write-probe").write_text("must fail")
+        except OSError:
+            pass
+        else:
+            raise AssertionError("container root was writable")
+        try:
+            connection = socket.create_connection(("9.9.9.9", 443), timeout=1)
+        except OSError:
+            pass
+        else:
+            connection.close()
+            raise AssertionError("Research capsule gained direct IP access")
+    else:
+        # Host synchronization uses the real relay/client/readiness operation.
+        # It supplies no evidence to the admission collector.
+        command, research_socket = sys.argv[1:]
+    messages = [
+        {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {
+            "protocolVersion": "2025-11-25", "capabilities": {},
+            "clientInfo": {"name": "admitted-research-fixture", "version": "1"}}},
+        {"jsonrpc": "2.0", "method": "notifications/initialized"},
+        {"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {
+            "name": "research_job", "arguments": {"operation": "readiness"}}},
+    ]
+    def expired(signum, frame):
+        raise TimeoutError("fixture readiness deadline exceeded")
+
+    signal.signal(signal.SIGALRM, expired)
+    signal.alarm(10)
+    child = subprocess.Popen([command, "--socket", research_socket],
+                             stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+    try:
+        for message in messages:
+            child.stdin.write(json.dumps(message) + "\n")
+            child.stdin.flush()
+            if "id" not in message:
+                continue
+            while True:
+                line = child.stdout.readline(65537)
+                assert line and len(line) <= 65536, "missing or oversized client response"
+                response = json.loads(line)
+                if response.get("id") == message["id"]:
+                    assert "error" not in response
+                    break
+        assert not response["result"].get("isError", False)
+        report = response["result"]["structuredContent"]
+        child.stdin.close()
+        assert child.wait(timeout=2) == 0
+    finally:
+        signal.alarm(0)
+        if child.poll() is None:
+            child.kill()
+            child.wait()
+    assert report["schema_version"] == 1 and report["caller_uid"] == 62103
+    assert report["untrusted"] is True and report["accepting"] is True
+    assert report["egress"]["mode"] == "ready" and report["egress"]["lease_valid"] is True
+    assert len(report["policy_sha256"]) == 64
+    if len(sys.argv) > 1:
+        lease = json.loads(Path("/run/agent-research-egress/control/state.json").read_text())
+        assert report["egress"]["generation"] == lease["generation"]
+        assert lease["mode"] == "ready" and lease["valid_until"] > int(time.time())
+    print(json.dumps(report))
+  '';
   probe = pkgs.writeText "research-capsule-probe.py" ''
     import json
     import os
@@ -127,16 +239,63 @@ pkgs.testers.runNixOSTest {
         name = lib.removePrefix "generic-" name;
         definition = {
           schemaVersion = 1;
-          image = builders.constants.hermesImage;
-          command = [ "/bin/python3" ];
+          image =
+            if name == "generic-research" then
+              {
+                kind = "local-artifact";
+                inherit descriptor;
+              }
+            else
+              builders.constants.hermesImage;
+          command = [
+            "/bin/python3"
+            "-u"
+            "-c"
+            "import signal,sys,time; signal.signal(signal.SIGTERM, lambda *_: sys.exit(0)); print('research-admission-ready', flush=True); time.sleep(86400)"
+          ];
           lifecycle = "stopped";
           capabilities = lib.optional (name == "generic-research") "research";
+          ownership = {
+            uid = 10000;
+            gid = 10000;
+          };
+          resources = {
+            memory = "256m";
+            memorySwap = "256m";
+            cpus = "0.5";
+            nofile = 128;
+            pidsLimit = 128;
+            tmpfsSize = "8m";
+            runTmpfsSize = "8m";
+          };
         };
       }
     ) genericNames;
+    # Real Nix database/root registration for prebuilt closures only. Empty
+    # build-users-group avoids changing ownership of the shared store; Nix's
+    # internal remount is confined to each service's private mount namespace.
+    nix = {
+      enable = true;
+      nrBuildUsers = 0;
+      settings = {
+        build-users-group = lib.mkForce "";
+        max-jobs = lib.mkForce 0;
+        builders = lib.mkForce "";
+        substituters = lib.mkForce [ ];
+        substitute = false;
+      };
+    };
     virtualisation = {
+      writableStore = false;
+      fileSystems."/nix/store".options = [ "ro" ];
       memorySize = 2048;
+      cores = 2;
+      diskSize = 2048;
       docker.enable = true;
+      docker.daemon.settings = {
+        live-restore = false;
+        features.containerd-snapshotter = false;
+      };
       oci-containers.backend = "docker";
     };
     tentaflake = {
@@ -150,6 +309,46 @@ pkgs.testers.runNixOSTest {
         zeroclaw-research.uid = 62102;
         generic-research.uid = 62103;
       };
+      security.admission = {
+        authorityEpoch = "research-vm";
+        physicalSpaceHeadroomBytes = 67108864;
+        capacity = {
+          memoryBytes = 1610612736;
+          memorySwapBytes = 1610612736;
+          nanoCpus = 2000000000;
+          pids = 1408;
+          workspaceBytes = 134217728;
+          stateBytes = 134217728;
+        };
+        hostReserve = {
+          memoryBytes = 268435456;
+          memorySwapBytes = 268435456;
+          nanoCpus = 500000000;
+          pids = 256;
+          workspaceBytes = 0;
+          stateBytes = 0;
+        };
+        researchReserve = {
+          memoryBytes = 1073741824;
+          memorySwapBytes = 1073741824;
+          nanoCpus = 1000000000;
+          pids = 1024;
+          workspaceBytes = 0;
+          stateBytes = 0;
+        };
+        maxActive = 1;
+      };
+      workspaceQuota.agents.generic-research = {
+        enable = true;
+        workspace = "/var/lib/generic-research/workspace";
+        sizeMiB = 128;
+        ownerUid = 10000;
+        ownerGid = 10000;
+        state = {
+          path = "/var/lib/generic-research/state";
+          sizeMiB = 128;
+        };
+      };
     };
     services.secureResearch = {
       serviceUid = 4201;
@@ -157,9 +356,65 @@ pkgs.testers.runNixOSTest {
       vpnInterface = "fixture-vpn";
       resolvers = [ "9.9.9.9" ];
     };
-    systemd.tmpfiles.rules = [ "d /run/research-vpn 0755 root root -" ];
+    systemd = {
+      units =
+        lib.genAttrs
+          [
+            "nix-store.mount"
+            "nix-.ro\\x2dstore.mount"
+          ]
+          (_: {
+            overrideStrategy = "asDropin";
+            text = ''
+              [Unit]
+              DefaultDependencies=no
+            '';
+          });
+      tmpfiles.rules = [ "d /run/research-vpn 0755 root root -" ];
+      # The earlier transport projections run their own ephemeral fixture CIDs.
+      # Only the declared admitted Generic unit may mutate Docker after bootstrap.
+      services =
+        lib.genAttrs
+          [
+            "docker-hermes-research"
+            "docker-zeroclaw-research"
+            "docker-generic-ungranted"
+          ]
+          (_: {
+            enable = false;
+          })
+        // {
+          register-nix-paths = {
+            preStart = ''
+              test -d /nix/store/.links && test ! -L /nix/store/.links
+            '';
+            serviceConfig.PrivateMounts = true;
+          };
+          nix-daemon = {
+            preStart = ''
+              test -d /nix/store/.links && test ! -L /nix/store/.links
+            '';
+            serviceConfig.PrivateMounts = true;
+          };
+          tentaflake-research-fixture-observer.serviceConfig = {
+            Type = "simple";
+            ExecStart = "${pkgs.python3}/bin/python3 ${fixtureObserver}";
+            User = "root";
+            KillMode = "control-group";
+            TimeoutStopSec = 5;
+          };
+        };
+      slices.agent-research.sliceConfig = {
+        MemoryMax = lib.mkForce "1073741824";
+        CPUQuota = "100%";
+      };
+    };
     environment = {
-      systemPackages = [ (pkgs.python3.withPackages (packages: [ packages.pyyaml ])) ];
+      systemPackages = [
+        (pkgs.python3.withPackages (packages: [ packages.pyyaml ]))
+        pkgs.iproute2
+        pkgs.util-linux
+      ];
       etc = {
         "research-fixture-image".source = image;
         "research-fixture-mounts.json".text = builtins.toJSON (
@@ -267,5 +522,305 @@ pkgs.testers.runNixOSTest {
             argv += ["--volume", mount]
         argv += ["tentaflake-research-fixture:test", "/bin/python3", "/research-probe.py", str(uid)] + client_arguments
         machine.succeed(shlex.join(argv))
+
+    # The preceding transport tests are now completely stopped. From here the
+    # generated unit, installed plan, physical quotas and durable ledger own OCI.
+    agent = "generic-research"
+    plan_path = machine.succeed("readlink -f /etc/tentaflake/admission.json").strip()
+    plan = json.loads(machine.succeed("cat " + shlex.quote(plan_path)))
+    runtime = plan["runtimes"][agent]
+    research = runtime["research"]
+    unit = runtime["unit"]
+    controller = research["controller"]["unit"]
+    observer = "tentaflake-research-fixture-observer.service"
+    control = research["controlPath"]
+    relay_socket = research["relay"]["socketPath"]
+    ledger = "/var/lib/tentaflake-admission/ledger.json"
+    volumes = {volume["spec"]["kind"]: volume for volume in plan["volumes"]}
+    assert set(plan["runtimes"]) == {agent} and runtime["model"] is None
+    assert plan["instances"][agent]["requestedCapabilities"] == ["research"]
+    assert research["relay"]["template"]["uid"] == 62103
+    assert runtime["image"] == {"kind": "local-artifact", "descriptor": "${descriptor}"}
+
+    def admission(action, identifier=None):
+        args = ["tentaflake", "admission", action, plan_path]
+        if identifier is not None:
+            args.append(identifier)
+        return shlex.join(args)
+
+    def docker(*args):
+        return shlex.join(["timeout", "20s", "docker", "--host=unix:///run/docker.sock", "--config=/var/empty", *args])
+
+    def snapshot():
+        return json.loads(machine.succeed("cat " + ledger))
+
+    def current():
+        return max((receipt for receipt in snapshot()["receipts"] if receipt["request"]["instanceId"] == agent),
+                   key=lambda receipt: receipt["claimedRevision"])
+
+    def stop_unit(name, allow_failed=False):
+        machine.succeed("timeout 150s systemctl stop " + shlex.quote(name))
+        state = machine.succeed("systemctl show --value --property=ActiveState " + shlex.quote(name)).strip()
+        assert state == "inactive" or (allow_failed and state == "failed"), (name, state)
+        jobs = machine.succeed("systemctl list-jobs --no-legend --no-pager --full")
+        assert all(name not in line.split() for line in jobs.splitlines()), jobs
+
+    def start_agent(succeeds=True):
+        previous = machine.succeed("systemctl show --value --property=InvocationID " + shlex.quote(unit)).strip()
+        command = "timeout 320s systemctl start " + shlex.quote(unit)
+        if succeeds:
+            machine.succeed(command)
+            machine.wait_for_unit(unit)
+        else:
+            machine.fail(command)
+            invocation = machine.succeed("systemctl show --value --property=InvocationID " + shlex.quote(unit)).strip()
+            assert invocation != previous and len(invocation) == 32 and all(c in "0123456789abcdef" for c in invocation), invocation
+            for property_name, expected in [("ActiveState", "failed"), ("Result", "exit-code"), ("ExecMainStatus", "2")]:
+                actual = machine.succeed("systemctl show --value --property=" + property_name + " " + shlex.quote(unit)).strip()
+                assert actual == expected, (property_name, actual)
+            # Reset only this observed fresh admission refusal while the failed
+            # state still pins the unit loaded. A rate-limit rejection is not
+            # evidence that the collector ran or refused this changed source.
+            machine.succeed("systemctl reset-failed " + shlex.quote(unit))
+            stop_unit(unit)
+
+    def nix_evidence(retained=False):
+        machine.wait_for_unit("register-nix-paths.service")
+        machine.wait_for_unit("nix-daemon.socket")
+        assert machine.succeed("systemctl show --value --property=Result register-nix-paths.service").strip() == "success"
+        options = machine.succeed("findmnt --task 1 --first-only --direction backward -n -o OPTIONS --mountpoint /nix/store").strip().split(",")
+        assert "ro" in options and "rw" not in options, options
+        machine.succeed("test -d /nix/store/.links && test ! -L /nix/store/.links")
+        if retained:
+            assert plan_path.startswith("/nix/store/") and "/" not in plan_path[len("/nix/store/"):], plan_path
+            root = "/nix/var/nix/gcroots/tentaflake/" + plan_path.rsplit("/", 1)[1]
+            assert machine.succeed("readlink -- " + shlex.quote(root)).strip() == plan_path
+            assert machine.succeed("test -L " + shlex.quote(root) + " && stat -c %u:%h -- " + shlex.quote(root)).strip() == "0:1"
+
+    def denied_without_dispatch():
+        before = snapshot()
+        start_agent(succeeds=False)
+        assert snapshot() == before, "Research refusal changed durable claims"
+        machine.fail(docker("container", "inspect", agent))
+
+    ready_command = shlex.join([
+        "timeout", "15s", "python3", "${readinessProbe}",
+        research["client"]["executable"], relay_socket,
+    ])
+
+    def wait_ready():
+        machine.wait_until_succeeds(ready_command, timeout=40)
+        return json.loads(machine.succeed("cat " + shlex.quote(control)))
+
+    with subtest("Research-only Generic uses explicit image acquisition and fenced bootstrap"):
+        nix_evidence()
+        stop_unit(unit)
+        for volume in volumes.values():
+            image_path = volume["spec"]["imagePath"]
+            machine.succeed("test ! -e " + shlex.quote(image_path) + " && test ! -e " + shlex.quote(image_path + ".new"))
+            owner = volume["units"]["owner"]
+            failed = machine.succeed("systemctl show --value --property=ActiveState " + shlex.quote(owner)).strip() == "failed"
+            if failed:
+                invocation = machine.succeed("systemctl show --value --property=InvocationID " + shlex.quote(owner)).strip()
+                assert len(invocation) == 32 and all(c in "0123456789abcdef" for c in invocation), invocation
+                assert machine.succeed("systemctl show --value --property=ExecMainStatus " + shlex.quote(owner)).strip() == "2"
+                diagnostic = machine.succeed(shlex.join([
+                    "journalctl", "--no-pager", "-o", "cat", "-n", "20", "_SYSTEMD_INVOCATION_ID=" + invocation,
+                ]))
+                assert "tentaflake: admission ledger unavailable; explicit bootstrap or recovery required" in diagnostic.splitlines(), diagnostic
+            stop_unit(owner, allow_failed=failed)
+        machine.succeed("test ! -e /var/lib/tentaflake-admission")
+        for legacy in ["docker-hermes-research.service", "docker-zeroclaw-research.service", "docker-generic-ungranted.service"]:
+            assert machine.succeed("systemctl show --value --property=LoadState " + legacy).strip() == "masked"
+        daemon_info = json.loads(machine.succeed(docker("info", "--format", "{{json .}}")))
+        assert daemon_info["Driver"] and all(row[0] != "driver-type" for row in daemon_info["DriverStatus"]), daemon_info["DriverStatus"]
+        machine.succeed(admission("image-acquire", agent))
+        machine.succeed("test ! -e /var/lib/tentaflake-admission")
+        daemon_units = ["docker.service"]
+        if machine.succeed("systemctl show --value --property=LoadState docker.socket").strip() != "not-found":
+            daemon_units.append("docker.socket")
+        machine.succeed("timeout 150s systemctl stop " + shlex.join(daemon_units))
+        print(machine.succeed(${
+          builtins.toJSON (
+            "timeout 60s bash -euo pipefail -c "
+            + pkgs.lib.escapeShellArg (builtins.readFile ./fixtures/admission-mount-inventory.sh)
+          )
+        }))
+        machine.succeed(admission("bootstrap-fence"))
+        machine.succeed("timeout 150s systemctl start docker.service")
+        machine.wait_for_unit("docker.service")
+        machine.succeed(admission("bootstrap"))
+        nix_evidence(retained=True)
+        for kind in ["state", "workspace"]:
+            machine.succeed("timeout 80s systemctl start " + shlex.quote(volumes[kind]["units"]["owner"]))
+        storage = snapshot()["storage"]
+        assert len(storage) == 2 and all(row["allocation"]["state"] == "present" for row in storage)
+        assert sum(row["allocation"]["bytes"] for row in storage) == 268435456
+        assert snapshot()["receipts"] == []
+        machine.fail(admission("runtime-start", agent))
+        machine.succeed("ip link add fixture-vpn type dummy")
+        machine.succeed("ip link set dev fixture-vpn up")
+        requires = machine.succeed("systemctl show --value --property=Requires " + unit).split()
+        assert {controller, research["service"]["unit"], research["egress"]["unit"]}.issubset(requires)
+        # No observation producer exists yet; socket/process availability alone
+        # cannot admit this first actual Generic invocation.
+        denied_without_dispatch()
+        machine.succeed("systemctl start " + observer)
+        machine.succeed("systemctl start agent-research.service agent-research-egress.service")
+        wait_ready()
+
+    with subtest("missing and expired real controller leases cannot dispatch"):
+        for missing in [True, False]:
+            wait_ready()
+            machine.succeed("systemctl kill --kill-whom=main --signal=STOP " + controller)
+            saved = control + ".fixture-saved"
+            try:
+                if missing:
+                    machine.succeed(shlex.join(["mv", "--", control, saved]))
+                else:
+                    expired = "import json,time; assert json.load(open(" + repr(control) + "))['valid_until'] <= int(time.time())"
+                    machine.wait_until_succeeds("python3 -c " + shlex.quote(expired), timeout=10)
+                denied_without_dispatch()
+            finally:
+                if missing:
+                    machine.succeed(shlex.join(["mv", "--", saved, control]))
+                machine.succeed("systemctl kill --kill-whom=main --signal=CONT " + controller)
+            wait_ready()
+
+    with subtest("real draining and offline controller states cannot dispatch"):
+        for mode in ["draining", "offline"]:
+            machine.succeed("printf '%s\\n' " + mode + " > /run/research-vpn/fixture-mode.next")
+            machine.succeed("mv /run/research-vpn/fixture-mode.next /run/research-vpn/fixture-mode")
+            condition = "import json; assert json.load(open(" + repr(control) + "))['mode'] == " + repr(mode)
+            machine.wait_until_succeeds("python3 -c " + shlex.quote(condition), timeout=10)
+            denied_without_dispatch()
+            machine.succeed("rm /run/research-vpn/fixture-mode")
+            wait_ready()
+
+    with subtest("active relay unit without its exact socket path cannot dispatch"):
+        machine.succeed(shlex.join(["mv", "--", relay_socket, relay_socket + ".fixture-saved"]))
+        try:
+            assert machine.succeed("systemctl show --value --property=ActiveState " + research["relay"]["socketUnit"]).strip() == "active"
+            denied_without_dispatch()
+        finally:
+            machine.succeed(shlex.join(["mv", "--", relay_socket + ".fixture-saved", relay_socket]))
+        wait_ready()
+
+    with subtest("a relay process with another UID is not the granted Research transport"):
+        template = research["relay"]["template"]["unit"]
+        directory = "/run/systemd/system/" + template + ".d"
+        dropin = directory + "/90-research-fixture.conf"
+        socket_unit = research["relay"]["socketUnit"]
+        stop_unit(socket_unit)
+        machine.succeed(shlex.join(["mkdir", "-p", directory]))
+        machine.succeed("printf '%s\\n' '[Service]' 'User=10000' > " + shlex.quote(dropin))
+        machine.succeed("systemctl daemon-reload")
+        machine.succeed("systemctl start " + socket_unit)
+        try:
+            denied_without_dispatch()
+        finally:
+            stop_unit(socket_unit)
+            machine.succeed(shlex.join(["rm", "--", dropin]))
+            machine.succeed("systemctl daemon-reload")
+            machine.succeed("systemctl start " + socket_unit)
+        wait_ready()
+
+    with subtest("backend start dependencies must produce actual live processes"):
+        for backend in [research["service"]["unit"], research["egress"]["unit"]]:
+            stop_unit(backend)
+            directory = "/run/systemd/system/" + backend + ".d"
+            dropin = directory + "/90-research-fixture.conf"
+            machine.succeed(shlex.join(["mkdir", "-p", directory]))
+            machine.succeed("printf '%s\\n' '[Unit]' 'ConditionPathExists=/run/research-fixture-never-created' > " + shlex.quote(dropin))
+            machine.succeed("systemctl daemon-reload")
+            try:
+                denied_without_dispatch()
+                assert machine.succeed("systemctl show --value --property=MainPID " + backend).strip() == "0"
+            finally:
+                machine.succeed(shlex.join(["rm", "--", dropin]))
+                machine.succeed("systemctl daemon-reload")
+                machine.succeed("systemctl start agent-research.service agent-research-egress.service")
+            wait_ready()
+
+    def assert_active():
+        receipt = current()
+        assert receipt["reservation"]["state"] == "active"
+        assert receipt["reservation"]["resources"] == plan["instances"][agent]["resources"]
+        dispatch = receipt["runtime"]
+        cid = dispatch["containerId"]
+        assert len(cid) == 64 and all(c in "0123456789abcdef" for c in cid)
+        observed = json.loads(machine.succeed(docker("container", "inspect", cid)))[0]
+        assert observed["Id"] == cid and observed["State"]["Running"]
+        assert observed["Image"] == dispatch["intent"]["imageId"]
+        assert dispatch["intent"]["image"] == runtime["image"]
+        assert dispatch["intent"]["specRevision"] == plan["instances"][agent]["revision"]
+        assert observed["Config"]["Labels"]["io.tentaflake.operation"] == receipt["request"]["operationId"]
+        assert observed["Config"]["User"] == "10000:10000"
+        host = observed["HostConfig"]
+        assert host["Runtime"] == "runsc" and host["NetworkMode"] == "none"
+        assert host["ReadonlyRootfs"] and not host["Privileged"] and not host["AutoRemove"]
+        assert set(host["CapDrop"]) == {"ALL"} and not host["CapAdd"]
+        security = {option.replace(":", "=", 1) for option in host["SecurityOpt"]}
+        assert security in (
+            {"no-new-privileges=true", "apparmor=docker-default"},
+            {"no-new-privileges", "apparmor=docker-default"},
+        )
+        assert host["Memory"] == 268435456 and host["MemorySwap"] == 268435456
+        assert host["NanoCpus"] == 500000000 and host["PidsLimit"] == 128
+        assert {item["Name"]: (item["Soft"], item["Hard"]) for item in host["Ulimits"]} == {
+            "nofile": (128, 128), "nproc": (128, 128),
+        }
+        assert set(host["Tmpfs"]) == {"/tmp", "/run", "/var/tmp"}
+        for options in host["Tmpfs"].values():
+            assert set(options.split(",")) == {"rw", "nosuid", "nodev", "noexec", "size=8m"}
+        expected_mounts = {}
+        for volume in runtime["container"]["volumes"]:
+            source, target, mode = volume.split(":")
+            expected_mounts[target] = (source, mode != "ro")
+        actual_mounts = {item["Destination"]: (item["Source"], item["RW"]) for item in observed["Mounts"] if item["Type"] == "bind"}
+        assert actual_mounts == expected_mounts
+        assert actual_mounts["/run/tentaflake-research"] == ("/run/tentaflake-research/generic-research", False)
+        assert not any(item["Type"] == "volume" for item in observed["Mounts"])
+        report = json.loads(machine.succeed(docker("exec", cid, "/bin/python3", "-c", machine.succeed("cat ${readinessProbe}"))))
+        lease = json.loads(machine.succeed("cat " + shlex.quote(control)))
+        assert report["egress"]["generation"] == lease["generation"]
+        machine.wait_until_succeeds("journalctl --no-pager -o cat -n 60 -u " + unit + " | grep -Fx research-admission-ready", timeout=30)
+        return receipt, lease["generation"]
+
+    with subtest("owned Generic reaches Active only with authenticated same-generation Research"):
+        wait_ready()
+        start_agent()
+        first, generation = assert_active()
+        assert snapshot()["storage"] == storage
+
+    with subtest("controller loss stops the exact CID and old generation cannot restart"):
+        stop_unit(controller)
+        machine.wait_until_succeeds("test $(systemctl show --value --property=ActiveState " + unit + ") = inactive", timeout=40)
+        retained = current()
+        assert retained["reservation"]["state"] == "retained"
+        assert retained["runtime"] == first["runtime"]
+        assert retained["reservation"]["resources"]["memoryBytes"] == 0
+        machine.fail(docker("container", "inspect", first["runtime"]["containerId"]))
+        stop_unit(observer)
+        machine.succeed("rm /run/research-vpn/observation.json")
+        machine.succeed("systemctl start " + controller)
+        denied_without_dispatch()
+        machine.succeed("systemctl start " + observer)
+        renewed = wait_ready()
+        assert renewed["generation"] != generation
+        start_agent()
+        second, current_generation = assert_active()
+        assert current_generation == renewed["generation"]
+        assert second["request"]["operationId"] != first["request"]["operationId"]
+        assert second["runtime"]["containerId"] != first["runtime"]["containerId"]
+        stop_unit(unit)
+        assert current()["reservation"]["state"] == "retained"
+        assert snapshot()["storage"] == storage
+        machine.fail(docker("container", "inspect", second["runtime"]["containerId"]))
+    nix_evidence(retained=True)
+    for mount_unit in ["nix-store.mount", r"nix-.ro\x2dstore.mount"]:
+        assert machine.succeed("systemctl show --value --property=DefaultDependencies " + shlex.quote(mount_unit)).strip() == "no"
+        assert "umount.target" not in machine.succeed("systemctl show --value --property=Conflicts " + shlex.quote(mount_unit)).split()
+    machine.shutdown()
   '';
 }

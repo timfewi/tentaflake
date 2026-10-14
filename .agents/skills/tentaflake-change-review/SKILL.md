@@ -1,7 +1,7 @@
 ---
 name: tentaflake-change-review
 description: Review a Tentaflake change for a concrete requirement, proportionate verification, synchronized docs and a complete PR.
-version: 1.1.18
+version: 1.1.19
 ---
 
 # Tentaflake change review
@@ -23,6 +23,7 @@ Use for features, fixes and substantive reviews. Read `AGENTS.md` and
 | Ordinary source/configuration | Start with `just fast`, then focused assertions/tests |
 | Docs/skills | Inspect source claims, local links and frontmatter; run `just fast` |
 | Image validation | `nix build --no-link .#checks.x86_64-linux.image-pinning` |
+| Admission schema/projection | `just admission-plan` exercises generated offline and model plans through the actual loader |
 | Runtime/security | Identify affected host/Research VMs; run when explicitly authorized |
 | Installer | Focused disk/generated-flake checks; ISO/VM builds when explicitly authorized |
 
@@ -42,6 +43,15 @@ Session-revocation fixtures must prove the saved cookie still succeeds immediate
 before restart or process death. The original HTTP fixture saved an already
 logged-out cookie, so its restart refusal could not detect missing revocation.
 Keep logout coverage separate and preserve durable token consumption on restart.
+For broker firewall changes, inspect hook ordering and exercise unrelated open
+host ports and DNAT paths in the VM. Broker drops in NixOS's late allow chains
+were bypassed by earlier global accepts; matching rule text did not prove the
+boundary. Keep authenticated local readiness separate from provider acceptance.
+
+For Unix listeners, exercise an accepted connection in the real kernel table:
+accepted server sockets retain the listener pathname. Match the unique listening
+row and its inherited FD, excluding established rows; duplicate listeners remain
+ambiguous. Preserve the held peer and process identity through probes.
 
 For filesystem ownership tests, obtain the focused Nix package test result as
 well as Cargo evidence. A real sandbox mapped `/` to an unowned overflow UID;
@@ -83,14 +93,14 @@ For `busctl --json` fixtures, distinguish direct get-property values from wrappe
 method arguments. Observe the actual property shape before adding a collector;
 a wrapped scalar fixture hid a Worker path parser failure until source review.
 Review harness-generated mounts too: the NixOS VM's writable store adds an
-overlay. Fixtures using prebuilt closures can use its read-only store bind mount
-when admission does not support observing overlay backing options. Disable guest
-Nix for such fixtures: the harness's closure-registration service otherwise tries
-to change store ownership at boot and fails, including during later activation.
-Keep this bind explicitly read-only and both shared-store mounts available until
-the final shutdown ramfs. Lazy unmount removed systemd's shutdown executable and
-froze the guest; suppress early shutdown dependencies only for those harness
-mounts. Persistent volume and runtime stop checks must remain unchanged.
+overlay. Admission fixtures use its read-only store bind mount and retain real
+Nix database/GC-root registration for authority retention. Isolate registration
+and the daemon in private mount namespaces; never remount or change ownership
+of the host-namespace store. Disabling guest Nix breaks retention-backed
+bootstrap. Keep both shared-store mounts available until the final shutdown
+ramfs: lazy unmount removed systemd's shutdown executable and froze the guest.
+Suppress early shutdown dependencies only for those harness mounts. Persistent
+volume and runtime stop checks must remain unchanged.
 When a VM deliberately declares missing grants, assert the doctor's exact severe
 findings and nonzero exit; healthy subsystem checks must retain that host posture.
 After extracting service scripts into immutable helpers, migrate every inline-script

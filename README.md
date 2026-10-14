@@ -36,8 +36,10 @@ explicit [stopped-host publication protocol](docs/14-workspace-quota.md#changing
 when installing another configuration. The experimental
 [OCI admission supervisor](docs/agent-adapters.md#local-images-and-host-admission)
 binds durable claims to exact container identities and supports separately
-acquired local Nix images. Runtime acceptance, external capability collectors,
-automated installation and the host API service remain under development.
+acquired local Nix images. Model and Research startup collectors authenticate
+local broker/relay processes and their network or controller prerequisites.
+Combined runtime/provider acceptance, Worker admission and automated
+installation remain under development.
 The opt-in [experimental HTTP service](docs/19-host-api.md#experimental-authentication-service)
 implements discovery, operator sessions and published capacity reporting; dynamic environment operations remain
 unsupported while their admission and lifecycle integration is developed.

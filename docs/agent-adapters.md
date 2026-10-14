@@ -182,6 +182,12 @@ recursively inspected. A missing or unsafe source refuses a fresh claim; a chang
 after claiming retains Unknown and its charges. Stopping an owned container does
 not require its original store sources to remain available. These checks neither
 grant external capabilities nor authorize arbitrary read-only host mounts.
+Every read-only source must be an immutable store entry, the requested Research
+relay's exact source/destination pair, or the exact requested Worker's protected
+results binding. Research client closure entries retain their declared self-bind
+paths; requesting Worker never bypasses this source policy. Worker prerequisites
+do not establish Worker readiness. Research lease expiry is checked after the
+last immutable-source observation, immediately before each dispatch transition.
 
 Normal stop uses the owned full ID, verifies the container stopped, removes that
 exact container and retains its storage charge. Name collisions, failed writes,
@@ -191,8 +197,21 @@ systemd post-stop helper marks a crashed invocation Unknown without changing its
 container ID or releasing resources; it cannot modify an older invocation after
 a refused restart. Foreign containers
 are never removed by name. Automatic recovery from these uncertain claims is
-not implemented. This first lifecycle slice targets offline Generic workloads;
-external capability collectors and vendor acceptance remain separate work.
+not implemented.
+
+Model-enabled Generic startup additionally requires the declared broker's exact
+live process and authenticated `/readyz`, protected virtual-key environment,
+dedicated internal network and independent firewall table. A changed or unready
+dependency refuses dispatch even when its generation is unchanged. Docker receives
+the virtual-key environment through a retained file descriptor; credentials do
+not enter command arguments or admission receipts. Stopping an exact owned
+container does not require the broker to remain ready. These checks establish
+local transport prerequisites, not provider acceptance or available model budget.
+The [Research collector](16-research.md#verification-and-limits) authenticates the
+exact relay and backend processes against a fresh controller generation; its
+upstream readiness input and lifecycle VM acceptance remain pending. Worker
+collection, vendor acceptance and automatic recovery remain separate work;
+missing capability evidence continues to refuse startup.
 
 ### OpenShell reuse decision
 
