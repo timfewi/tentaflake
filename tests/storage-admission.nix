@@ -62,6 +62,9 @@
       ) names;
 
       virtualisation = {
+        # These tests execute prebuilt closures; admission does not support the
+        # VM harness's writable-store overlay with unobserved backing options.
+        writableStore = false;
         oci-containers.backend = "docker";
         docker.enable = true;
         docker.daemon.settings."live-restore" = false;
@@ -183,6 +186,12 @@
         if storage.succeed("systemctl show --value --property=LoadState docker.socket").strip() != "not-found":
             docker_units.append("docker.socket")
         storage.succeed("timeout 150s systemctl stop " + shlex.join(docker_units))
+        print(storage.succeed(${
+          builtins.toJSON (
+            "timeout 60s bash -euo pipefail -c "
+            + self.inputs.nixpkgs.lib.escapeShellArg (builtins.readFile ./fixtures/admission-mount-inventory.sh)
+          )
+        }))
         storage.succeed(storage_command("bootstrap-fence"))
         storage.succeed("timeout 150s systemctl start docker.service")
         storage.wait_for_unit("docker.service")

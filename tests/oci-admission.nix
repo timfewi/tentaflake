@@ -67,6 +67,9 @@ let
       }
     ) names;
     virtualisation = {
+      # Use prebuilt closures through the harness's read-only bind mount; an
+      # overlay store has backing options outside the maintenance contract.
+      writableStore = false;
       oci-containers.backend = "docker";
       docker.enable = true;
       docker.daemon.settings."live-restore" = false;
@@ -187,6 +190,12 @@ in
         if node.succeed("systemctl show --value --property=LoadState docker.socket").strip() != "not-found":
             units.append("docker.socket")
         node.succeed("timeout 150s systemctl stop " + shlex.join(units))
+        print(node.succeed(${
+          builtins.toJSON (
+            "timeout 60s bash -euo pipefail -c "
+            + pkgs.lib.escapeShellArg (builtins.readFile ./fixtures/admission-mount-inventory.sh)
+          )
+        }))
         node.succeed(shlex.join(["tentaflake", "admission", "bootstrap-fence", plan]))
         node.succeed("timeout 150s systemctl start docker.service")
         node.wait_for_unit("docker.service")
