@@ -1,7 +1,7 @@
 ---
 name: tentaflake-change-review
 description: Review a Tentaflake change for a concrete requirement, proportionate verification, synchronized docs and a complete PR.
-version: 1.1.17
+version: 1.1.18
 ---
 
 # Tentaflake change review
@@ -51,6 +51,9 @@ independently assert that the public absolute-path API still refuses foreign
 root ownership. Never relax production ownership policy to fit a sandbox.
 Use a process-wide counter for concurrent fixture names; PID plus a nanosecond
 clock reading alone collided in parallel CI diagnostics tests.
+Replace immutable directory fixtures within the same parent: an unprivileged
+cross-parent rename needs write access to the moved directory and failed before
+the identity assertion. Do not chmod away the identity being tested.
 
 Validate mount declarations against their capability owner before comparing live
 mounts with those declarations. Worker shape-validation regressions exposed

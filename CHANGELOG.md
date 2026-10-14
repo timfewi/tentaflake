@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 ### Fixed
+- Verify immutable store mount sources through protected descriptors across OCI
+  dispatch; source changes retain uncertain claims without blocking owned cleanup.
 - Bind declared controller results mounts to the exact requested Worker and
   verify protected results directories without granting Worker runtime admission.
 - Mark crashed OCI supervisors Unknown through an exact-invocation post-stop

@@ -174,6 +174,15 @@ identity. The returned full container ID must be durably bound before start.
 Systemd reports ready only after the running container passes inspection and
 the ledger records Active. Output is forwarded to the service journal.
 
+Read-only store mount sources must be protected immutable files or directories.
+The supervisor opens their complete ancestry without following symlinks, holds
+their descriptors through dispatch, and reopens their identities before create,
+start and recording Active. Ordinary symlinks inside a mounted closure are not
+recursively inspected. A missing or unsafe source refuses a fresh claim; a change
+after claiming retains Unknown and its charges. Stopping an owned container does
+not require its original store sources to remain available. These checks neither
+grant external capabilities nor authorize arbitrary read-only host mounts.
+
 Normal stop uses the owned full ID, verifies the container stopped, removes that
 exact container and retains its storage charge. Name collisions, failed writes,
 interrupted mutations and ambiguous observations keep compute reserved as

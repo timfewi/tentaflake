@@ -1,14 +1,14 @@
 //! Owned offline Docker lifecycle. A recorded intent precedes every create; an
 //! exact CID is synced before start. Uncertain outcomes retain the entire claim.
 use crate::admission_host::{
-    HostPlan, load_plan, open_store_file, read_store_document, store_path,
+    HostPlan, load_plan, open_store_entry, open_store_file, read_store_document, store_path,
 };
 use crate::admission_runtime::{LEDGER, authority, installed, require_root};
 use crate::admission_systemd::{self, ExecCommand, UnitObservation};
 use serde::Deserialize;
 use serde_json::{Map, Value};
 use std::collections::{BTreeMap, BTreeSet};
-use std::fs;
+use std::fs::{self, File};
 use std::io::{self, Read};
 use std::os::fd::AsRawFd;
 use std::os::unix::fs::{FileTypeExt, MetadataExt};
@@ -1282,6 +1282,83 @@ fn notify_ready() -> Result<(), String> {
     Ok(())
 }
 
+#[derive(PartialEq, Eq)]
+struct StoreMountIdentity {
+    device: u64,
+    inode: u64,
+    uid: u32,
+    gid: u32,
+    mode: u32,
+    size: u64,
+    modified: (i64, i64),
+    changed: (i64, i64),
+}
+
+impl StoreMountIdentity {
+    fn read(file: &File) -> Result<Self, String> {
+        let metadata = file
+            .metadata()
+            .map_err(|_| "immutable mount metadata unavailable")?;
+        Ok(Self {
+            device: metadata.dev(),
+            inode: metadata.ino(),
+            uid: metadata.uid(),
+            gid: metadata.gid(),
+            mode: metadata.mode(),
+            size: metadata.len(),
+            modified: (metadata.mtime(), metadata.mtime_nsec()),
+            changed: (metadata.ctime(), metadata.ctime_nsec()),
+        })
+    }
+}
+
+struct StoreMount {
+    path: PathBuf,
+    file: File,
+    identity: StoreMountIdentity,
+}
+
+// The opener authenticates the selected entry and every path component. Hold
+// the original FD while Docker uses the named source; never replace this proof
+// with a fresh, unrelated snapshot after create. This does not inspect a mounted
+// tree recursively or establish the kernel identity of the container's mount.
+fn capture_store_mounts(
+    mounts: &[crate::DeclaredMount],
+    open: impl Fn(&Path) -> Result<File, String>,
+) -> Result<Vec<StoreMount>, String> {
+    mounts
+        .iter()
+        .filter(|mount| !mount.writable && store_path(Path::new(&mount.source)))
+        .map(|mount| {
+            let path = PathBuf::from(&mount.source);
+            let file = open(&path)?;
+            let identity = StoreMountIdentity::read(&file)?;
+            Ok(StoreMount {
+                path,
+                file,
+                identity,
+            })
+        })
+        .collect()
+}
+
+fn recheck_store_mounts(
+    mounts: &[StoreMount],
+    open: impl Fn(&Path) -> Result<File, String>,
+) -> Result<(), String> {
+    for mount in mounts {
+        let current = open(&mount.path)?;
+        if mount.identity != StoreMountIdentity::read(&mount.file)?
+            || mount.identity != StoreMountIdentity::read(&current)?
+        {
+            return Err(
+                "immutable mount source changed during dispatch; claim remains charged".into(),
+            );
+        }
+    }
+    Ok(())
+}
+
 pub(crate) fn lifecycle(path: &Path, id: &str, action: Lifecycle) -> Result<u8, String> {
     require_root()?;
     let plan = load_plan(path)?;
@@ -1332,12 +1409,15 @@ fn start_runtime(
         });
     let mut image_config = Map::new();
     let mut sources = Vec::new();
+    let mut immutable_mounts = Vec::new();
     let outcome = ledger
         .claim(&request, |published| {
             current_authority(plan, path, published)?;
             if caller(plan, path, id, spec, Lifecycle::Start)? != supervisor {
                 return Err("runtime supervisor identity changed".into());
             }
+            immutable_mounts =
+                capture_store_mounts(&containment(plan, id, spec)?.mounts, open_store_entry)?;
             let now = timestamp()?;
             let (boot_id, daemon) = daemon(plan)?;
             let runtime_generation = format!("{boot_id}:{}", daemon.invocation_id);
@@ -1392,6 +1472,7 @@ fn start_runtime(
         .clone();
     unchanged(plan, &intent)?;
     let args = create_args(id, spec, &intent, &request.operation_id);
+    recheck_store_mounts(&immutable_mounts, open_store_entry)?;
     let output = mutate(docker(plan).args(&args), &fence, Duration::from_secs(60))?;
     let cid = std::str::from_utf8(&output)
         .ok()
@@ -1405,6 +1486,7 @@ fn start_runtime(
     exact_container(plan, id, spec, permit.receipt(), &image_config, cid, false)?;
     permit.bind_container(cid).map_err(|e| e.to_string())?;
     refresh_prerequisites(plan, path, id, spec, &intent, &sources)?;
+    recheck_store_mounts(&immutable_mounts, open_store_entry)?;
     mutate(
         docker(plan).args(["container", "start", cid]),
         &fence,
@@ -1412,9 +1494,11 @@ fn start_runtime(
     )?;
     exact_container(plan, id, spec, permit.receipt(), &image_config, cid, true)?;
     refresh_prerequisites(plan, path, id, spec, &intent, &sources)?;
+    recheck_store_mounts(&immutable_mounts, open_store_entry)?;
     permit
         .complete(Observation::Running)
         .map_err(|e| e.to_string())?;
+    drop(immutable_mounts);
     drop(fence);
     notify_ready()?;
     // Readers inherit no admission locks. Journal forwarding has ordinary child
@@ -1683,8 +1767,188 @@ fn finish_runtime(
 pub(crate) mod tests {
     use super::*;
     use serde_json::json;
+    use std::cell::Cell;
+    use std::ffi::OsStr;
+    use std::os::unix::fs::{DirBuilderExt, PermissionsExt, symlink};
+    use std::sync::atomic::{AtomicU64, Ordering};
     use tentaflake_admission::ledger::RuntimeDispatch;
+    use tentaflake_admission::protected_path::{open_at, open_relative};
     use tentaflake_admission::{Decision, Reservation};
+
+    const STORE_MOUNT: &str = "/nix/store/00000000000000000000000000000000-mount-fixture";
+
+    struct StoreFixture {
+        root: PathBuf,
+        anchor: File,
+    }
+
+    impl StoreFixture {
+        fn new(directory: bool) -> Self {
+            static SEQUENCE: AtomicU64 = AtomicU64::new(0);
+            let root = std::env::temp_dir().join(format!(
+                "tentaflake-store-mount-{}-{}",
+                std::process::id(),
+                SEQUENCE.fetch_add(1, Ordering::Relaxed),
+            ));
+            fs::DirBuilder::new().mode(0o700).create(&root).unwrap();
+            fs::DirBuilder::new()
+                .mode(0o700)
+                .create(root.join("parent"))
+                .unwrap();
+            let source = root.join("parent/source");
+            if directory {
+                fs::create_dir(&source).unwrap();
+                // Internal closure links are not mount-source path components.
+                symlink("/unavailable-closure-target", source.join("link")).unwrap();
+                fs::set_permissions(&source, fs::Permissions::from_mode(0o555)).unwrap();
+            } else {
+                fs::write(&source, b"fixture").unwrap();
+                fs::set_permissions(&source, fs::Permissions::from_mode(0o444)).unwrap();
+            }
+            let anchor = open_at(
+                libc::AT_FDCWD,
+                root.as_os_str(),
+                libc::O_RDONLY | libc::O_DIRECTORY,
+            )
+            .unwrap();
+            Self { root, anchor }
+        }
+
+        fn open(&self, path: &Path) -> Result<File, String> {
+            assert_eq!(path, Path::new(STORE_MOUNT));
+            // Only this test maps the logical store name to its own protected
+            // anchor. Production always uses open_store_entry's full root walk.
+            let parent = open_relative(&self.anchor, Path::new("parent"), unsafe {
+                libc::geteuid()
+            })?;
+            open_at(parent.as_raw_fd(), OsStr::new("source"), libc::O_RDONLY)
+        }
+
+        fn capture(&self) -> Vec<StoreMount> {
+            capture_store_mounts(
+                &[crate::DeclaredMount {
+                    source: STORE_MOUNT.into(),
+                    destination: "/reference".into(),
+                    writable: false,
+                }],
+                |path| self.open(path),
+            )
+            .unwrap()
+        }
+    }
+
+    impl Drop for StoreFixture {
+        fn drop(&mut self) {
+            for relative in [
+                "parent/source",
+                "parent/previous",
+                "previous/source",
+                "previous",
+            ] {
+                let path = self.root.join(relative);
+                if fs::symlink_metadata(&path).is_ok_and(|m| m.is_dir()) {
+                    fs::set_permissions(path, fs::Permissions::from_mode(0o700)).unwrap();
+                }
+            }
+            fs::remove_dir_all(&self.root).unwrap();
+        }
+    }
+
+    #[test]
+    fn immutable_mount_capture_is_runtime_only_and_selects_readonly_store_entries() {
+        let (plan, mut spec, _, _, _) = fixture();
+        let fixture = StoreFixture::new(false);
+        spec.container
+            .volumes
+            .push(format!("{STORE_MOUNT}:/reference:ro"));
+        // This logical store path does not exist in the host store. Validation
+        // remains pure; only the runtime observation opens mount sources.
+        validate_runtime(&plan, "agent-fixture", &spec).unwrap();
+        let mut mounts = containment(&plan, "agent-fixture", &spec).unwrap().mounts;
+        mounts.push(crate::DeclaredMount {
+            source: "/run/unrelated-capability".into(),
+            destination: "/unrelated".into(),
+            writable: false,
+        });
+        let opens = Cell::new(0);
+        let captured = capture_store_mounts(&mounts, |path| {
+            opens.set(opens.get() + 1);
+            fixture.open(path)
+        })
+        .unwrap();
+        assert_eq!(captured.len(), 1);
+        assert_eq!(opens.get(), 1);
+        recheck_store_mounts(&captured, |path| fixture.open(path)).unwrap();
+        fs::remove_file(fixture.root.join("parent/source")).unwrap();
+        assert!(capture_store_mounts(&mounts, |path| fixture.open(path)).is_err());
+        assert!(recheck_store_mounts(&captured, |path| fixture.open(path)).is_err());
+    }
+
+    #[test]
+    fn immutable_mount_rechecks_keep_the_original_file_or_directory_identity() {
+        for directory in [false, true] {
+            let fixture = StoreFixture::new(directory);
+            let captured = fixture.capture();
+            for _ in 0..3 {
+                recheck_store_mounts(&captured, |path| fixture.open(path)).unwrap();
+            }
+            fs::rename(
+                fixture.root.join("parent/source"),
+                fixture.root.join("parent/previous"),
+            )
+            .unwrap();
+            let source = fixture.root.join("parent/source");
+            if directory {
+                fs::create_dir(&source).unwrap();
+                fs::set_permissions(source, fs::Permissions::from_mode(0o555)).unwrap();
+            } else {
+                fs::write(&source, b"fixture").unwrap();
+                fs::set_permissions(source, fs::Permissions::from_mode(0o444)).unwrap();
+            }
+            assert!(recheck_store_mounts(&captured, |path| fixture.open(path)).is_err());
+            // A new snapshot is valid on its own, but cannot replace the one
+            // admitted before dispatch.
+            recheck_store_mounts(&fixture.capture(), |path| fixture.open(path)).unwrap();
+        }
+    }
+
+    #[test]
+    fn immutable_mount_rechecks_refuse_ancestor_replacement_symlinks_and_in_place_change() {
+        for case in ["parent", "symlink", "permissions", "contents"] {
+            let fixture = StoreFixture::new(false);
+            let source = fixture.root.join("parent/source");
+            // Hold a real writer opened before immutable permissions, modeling
+            // a stale producer FD without any production permission exception.
+            fs::set_permissions(&source, fs::Permissions::from_mode(0o600)).unwrap();
+            let writer = fs::OpenOptions::new().write(true).open(&source).unwrap();
+            fs::set_permissions(&source, fs::Permissions::from_mode(0o444)).unwrap();
+            let captured = fixture.capture();
+            match case {
+                "parent" => {
+                    fs::rename(fixture.root.join("parent"), fixture.root.join("previous")).unwrap();
+                    fs::DirBuilder::new()
+                        .mode(0o700)
+                        .create(fixture.root.join("parent"))
+                        .unwrap();
+                    fs::write(&source, b"fixture").unwrap();
+                    fs::set_permissions(&source, fs::Permissions::from_mode(0o444)).unwrap();
+                }
+                "symlink" => {
+                    fs::rename(&source, fixture.root.join("previous")).unwrap();
+                    symlink(fixture.root.join("previous"), &source).unwrap();
+                }
+                "permissions" => {
+                    fs::set_permissions(&source, fs::Permissions::from_mode(0o644)).unwrap()
+                }
+                "contents" => writer.set_len(64).unwrap(),
+                _ => unreachable!(),
+            }
+            assert!(
+                recheck_store_mounts(&captured, |path| fixture.open(path)).is_err(),
+                "{case}"
+            );
+        }
+    }
 
     #[test]
     fn image_store_requires_classic_live_status_even_with_new_declared_settings() {

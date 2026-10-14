@@ -241,6 +241,9 @@ are already published or require access to another repository for public checks.
   or unsafe parent ownership/permissions before container startup.
   OCI inspection has a deadline and a combined output-byte ceiling; failures
   remain unknown and raw container environment data must not reach reports.
+  Authenticate immutable mount sources through protected descriptors during
+  dispatch; path spelling alone is not immutability. Keep cleanup independent
+  of source availability and retain Unknown after a claimed dispatch loses proof.
 - Broker host concurrency/rate admission counts each enabled LLM/fetch mode.
   LLM SSE is opt-in through `llm.streaming.enable`; retain bounded event/response
   sizes, first/idle/total deadlines, cancellation, no request replay and

@@ -137,7 +137,7 @@ storage receipts already Present, proving owner initialization finished. A valid
 Btrfs image alone cannot prove that step. Incomplete images may only remain
 charged during abort; recovery must never rerun ownership or creation helpers.
 
-The stacked Worker results prerequisite requires the exact requested Worker's
+The stacked Worker results prerequisite (#174) requires the exact requested Worker's
 read-only binding, independently of live declaration equality. Runtime observation
 binds immutable workspace/UID/GID settings to the quota owner and checks protected
 state/results directory identities without repairs. Seven regressions pass,
@@ -146,6 +146,16 @@ directory replacement and legitimate result publication. `just fast` passes
 **463 Rust tests** plus static/helper checks; the generated Nix plan passes the
 closed Rust loader. The actual offline CLI Nix package passes **358 tests**, with
 four intentional helpers ignored. No Worker readiness evidence or grant is added.
+
+The OCI source prerequisite authenticates immutable store mount sources through
+held descriptors and repeated protected opens during OCI dispatch. It preserves
+file-only readers, pure plan validation and cleanup without the original mount
+sources. Nine focused tests (seven new regressions), **470 Rust tests** in
+`just fast`, and the generated Nix plan loader pass. The actual offline CLI Nix
+package passes **365 tests**, with four intentional helpers ignored. Independent
+source reviews pass; actual dispatch acceptance remains required before merging.
+When integrating Research collectors, retain their final lease-expiry check after
+store observation so additional filesystem work cannot consume an unchecked lease.
 
 Remaining Worker requirements include general read-only mount authority, exact
 grants, aggregate private storage and compute, and daemon-generation job recovery.

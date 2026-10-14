@@ -260,18 +260,27 @@ fn parse_plan(bytes: &[u8]) -> Result<HostPlan, String> {
     Ok(plan)
 }
 
-/// Open a regular immutable store file without following any component symlink.
-/// Tool executables may use normal store symlinks separately; documents/archives
-/// are authenticated bytes, so their complete ancestry is checked here.
-pub(crate) fn open_store_file(path: &Path) -> Result<File, String> {
-    if !store_path(path) {
-        return Err("immutable input must name a normalized store file".into());
-    }
-    let mut directory = OpenOptions::new()
+/// Open a regular immutable store file or directory without following any
+/// component symlink. Directory contents, including closure symlinks, are not
+/// traversed. Executables may use normal store symlinks separately.
+pub(crate) fn open_store_entry(path: &Path) -> Result<File, String> {
+    let root = OpenOptions::new()
         .read(true)
         .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_NONBLOCK)
         .open("/")
         .map_err(|_| "cannot open immutable input ancestry")?;
+    open_store_entry_at(&root, path, 0)
+}
+
+// Production always supplies / and owner 0. Tests use the same traversal from
+// their own held root FD, without weakening the public ownership boundary.
+fn open_store_entry_at(root: &File, path: &Path, owner_uid: u32) -> Result<File, String> {
+    if !store_path(path) {
+        return Err("immutable input must name a normalized store entry".into());
+    }
+    let mut directory = root
+        .try_clone()
+        .map_err(|_| "cannot duplicate immutable input ancestry")?;
     let parts: Vec<_> = path.components().skip(1).collect();
     for (index, part) in parts.iter().enumerate() {
         let metadata = directory
@@ -279,7 +288,7 @@ pub(crate) fn open_store_file(path: &Path) -> Result<File, String> {
             .map_err(|_| "cannot inspect immutable input ancestry")?;
         // index 0 checks '/', 1 '/nix', 2 the canonical '/nix/store'.
         if !metadata.is_dir()
-            || metadata.uid() != 0
+            || metadata.uid() != owner_uid
             || (metadata.mode() & 0o022 != 0 && !(index == 2 && metadata.mode() & 0o1000 != 0))
         {
             return Err("unsafe immutable input ancestry".into());
@@ -301,10 +310,29 @@ pub(crate) fn open_store_file(path: &Path) -> Result<File, String> {
     let metadata = directory
         .metadata()
         .map_err(|_| "cannot inspect immutable input")?;
-    if !metadata.is_file() || metadata.uid() != 0 || metadata.mode() & 0o222 != 0 {
-        return Err("immutable input must be a protected root-owned regular file".into());
+    if (!metadata.is_file() && !metadata.is_dir())
+        || metadata.uid() != owner_uid
+        || metadata.mode() & 0o222 != 0
+    {
+        return Err("immutable input must be a protected immutable file or directory".into());
     }
     Ok(directory)
+}
+
+/// Documents and archives retain the narrower regular-file requirement.
+pub(crate) fn open_store_file(path: &Path) -> Result<File, String> {
+    regular_store_file(open_store_entry(path)?)
+}
+
+fn regular_store_file(file: File) -> Result<File, String> {
+    if !file
+        .metadata()
+        .map_err(|_| "cannot inspect immutable input")?
+        .is_file()
+    {
+        return Err("immutable input must be a protected root-owned regular file".into());
+    }
+    Ok(file)
 }
 
 pub(crate) fn read_store_document(path: &Path, limit: u64) -> Result<Vec<u8>, String> {
@@ -364,6 +392,10 @@ pub(crate) fn inventory(path: &Path, mode: OutputMode) -> Result<u8, String> {
 pub(crate) mod tests {
     use super::*;
     use serde_json::{Value, json};
+    use std::fs::{self, DirBuilder};
+    use std::os::unix::fs::{DirBuilderExt, PermissionsExt, symlink};
+    use std::os::unix::net::UnixListener;
+    use std::sync::atomic::{AtomicU64, Ordering};
     use tentaflake_admission::{RecordedAdmission, StorageKind, StorageRequirement};
 
     const INSTANCE: &str = "agent-fixture";
@@ -623,6 +655,148 @@ pub(crate) mod tests {
             mount_unit(Path::new("/var/lib/agent-one/work+space")),
             "var-lib-agent\\x2done-work\\x2bspace.mount"
         );
+    }
+
+    struct StoreFixture {
+        path: PathBuf,
+        root: File,
+        uid: u32,
+    }
+
+    impl StoreFixture {
+        fn new() -> Self {
+            static SEQUENCE: AtomicU64 = AtomicU64::new(0);
+            let path = std::env::temp_dir().join(format!(
+                "tf-store-{}-{}",
+                std::process::id(),
+                SEQUENCE.fetch_add(1, Ordering::Relaxed)
+            ));
+            DirBuilder::new().mode(0o700).create(&path).unwrap();
+            let root = OpenOptions::new()
+                .read(true)
+                .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_NONBLOCK)
+                .open(&path)
+                .unwrap();
+            let fixture = Self {
+                uid: root.metadata().unwrap().uid(),
+                path,
+                root,
+            };
+            for directory in ["/nix", "/nix/store", STORE] {
+                DirBuilder::new()
+                    .mode(0o700)
+                    .create(fixture.path(directory))
+                    .unwrap();
+            }
+            fs::write(fixture.path(&format!("{STORE}/file")), b"immutable fixture").unwrap();
+            fixture.mode(&format!("{STORE}/file"), 0o444);
+            symlink("file", fixture.path(&format!("{STORE}/link"))).unwrap();
+            fixture.mode(STORE, 0o555);
+            fixture
+        }
+
+        fn path(&self, path: &str) -> PathBuf {
+            self.path.join(path.strip_prefix('/').unwrap())
+        }
+
+        fn mode(&self, path: &str, mode: u32) {
+            fs::set_permissions(self.path(path), fs::Permissions::from_mode(mode)).unwrap();
+        }
+
+        fn open(&self, path: &str) -> Result<File, String> {
+            open_store_entry_at(&self.root, Path::new(path), self.uid)
+        }
+    }
+
+    impl Drop for StoreFixture {
+        fn drop(&mut self) {
+            fn writable_directories(path: &Path) {
+                if fs::symlink_metadata(path).unwrap().is_dir() {
+                    fs::set_permissions(path, fs::Permissions::from_mode(0o700)).unwrap();
+                    for child in fs::read_dir(path).unwrap() {
+                        writable_directories(&child.unwrap().path());
+                    }
+                }
+            }
+            writable_directories(&self.path);
+            fs::remove_dir_all(&self.path).unwrap();
+        }
+    }
+
+    #[test]
+    fn immutable_store_entries_accept_files_and_closure_directories_without_following_contents() {
+        let fixture = StoreFixture::new();
+        let file = fixture.open(&format!("{STORE}/file")).unwrap();
+        assert!(
+            regular_store_file(file)
+                .unwrap()
+                .metadata()
+                .unwrap()
+                .is_file()
+        );
+        let directory = fixture.open(STORE).unwrap();
+        assert!(directory.metadata().unwrap().is_dir());
+        assert!(regular_store_file(directory).is_err());
+        assert!(
+            fs::symlink_metadata(fixture.path(&format!("{STORE}/link")))
+                .unwrap()
+                .is_symlink()
+        );
+        assert!(fixture.open(&format!("{STORE}/link")).is_err());
+        assert!(fixture.open("/nix/store").is_err());
+    }
+
+    #[test]
+    fn immutable_store_entries_refuse_symlink_ancestry_and_leaf_aliases() {
+        for target in ["/nix", "/nix/store", STORE, &format!("{STORE}/file")] {
+            let fixture = StoreFixture::new();
+            // Fixture setup may replace a component; observation may
+            // never follow that alias, even when its target is otherwise valid.
+            fixture.mode(STORE, 0o755);
+            let original = fixture.path(target);
+            let saved = fixture.path.join("saved");
+            fs::rename(&original, &saved).unwrap();
+            symlink(saved, original).unwrap();
+            assert!(fixture.open(&format!("{STORE}/file")).is_err(), "{target}");
+        }
+    }
+
+    #[test]
+    fn immutable_store_entries_limit_the_sticky_exception_to_the_canonical_store_directory() {
+        let fixture = StoreFixture::new();
+        fixture.mode("/nix/store", 0o1777);
+        assert!(fixture.open(STORE).is_ok());
+        assert!(fixture.open(&format!("{STORE}/file")).is_ok());
+        fixture.mode("/nix/store", 0o777);
+        assert!(fixture.open(STORE).is_err());
+        fixture.mode("/nix/store", 0o700);
+        for target in ["/", "/nix", STORE] {
+            fixture.mode(target, 0o1777);
+            assert!(fixture.open(&format!("{STORE}/file")).is_err(), "{target}");
+            fixture.mode(target, if target == STORE { 0o555 } else { 0o700 });
+        }
+        assert!(open_store_entry_at(&fixture.root, Path::new(STORE), fixture.uid ^ 1).is_err());
+    }
+
+    #[test]
+    fn immutable_store_entries_refuse_writable_leaves_and_special_nodes() {
+        let fixture = StoreFixture::new();
+        for mode in [0o644, 0o464, 0o446] {
+            fixture.mode(&format!("{STORE}/file"), mode);
+            assert!(fixture.open(&format!("{STORE}/file")).is_err());
+        }
+        fixture.mode(STORE, 0o755);
+        assert!(fixture.open(STORE).is_err());
+        let fifo = format!("{STORE}/fifo");
+        let name = CString::new(fixture.path(&fifo).as_os_str().as_encoded_bytes()).unwrap();
+        assert_eq!(unsafe { libc::mkfifo(name.as_ptr(), 0o444) }, 0);
+        assert!(fixture.open(&fifo).is_err());
+        let socket = format!("{STORE}/socket");
+        let directory = File::open(fixture.path(STORE)).unwrap();
+        let _listener =
+            UnixListener::bind(format!("/proc/self/fd/{}/socket", directory.as_raw_fd())).unwrap();
+        fixture.mode(&socket, 0o444);
+        assert!(fixture.open(&socket).is_err());
     }
 
     #[test]
