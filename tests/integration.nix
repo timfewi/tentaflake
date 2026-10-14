@@ -21,6 +21,7 @@
 let
   storageAdmission = import ./storage-admission.nix { inherit self; };
   ociAdmission = import ./oci-admission.nix { inherit self; };
+  creationAdmission = import ./creation-admission.nix { inherit self; };
 in
 {
   name = "tentaflake-integration";
@@ -29,6 +30,7 @@ in
     storage = storageAdmission.node;
     oci = ociAdmission.node;
     oci_crash = ociAdmission.crashNode;
+    creation = creationAdmission.node;
     machine =
       { pkgs, ... }:
       let
@@ -1876,5 +1878,6 @@ in
   ''
   + storageAdmission.testScript
   + ociAdmission.testScript
-  + ociAdmission.crashTestScript;
+  + ociAdmission.crashTestScript
+  + creationAdmission.testScript;
 }

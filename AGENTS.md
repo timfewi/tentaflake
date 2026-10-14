@@ -177,6 +177,9 @@ are already published or require access to another repository for public checks.
   root recovery/abort only observes: claimed work needs a changed boot; successful
   recovery needs both native rows already Present. Preserve original templates,
   storage charges and historical terminal retries without rerunning helpers.
+  The creation VM's ignored test harness prepares accepted/interrupted records;
+  keep it outside the production CLI and distinguish synthetic execution records
+  from actual supervisor-crash evidence. See `docs/17-builds.md`.
 - CLI help is configuration-free; management commands require generated
   host configuration and inventory.
 - `crates/tentaflake-cli/src/api` and `modules/api.nix` own the optional private

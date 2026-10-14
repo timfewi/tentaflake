@@ -33,22 +33,13 @@ Current integration work:
 
 - **OCI/storage/publication, PR #166:** complete effective specifications, exact
   supervisor/daemon/CID ownership, durable Unknown claims and explicit stopped
-  bootstrap/publication. Run `38513151502` passed the storage/publication
-  assertions, then failed initial OCI fixture cleanup on a quota owner that had
-  correctly refused the missing ledger. The fixture now validates that exact
-  invocation and lazily unmounts only its immutable read-only shared store after
-  normal shutdown. Run `38520514416` then exposed a quota-owner start-limit after
-  repeated intentional refusals. Commit `4156c23` proves fresh CLI refusals and
-  clears only those counters after stopped/no-job evidence. Focused lint,
-  no-build rendering and helper replay pass. Replacement run `38524860586`
-  passed the original VM and all storage/publication assertions, then timed out
-  during storage-VM shutdown: the early store unmount removed the shutdown
-  executable. Commit `5248ac3` keeps only both immutable harness-store mounts
-  available through final shutdown; focused checks and source review pass.
-  Replacement run `38536113968` passed storage/publication and normal shutdown
-  in 5 seconds, then first reached OCI and failed explicit local image acquisition
-  with a bounded runtime-observation error. Its preceding Docker load also
-  reported an unexpected manifest descriptor; the cause is under investigation.
+  bootstrap/publication. Run `38536113968` passed storage/publication and normal
+  shutdown in 5 seconds, then failed OCI local image acquisition because Docker's
+  default containerd store reports manifest/index identities instead of the
+  required config digest. Commit `c9442ef` explicitly requires the classic image
+  store and verifies its live configuration without weakening exact identity.
+  Its 226 package tests, focused Rust/Nix checks, independent source review and
+  automatic CI pass; replacement full run `38542786276` is pending.
   OCI/crash and Research VM acceptance remain outstanding.
 - **Model/Research integration:** PR #167 and the upstream Research readiness
   work still need their relevant runtime gates and final public pin integration.
@@ -99,19 +90,24 @@ Claimed work requires a changed boot; successful recovery requires both native
 receipts already Present. Exact terminal retries skip original-template loads
 and live observations. Publication and Worker/native recovery prepare historical
 maintenance inventory outside their ledger callbacks, avoiding recursive locks.
-`just fast` passes **445 Rust tests** plus static/helper gates; the actual offline
-Nix CLI package passes **340 tests**, including all 130 admission tests. Three
-intentional subprocess helpers are ignored in each full test inventory. All 20
+`just fast` passes **446 Rust tests** plus static/helper gates; the actual offline
+Nix CLI package passes **341 tests**, including all 130 admission tests. Four
+intentional subprocess/VM helpers are ignored in each full test inventory. All 20
 static helper paths are unchanged; actual rendered dynamic-helper tests pass
-argument refusals, Btrfs creation/verification and sibling-slot isolation. Offline
-no-build fixture evaluation and the 2400-line rendered VM driver pass. Actual
-daemon/GC registration and runtime acceptance remain unverified; HTTP creation
-still returns `501`.
+argument refusals, Btrfs creation/verification and sibling-slot isolation. The
+VM-only acceptance harness builds, and both generated creation/candidate plans
+pass the closed Rust loader. The new VM fixture covers actual supervised creation
+and interruption, reboot reconciliation, partial charges and historical retries
+after template removal. Its additional prepared Unknown cases use explicitly
+synthetic execution records. Offline no-build evaluation and rendered Python
+compilation pass; actual daemon/GC registration and VM acceptance remain
+unverified. HTTP creation still returns `501`.
 New code reads old v3 files; older binaries reject the new field once written.
 
 Resume here: obtain actual supervised creation/recovery VM evidence, including
 partial outcomes and historical retries.
-Only then connect HTTP planning/queueing and exact grants. Keep
+Only then connect HTTP planning/queueing and exact grants through a bounded
+host-namespace owner; the isolated HTTP process cannot run the host collectors. Keep
 creation within installed policy without rebuilding the host. Follow with
 workspace/files/streams and the matching
 CLI, then actual client and coding-agent acceptance. Preserve private v3 ledger

@@ -125,7 +125,11 @@
       "installer/**",
       "tests/integration.nix",
       "tests/storage-admission.nix",
-      "tests/oci-admission.nix"
+      "tests/oci-admission.nix",
+      "tests/creation-admission.nix",
+      "tests/fixtures/creation-node.nix",
+      "tests/fixtures/creation-harness.nix",
+      "tests/fixtures/creation-interrupt.py"
     ],
     "checks": [
       "runtime",

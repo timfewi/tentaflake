@@ -43,6 +43,17 @@ regressions without mounts. `just ci`/`just e2e` run the complete gate, both VM
 suites and the installer ISO. Run an affected VM suite when changing runtime
 or security behavior; use the ISO gate when changing installation.
 
+`tests/creation-admission.nix` adds stopped environment creation and reconciliation
+to the runtime suite. Its isolated node uses real Nix registration and immutable
+quota helpers. The VM-only Rust test harness queues accepted work for the actual
+supervisor. A bounded guest observer holds its PID descriptor and interrupts it
+after both native preparation receipts, before completion; missing that window
+fails the test. Separate prepared interrupted states use synthetic supervisor
+identities to cover absent/partial storage; they do not establish actual crash
+behavior. The harness is an ignored test, never a production command. Building
+it or compiling the rendered driver does not establish VM acceptance; public
+HTTP creation remains disabled.
+
 ## Rust cache boundaries
 
 Cargo remains the Rust build definition. `[workspace.package]` in `Cargo.toml`

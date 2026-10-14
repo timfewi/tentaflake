@@ -432,6 +432,9 @@ fn offline_inventory(
 }
 
 #[cfg(test)]
+mod vm_fixture;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::admission_systemd::{ExecCommand, ServiceObservation, UnitJob};
