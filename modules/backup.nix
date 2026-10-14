@@ -6,6 +6,8 @@
 }:
 let
   cfg = config.tentaflake.backup;
+  enforced = config.tentaflake.security.admission != null;
+  pathWithin = root: path: path == root || lib.hasPrefix "${root}/" path;
   safePath =
     root: path:
     lib.hasPrefix root path
@@ -40,6 +42,23 @@ let
       )
   );
   backupPaths = lib.unique (cfg.paths ++ managedMounts);
+  managedVolumes = lib.attrValues config.tentaflake.admissionVolumes;
+  selectedVolumes = lib.filter (
+    volume:
+    lib.any (
+      path: pathWithin volume.spec.mountPath path || pathWithin path volume.spec.mountPath
+    ) backupPaths
+  ) managedVolumes;
+  # RequiresMountsFor on a managed target/descendant would activate its masked
+  # native mount unit. Keep only the underlying ancestor and require the guarded
+  # supervisor separately; Restic's actual source paths remain unchanged.
+  unmanagedAncestor =
+    path:
+    if lib.any (volume: pathWithin volume.spec.mountPath path) managedVolumes then
+      unmanagedAncestor (builtins.dirOf path)
+    else
+      path;
+  requiredMounts = if enforced then lib.unique (map unmanagedAncestor backupPaths) else backupPaths;
 in
 {
   options.tentaflake.backup = {
@@ -137,10 +156,22 @@ in
       extraBackupArgs = [ "--one-file-system" ];
     };
 
-    systemd.services.restic-backups-tentaflake.unitConfig = {
-      RequiresMountsFor = backupPaths;
-      AssertPathIsMountPoint = managedMounts;
-      OnSuccess = [ "tentaflake-backup-success.service" ];
+    systemd.services.restic-backups-tentaflake = {
+      requires = lib.optionals enforced (map (volume: volume.units.owner) selectedVolumes);
+      after = lib.optionals enforced (map (volume: volume.units.owner) selectedVolumes);
+      preStart = lib.mkIf enforced (
+        lib.mkBefore (
+          lib.concatMapStringsSep "\n" (
+            volume: "${lib.escapeShellArg volume.helpers.verify} --mounted"
+          ) selectedVolumes
+        )
+      );
+      unitConfig = {
+        RequiresMountsFor = requiredMounts;
+        AssertPathIsMountPoint =
+          if enforced then map (volume: volume.spec.mountPath) selectedVolumes else managedMounts;
+        OnSuccess = [ "tentaflake-backup-success.service" ];
+      };
     };
 
     systemd.services.tentaflake-backup-success = {

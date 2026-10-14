@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 ### Fixed
+- Mark crashed OCI supervisors Unknown through an exact-invocation post-stop
+  hook, retaining container identity and resource charges without daemon mutation.
+- Require Docker's classic image store for admission's exact configuration-digest
+  contract, checking immutable settings and live driver status before loading an
+  image; existing stores require explicit operator migration.
+- Clear only verified quota-owner refusal counters after stopped/no-job evidence
+  in storage VM recovery; start-rate failures cannot satisfy refusal assertions.
+- Give parallel CLI test fixtures distinct directory names even when clock
+  readings coincide.
+- Verify expected missing-ledger refusals before cleaning up quota owners in
+  both initial OCI admission VM fixtures.
+- Keep the read-only shared Nix store available until admission VMs enter their
+  final shutdown ramfs, preserving ordinary runtime and persistent-volume cleanup.
+- Capture CLI refusal diagnostics from stderr in publication VM assertions.
+- Keep guest Nix's store-mutating registration out of prebuilt, read-only
+  admission VM fixtures, including publication specialisations.
+- Handle kernel PTY mounts during admission maintenance, preserve refusal of
+  unverified overlay backing, and report mount failures without raw sources.
+- Allow inert dependency-only mount entries during admission maintenance while
+  retaining strict required-unit and installed-file checks.
 - Preserve completed worker results without redispatching stale requests, and
   retain complete inbox copies when legacy private pending state is damaged.
 - Identify the exact quota loop backing image inside systemd namespaces;
@@ -19,6 +39,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   budget reservation or upstream dispatch, omit session IDs from audit logs,
   and keep arbitrary client headers excluded. Clients still own ID propagation.
 ### Added
+- Experimental aggregate Docker admission for offline Generic workloads, with
+  durable host/daemon/supervisor/image intent, exact container-ID binding before
+  start, conservative uncertain outcomes and storage retention on stop. Local
+  Docker archives use immutable Nix descriptors and explicit image acquisition;
+  runtime and vendor acceptance remain separate gates.
 - Reviewed Debian 13 and Ubuntu 26.04 LTS base-image metadata, platform-specific
   immutable Nix selection, and offline digest-chain regression checks. This
   catalog does not acquire layers or establish signature/runtime acceptance.

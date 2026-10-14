@@ -77,7 +77,50 @@ let
       ++ extra
     );
   config = fixture [ ];
+  emptyReserve = lib.genAttrs [
+    "memoryBytes"
+    "memorySwapBytes"
+    "nanoCpus"
+    "pids"
+    "workspaceBytes"
+    "stateBytes"
+  ] (_: 0);
+  admissionConfig = {
+    authorityEpoch = "fixture-authority";
+    physicalSpaceHeadroomBytes = 67108864;
+    capacity = {
+      memoryBytes = 2147483648;
+      memorySwapBytes = 2147483648;
+      nanoCpus = 2000000000;
+      pids = 512;
+      workspaceBytes = 4294967296;
+      stateBytes = 4294967296;
+    };
+    hostReserve = emptyReserve;
+    researchReserve = emptyReserve;
+    maxActive = 2;
+  };
+  admitted = fixture [
+    { tentaflake.security.admission = admissionConfig; }
+  ];
+  admittedSubdirectory = fixture [
+    {
+      tentaflake.security.admission = admissionConfig;
+      tentaflake.backup.paths = lib.mkForce [ "/var/lib/hermes-quota/workspace/project" ];
+    }
+  ];
+  # Inspect JSON values only; the generated writeText derivation retains every
+  # tool/helper dependency. fromJSON rejects contextual strings even in tests.
+  plan = builtins.fromJSON (
+    builtins.unsafeDiscardStringContext admitted.tentaflake.admissionManifest.text
+  );
   services = config.systemd.services;
+  guarded = admitted.systemd.services;
+  guardedState = guarded.tentaflake-state-quota-generic-quota;
+  guardedWorkspace = guarded.tentaflake-workspace-quota-generic-quota;
+  stateHelpers = config.tentaflake.admissionVolumes."state:generic-quota".helpers;
+  prepareLines = lib.splitString "\n" services.tentaflake-state-quota-prepare-generic-quota.script;
+  ownerHelper = config.tentaflake.admissionVolumes."state:hermes-quota".helpers.owner;
   mount = path: lib.findFirst (entry: entry.where == path) null config.systemd.mounts;
   failed = config: lib.filter (item: !item.assertion) config.assertions;
   refuses =
@@ -177,7 +220,105 @@ assert refuses "may not overlap" {
     lib.mkForce "/var/lib/hermes-quota/other";
 };
 assert refuses "intended for balanced/strict" { tentaflake.security.profile = lib.mkForce "dev"; };
+assert lib.elem "  exec ${stateHelpers.create}" prepareLines;
+assert lib.elem "  exec ${stateHelpers.verify}" prepareLines;
+assert services.tentaflake-state-quota-hermes-quota.script == "exec ${ownerHelper}";
+assert config.tentaflake.admissionManifest == null;
+assert plan.schemaVersion == 3;
+assert plan.physicalSpaceHeadroomBytes == 67108864;
+assert plan.policy.generation == "fixture-authority";
+assert builtins.stringLength plan.policy.revision == 71;
+assert plan.policy.maxActive == 2;
+assert plan.policy.grants == [ ];
+assert builtins.length plan.volumes == 6;
+assert plan.instances.generic-quota.ownerId == "host-root";
+assert plan.instances.generic-quota.resources.workspaceBytes == 134217728;
+assert plan.instances.generic-quota.resources.stateBytes == 134217728;
+assert
+  map (requirement: requirement.id) plan.instances.generic-quota.storage == [
+    "state:generic-quota"
+    "workspace:generic-quota"
+  ];
+assert lib.all (
+  volume:
+  volume.spec.ownerId == "host-root" && builtins.stringLength volume.spec.bindingRevision == 71
+) plan.volumes;
+assert failed admitted == [ ];
+assert guardedState.serviceConfig.Type == "oneshot";
+assert guardedState.serviceConfig.RemainAfterExit;
+assert guardedState.serviceConfig.KillMode == "control-group";
+assert guardedState.serviceConfig.TimeoutStartSec == 300;
+assert guardedState.serviceConfig.TimeoutStopSec == 120;
+assert guardedState.serviceConfig.PrivateMounts == false;
+assert guardedState.serviceConfig.PrivateTmp == false;
+assert guardedState.serviceConfig.ProtectSystem == false;
+assert guardedState.serviceConfig.ProtectHome == false;
+assert (guardedState.serviceConfig.ReadWritePaths or [ ]) == [ ];
+assert
+  guardedState.serviceConfig.ExecStart == lib.escapeShellArgs [
+    plan.tools.cli
+    "admission"
+    "volume-start"
+    (toString admitted.tentaflake.admissionManifest)
+    "state:generic-quota"
+  ];
+assert
+  guardedState.serviceConfig.ExecStop == lib.escapeShellArgs [
+    plan.tools.cli
+    "admission"
+    "volume-stop"
+    (toString admitted.tentaflake.admissionManifest)
+    "state:generic-quota"
+  ];
+assert lib.elem "tentaflake-state-quota-generic-quota.service" guardedWorkspace.requires;
+assert lib.elem "tentaflake-state-quota-generic-quota.service" guardedWorkspace.after;
+assert lib.elem "tentaflake-workspace-quota-hermes-quota.service"
+  guarded.hermes-quota-heal-uid.requires;
+assert lib.elem "tentaflake-workspace-quota-hermes-quota.service"
+  guarded.seed-hermes-quota.requires;
+assert lib.elem "tentaflake-workspace-quota-hermes-quota.service"
+  guarded.tentaflake-worker-hermes-quota.requires;
+assert lib.all (
+  volume:
+  !admitted.systemd.units.${volume.units.mount}.enable
+  && !admitted.systemd.services.${lib.removeSuffix ".service" volume.units.prepare}.enable
+  && lib.all (mount: mount.where != volume.spec.mountPath) admitted.systemd.mounts
+  && lib.hasPrefix "/nix/store/" volume.helpers.mount
+  && lib.hasPrefix "/nix/store/" volume.helpers.unmount
+) plan.volumes;
+assert admitted.services.restic.backups.tentaflake.paths == backupPaths;
+assert
+  guarded.restic-backups-tentaflake.unitConfig.RequiresMountsFor == [ "/var/lib/generic-quota" ];
+assert
+  guarded.restic-backups-tentaflake.requires == [
+    "tentaflake-state-quota-generic-quota.service"
+    "tentaflake-workspace-quota-generic-quota.service"
+  ];
+assert lib.all (
+  unit: lib.elem unit guarded.restic-backups-tentaflake.after
+) guarded.restic-backups-tentaflake.requires;
+assert lib.elem "${
+  lib.escapeShellArg admitted.tentaflake.admissionVolumes."state:generic-quota".helpers.verify
+} --mounted" (lib.splitString "\n" guarded.restic-backups-tentaflake.preStart);
+assert
+  admittedSubdirectory.services.restic.backups.tentaflake.paths
+  == [ "/var/lib/hermes-quota/workspace/project" ];
+assert
+  admittedSubdirectory.systemd.services.restic-backups-tentaflake.unitConfig.RequiresMountsFor
+  == [ "/var/lib" ];
+assert
+  admittedSubdirectory.systemd.services.restic-backups-tentaflake.requires == [
+    "tentaflake-state-quota-hermes-quota.service"
+    "tentaflake-workspace-quota-hermes-quota.service"
+  ];
 {
-  prepareScript = services.tentaflake-state-quota-prepare-generic-quota.script;
-  ownerScript = services.tentaflake-state-quota-hermes-quota.script;
+  quotaHelpers = {
+    inherit (stateHelpers)
+      create
+      verify
+      mount
+      unmount
+      ;
+    owner = ownerHelper;
+  };
 }

@@ -164,6 +164,46 @@ let
     };
   };
   genericStorage.tentaflake.workspaceQuota.agents.generic-coding = genericQuota;
+  # Only the source projection is evaluated here. Runtime descriptor validation
+  # must inspect the actual archive before loading or starting an image.
+  descriptorLocator = pkgs.writeText "fixture-local-image.json" "{}";
+  localImage = {
+    kind = "local-artifact";
+    descriptor = descriptorLocator;
+  };
+  localDefinition = runtimeContract (definition // { image = localImage; });
+  emptyReserve = lib.genAttrs [
+    "memoryBytes"
+    "memorySwapBytes"
+    "nanoCpus"
+    "pids"
+    "workspaceBytes"
+    "stateBytes"
+  ] (_: 0);
+  admissionPolicy = {
+    authorityEpoch = "image-source-fixture";
+    physicalSpaceHeadroomBytes = 67108864;
+    capacity = {
+      memoryBytes = 2147483648;
+      memorySwapBytes = 2147483648;
+      nanoCpus = 2000000000;
+      pids = 512;
+      workspaceBytes = 4294967296;
+      stateBytes = 4294967296;
+    };
+    hostReserve = emptyReserve;
+    researchReserve = emptyReserve;
+    maxActive = 2;
+  };
+  localPolicy = lib.recursiveUpdate genericStorage {
+    tentaflake.security.admission = admissionPolicy;
+  };
+  localGeneric = genericEval { image = localImage; } localPolicy;
+  localContainer = localGeneric.virtualisation.oci-containers.containers.generic-coding;
+  localSupervisor = localGeneric.systemd.services.docker-generic-coding;
+  localManifest = builtins.fromJSON (
+    builtins.unsafeDiscardStringContext localGeneric.tentaflake.admissionManifest.text
+  );
   genericOffline = genericEval { lifecycle = "service"; } genericStorage;
   genericMissing = genericEval {
     capabilities = [
@@ -329,6 +369,8 @@ assert
 assert failures generic == [ ];
 assert !genericContainer.autoStart;
 assert genericContainer.cmd == definition.command;
+assert genericContainer.workdir == "/workspace";
+assert !(lib.any (lib.hasPrefix "--workdir") genericContainer.extraOptions);
 assert genericContainer.user == "10000:10000";
 assert lib.elem "--network=none" genericContainer.extraOptions;
 assert lib.elem "--runtime=runsc" genericContainer.extraOptions;
@@ -353,6 +395,10 @@ assert
       research = false;
       stateQuota = false;
       requireStateQuota = true;
+      runtimeImage = {
+        kind = "registry";
+        reference = definition.image;
+      };
     }
   &&
     builtins.fromJSON (lib.elemAt fields 29) == {
@@ -486,6 +532,39 @@ assert lib.any (lib.hasInfix "effective memorySwap") (
 assert lib.all (bad: rejects (runtimeContract (definition // bad))) [
   { schemaVersion = 2; }
   { image = "example.invalid/agent:latest"; }
+  {
+    image = {
+      kind = "local-artifact";
+      descriptor = builtins.unsafeDiscardStringContext (toString descriptorLocator);
+    };
+  }
+  {
+    image = {
+      kind = "local-artifact";
+      descriptor = "/tmp/image.json";
+    };
+  }
+  {
+    image = {
+      kind = "local-artifact";
+      descriptor = 1;
+    };
+  }
+  {
+    image = localImage // {
+      pull = "missing";
+    };
+  }
+  {
+    image = localImage // {
+      descriptor = "${descriptorLocator}/../other.json";
+    };
+  }
+  {
+    image = localImage // {
+      kind = "archive";
+    };
+  }
   { image = "image;echo unsafe@sha256:${lib.concatStrings (lib.replicate 64 "a")}"; }
   { command = "sh -c echo unsafe"; }
   { command = [ ]; }
@@ -522,6 +601,133 @@ assert lib.all (bad: rejects (runtimeContract (definition // bad))) [
     ];
   }
 ];
+assert
+  localDefinition.runtimeImage == {
+    kind = "local-artifact";
+    descriptor = toString descriptorLocator;
+  };
+assert builtins.hasContext localDefinition.image;
+assert localDefinition.image == toString descriptorLocator;
+assert failures localGeneric == [ ];
+assert localContainer.image == localDefinition.image;
+assert localContainer.pull == "never";
+assert localContainer.imageFile == null && localContainer.imageStream == null;
+assert lib.all (value: value == null) (lib.attrValues localContainer.login);
+assert
+  localGeneric.tentaflake.agentInstances.generic-coding.runtimeImage == localDefinition.runtimeImage;
+assert localManifest.schemaVersion == 3;
+assert localManifest.runtimes.generic-coding.image == localDefinition.runtimeImage;
+assert localManifest.runtimes.generic-coding.unit == "docker-generic-coding.service";
+assert localManifest.runtimes.generic-coding.container.cmd == localContainer.cmd;
+assert localManifest.runtimes.generic-coding.container.extraOptions == localContainer.extraOptions;
+assert localSupervisor.serviceConfig.Type == "notify";
+assert localSupervisor.serviceConfig.Restart == "no";
+assert localSupervisor.serviceConfig.NotifyAccess == "main";
+assert localSupervisor.serviceConfig.KillMode == "control-group";
+assert localSupervisor.serviceConfig.ExecStartPre == [ ];
+assert localSupervisor.serviceConfig.ExecStartPost == [ ];
+assert lib.hasInfix "runtime-finish" localSupervisor.serviceConfig.ExecStopPost;
+assert
+  localSupervisor.script == "" && localSupervisor.preStart == "" && localSupervisor.preStop == "";
+assert lib.hasInfix "runtime-start" localSupervisor.serviceConfig.ExecStart;
+assert lib.hasInfix "runtime-stop" localSupervisor.serviceConfig.ExecStop;
+assert !localContainer.autoRemoveOnStop;
+assert !localGeneric.virtualisation.docker.daemon.settings.live-restore;
+assert !localGeneric.virtualisation.docker.daemon.settings.features.containerd-snapshotter;
+assert lib.any (lib.hasInfix "requires the classic Docker image store") (
+  failures (
+    genericEval { image = localImage; } (
+      lib.recursiveUpdate localPolicy {
+        virtualisation.docker.daemon.settings.features.containerd-snapshotter = true;
+      }
+    )
+  )
+);
+assert !localGeneric.systemd.services.docker-prune.enable;
+assert lib.any (lib.hasInfix "requires Docker automatic pruning disabled") (
+  failures (
+    genericEval { image = localImage; } (
+      lib.recursiveUpdate localPolicy { virtualisation.docker.autoPrune.enable = true; }
+    )
+  )
+);
+assert
+  let
+    disabledProvenance = genericEval { image = localImage; } (
+      lib.recursiveUpdate localPolicy {
+        tentaflake.imageProvenance.agents.generic-coding.enable = false;
+      }
+    );
+    disabledPlan = builtins.fromJSON (
+      builtins.unsafeDiscardStringContext disabledProvenance.tentaflake.admissionManifest.text
+    );
+  in
+  failures disabledProvenance == [ ] && disabledPlan.runtimes.generic-coding.provenance == null;
+assert lib.any (lib.hasInfix "require configured secure Docker admission") (
+  failures (genericEval { image = localImage; } { })
+);
+assert lib.all
+  (
+    override:
+    lib.any (lib.hasInfix "local artifacts forbid registry login or pull fallback") (
+      failures (
+        genericEval { image = localImage; } (
+          lib.recursiveUpdate localPolicy {
+            virtualisation.oci-containers.containers.generic-coding = override;
+          }
+        )
+      )
+    )
+  )
+  [
+    { pull = lib.mkForce "missing"; }
+    { login.registry = "example.invalid"; }
+    { imageFile = descriptorLocator; }
+  ];
+assert lib.any (lib.hasInfix "effective image must match") (
+  failures (
+    genericEval { image = localImage; } (
+      lib.recursiveUpdate localPolicy {
+        virtualisation.oci-containers.containers.generic-coding.image = lib.mkForce definition.image;
+      }
+    )
+  )
+);
+assert lib.all
+  (
+    provenance:
+    lib.any (lib.hasInfix "local image artifacts do not provide registry Cosign provenance") (
+      failures (
+        genericEval { image = localImage; } (
+          lib.recursiveUpdate localPolicy {
+            tentaflake.imageProvenance = provenance;
+          }
+        )
+      )
+    )
+  )
+  [
+    { requireForSecureAgents = true; }
+    {
+      agents.generic-coding = {
+        mode = "key";
+        publicKeyFile = "/etc/fixture.pub";
+      };
+    }
+  ];
+assert
+  let
+    line = lib.findFirst (lib.hasPrefix "agent\tgeneric-coding\t") "" (
+      lib.splitString "\n" localGeneric.environment.etc."tentaflake/security.tsv".text
+    );
+    fields = lib.splitString "\t" line;
+    # Inspect values only; generated manifests retain the source dependency.
+    declaration = builtins.fromJSON (builtins.unsafeDiscardStringContext (lib.elemAt fields 30));
+  in
+  lib.elemAt fields 13 == "false"
+  && declaration.runtimeImage.kind == "local-artifact"
+  && declaration.runtimeImage.descriptor == toString descriptorLocator
+  && builtins.hasContext line;
 assert lib.all (name: (contract name builders.adapters.${name}).identity.id == name) registryNames;
 assert devRoot.tentaflake.agentInstances.hermes-dev-root.uid == 0;
 assert devRoot.virtualisation.oci-containers.containers.hermes-dev-root.user == "0:0";
@@ -671,4 +877,5 @@ assert rejects
 (import ./agent-state-quota.nix { inherit pkgs eval builders; })
 // {
   deniedStartScript = genericMissing.systemd.services.docker-generic-coding.preStart;
+  admissionPlan = localGeneric.tentaflake.admissionManifest;
 }

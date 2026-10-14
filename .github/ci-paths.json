@@ -7,6 +7,10 @@
     "paths": ["images/**", "scripts/test_image_catalog.py"],
     "checks": ["static"]
   },
+  "local-image": {
+    "paths": ["scripts/describe_docker_archive.py", "scripts/test_describe_docker_archive.py"],
+    "checks": ["runtime", "evaluate", "static"]
+  },
   "flake-evaluation": {
     "paths": ["scripts/eval_flake.py", "scripts/test_eval_flake.py", "scripts/test_eval_flake_nix.py"],
     "checks": ["evaluate", "selection", "static"]
@@ -119,7 +123,9 @@
   "runtime": {
     "paths": [
       "installer/**",
-      "tests/integration.nix"
+      "tests/integration.nix",
+      "tests/storage-admission.nix",
+      "tests/oci-admission.nix"
     ],
     "checks": [
       "runtime",

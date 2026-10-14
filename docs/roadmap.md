@@ -15,11 +15,25 @@ commands and interfaces below are not installed APIs.
 
 ## Delivery checkpoint
 
-2026-10-13: [PR #151](https://github.com/timfewi/tentaflake/pull/151) merged lighter
-CI. Automatic PR/push runs keep static/unit checks; explicit dispatch selects
-affected configuration, package and VM gates. The fast gate passed with 122
-Rust tests and 28 routing regressions; automatic and explicit GitHub runs passed
-at `20e0273`. This is workflow evidence, not runtime acceptance.
+2026-10-14: PRs #149/#150 (libc/Tokio), #151/#160/#162 (bounded source checks and
+evaluation), #161 (reviewed Debian/Ubuntu metadata) and #163 (bounded optional
+cache setup) are merged. Automatic PR/push checks remain separate from explicit
+configuration, package and VM gates.
+
+PRs #156–#159 retain their implementation boundaries below. Complete run
+`38478204372` passed evaluation, non-VM builds and the repaired onboarding gate,
+then exposed a test race between an active Docker client unit and a running
+container. The bounded Running wait preserves every capability/security
+assertion. Replacement run `38483033310` tests capability head `33c435f` against
+main `01340a9`, including the previously unreached Research VM. Dependent PRs
+remain open until their relevant runtime gates pass.
+
+Actual Nix CLI package builds for #157–#159 and draft #164/#165 now pass after
+anchoring filesystem fixtures at explicitly owned directory descriptors. The
+Nix sandbox maps `/` to an unrelated UID; public absolute-path ownership checks
+still reject that root. The same protected traversal, replacement detection and
+process-lock tests run beneath each fixture anchor. No production UID or sticky
+directory exception was added. Both draft branches also pass `just fast`.
 
 Next: capability admission [#116](https://github.com/timfewi/tentaflake/issues/116),
 real coding-agent acceptance [#136](https://github.com/timfewi/tentaflake/issues/136),
@@ -61,14 +75,79 @@ returns an image-creation permit. Existing receipts cannot recreate a missing
 image. Startup requires exact owned Present workspace and state allocations;
 storage-only admission also covers legacy workspace-only quotas. Review removed
 an obsolete historical-size rule that disagreed with this allocation accounting.
-Fast-gate components pass with 195 Rust tests, 31 routing regressions and the
-47-route API contract. Host inventory collection and quota-unit integration
-remain outstanding; the library alone does not fence existing image creators.
+Fast-gate components passed with 195 Rust tests, 31 routing regressions and the
+47-route API contract. The library alone does not fence existing image creators.
 
-Next: host-owned inventory and policy publication, quota creation fencing, live
-collectors and mandatory startup/stop integration with
-the ledger, then the authenticated dynamic host API. Offline `admission explain`
-and library tests do not establish live admission, runtime or vendor acceptance.
+The storage runtime slice connects ledger v3 to the generated quota services.
+Explicit stopped-host bootstrap verifies masked legacy creators, a complete
+loaded/installed mount inventory, idle Docker and no attached loop devices;
+diagnostic inventory remains incomplete and Unknown. An exact systemd invocation
+holds an inherited exclusive host fence and the ledger transaction through
+create/mount/ownership. New images require synced Unknown claims; existing,
+orphan, missing and uncertain images retain charges and never authorize implicit
+recreation. Stop unmounts without releasing storage. Read-only explicit recovery
+can verify an exact retained image. Backups depend on the guarded services and
+verify exact host mounts before reading them.
+
+The shared backing filesystem must have current free bytes for every retained
+logical image, the new image and explicit headroom. Device/mount identities are
+checked; sparse/shared extents receive no credit. This is a conservative
+admission-time guard, not a physical extent reservation. Unrelated host writes
+and later filesystem metadata allocation can still exhaust space. Kernel discard
+proof is therefore not claimed or required for this model.
+
+Changed ownership: CLI `admission_runtime`, `admission_fence`, `admission_systemd`
+and protected storage code; quota/admission/backup modules; a dedicated sequential
+storage node in the existing integration VM. Fast source checks, the actual Nix
+CLI package, focused adapter evaluation and the actual-helper check pass,
+including read-only Btrfs verification. The integration VM derivation evaluates;
+its storage phase has not run and no live host acceptance is claimed.
+
+Storage runtime is prepared in draft [PR #164](https://github.com/timfewi/tentaflake/pull/164).
+The next slice adds root-only `admission publication status|begin|finish|cancel`.
+Begin requires stopped workloads and certain retained claims before durable
+Pending. Installation remains an explicit operator action. Finish/cancel inspect
+the desired installed plan and both generations' complete unit/path inventory
+under the host fence and ledger lock. Historical retries return receipts without
+reopening candidate artifacts or repeating observations. No charges are released.
+The existing storage VM now includes a genuine NixOS specialisation, activation,
+rollback/cancel, retained-image checks and a real Unknown-claim refusal.
+
+Publication verification: `just fast` and the actual Nix CLI package pass. The
+package gate caught one remaining public-path reopen in a publication fixture;
+its anchored reopen now exercises the same durable historical receipt query.
+The integration VM derivation and rendered Python script validate; the VM has
+not run. Changed owners are the CLI publication/host observer, ledger receipt
+query, storage VM and operator guidance.
+
+Next: complete storage/publication runtime verification, then automated host
+installation, aggregate OCI startup/stop accounting, live capability collectors and the
+authenticated dynamic host API. Pinned image acquisition, the first real coding
+agent, strict guest-kernel execution and the private VPS deployment remain in
+scope. Publication APIs still require trusted drain/install/fence proof; library
+or source checks do not establish runtime isolation or vendor acceptance.
+
+The OCI slice in `feat/oci-runtime` now binds the complete effective specification
+to schema-3 host plans and persists boot/daemon/supervisor/image identity before
+create, then one full CID before start. It replaces the whole admitted Docker
+unit, refreshes actual prerequisites around create/start, and retains uncertain
+claims without replay. Normal exact-CID stop/removal retains storage. Public
+`mkLocalImage` builds immutable descriptors without IFD; explicit acquisition
+loads the archive separately and proves the local image ID without claiming
+registry provenance.
+
+Checkpoint: the OCI implementation, explicit stopped-Docker bootstrap fence and
+old/new runtime-unit publication inventory are ready for runtime verification.
+The pinned fast gate passed 288 Rust tests and 17 bounded archive tests. The
+final CLI Nix package passes 220 tests, including the added inert-socket
+regression; formatting and Clippy pass. The actual generated Nix plan passes the
+closed Rust loader. Adapter and expanded VM definitions evaluate and the
+rendered Python compiles. Two sequential OCI nodes cover budget denial,
+exact-CID retirement, foreign-name refusal and a real supervisor/daemon crash;
+neither node has run. Owners are the CLI OCI/bootstrap supervisors, admission
+module, image contract/helper and storage/OCI VM fixtures. The next step is the
+full remote runtime gate after the predecessor PRs; it must pass before merge.
+External capability collectors and automatic Unknown recovery remain unfinished.
 
 The [base-image catalog](20-base-images.md) adds Debian 13 and Ubuntu 26.04 LTS
 platform manifest selection with an offline metadata validator. The 2026-10-13

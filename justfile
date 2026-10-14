@@ -14,11 +14,11 @@ alias list := default
 # ── The gates ────────────────────────────────────────────────
 
 # Full local gate: source checks, all flake checks and the installer ISO
-ci: formatter-test lint shellcheck rust ci-policy api-contract image-catalog check generated-flake iso-installer
+ci: formatter-test lint shellcheck rust ci-policy api-contract image-catalog local-image check generated-flake iso-installer
     @echo "==> all green"
 
 # Fast source checks; evaluation and all Nix package/runtime builds are explicit
-fast: formatter-test lint shellcheck rust ci-policy api-contract image-catalog
+fast: formatter-test lint shellcheck rust ci-policy api-contract image-catalog local-image
 
 # Validate the versioned host API and all offline contract exchanges
 api-contract:
@@ -27,6 +27,15 @@ api-contract:
 # Verify base-image pins against checked-in registry metadata without acquisition
 image-catalog:
     python3 scripts/test_image_catalog.py
+
+# Validate bounded Docker archive descriptors without loading an image
+local-image:
+    python3 scripts/test_describe_docker_archive.py
+
+# Check the generated Nix runtime plan through the real closed Rust loader
+# This explicit evaluator gate strips dependencies only from its read-only copy.
+admission-plan:
+    TENTAFLAKE_TEST_ADMISSION_PLAN="$(nix eval --raw --no-write-lock-file --option allow-import-from-derivation false .#checks.x86_64-linux.agent-adapters.admissionPlan --apply 'plan: builtins.toFile "tentaflake-schema-fixture.json" (builtins.unsafeDiscardStringContext plan.text)')" cargo test -p tentaflake-cli --locked admission_host::tests::generated_nix_plan_matches_closed_host_schema -- --ignored --exact
 
 # Test routing with real Git histories and validate workflow syntax
 ci-policy:

@@ -646,6 +646,9 @@ let
   numericWorkerService = workerCapsule.config.systemd.services.tentaflake-worker-zeroclaw-worker;
   workerPath = workerCapsule.config.systemd.paths.tentaflake-worker-hermes-worker;
   workerOwnerService = workerCapsule.config.systemd.services.tentaflake-workspace-quota-hermes-worker;
+  workerQuotaHelpers =
+    workerCapsule.config.tentaflake.admissionVolumes."workspace:hermes-worker".helpers;
+  workerPrepareLines = lib.splitString "\n" workerCapsule.config.systemd.services.tentaflake-workspace-quota-prepare-hermes-worker.script;
   workerAttempt = builtins.tryEval workerCapsule.config.system.build.toplevel.drvPath;
   tooSmallQuota = workerCapsule.extendModules {
     modules = [ { tentaflake.workspaceQuota.agents.hermes-worker.sizeMiB = lib.mkForce 32; } ];
@@ -1119,7 +1122,7 @@ assert workerMount.options == "loop,nodev,nosuid,noatime";
 assert workerMount.unitConfig.DefaultDependencies == false;
 assert workerMount.wantedBy == [ "multi-user.target" ];
 assert lib.elem "local-fs.target" workerMount.after;
-assert lib.hasInfix "refusing unsafe worker control path" workerOwnerService.script;
+assert workerOwnerService.script == "exec ${workerQuotaHelpers.owner}";
 assert
   workerOwnerService.serviceConfig.CapabilityBoundingSet == [
     "CAP_CHOWN"
@@ -1131,8 +1134,8 @@ assert lib.elem
   workerCapsule.config.systemd.tmpfiles.rules;
 assert lib.elem "tentaflake-workspace-quota-hermes-worker.service"
   workerCapsule.config.systemd.services.docker-hermes-worker.requires;
-assert lib.hasInfix "refusing to hide non-empty workspace"
-  workerCapsule.config.systemd.services.tentaflake-workspace-quota-prepare-hermes-worker.script;
+assert lib.elem "  exec ${workerQuotaHelpers.create}" workerPrepareLines;
+assert lib.elem "  exec ${workerQuotaHelpers.verify}" workerPrepareLines;
 assert lib.hasInfix " load --input "
   workerCapsule.config.systemd.services.tentaflake-worker-image.serviceConfig.ExecStart;
 assert lib.hasInfix "host\tbalanced\tfalse\ttrue\ttrue\ttrue\tfalse\t36\n" brokerManifest;
@@ -1245,6 +1248,11 @@ assert (builtins.head tailscalePolicy.ssh).action == "check";
 # Parse the configured flags with the pinned CLI. --help avoids contacting a
 # daemon, while an unsupported flag before it still fails during parsing.
 pkgs.runCommand "tentaflake-module-evaluation" { } ''
+  # Quota services delegate to immutable helpers. Check the selected artifacts
+  # here, without importing derivation contents during module evaluation.
+  grep -Fq 'refusing unsafe worker control path' ${workerQuotaHelpers.owner}
+  grep -Fq 'refusing to hide non-empty workspace' ${workerQuotaHelpers.create}
+  grep -Fq 'refusing to hide non-empty workspace' ${workerQuotaHelpers.verify}
   ${lib.getExe capsule.config.services.tailscale.package} set ${lib.escapeShellArgs capsule.config.services.tailscale.extraSetFlags} --help >/dev/null
   ${lib.getExe capsule.config.services.tailscale.package} up ${lib.escapeShellArgs capsule.config.services.tailscale.extraUpFlags} --help >/dev/null
   touch $out

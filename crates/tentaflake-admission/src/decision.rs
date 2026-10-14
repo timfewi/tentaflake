@@ -1,7 +1,8 @@
 use crate::*;
 use std::collections::{BTreeMap, BTreeSet};
 
-pub(crate) fn identifier(value: &str) -> bool {
+/// Bounded non-secret identity accepted by the shared admission contract.
+pub fn identifier(value: &str) -> bool {
     !value.is_empty()
         && value.len() <= 128
         && value.as_bytes()[0].is_ascii_alphanumeric()
@@ -113,20 +114,9 @@ fn capability_kind(capability: Capability) -> EvidenceKind {
     }
 }
 
-pub(crate) fn authority_shape(
-    schema_version: u32,
-    policy: &HostPolicy,
-    instance: &Instance,
-    request: &AdmissionRequest,
-) -> Vec<Reason> {
+/// Validate identity and grant shape without granting capabilities or resources.
+pub fn validate_authority(policy: &HostPolicy, instance: &Instance) -> Vec<Reason> {
     let mut reasons = Vec::new();
-    if schema_version != SCHEMA_VERSION || request.schema_version != SCHEMA_VERSION {
-        reason(
-            &mut reasons,
-            ReasonCode::UnsupportedVersion,
-            "schemaVersion",
-        );
-    }
     if !identifier(&policy.revision)
         || !identifier(&policy.generation)
         || policy.grants.len() > MAX_GRANTS
@@ -146,15 +136,6 @@ pub(crate) fn authority_shape(
     {
         reason(&mut reasons, ReasonCode::InvalidInstance, "instance");
     }
-    if !identifier(&request.operation_id)
-        || !identifier(&request.instance_id)
-        || !identifier(&request.principal_id)
-        || !identifier(&request.expected.policy)
-        || !identifier(&request.expected.instance)
-        || request.expected.ledger == 0
-    {
-        reason(&mut reasons, ReasonCode::InvalidRequest, "request");
-    }
     if !reasons.is_empty() {
         return reasons;
     }
@@ -173,7 +154,34 @@ pub(crate) fn authority_shape(
     reasons
 }
 
-pub(crate) fn check_policy(policy: &HostPolicy) -> Vec<Reason> {
+pub(crate) fn authority_shape(
+    schema_version: u32,
+    policy: &HostPolicy,
+    instance: &Instance,
+    request: &AdmissionRequest,
+) -> Vec<Reason> {
+    let mut reasons = validate_authority(policy, instance);
+    if schema_version != SCHEMA_VERSION || request.schema_version != SCHEMA_VERSION {
+        reason(
+            &mut reasons,
+            ReasonCode::UnsupportedVersion,
+            "schemaVersion",
+        );
+    }
+    if !identifier(&request.operation_id)
+        || !identifier(&request.instance_id)
+        || !identifier(&request.principal_id)
+        || !identifier(&request.expected.policy)
+        || !identifier(&request.expected.instance)
+        || request.expected.ledger == 0
+    {
+        reason(&mut reasons, ReasonCode::InvalidRequest, "request");
+    }
+    reasons
+}
+
+/// Validate policy shape without admitting work or requiring available capacity.
+pub fn check_policy(policy: &HostPolicy) -> Vec<Reason> {
     let mut reasons = Vec::new();
     if !active_resources(policy.capacity)
         || !active_resources(policy.per_instance)

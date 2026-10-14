@@ -21,6 +21,28 @@ let
       uid = field lib.types.ints.unsigned;
       gid = field lib.types.ints.unsigned;
       runnable = field lib.types.bool;
+      runtimeImage = lib.mkOption {
+        type = lib.types.nullOr (
+          lib.types.addCheck (lib.types.attrsOf lib.types.str) (
+            source:
+            if (source.kind or null) == "registry" then
+              builtins.attrNames source == [
+                "kind"
+                "reference"
+              ]
+            else
+              (source.kind or null) == "local-artifact"
+              &&
+                builtins.attrNames source == [
+                  "descriptor"
+                  "kind"
+                ]
+              && builtins.hasContext source.descriptor
+          )
+        );
+        default = null;
+        description = "Normalized image source; local descriptors retain their immutable Nix build dependency. Null keeps legacy registry inventory behavior.";
+      };
       requestedCapabilities = lib.mkOption {
         type = lib.types.listOf (
           lib.types.enum [

@@ -1,5 +1,4 @@
-//! Offline explanation of a recorded, non-secret admission snapshot.
-//! This command does not collect live evidence, claim capacity or dispatch work.
+//! Recorded decisions, diagnostic inventory and root-owned storage lifecycle.
 
 use crate::OutputMode;
 use std::fs::OpenOptions;
@@ -11,11 +10,53 @@ use tentaflake_admission::{Decision, RecordedAdmission, decide};
 const MAX_SNAPSHOT_BYTES: u64 = 4 * 1024 * 1024;
 
 pub(crate) fn run(args: &[String], mode: OutputMode) -> Result<u8, String> {
+    match args {
+        [command, file, id] if command == "image-acquire" => {
+            return crate::admission_oci::acquire(Path::new(file), id);
+        }
+        [command, file, id]
+            if matches!(
+                command.as_str(),
+                "runtime-start" | "runtime-stop" | "runtime-finish"
+            ) =>
+        {
+            use crate::admission_oci::Lifecycle;
+            let action = match command.as_str() {
+                "runtime-start" => Lifecycle::Start,
+                "runtime-stop" => Lifecycle::Stop,
+                _ => Lifecycle::Finish,
+            };
+            return crate::admission_oci::lifecycle(Path::new(file), id, action);
+        }
+        [command, rest @ ..] if command == "publication" => {
+            return crate::admission_publication::run(rest, mode);
+        }
+        [command, file] if command == "bootstrap" => {
+            return crate::admission_runtime::bootstrap(Path::new(file));
+        }
+        [command, file] if command == "bootstrap-fence" => {
+            return crate::admission_bootstrap::fence(Path::new(file));
+        }
+        [command, file, id] if command == "volume-start" || command == "volume-stop" => {
+            return crate::admission_runtime::lifecycle(
+                Path::new(file),
+                id,
+                command == "volume-start",
+            );
+        }
+        [command, file, id] if command == "storage-recover" => {
+            return crate::admission_runtime::recover(Path::new(file), id);
+        }
+        _ => {}
+    }
     let [command, file] = args else {
-        return Err("admission requires: explain <snapshot-file> [--hide]".into());
+        return Err("admission requires explain <snapshot-file>, inventory|bootstrap <generated-store-plan>, or storage-recover <generated-store-plan> <allocation-id>".into());
     };
+    if command == "inventory" {
+        return crate::admission_host::inventory(Path::new(file), mode);
+    }
     if command != "explain" {
-        return Err("admission supports only offline explain".into());
+        return Err("unsupported admission command".into());
     }
     let mut decision = explain_file(Path::new(file))?;
     if mode.hide
@@ -82,7 +123,7 @@ mod tests {
     }
 
     #[test]
-    fn rejects_non_files_and_never_opens_a_mutation_command() {
+    fn rejects_non_files_and_unknown_or_incomplete_commands() {
         assert!(explain_file(Path::new(".")).is_err());
         assert!(run(&["start".into(), "missing".into()], OutputMode::default()).is_err());
         assert!(run(&["explain".into()], OutputMode::default()).is_err());

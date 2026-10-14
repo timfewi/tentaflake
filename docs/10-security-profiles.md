@@ -127,10 +127,12 @@ redacts reservation identity. Recorded time and evidence are caller-supplied;
 this command neither verifies them nor starts, reserves or reconciles anything.
 The checked-in example is synthetic evidence.
 
-The library ledger creates private state only through explicit initialization
-of a new directory with an explicitly complete storage inventory. Ordinary opens
-refuse missing, corrupt or unsafe state; version-1 state requires an explicit
-migration and is never interpreted as empty.
+The private on-disk ledger now uses schema version 3; pure snapshots and requests
+remain version 2. Its initialization API requires a new directory, an explicit
+`PublishedAuthority` and a complete storage inventory. Ordinary opens refuse
+missing, corrupt, unsafe or older-version state; migration is explicit and never
+interprets old state as empty. Explicit host bootstrap is a stopped-host
+[storage maintenance operation](14-workspace-quota.md#guarded-storage-lifecycle).
 A nonblocking exclusive lock serializes decisions, and a durable unknown
 reservation precedes any new dispatch permit. The in-memory permit retains
 that lock through the launch handoff. An identical operation key returns the
@@ -146,21 +148,60 @@ once, including orphaned and uncertain images. Startup requires exact owned,
 present workspace and state allocations. A storage-only claim also supports
 legacy workspace-only quotas without requiring model or Research access. Its
 new durable unknown allocation yields the only image-creation permit, under the
-same ledger lock. Existing receipts only allow verification; a missing previously
-recorded image cannot be recreated. Resize, rebinding, deletion and inventory
+same ledger lock. Existing receipts never grant another creation permit; a missing
+previously recorded image cannot be recreated. Resize, rebinding, deletion and inventory
 recovery require separate explicit operations. The host must scan every managed
 backing location, fence all volume creators and verify and sync the final image
 before recording it present; the library does not perform those filesystem steps.
 
-The policy, readiness snapshot and ledger share a durable host authority epoch;
-boot and service generations are separate live evidence. Callers authenticate
-the principal and supply current host-owned policy and collectors under the
-ledger lock, including when recovering an existing receipt. They must fence
-policy changes, stop old dispatchers before proving absence, and reconcile
-actual owned runtime identities. There is no HTTP service, live collector or
-mandatory OCI startup integration yet; existing generic units still use their
-declarative capability/quota gates. A successful core decision does not establish
-runtime isolation, upstream model authorization or vendor acceptance.
+`PublishedAuthority` records the durable authority epoch, policy revision and
+immutable manifest path. The policy, readiness snapshot and ledger share that
+epoch; boot and service generations remain separate live evidence. Current
+policy and ownership are checked under the ledger lock, including receipt
+recovery. Publication, runtime and storage claims share operation-ID conflict
+checks; an old receipt never supplies fresh mutation authority.
+
+The publication API persists `Pending` before a host caller drains work or
+installs a candidate plan. Pending blocks new claims and `with_present_storage`
+calls while allowing recovery observations. `finish_publication` requires stopped
+runtime reservations, Present storage, the exact installed candidate and a
+trusted callback proving both plans' mutators are fenced. Explicit
+`cancel_publication` requires the original plan restored with the same fence.
+Failed observations leave Pending; restart does not cancel it or discard Unknown
+charges. Terminal retries return receipts without replaying callbacks. The
+root-only [operator publication protocol](14-workspace-quota.md#changing-the-published-host-plan)
+implements the live installation and mutator observations. It requires an
+already stopped host before beginning; configuration installation remains an
+explicit operator action, with Pending retained across failures.
+
+`with_present_storage` holds the same lock through a current-authority check and
+a bounded verification/ownership callback on an existing Present allocation.
+It provides no creation permit or durable idempotency: retries may repeat the
+callback. Callers must use repeat-safe helpers, verify exact files and mounts,
+and keep helper processes within the callback's lifetime.
+
+The optional `tentaflake.security.admission` declaration generates a closed
+version-2 `HostPlan` for balanced Docker hosts. It takes `authorityEpoch`,
+`capacity`, `hostReserve`, `researchReserve`, `maxActive` and
+`evidenceMaxAgeSeconds`, plus explicit `physicalSpaceHeadroomBytes`;
+per-instance ceilings remain owned by
+`security.resources` and quota options. Legacy compute, independent workers and
+other unmanaged workloads must fit the explicit host reserve. The generated
+store file is linked at `/etc/tentaflake/admission.json`; it contains configured
+policy, exact quota bindings and immutable helper paths, with no live readiness.
+
+This option puts quota creation, mounting and ownership behind the root-owned
+storage supervisor. It does not initialize a ledger automatically. Explicit
+bootstrap verifies stopped guarded units, masked legacy creators, detached
+managed backing images and an idle Docker backend before importing inventory.
+The root-only
+[`admission inventory` diagnostic](14-workspace-quota.md#read-only-admission-inventory)
+always reports `complete: false`; its output cannot bootstrap the ledger.
+Mandatory OCI startup/stop accounting, live capability collectors, automated
+configuration installation and the HTTP service remain unfinished. Existing
+generic units retain their declarative capability/quota
+gates. A successful core decision or inventory scan does not establish runtime
+isolation, upstream model authorization or vendor acceptance.
 
 ## Image signatures and provenance
 

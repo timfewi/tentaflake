@@ -18,10 +18,17 @@
   mkZeroClawAgent,
   ...
 }:
+let
+  storageAdmission = import ./storage-admission.nix { inherit self; };
+  ociAdmission = import ./oci-admission.nix { inherit self; };
+in
 {
   name = "tentaflake-integration";
 
   nodes = {
+    storage = storageAdmission.node;
+    oci = ociAdmission.node;
+    oci_crash = ociAdmission.crashNode;
     machine =
       { pkgs, ... }:
       let
@@ -804,6 +811,7 @@
         assert json.loads(record[30]) == {
             "schemaVersion": 1, "requested": ["files", "shell", "terminal"],
             "research": False, "stateQuota": True, "requireStateQuota": True,
+            "runtimeImage": {"kind": "registry", "reference": "fixture.invalid/tentaflake-network-test@sha256:0000000000000000000000000000000000000000000000000000000000000000"},
         }, record
         for unit in ["tentaflake-broker-llm-generic-offline.service",
                      "tentaflake-research-generic-offline.socket", "tentaflake-worker-generic-offline.path"]:
@@ -1799,5 +1807,11 @@
         )
         assert machine.succeed("cat /var/lib/hermes-test/restore-fixture").strip() == "restore-fixture"
 
-  '';
+    machine.shutdown()
+    attacker.shutdown()
+    podman.shutdown()
+  ''
+  + storageAdmission.testScript
+  + ociAdmission.testScript
+  + ociAdmission.crashTestScript;
 }

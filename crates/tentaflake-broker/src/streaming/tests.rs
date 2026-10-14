@@ -198,12 +198,17 @@ impl Exchange {
 
     fn finish(mut self, mut prefix: Vec<u8>) -> (Vec<u8>, String, Value) {
         self.client.read_to_end(&mut prefix).unwrap();
+        let (audit, budget) = self.join();
+        (prefix, audit, budget)
+    }
+
+    fn join(self) -> (String, Value) {
         self.broker.join().unwrap();
         self.provider.join().unwrap();
         let audit = self.directory.audit();
         let budget =
             serde_json::from_slice(&fs::read(self.directory.0.join("budget")).unwrap()).unwrap();
-        (prefix, audit, budget)
+        (audit, budget)
     }
 }
 
@@ -440,7 +445,9 @@ fn client_disconnect_cancels_a_silent_provider() {
     exchange.read_until(b"PRIVATE_OUTPUT_FIXTURE");
     exchange.client.shutdown(Shutdown::Both).unwrap();
     assert!(cancel_receive.recv_timeout(Duration::from_secs(1)).unwrap());
-    let (_, audit, _) = exchange.finish(Vec::new());
+    // Provider EOF above proves timely cancellation. Reading this deliberately
+    // closed client again may return ConnectionReset instead of EOF.
+    let (audit, _) = exchange.join();
     assert!(audit.contains("client disconnected"));
 }
 

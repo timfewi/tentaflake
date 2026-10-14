@@ -3,14 +3,22 @@
 //! A pure decision neither authenticates its input nor enforces containment.
 //! Callers must collect trusted current policy and launch-prerequisite evidence,
 //! reserve under the authoritative ledger lock, and fence dispatch against changes.
+//! A new runtime claim persists its exact host/daemon/supervisor/image intent
+//! before returning the only dispatch permit; that permit must durably bind the
+//! full container ID before startup can be recorded Running. Legacy v3 runtime
+//! receipts retain their charges without becoming live identity evidence.
 //! Source declarations, fixtures and a successful decision are not runtime or
 //! vendor acceptance. The HTTP contract remains owned by `api/v1/openapi.json`.
 
 mod decision;
 pub mod ledger;
+mod runtime;
 mod storage_decision;
 
-pub use decision::{authorize, decide, validate_reservations};
+pub use decision::{
+    authorize, check_policy as validate_policy, decide, identifier, validate_authority,
+    validate_reservations,
+};
 use serde::{Deserialize, Serialize};
 pub use storage_decision::{authorize_storage, decide_storage};
 

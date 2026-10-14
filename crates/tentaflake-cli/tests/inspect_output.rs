@@ -2,7 +2,10 @@ use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
+
+static NEXT_FIXTURE: AtomicU64 = AtomicU64::new(0);
 
 struct Fixture(PathBuf);
 
@@ -19,8 +22,9 @@ fn executable(path: &Path, shell: &str, script: &str) {
 
 fn fixture() -> (Fixture, String) {
     let root = std::env::temp_dir().join(format!(
-        "tentaflake-inspect-{}-{}",
+        "tentaflake-inspect-{}-{}-{}",
         std::process::id(),
+        NEXT_FIXTURE.fetch_add(1, Ordering::Relaxed),
         SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()

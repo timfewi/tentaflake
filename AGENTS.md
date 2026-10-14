@@ -126,11 +126,29 @@ are already published or require access to another repository for public checks.
   ledger. `admission explain` only re-evaluates recorded non-secret evidence;
   it never claims or dispatches. A newly synced claim alone returns an in-memory
   dispatch permit holding the ledger lock; uncertain outcomes keep reservations.
-  Schema-v2 storage allocations charge never-started and orphan volumes once.
-  Initialization requires complete inventory; existing storage receipts never
-  authorize recreation, resizing or rebinding. All quota creators need the same
-  durable storage permit before this accounting can be treated as authoritative.
-  Live collectors and mandatory runtime integration remain separate work.
+  Pure snapshots remain v2; private ledger v3 adds published authority and durable
+  Pending publication. Finish/cancel require trusted installation/drain/fence
+  proof; Unknown charges remain. Volume rows charge never-started/orphan storage
+  once and never authorize recreation, resize or rebinding. Initialization needs
+  complete fenced inventory. `with_present_storage` holds the lock through a
+  repeat-safe helper callback; it provides no durable idempotency.
+  `security.admission` selects guarded quota supervisors and masks legacy
+  prepare/native mount units. Explicit stopped-host bootstrap owns completeness;
+  diagnostic inventory still emits `complete: false` and Unknown rows. Preserve
+  the exact systemd invocation, host mount namespace and inherited exclusive
+  fence through helper lifetimes. Full logical image charges plus explicit
+  headroom must fit current shared-pool free bytes before new creation; this
+  reserves no physical extents. Explicit publication begin requires stopped
+  workloads, Retained compute and Present storage before persisting Pending.
+  Finish/cancel observe both plans' unit/path union under the fence; identical
+  terminal retries return history without repeating observations or installation.
+  Installation remains an explicit operator action. The OCI supervisor owns the
+  complete admitted Docker unit: no implicit pull/load, name-based cleanup or
+  automatic restart. Persist exact boot/daemon/supervisor/image identity before
+  create and the full CID before start; unknown outcomes retain charges without
+  replay. Local `mkLocalImage` descriptors prove content identity, not registry
+  provenance. Real lifecycle VM evidence and external capability collectors
+  remain required. See `docs/agent-adapters.md` and `docs/14-workspace-quota.md`.
 - CLI help is configuration-free; management commands require generated
   host configuration and inventory.
 - `api/v1/openapi.json` owns the host API wire contract; clients consume its

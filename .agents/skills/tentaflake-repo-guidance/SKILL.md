@@ -16,7 +16,7 @@ relevant source and guide. Avoid loading unrelated references.
 | Base-image pins | `images/catalog.json`, `lib/baseImages.nix`, `scripts/test_image_catalog.py` | [Base images](../../../docs/20-base-images.md) |
 | Declarative input, onboarding and inventory | `configuration.nix`, `lib/agentsFromData.nix`, `lib/agentPlan.nix`, CLI onboarding | [Configuration](../../../docs/08-agent-cli.md) |
 | CLI and diagnostics | `crates/tentaflake-cli/`, `modules/shell.nix`, `modules/security.nix` | [CLI](../../../docs/06-shell.md) |
-| Shared startup decisions and durable claims | `crates/tentaflake-admission/`, CLI `admission.rs` | [Security](../../../docs/10-security-profiles.md#shared-admission-core) |
+| Admission decisions, publication and diagnostic inventory | `crates/tentaflake-admission/`, CLI `admission*.rs`, `modules/admission.nix` | [Security](../../../docs/10-security-profiles.md#shared-admission-core) |
 | Private management | `modules/management.nix`, `modules/tailscale.nix`, versioned security manifest | [Management](../../../docs/11-tailscale-management.md) |
 | LLM broker and streaming | `modules/broker.nix`, `crates/tentaflake-broker/` | [Broker](../../../docs/12-brokered-egress.md) |
 | Research projection | `modules/research.nix`, `lib/researchClient.nix`, adapter hooks | [Research](../../../docs/16-research.md) |
@@ -42,6 +42,17 @@ relevant source and guide. Avoid loading unrelated references.
   Charge volumes independently of runtime receipts, including never-started and
   orphan images. Complete inventory and fenced creators precede authority;
   existing allocations never permit implicit recreation, resize or rebinding.
+  Private ledger v3 adds durable Pending publication; pure snapshots remain v2.
+  Require exact installation and mutator fencing before finish/cancel. Present
+  storage callbacks hold the lock but may repeat; use repeat-safe helpers.
+  Guarded quota services bind mutations to the exact systemd invocation and
+  host mount namespace; preserve the inherited exclusive fence through helpers.
+  Only stopped-host bootstrap establishes complete inventory. Root diagnostics
+  remain incomplete/Unknown. Physical headroom is an admission-time shared-pool
+  check, not an extent reservation. Publication begin requires stopped workloads
+  and certain retained claims; finish/cancel inspect both plans' mutators under
+  the fence. Keep installation explicit and terminal retries historical.
+  OCI gating and automatic installation remain unfinished.
 - Base images select reviewed platform manifests, separate from native presets.
   Preserve raw metadata bytes and run `just image-catalog`. Acquisition is separate
   from Research; digest chains do not prove signatures or runtime acceptance.
@@ -89,6 +100,8 @@ relevant source and guide. Avoid loading unrelated references.
   selected state/workspace mounts separately in Restic and verify both restores.
   `ReadWritePaths` creates bind mounts: identify the exact loop backing image,
   never infer quota readiness from a mount point or filesystem type alone.
+  Preserve exclusive synced creation and separate read-only verification;
+  missing images, unsafe backing ancestors or any `.new` entry must refuse.
 - Keep exact runtime resource/mount/network expectations and unknown evidence.
   Generic requests bound grants and resource overrides; both fixed-size quotas
   gate automatic and manual starts. Manifest v3 records requested capabilities;
@@ -103,6 +116,9 @@ relevant source and guide. Avoid loading unrelated references.
 Start with `just fast` for static/unit checks; `just list` lists recipes. Recipes
 load pinned tools; direct Cargo/lint commands need `nix develop`. Configuration
 evaluation (`just eval`), generated flakes and builds are explicit gates.
+Generated helper paths carry Nix string context: compare exact invocation lines,
+not regex patterns. Strip context only from test-only JSON inspection copies;
+generated manifests and helpers must retain their dependency references.
 Use `just fmt-check` for read-only formatting checks; treefmt's `--ci` can rewrite files.
 `.github/ci-paths.json` selects fast PR/push checks and affected dispatch builds
 from the same rules. Unknown paths/history select all fast checks automatically

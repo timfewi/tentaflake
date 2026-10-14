@@ -108,6 +108,10 @@ jobs:
         if: needs.changes.outputs.static == 'true'
         run: nix develop --command python3 scripts/test_image_catalog.py
 
+      - name: Local image descriptor
+        if: needs.changes.outputs.static == 'true'
+        run: nix develop --command python3 scripts/test_describe_docker_archive.py
+
       - name: Rust lint and unit tests
         if: needs.changes.outputs.rust == 'true'
         env:

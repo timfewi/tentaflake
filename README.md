@@ -28,8 +28,16 @@ features. This is planned work; the current support matrix below still applies.
 
 The shared Rust admission core can [explain a recorded startup decision](docs/10-security-profiles.md#shared-admission-core)
 and persist conservative runtime and volume claims, including storage for
-never-started environments. Live collection, mandatory startup
-integration and the host API service are still under development.
+never-started environments. Root-only [`admission inventory`](docs/14-workspace-quota.md#read-only-admission-inventory)
+lists existing quota images as Unknown and always reports incomplete bootstrap
+evidence. Explicit [storage bootstrap and guarded quota services](docs/14-workspace-quota.md#guarded-storage-lifecycle)
+connect volume claims to image creation and mounting. Root operators can use the
+explicit [stopped-host publication protocol](docs/14-workspace-quota.md#changing-the-published-host-plan)
+when installing another configuration. The experimental
+[OCI admission supervisor](docs/agent-adapters.md#local-images-and-host-admission)
+binds durable claims to exact container identities and supports separately
+acquired local Nix images. Runtime acceptance, external capability collectors,
+automated installation and the host API service remain under development.
 
 Discover presets with `tentaflake runtimes --json`. A digest-pinned image and
 command can use the [common isolated workload definition](docs/agent-adapters.md#generic-isolated-workload)

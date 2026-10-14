@@ -1,6 +1,7 @@
 { pkgs, lib }:
 {
   mkAgent = import ./mkAgent.nix { inherit pkgs lib; };
+  mkLocalImage = archive: import ./localImage.nix { inherit pkgs archive; };
   runtimeCatalog = import ./runtimeCatalog.nix;
   baseImages = import ./baseImages.nix { inherit lib; };
   adapters = import ../adapters { inherit pkgs lib; };

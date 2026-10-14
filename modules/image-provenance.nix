@@ -14,6 +14,12 @@ let
     _: container: (container.labels."io.tentaflake.security-profile" or "dev") != "dev"
   ) agentContainers;
   enabledPolicies = lib.filterAttrs (_: policy: policy.enable) cfg.agents;
+  localImage =
+    name:
+    let
+      source = (config.tentaflake.agentInstances.${name} or { runtimeImage = null; }).runtimeImage;
+    in
+    source != null && source.kind == "local-artifact";
   serviceName = name: "tentaflake-image-verify-${name}";
   ociServiceName = name: "${config.virtualisation.oci-containers.backend}-${name}";
   safeAbsolutePath =
@@ -149,6 +155,12 @@ in
       {
         assertion = lib.all (name: lib.hasAttr name agentContainers) (lib.attrNames enabledPolicies);
         message = "tentaflake image provenance policies must name an existing agent container exactly.";
+      }
+      {
+        assertion =
+          !lib.any localImage (lib.attrNames enabledPolicies)
+          && (!cfg.requireForSecureAgents || !lib.any localImage (lib.attrNames secureAgents));
+        message = "tentaflake: local image artifacts do not provide registry Cosign provenance and cannot satisfy imageProvenance.requireForSecureAgents.";
       }
       {
         assertion =
