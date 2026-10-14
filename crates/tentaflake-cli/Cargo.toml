@@ -19,7 +19,7 @@ tentaflake-admission = { path = "../tentaflake-admission" }
 tokio = { version = "=1.53.2", features = ["rt", "net", "time", "sync", "io-util"] }
 
 [dev-dependencies]
-rustls = { version = "=0.23.45", default-features = false, features = ["ring", "std", "tls12"] }
+rustls = { version = "=0.23.46", default-features = false, features = ["ring", "std", "tls12"] }
 
 [[bin]]
 name = "tentaflake"
