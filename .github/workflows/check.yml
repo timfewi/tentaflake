@@ -122,6 +122,9 @@ jobs:
               packages+=(--package "tentaflake-$crate")
             fi
           done
+          if [[ "$CHECK_CLI" == true ]]; then
+            packages+=(--package tentaflake-admission)
+          fi
           # Refuse an inconsistent policy instead of silently widening the suite.
           test "${#packages[@]}" -gt 0
           nix develop --command cargo clippy "${packages[@]}" --all-targets -- -D warnings

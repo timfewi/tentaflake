@@ -41,8 +41,22 @@ started. Added generic startup and Research projection VM regressions await CI.
 The explicit gate exposed a VM-fixture import recursion; focused evaluation
 reproduced it and passes after making the import independent of node `pkgs`.
 The full runtime/build gate is being rerun for that fix.
-Live readiness, bounded aggregate decisions and recovery remain outstanding;
-no dynamic host API is implemented.
+
+The next shared-core slice adds `crates/tentaflake-admission`: exact typed
+decisions, checked aggregate reservations including host/Research reserves,
+source-generation freshness and a private durable claim ledger. Only newly
+synced claims yield a dispatch permit; existing receipts never redispatch,
+unknown outcomes retain capacity and confirmed stops retain storage. Review
+fixed unsafe directory ancestry and stale-owner capability grants. CI then exposed
+an inherited-descriptor lock-release race; a deterministic failing regression
+now passes with explicit lock release. Fast-gate components pass with 170 Rust
+tests and 31 routing regressions; the API fixtures
+and focused Nix package-source check pass. Actual offline CLI interactions cover
+allow, redaction, owner/expiry/strict denial and unsafe-input refusal.
+
+Next: host-owned live collectors and mandatory startup/stop integration with
+the ledger, then the authenticated dynamic host API. Offline `admission explain`
+and library tests do not establish live admission, runtime or vendor acceptance.
 
 The [base-image catalog](20-base-images.md) adds Debian 13 and Ubuntu 26.04 LTS
 platform manifest selection with an offline metadata validator. The 2026-10-13

@@ -200,8 +200,10 @@ are retained where practical, but migration is required before backend connectio
   prove a mutation failed. Retain keyboard/accessibility and real-browser tests.
 
 No edits or acceptance claims are made for that separately owned UI here.
-Remaining #152 delivery includes a real shared admission/CLI/API service, durable
-store/reconciliation, private authenticated serving, owned workspace and terminal
+The [Rust admission core](10-security-profiles.md#shared-admission-core) provides
+startup decisions and durable claims, with offline CLI explanation. It is not
+an HTTP backend. Remaining #152 delivery includes mandatory live admission,
+runtime reconciliation, private authenticated serving, owned workspace and terminal
 implementation, generated consumer migration, and actual interactions. Acceptance
 must exercise cross-owner denial, CSRF/Origin refusal, revoke/expiry, concurrent
 revision conflicts, crash-after-dispatch recovery, quotas and overflow, path and

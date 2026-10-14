@@ -24,13 +24,19 @@ rustPlatform.buildRustPackage {
         (lib.fileset.fileFilter (file: file.name == "Cargo.toml") ../crates)
         crate
       ]
-      ++ lib.optional (pname == "tentaflake-cli") ../adapters/catalog.json
+      ++ lib.optionals (pname == "tentaflake-cli") [
+        ../adapters/catalog.json
+        ../crates/tentaflake-admission
+      ]
     );
   };
 
   cargoLock.lockFile = ../Cargo.lock;
   cargoBuildFlags = [ "-p=${pname}" ];
-  cargoTestFlags = [ "-p=${pname}" ];
+  cargoTestFlags = [
+    "-p=${pname}"
+  ]
+  ++ lib.optional (pname == "tentaflake-cli") "-p=tentaflake-admission";
 
   meta = {
     inherit (package) description;

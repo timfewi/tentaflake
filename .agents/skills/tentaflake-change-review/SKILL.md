@@ -34,6 +34,13 @@ See [build boundaries](../../../docs/17-builds.md) for affected workflow dispatc
 Full `just ci`/`just e2e`, VM, ISO and system builds are larger workloads.
 Evaluation does not prove runtime behavior or authorize activation.
 
+For filesystem ownership tests, obtain the focused Nix package test result as
+well as Cargo evidence. A real sandbox mapped `/` to an unowned overflow UID;
+host Cargo tests passed while the package tests failed. Anchor private fixtures
+at checked directory descriptors, retain descendant ownership/mode checks, and
+independently assert that the public absolute-path API still refuses foreign
+root ownership. Never relax production ownership policy to fit a sandbox.
+
 VM lifecycle fixtures must inspect container readiness after a unit becomes
 active. A successful `systemctl stop` may unload the unit; assert inactive state
 and no queued job instead of requiring a later `reset-failed` on that unloaded

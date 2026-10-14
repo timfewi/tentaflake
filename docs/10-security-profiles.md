@@ -101,6 +101,53 @@ sandbox plus a non-root in-container UID today and does not claim a separate
 host UID mapping. Adding one requires an explicit state, seed, Git-helper, and
 workspace ownership migration with Docker and Podman runtime tests.
 
+## Shared admission core
+
+`crates/tentaflake-admission` provides one typed Rust decision function for future
+host lifecycle callers. It checks exact owner/capability grants, revisions,
+fresh live prerequisite evidence, service generations, per-instance limits and
+aggregate CPU, memory, combined memory-plus-swap, PIDs, workspace and state.
+Host and Research reserves count against capacity. Unknown reservations block
+admission; stopped instances retain their storage charge. Unsupported guest-kernel
+isolation is denied. This library does not collect evidence or enforce containment.
+
+An offline operator command re-evaluates a recorded decision:
+
+```bash
+tentaflake admission explain crates/tentaflake-admission/tests/recorded-start.json
+```
+
+The input is a regular JSON file of at most 4 MiB containing
+`nowUnixSeconds`, `snapshot` and `request`. The snapshot and request use the
+versioned, closed Rust types in `src/lib.rs`; this internal diagnostic format
+is separate from the [HTTP contract](19-host-api.md). Output is a JSON decision;
+exit codes are 0 for allowed, 1 for denied and 2 for invalid input. `--hide`
+redacts reservation identity. Recorded time and evidence are caller-supplied;
+this command neither verifies them nor starts, reserves or reconciles anything.
+The checked-in example is synthetic evidence.
+
+The library ledger creates private state only through explicit initialization
+of a new directory. Ordinary opens refuse missing, corrupt or unsafe state.
+A nonblocking exclusive lock serializes decisions, and a durable unknown
+reservation precedes any new dispatch permit. The in-memory permit retains
+that lock through the launch handoff. An identical operation key returns the
+existing receipt without another permit; a different request using that key
+conflicts. Crash or uncertain completion retains capacity. Confirmed stopping
+releases compute but retains workspace and private-state capacity; it does not
+delete data. Receipt and byte limits refuse additional work rather than evicting
+recovery records. Initialization must account for pre-existing workloads before
+the ledger can be treated as complete.
+
+The policy, readiness snapshot and ledger share a durable host authority epoch;
+boot and service generations are separate live evidence. Callers authenticate
+the principal and supply current host-owned policy and collectors under the
+ledger lock, including when recovering an existing receipt. They must fence
+policy changes, stop old dispatchers before proving absence, and reconcile
+actual owned runtime identities. There is no HTTP service, live collector or
+mandatory OCI startup integration yet; existing generic units still use their
+declarative capability/quota gates. A successful core decision does not establish
+runtime isolation, upstream model authorization or vendor acceptance.
+
 ## Image signatures and provenance
 
 The [base-image catalog](20-base-images.md) records reviewed Debian/Ubuntu
@@ -228,7 +275,8 @@ broker bridge, no published ports, and matching mounts and limits. Missing or
 legacy manifest fields remain unknown. Each OCI subprocess has a five-second
 deadline and an 8 MiB combined stdout/stderr ceiling, including inherited
 output handles; overflow remains unknown. Broker
-health probes run in batches of at most 16. The check still does not prove
+health probes run in batches of at most 16, with a two-second total deadline
+and strict HTTP framing and JSON readiness checks. The check still does not prove
 complete controller-tool audit coverage, remote policy delivery, or cross-agent
 network denial; those require
 target-host runtime and VM evidence.

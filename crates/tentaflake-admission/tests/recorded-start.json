@@ -1,0 +1,129 @@
+{
+  "nowUnixSeconds": 1001,
+  "snapshot": {
+    "schemaVersion": 1,
+    "policy": {
+      "revision": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+      "generation": "fixture-authority-epoch",
+      "capacity": {
+        "memoryBytes": 4294967296,
+        "memorySwapBytes": 8589934592,
+        "nanoCpus": 4000000000,
+        "pids": 1024,
+        "workspaceBytes": 8589934592,
+        "stateBytes": 4294967296
+      },
+      "hostReserve": {
+        "memoryBytes": 536870912,
+        "memorySwapBytes": 1073741824,
+        "nanoCpus": 1000000000,
+        "pids": 128,
+        "workspaceBytes": 268435456,
+        "stateBytes": 268435456
+      },
+      "researchReserve": {
+        "memoryBytes": 268435456,
+        "memorySwapBytes": 536870912,
+        "nanoCpus": 500000000,
+        "pids": 64,
+        "workspaceBytes": 134217728,
+        "stateBytes": 134217728
+      },
+      "perInstance": {
+        "memoryBytes": 1073741824,
+        "memorySwapBytes": 2147483648,
+        "nanoCpus": 2000000000,
+        "pids": 256,
+        "workspaceBytes": 2147483648,
+        "stateBytes": 1073741824
+      },
+      "maxActive": 2,
+      "evidenceMaxAgeSeconds": 30,
+      "grants": []
+    },
+    "instance": {
+      "id": "generic-fixture",
+      "ownerId": "owner-fixture",
+      "revision": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+      "isolation": "container",
+      "resources": {
+        "memoryBytes": 268435456,
+        "memorySwapBytes": 536870912,
+        "nanoCpus": 500000000,
+        "pids": 64,
+        "workspaceBytes": 536870912,
+        "stateBytes": 268435456
+      },
+      "requestedCapabilities": []
+    },
+    "readiness": {
+      "generation": "fixture-authority-epoch",
+      "sources": [
+        {
+          "kind": "runtime",
+          "generation": "fixture-runtime-source"
+        },
+        {
+          "kind": "workspace-quota",
+          "generation": "fixture-workspace-quota-source"
+        },
+        {
+          "kind": "state-quota",
+          "generation": "fixture-state-quota-source"
+        }
+      ],
+      "evidence": [
+        {
+          "instanceId": "generic-fixture",
+          "kind": "runtime",
+          "status": "ready",
+          "source": "live",
+          "policyRevision": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+          "instanceRevision": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+          "generation": "fixture-runtime-source",
+          "observedAt": 1000,
+          "expiresAt": 1030
+        },
+        {
+          "instanceId": "generic-fixture",
+          "kind": "workspace-quota",
+          "status": "ready",
+          "source": "live",
+          "policyRevision": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+          "instanceRevision": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+          "generation": "fixture-workspace-quota-source",
+          "observedAt": 1000,
+          "expiresAt": 1030
+        },
+        {
+          "instanceId": "generic-fixture",
+          "kind": "state-quota",
+          "status": "ready",
+          "source": "live",
+          "policyRevision": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+          "instanceRevision": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+          "generation": "fixture-state-quota-source",
+          "observedAt": 1000,
+          "expiresAt": 1030
+        }
+      ]
+    },
+    "reservations": {
+      "revision": 1,
+      "generation": "fixture-authority-epoch",
+      "complete": true,
+      "entries": []
+    }
+  },
+  "request": {
+    "schemaVersion": 1,
+    "operationId": "operation-fixture",
+    "instanceId": "generic-fixture",
+    "principalId": "owner-fixture",
+    "expected": {
+      "policy": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+      "instance": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+      "ledger": 1
+    }
+  }
+}

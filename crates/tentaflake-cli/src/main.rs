@@ -12,6 +12,8 @@ use std::process::{Command, ExitCode, Output, Stdio};
 use std::time::{Duration, Instant, SystemTime};
 
 const RUNTIME_CATALOG: &str = include_str!("../../../adapters/catalog.json");
+mod admission;
+mod admission_evidence;
 mod onboarding;
 
 const DEFAULT_CONFIG: &str = "/etc/tentaflake/cli.conf";
@@ -212,6 +214,7 @@ fn run(mut args: Vec<String>) -> Result<u8, String> {
     match command {
         "remote-check" => return remote_check(&args[1..]),
         "runtimes" => return runtimes(&args[1..], mode),
+        "admission" => return admission::run(&args[1..], mode),
         "agent" if args.get(1).map(String::as_str) == Some("template") => {
             return onboarding::template(&args[2..], mode);
         }
@@ -1356,13 +1359,13 @@ enum BrokerHealth {
 }
 
 fn probe_broker_health(endpoint: SocketAddr) -> BrokerHealth {
-    let timeout = std::time::Duration::from_secs(2);
+    let timeout = Duration::from_secs(2);
+    let deadline = Instant::now() + timeout;
     let Ok(mut stream) = TcpStream::connect_timeout(&endpoint, timeout) else {
         return BrokerHealth::Unavailable;
     };
-    if stream.set_read_timeout(Some(timeout)).is_err()
-        || stream.set_write_timeout(Some(timeout)).is_err()
-    {
+    let remaining = deadline.saturating_duration_since(Instant::now());
+    if remaining.is_zero() || stream.set_write_timeout(Some(remaining)).is_err() {
         return BrokerHealth::Unavailable;
     }
     let request = format!(
@@ -1373,13 +1376,21 @@ fn probe_broker_health(endpoint: SocketAddr) -> BrokerHealth {
         return BrokerHealth::Unavailable;
     }
     let mut response = Vec::new();
-    if stream.take(8193).read_to_end(&mut response).is_err() || response.len() > 8192 {
-        return BrokerHealth::Unavailable;
+    let mut buffer = [0; 1024];
+    loop {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() || stream.set_read_timeout(Some(remaining)).is_err() {
+            return BrokerHealth::Unavailable;
+        }
+        match stream.read(&mut buffer) {
+            Ok(0) => break,
+            Ok(count) if response.len() + count <= 8192 => {
+                response.extend_from_slice(&buffer[..count]);
+            }
+            _ => return BrokerHealth::Unavailable,
+        }
     }
-    let response = String::from_utf8_lossy(&response);
-    let status_ready =
-        response.starts_with("HTTP/1.1 200 ") || response.starts_with("HTTP/1.0 200 ");
-    if status_ready && response.contains("\"status\":\"ready\"") {
+    if admission_evidence::broker_response_ready(&response) {
         BrokerHealth::Ready
     } else {
         BrokerHealth::Unhealthy
@@ -2760,6 +2771,7 @@ fn print_help() {
          USAGE\n\
            tentaflake help|--help|-h\n\
            tentaflake runtimes [--json]\n\
+           tentaflake admission explain <snapshot-file> [--hide]\n\
            tentaflake agent template <preset> <name> [--image <digest-reference> -- <command>...]\n\
            tentaflake agent validate|plan|import <file> [--json] [--hide]\n\
            tentaflake [status] [--hide] [--json]\n\
@@ -3409,6 +3421,27 @@ mod tests {
                 .iter()
                 .all(|health| *health == BrokerHealth::Unavailable)
         );
+    }
+
+    #[test]
+    fn broker_health_deadline_bounds_a_slow_complete_response() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut request = [0; 1024];
+            assert!(stream.read(&mut request).unwrap() > 0);
+            // Each read arrives before the old per-read timeout, but the full
+            // valid response takes longer than the total health deadline.
+            for byte in b"HTTP/1.1 200 OK\r\nContent-Length: 18\r\n\r\n{\"status\":\"ready\"}" {
+                if stream.write_all(&[*byte]).is_err() {
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(50));
+            }
+        });
+        assert_eq!(probe_broker_health(address), BrokerHealth::Unavailable);
+        server.join().unwrap();
     }
 
     #[test]

@@ -48,7 +48,9 @@ image supplies its default local reference through `imageName`/`imageTag`;
 images without those attributes require an explicit `worker.imageReference`.
 
 Each Rust Nix source contains root Cargo files, all member manifests, and the
-selected crate's complete source. Cargo can resolve the workspace while an
+selected crate's complete source and local dependencies. The CLI includes and
+tests `tentaflake-admission`; broker and worker sources exclude its implementation.
+Cargo can resolve the workspace while an
 unrelated crate source edit leaves the other package derivations unchanged.
 Shared manifests, dependencies or toolchain changes still invalidate affected
 builds. Declare additional root build inputs explicitly; add shared/path
@@ -86,8 +88,9 @@ comparison adds the affected expensive gates below to its fast checks.
 | Docs and listed presentation metadata | None | None | None |
 | CI routing/workflow/test definition or contributor tooling | Static | None | None |
 | One Rust crate/package | Static and affected crate | Affected package and source-boundary check; worker includes its image | Runtime |
+| Shared admission library | Static, admission library and CLI | CLI package with library tests and source-boundary check | Runtime |
 | Worker module | Static and worker crate | Worker package/image and source-boundary check | Runtime |
-| Shared Cargo inputs | Static and all Rust crates | All Rust packages/image and source-boundary check | Runtime |
+| Shared Cargo inputs or Rust packaging helper | Static and all Rust crates | All Rust packages/image and source-boundary check | Runtime |
 | Installer scripts or host VM fixture | Static | Generated installed flake | Runtime |
 | Installer Nix | Static | Configuration evaluation, generated installed flake and host build | Runtime |
 | Research module/client/fixture or research-only input pin | Static | Research closures, configuration evaluation and generated installed flake | Research |
