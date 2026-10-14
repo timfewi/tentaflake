@@ -174,13 +174,25 @@ Next: obtain remote VM evidence.
 Provider/vendor acceptance remains separate.
 
 Optional Worker requests currently fail closed in owned OCI admission.
-The root oneshot/file-queue dispatcher lacks a mutation-free readiness probe.
-Introduce its collector together with immutable-image/exact-CID dispatch,
-the common maintenance fence and worker launcher inventory for bootstrap and
-publication. Replace the Worker read-only-mount validation skip with exact
-results-mount validation before enabling grants. Private worker data and
-retention are outside admitted workspace/state volumes; worker compute still
-relies on explicit host reserves.
+`feat/worker-admission` adds a root-only read-only queue snapshot, with bounded
+nofollow observations under an existing shared queue lock; it grants no
+readiness or dispatch authority. CLI parsing precedes any state mutation.
+Dispatch resolves a local immutable image ID, refuses pulls and inherited
+remote runtime settings, records a durable intent before create and a full CID
+before start, and uses only that CID for subsequent operations. Unknown create
+outcomes preserve the claim/snapshot and refuse automatic drain or approve
+recovery; a terminal result cannot override the intent. Ordinary runtime output
+and client duration are bounded, without claiming daemon cancellation.
+The configured Podman package supplies its declared gVisor runtime. The fast gate
+passes 359 Rust tests and static/helper checks; the actual offline Worker Nix
+package passes 40 unit, three probe CLI and eight queue CLI tests. Its fixture
+uses the supported 0750 result layout because Nix forbids chmod setgid; the VM
+exercises the actual tmpfiles layout. VM/configuration verification is pending.
+Next: bind the collector and worker launcher inventory to the common host fence,
+add daemon-generation recovery and bound the artifact stream. Replace the
+Worker read-only-mount validation skip with exact results-mount validation
+before enabling grants. Private worker data/retention remain outside admitted
+workspace/state volumes; worker compute still relies on explicit host reserves.
 
 `feat/research-admission` now projects the final Research process/relay contract
 and connects it to Generic grants, owned service dependencies and the OCI

@@ -129,15 +129,21 @@ let
     (hostModule "balanced")
     {
       virtualisation.oci-containers.backend = lib.mkForce "podman";
-      tentaflake.networking.enable = lib.mkForce true;
-      tentaflake.broker.agents.hermes-podman-fixture = {
-        enable = true;
-        networkName = "tf-hermes-podman";
-        subnet = "10.203.40.0/30";
-        gateway = "10.203.40.1";
-        fetch = {
+      tentaflake = {
+        worker.agents.hermes-podman-fixture = {
           enable = true;
-          allowedHosts = [ "docs.example.com" ];
+          workspace = "/var/lib/hermes-podman-fixture/workspace";
+        };
+        networking.enable = lib.mkForce true;
+        broker.agents.hermes-podman-fixture = {
+          enable = true;
+          networkName = "tf-hermes-podman";
+          subnet = "10.203.40.0/30";
+          gateway = "10.203.40.1";
+          fetch = {
+            enable = true;
+            allowedHosts = [ "docs.example.com" ];
+          };
         };
       };
     }
@@ -988,6 +994,9 @@ assert
     "runsc"
   ];
 assert lib.elem pkgs.gvisor podmanCapsule.config.virtualisation.podman.extraRuntimes;
+assert lib.hasPrefix
+  "${lib.getExe podmanCapsule.config.virtualisation.podman.package} load --input "
+  podmanCapsule.config.systemd.services.tentaflake-worker-image.serviceConfig.ExecStart;
 assert podmanContainer.networks == [ "tf-hermes-podman" ];
 assert lib.hasInfix "--interface-name \"$bridge\""
   podmanCapsule.config.systemd.services.tentaflake-broker-network-hermes-podman-fixture.script;
@@ -1154,11 +1163,18 @@ assert
 assert lib.elem
   "d /var/lib/hermes-worker/workspace/.tentaflake-worker/inbox 0770 10000 tfw-gid-10000 -"
   workerCapsule.config.systemd.tmpfiles.rules;
+assert lib.elem "d /var/lib/tentaflake-worker-hermes-worker/running 0700 root root -"
+  workerCapsule.config.systemd.tmpfiles.rules;
+assert lib.elem "f /var/lib/tentaflake-worker-hermes-worker/.queue.lock 0600 root root -"
+  workerCapsule.config.systemd.tmpfiles.rules;
 assert lib.elem "tentaflake-workspace-quota-hermes-worker.service"
   workerCapsule.config.systemd.services.docker-hermes-worker.requires;
 assert lib.elem "  exec ${workerQuotaHelpers.create}" workerPrepareLines;
 assert lib.elem "  exec ${workerQuotaHelpers.verify}" workerPrepareLines;
 assert lib.hasInfix " load --input "
+  workerCapsule.config.systemd.services.tentaflake-worker-image.serviceConfig.ExecStart;
+assert lib.hasPrefix
+  "${lib.getExe workerCapsule.config.virtualisation.docker.package} load --input "
   workerCapsule.config.systemd.services.tentaflake-worker-image.serviceConfig.ExecStart;
 assert lib.hasInfix "host\tbalanced\tfalse\ttrue\ttrue\ttrue\tfalse\t36\n" brokerManifest;
 assert lib.hasInfix "management\ttailscale\ttrue\ttrue\ttailnet-policy" brokerManifest;

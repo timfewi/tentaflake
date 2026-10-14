@@ -25,7 +25,7 @@ pub(super) fn lock(config: &Config) -> Result<File> {
     Ok(file)
 }
 
-fn sync_directory(path: &Path) -> Result<()> {
+pub(super) fn sync_directory(path: &Path) -> Result<()> {
     let fd = open_path_no_symlinks(path)?;
     let readable = open_dir_at(fd.as_raw_fd(), OsStr::new("."))
         .map_err(|e| format!("open directory for sync: {e}"))?;
@@ -262,6 +262,19 @@ pub(super) fn recover(config: &Config) -> Result<()> {
             continue;
         };
         let request = read_request(config, "running", job)?;
+        let job_root = config.state_dir.join("jobs").join(job);
+        match fs::symlink_metadata(&job_root) {
+            Ok(_) => {
+                open_path_no_symlinks(&job_root)?;
+                match fs::symlink_metadata(job_root.join("dispatch.json")) {
+                    Ok(_) => return Err("worker dispatch intent is unresolved; preserve its running claim and snapshot for operator recovery".into()),
+                    Err(error) if error.kind() == io::ErrorKind::NotFound => {},
+                    Err(_) => return Err("cannot inspect worker dispatch intent".into()),
+                }
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(_) => return Err("cannot inspect worker dispatch state".into()),
+        }
         cleanup_existing_worker_container(config, &format!("tfw-{}-{job}", config.agent))?;
         for path in [
             config.state_dir.join("jobs").join(job),
@@ -357,7 +370,7 @@ mod tests {
                 .find(|p| p.is_file())
                 .expect("contributor tools include bash");
             let runtime = root.join("fake-oci");
-            fs::write(&runtime, format!("#!{}\nprintf '%s\\n' \"$*\" >> '{}'/calls\ncase \"$1\" in ps) exit 0;; *) exit 77;; esac\n", shell.display(), root.display())).unwrap();
+            fs::write(&runtime, format!("#!{}\n[[ \"$1\" == --host=unix:///run/docker.sock && \"$2\" == --config=/var/empty ]] || exit 90\nshift 2\nprintf '%s\\n' \"$*\" >> '{}'/calls\ncase \"$1\" in image) printf '%s\\n' 'sha256:{}';; ps) exit 0;; *) exit 77;; esac\n", shell.display(), root.display(), "ab".repeat(32))).unwrap();
             fs::set_permissions(&runtime, fs::Permissions::from_mode(0o700)).unwrap();
             let config = Config {
                 agent: "fixture".into(),
@@ -469,8 +482,18 @@ mod tests {
                 .count(),
             1
         );
-        drain(&f.config).unwrap();
-        drain(&f.config).unwrap();
+        let before = f.calls();
+        assert!(
+            drain(&f.config)
+                .unwrap_err()
+                .contains("dispatch intent is unresolved")
+        );
+        assert!(
+            drain(&f.config)
+                .unwrap_err()
+                .contains("dispatch intent is unresolved")
+        );
+        assert_eq!(f.calls(), before);
         assert_eq!(
             f.calls()
                 .lines()
@@ -478,12 +501,55 @@ mod tests {
                 .count(),
             1
         );
-        let result: JobResult = serde_json::from_slice(
-            &fs::read(f.config.state_dir.join("results/job_1/result.json")).unwrap(),
-        )
-        .unwrap();
-        assert_eq!(result.status, "interrupted");
-        assert!(!f.config.state_dir.join("running/job_1.json").exists());
+        assert!(
+            !f.config
+                .state_dir
+                .join("results/job_1/result.json")
+                .exists()
+        );
+        assert!(f.config.state_dir.join("running/job_1.json").is_file());
+        assert!(
+            f.config
+                .state_dir
+                .join("jobs/job_1/dispatch.json")
+                .is_file()
+        );
+        assert!(f.config.state_dir.join("jobs/job_1/input").is_dir());
+    }
+
+    #[test]
+    fn approving_another_job_cannot_bypass_unresolved_dispatch_even_with_terminal_result() {
+        let f = Fixture::new("approve-unknown");
+        let dispatched = f.request(ActionClass::LocalReversible);
+        f.pending(&dispatched);
+        assert!(drain(&f.config).is_err());
+        // A historical result cannot discharge a newer ambiguous dispatch.
+        finish_without_run(&f.config, &dispatched, "succeeded", "historical result").unwrap();
+        let mut pending = f.request(ActionClass::Communicative);
+        pending.id = "job_2".into();
+        f.pending(&pending);
+        let before = f.calls();
+        assert!(
+            approve(&f.config, &pending.id)
+                .unwrap_err()
+                .contains("dispatch intent is unresolved")
+        );
+        assert!(
+            drain(&f.config)
+                .unwrap_err()
+                .contains("dispatch intent is unresolved")
+        );
+        assert_eq!(f.calls(), before);
+        assert!(!f.config.state_dir.join("approvals/job_2").exists());
+        assert!(f.config.state_dir.join("pending/job_2.json").is_file());
+        assert!(f.config.state_dir.join("running/job_1.json").is_file());
+        assert!(
+            f.config
+                .state_dir
+                .join("jobs/job_1/dispatch.json")
+                .is_file()
+        );
+        assert!(terminal(&f.config, &dispatched).unwrap());
     }
 
     #[test]
@@ -628,7 +694,7 @@ mod tests {
             .map(|p| p.join("bash"))
             .find(|p| p.is_file())
             .unwrap();
-        fs::write(&f.config.runtime, format!("#!{}\ncase \"$1\" in ps) echo tfw-fixture-job_1;; inspect) echo another-agent;; *) exit 77;; esac\n", shell.display())).unwrap();
+        fs::write(&f.config.runtime, format!("#!{}\n[[ \"$1\" == --host=unix:///run/docker.sock && \"$2\" == --config=/var/empty ]] || exit 90\nshift 2\ncase \"$1\" in ps) echo tfw-fixture-job_1;; inspect) echo another-agent;; *) exit 77;; esac\n", shell.display())).unwrap();
         assert!(drain(&f.config).unwrap_err().contains("unowned"));
         assert!(f.config.state_dir.join("running/job_1.json").is_file());
         assert!(!terminal(&f.config, &request).unwrap());

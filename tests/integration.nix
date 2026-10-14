@@ -1494,7 +1494,7 @@ in
         assert "approval-required" in audit, audit
         assert '"event":"approved"' in audit, audit
 
-    with subtest("worker crash recovery never replays claimed or completed jobs"):
+    with subtest("worker preserves completed jobs and enforces queue capacity"):
         state = "/var/lib/tentaflake-worker-hermes-test"
         inbox = "/var/lib/hermes-test/workspace/.tentaflake-worker/inbox"
         worker = "tentaflake-worker-hermes-test.service"
@@ -1510,27 +1510,6 @@ in
         machine.succeed(command)
         assert machine.succeed("sha256sum " + state + "/results/local_1/result.json") == original
         machine.fail("test -e " + state + "/pending/local_1.json")
-        machine.succeed("systemctl start " + watcher)
-        machine.succeed(
-            "cat > " + inbox + "/crash_1.json <<'EOF'\n"
-            '{"version":1,"id":"crash_1","action_class":"local-reversible",'
-            '"argv":["sh","-c","sleep 120"],"timeout_seconds":60}\nEOF'
-        )
-        machine.wait_until_succeeds(
-            "test -f " + state + "/running/crash_1.json && "
-            "test $(docker inspect --format='{{.State.Running}}' tfw-hermes-test-crash_1) = true",
-            timeout=45,
-        )
-        machine.succeed("systemctl stop " + watcher)
-        machine.succeed("systemctl kill --kill-who=main --signal=SIGKILL " + worker)
-        stop_unit(machine, worker)
-        machine.succeed("test -f " + state + "/running/crash_1.json")
-        machine.succeed(command)
-        machine.succeed("jq -e '.status == \"interrupted\" and .artifacts_available == false' " + state + "/results/crash_1/result.json")
-        machine.fail("docker inspect tfw-hermes-test-crash_1")
-        machine.fail("test -e " + state + "/running/crash_1.json")
-        machine.fail("test -e " + state + "/jobs/crash_1")
-        machine.succeed(command)
         machine.succeed(
             "jq -e '.max_inbox_entries == 4 and .max_queue_entries == 2 and "
             ".max_queue_bytes == 1048576' /etc/tentaflake/workers/hermes-test.json"
@@ -1552,6 +1531,14 @@ in
         machine.succeed(command)
         machine.succeed(operator + "deny capacity_3")
         machine.succeed("grep -F '\"event\":\"queue-overload\"' " + state + "/audit.jsonl")
+        # Exercise the public root-only probe with the installed setgid
+        # results layout; unprivileged package fixtures use supported 0750.
+        machine.succeed("test $(stat -c %a " + state + "/results) = 2750")
+        snapshot = json.loads(machine.succeed(operator + "probe"))
+        assert snapshot["schemaVersion"] == 1 and snapshot["agent"] == "hermes-test", snapshot
+        for queue in ("pending", "running", "inbox"):
+            assert snapshot[queue] == {"entries": 0, "bytes": 0}, snapshot
+        assert "ready" not in snapshot and "grant" not in snapshot, snapshot
         machine.succeed("systemctl start " + watcher)
 
     with subtest("encrypted backup restores state and the mounted quota workspace"):
@@ -1806,6 +1793,82 @@ in
             "systemctl start tentaflake-workspace-quota-hermes-test.service"
         )
         assert machine.succeed("cat /var/lib/hermes-test/restore-fixture").strip() == "restore-fixture"
+
+    # Keep uncertain dispatch last: it deliberately leaves its container and
+    # private snapshot intact until guest shutdown, without a cleanup bypass.
+    with subtest("worker SIGKILL retains exact dispatch identity and refuses replay"):
+        state = "/var/lib/tentaflake-worker-hermes-test"
+        workspace = "/var/lib/hermes-test/workspace"
+        inbox = workspace + "/.tentaflake-worker/inbox"
+        worker = "tentaflake-worker-hermes-test.service"
+        watcher = "tentaflake-worker-hermes-test.path"
+        command = "tentaflake-worker --config /etc/tentaflake/workers/hermes-test.json drain"
+        machine.succeed("systemctl start " + watcher)
+        machine.succeed("printf '%s' retained-snapshot > " + workspace + "/crash-snapshot-marker")
+        machine.succeed(
+            "cat > " + inbox + "/crash_1.json <<'EOF'\n"
+            '{"version":1,"id":"crash_1","action_class":"local-reversible",'
+            '"argv":["sh","-c","sleep 120"],"timeout_seconds":60}\nEOF'
+        )
+        machine.wait_until_succeeds(
+            "test -f " + state + "/running/crash_1.json && "
+            "test -f " + state + "/jobs/crash_1/container.json && "
+            "test $(docker inspect --format='{{.State.Running}}' tfw-hermes-test-crash_1) = true",
+            timeout=45,
+        )
+        machine.succeed("systemctl stop " + watcher)
+        machine.succeed("systemctl kill --kill-who=main --signal=SIGSTOP " + worker)
+        try:
+            container = json.loads(machine.succeed("cat " + state + "/jobs/crash_1/container.json"))
+            cid = container["containerId"]
+            assert re.fullmatch("[0-9a-f]{64}", cid), container
+            intent = json.loads(machine.succeed("cat " + state + "/jobs/crash_1/dispatch.json"))
+            assert intent["schemaVersion"] == 1 and intent["job"] == "crash_1", intent
+            assert intent["containerName"] == "tfw-hermes-test-crash_1", intent
+            assert re.fullmatch("sha256:[0-9a-f]{64}", intent["image"]), intent
+            live = json.loads(machine.succeed("docker inspect " + cid))[0]
+            assert live["Id"] == cid and live["Image"] == intent["image"], live
+            assert live["State"]["Running"] is True, live
+            retained_files = ["running/crash_1.json", "jobs/crash_1/dispatch.json", "jobs/crash_1/container.json"]
+            retained = {
+                name: machine.succeed("stat -c '%d:%i:%f:%s:%y:%z' " + state + "/" + name +
+                                      " && sha256sum " + state + "/" + name)
+                for name in retained_files
+            }
+            snapshot = state + "/jobs/crash_1/input"
+            snapshot_command = (
+                "find " + snapshot + " -xdev -printf '%P %y %i %m %s %T@ %C@\\n' | sort; "
+                "find " + snapshot + " -xdev -type f -exec sha256sum {} + | sort"
+            )
+            snapshot_before = machine.succeed(snapshot_command)
+            machine.succeed("test $(cat " + snapshot + "/crash-snapshot-marker) = retained-snapshot")
+        finally:
+            machine.succeed("systemctl kill --kill-who=main --signal=SIGKILL " + worker)
+        machine.wait_until_succeeds(
+            "test $(systemctl show -P MainPID " + worker + ") = 0 && "
+            "test $(systemctl show -P ControlPID " + worker + ") = 0",
+            timeout=15,
+        )
+        machine.succeed("systemctl stop " + worker)
+        active_state = machine.succeed("systemctl show -P ActiveState " + worker).strip()
+        assert active_state in ("inactive", "failed"), active_state
+        jobs = machine.succeed("systemctl list-jobs --no-legend --no-pager").splitlines()
+        assert all(worker not in line.split() for line in jobs), jobs
+        for _ in range(3):
+            status, output = machine.execute(command)
+            assert status != 0 and "dispatch intent is unresolved" in output, output
+            for name, before in retained.items():
+                assert machine.succeed(
+                    "stat -c '%d:%i:%f:%s:%y:%z' " + state + "/" + name +
+                    " && sha256sum " + state + "/" + name
+                ) == before, name
+            assert machine.succeed(snapshot_command) == snapshot_before
+            current = json.loads(machine.succeed("docker inspect tfw-hermes-test-crash_1"))[0]
+            assert current["Id"] == cid and current["Created"] == live["Created"], current
+            assert current["State"]["Running"] is True, current
+            assert current["State"]["StartedAt"] == live["State"]["StartedAt"], current
+            machine.fail("test -e " + state + "/results/crash_1")
+        machine.succeed("test -f " + state + "/running/crash_1.json")
 
     machine.shutdown()
     attacker.shutdown()
