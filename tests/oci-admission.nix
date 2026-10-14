@@ -79,15 +79,21 @@ let
       memorySize = 1536;
       diskSize = 2048;
     };
-    # Only the immutable shared store gets lazy unmounting at VM shutdown.
+    # Keep the immutable shared store available for the final shutdown binary.
     # Runtime and persistent quota services retain their normal stop checks.
-    systemd.units."nix-store.mount" = {
-      overrideStrategy = "asDropin";
-      text = ''
-        [Mount]
-        LazyUnmount=true
-      '';
-    };
+    systemd.units =
+      lib.genAttrs
+        [
+          "nix-store.mount"
+          "nix-.ro\\x2dstore.mount"
+        ]
+        (_: {
+          overrideStrategy = "asDropin";
+          text = ''
+            [Unit]
+            DefaultDependencies=no
+          '';
+        });
     environment.systemPackages = [ pkgs.util-linux ];
     tentaflake = {
       hostName = "oci-host";

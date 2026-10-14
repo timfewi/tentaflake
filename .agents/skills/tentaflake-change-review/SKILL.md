@@ -1,7 +1,7 @@
 ---
 name: tentaflake-change-review
 description: Review a Tentaflake change for a concrete requirement, proportionate verification, synchronized docs and a complete PR.
-version: 1.1.12
+version: 1.1.13
 ---
 
 # Tentaflake change review
@@ -66,9 +66,10 @@ overlay. Fixtures using prebuilt closures can use its read-only store bind mount
 when admission does not support observing overlay backing options. Disable guest
 Nix for such fixtures: the harness's closure-registration service otherwise tries
 to change store ownership at boot and fails, including during later activation.
-Keep this bind explicitly read-only and lazily detach only that shared store at
-shutdown: its busy mount otherwise exhausted the guest's 30-minute poweroff job.
-Persistent volume and runtime stop checks must remain unchanged.
+Keep this bind explicitly read-only and both shared-store mounts available until
+the final shutdown ramfs. Lazy unmount removed systemd's shutdown executable and
+froze the guest; suppress early shutdown dependencies only for those harness
+mounts. Persistent volume and runtime stop checks must remain unchanged.
 When a VM deliberately declares missing grants, assert the doctor's exact severe
 findings and nonzero exit; healthy subsystem checks must retain that host posture.
 After extracting service scripts into immutable helpers, migrate every inline-script
