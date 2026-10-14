@@ -175,7 +175,9 @@ new closed-request regression caught and fixed extra fields on Serde's tagged
 unit variant; the empty workspace variant now remains a closed object. Security
 currently stops on four new rustls 0.23.45 advisories (fixed in 0.23.46); dependency
 correction and a complete scan remain required. The existing creation VM covers
-unchanged state and publication/Pending refusals but has not run. Public
+unchanged state and publication/Pending refusals. Its offline runtime projection
+passes `nix flake check --no-build` with IFD disabled; the rendered VM driver and
+guest probe compile. Actual package and VM acceptance remain pending. Public
 create/start/stop remain `501`.
 
 The isolated operation-read slice implements both GET routes using original

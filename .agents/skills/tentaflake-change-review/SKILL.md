@@ -1,7 +1,7 @@
 ---
 name: tentaflake-change-review
 description: Review a Tentaflake change for a concrete requirement, proportionate verification, synchronized docs and a complete PR.
-version: 1.1.22
+version: 1.1.23
 ---
 
 # Tentaflake change review
@@ -55,6 +55,9 @@ Session-revocation fixtures must prove the saved cookie still succeeds immediate
 before restart or process death. The original HTTP fixture saved an already
 logged-out cookie, so its restart refusal could not detect missing revocation.
 Keep logout coverage separate and preserve durable token consumption on restart.
+For closed tagged JSON objects, use an empty struct variant instead of a unit
+variant. A planning regression showed Serde accepting extra workspace fields on
+the unit variant despite `deny_unknown_fields`; retain that malformed-input check.
 For broker firewall changes, inspect hook ordering and exercise unrelated open
 host ports and DNAT paths in the VM. Broker drops in NixOS's late allow chains
 were bypassed by earlier global accepts; matching rule text did not prove the
