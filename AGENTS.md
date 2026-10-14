@@ -266,6 +266,9 @@ are already published or require access to another repository for public checks.
   uncertain loads block maintenance until explicit stopped-backend recovery.
   Include old/new services, path watchers, image loaders and private running/jobs
   state in maintenance inventory. Fencing alone enables no Worker capability.
+  Bind controller results mounts to the owning Worker independently of live
+  declaration equality. Keep plan validation pure; protected directory observation
+  is a runtime prerequisite and must not fabricate Worker readiness or grants.
 - Restic backups retain filesystem boundaries; selected managed quota mounts
   are separate sources and required mounts. Verify workspace restore as well
   as ordinary state when changing backup or quota behavior.

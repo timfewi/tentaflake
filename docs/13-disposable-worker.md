@@ -113,6 +113,19 @@ Worker state also refuses maintenance and remains available for explicit recover
 Neither this empty-state proof nor the fence enables Worker grants or accounts
 for aggregate Worker compute/private storage.
 
+OCI admission independently requires the requested Worker's exact read-only
+results binding at `/run/tentaflake-worker/results`. Missing, foreign, writable
+or overlapping declarations refuse admission. Runtime prerequisite observation
+also checks the immutable Worker's workspace and numeric ownership against its
+controller's quota declarations, then opens the protected state/results directories
+without following symlinks and refuses changed identities or unsafe permissions.
+It never creates or repairs these directories.
+
+This validates the declared results prerequisite. General read-only mount aliases,
+exact grants, aggregate private resources and daemon-bound job recovery still need
+their own acceptance. No Worker readiness evidence is produced, so host-admitted
+Worker requests remain unavailable.
+
 ## Inspect queue prerequisites
 
 As the host root owner, use the same generated configuration as the worker:

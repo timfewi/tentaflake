@@ -6,15 +6,19 @@ use crate::admission_runtime::{LEDGER, authority, installed, stopped};
 use crate::admission_systemd::{self, ExecCommand, UnitObservation};
 use serde::Deserialize;
 use std::collections::BTreeSet;
-use std::fs;
+use std::fs::{self, File};
+use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::Duration;
 use tentaflake_admission::host_fence;
 use tentaflake_admission::ledger::{Ledger, PublicationStatus, WorkerImageLoadOutcome};
+use tentaflake_admission::protected_path::{open_relative, open_root};
+use tentaflake_admission::{Capability, StorageKind};
 
 const INSTALLED: &str = "/etc/tentaflake/admission.json";
 const IMAGE_UNIT: &str = "tentaflake-worker-image.service";
+const RESULTS_DESTINATION: &str = "/run/tentaflake-worker/results";
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
@@ -86,6 +90,142 @@ pub(crate) fn validate_plan(plan: &HostPlan) -> Result<(), String> {
     Ok(())
 }
 
+fn results_worker<'a>(plan: &'a HostPlan, id: &str) -> Result<Option<&'a WorkerSpec>, String> {
+    let instance = plan
+        .instances
+        .get(id)
+        .ok_or("Worker instance is undeclared")?;
+    if !instance
+        .requested_capabilities
+        .contains(&Capability::Worker)
+    {
+        return Ok(None);
+    }
+    plan.workers
+        .get(id)
+        .map(Some)
+        .ok_or_else(|| "requested Worker has no owned declaration".into())
+}
+
+/// Pure declaration check; neither a capability grant nor live Worker evidence.
+pub(crate) fn validate_results_mounts(
+    plan: &HostPlan,
+    id: &str,
+    mounts: &[crate::DeclaredMount],
+) -> Result<(), String> {
+    let worker = results_worker(plan, id)?;
+    let expected = worker.map(|spec| spec.state_dir.join("results"));
+    let destination = Path::new(RESULTS_DESTINATION);
+    let mut found = false;
+    for mount in mounts {
+        let source = Path::new(&mount.source);
+        let target = Path::new(&mount.destination);
+        // Protect all reserved Worker state names, including undeclared ones,
+        // and aliases of their ancestors such as /var/lib. This is not a
+        // general read-only mount allowlist or a filesystem alias proof.
+        let worker_source = Path::new("/var/lib").starts_with(source)
+            || source
+                .strip_prefix("/var/lib")
+                .ok()
+                .and_then(|p| p.components().next())
+                .is_some_and(|c| {
+                    c.as_os_str()
+                        .as_encoded_bytes()
+                        .starts_with(b"tentaflake-worker-")
+                });
+        if worker_source || target.starts_with(destination) || destination.starts_with(target) {
+            if found
+                || expected.as_deref() != Some(source)
+                || target != destination
+                || mount.writable
+            {
+                return Err("Worker results require one exact owned read-only mount".into());
+            }
+            found = true;
+        }
+    }
+    if found != worker.is_some() {
+        return Err("requested Worker results mount is missing".into());
+    }
+    Ok(())
+}
+
+fn check_results_config(
+    plan: &HostPlan,
+    id: &str,
+    spec: &WorkerSpec,
+    value: &serde_json::Value,
+) -> Result<u32, String> {
+    let workspace = plan
+        .volumes
+        .iter()
+        .find(|volume| volume.spec.instance_id == id && volume.spec.kind == StorageKind::Workspace)
+        .ok_or("Worker results have no owned workspace")?;
+    if workspace.spec.owner_uid == 0
+        || workspace.spec.owner_gid == 0
+        || value.get("container_uid").and_then(|v| v.as_u64())
+            != Some(u64::from(workspace.spec.owner_uid))
+        || value.get("container_gid").and_then(|v| v.as_u64())
+            != Some(u64::from(workspace.spec.owner_gid))
+        || spec.inbox != workspace.spec.mount_path.join(".tentaflake-worker/inbox")
+    {
+        return Err("Worker results ownership differs from the runtime workspace".into());
+    }
+    Ok(workspace.spec.owner_gid)
+}
+
+fn results_directories(
+    owner_uid: u32,
+    group_gid: u32,
+    reopen_state: impl Fn() -> Result<File, String>,
+) -> Result<(), String> {
+    let identity = |file: &File, results: bool| {
+        let metadata = file
+            .metadata()
+            .map_err(|_| "Worker results metadata unavailable")?;
+        let mode = metadata.mode() & 0o7777;
+        if !metadata.is_dir()
+            || metadata.uid() != owner_uid
+            || metadata.gid() != group_gid
+            || !(mode == 0o750 || (results && mode == 0o2750))
+        {
+            return Err("Worker results directory ownership or mode mismatch");
+        }
+        Ok((
+            metadata.dev(),
+            metadata.ino(),
+            metadata.uid(),
+            metadata.gid(),
+            metadata.mode(),
+        ))
+    };
+    let state = reopen_state()?;
+    let before_state = identity(&state, false)?;
+    let results = open_relative(&state, Path::new("results"), owner_uid)?;
+    let before_results = identity(&results, true)?;
+    let current_state = reopen_state()?;
+    let current_results = open_relative(&current_state, Path::new("results"), owner_uid)?;
+    if before_state != identity(&state, false)?
+        || before_results != identity(&results, true)?
+        || before_state != identity(&current_state, false)?
+        || before_results != identity(&current_results, true)?
+    {
+        return Err("Worker results directory changed during observation".into());
+    }
+    Ok(())
+}
+
+/// Read-only startup prerequisite under the host fence. This authenticates the
+/// declared directory, not the Worker backend or a generation-bound capability.
+pub(crate) fn observe_results(plan: &HostPlan, id: &str) -> Result<(), String> {
+    let Some(spec) = results_worker(plan, id)? else {
+        return Ok(());
+    };
+    let value = worker_config(plan, id, spec)?;
+    let gid = check_results_config(plan, id, spec, &value)?;
+    results_directories(0, gid, || open_root(&spec.state_dir, 0))
+}
+
 fn require_root() -> Result<(), String> {
     // Worker services retain their private read-only mount namespace. This guard
     // changes no host mounts; the protected shared lock inodes remain identical.
@@ -137,11 +277,16 @@ fn context() -> Result<(HostPlan, PathBuf, Ledger), String> {
     Ok((plan, path, ledger))
 }
 
-fn worker_config(plan: &HostPlan, id: &str, spec: &WorkerSpec) -> Result<(), String> {
+fn worker_config(
+    plan: &HostPlan,
+    id: &str,
+    spec: &WorkerSpec,
+) -> Result<serde_json::Value, String> {
     let value: serde_json::Value =
         serde_json::from_slice(&read_store_document(&spec.config, 1024 * 1024)?)
             .map_err(|_| "invalid immutable Worker configuration")?;
-    check_worker_config(plan, id, spec, &value)
+    check_worker_config(plan, id, spec, &value)?;
+    Ok(value)
 }
 
 fn check_worker_config(
@@ -519,6 +664,10 @@ pub(crate) fn offline(plan: &HostPlan, other: Option<&HostPlan>) -> Result<Vec<S
 mod tests {
     use super::*;
     use serde_json::{Value, json};
+    use std::cell::Cell;
+    use std::fs::DirBuilder;
+    use std::os::unix::fs::{DirBuilderExt, PermissionsExt, symlink};
+    use std::sync::atomic::{AtomicU64, Ordering};
     use tentaflake_admission::ledger::{
         PublicationOutcome, PublicationReceipt, PublicationRequest, WorkerImageLoadReceipt,
     };
@@ -562,6 +711,217 @@ mod tests {
         // A previous plan must authenticate its own CLI, not the candidate's.
         plan.tools.cli = "/nix/store/11111111111111111111111111111111-new/bin/tentaflake".into();
         assert!(check(&plan, &config).is_err());
+    }
+
+    #[test]
+    fn results_configuration_requires_the_runtime_uid_gid_and_workspace() {
+        let (mut plan, mut config) = fixture();
+        for volume in &mut plan.volumes {
+            volume.spec.instance_id = "fixture".into();
+            if volume.spec.kind == StorageKind::Workspace {
+                volume.spec.mount_path = "/var/lib/fixture".into();
+            }
+        }
+        config["container_uid"] = json!(1000);
+        config["container_gid"] = json!(1000);
+        let check = |plan: &HostPlan, value: &Value| {
+            check_results_config(plan, "fixture", &plan.workers["fixture"], value)
+        };
+        assert_eq!(check(&plan, &config).unwrap(), 1000);
+        for field in ["container_uid", "container_gid"] {
+            for value in [
+                Value::Null,
+                json!(0),
+                json!(1001),
+                json!("1000"),
+                json!(u64::MAX),
+            ] {
+                let mut changed = config.clone();
+                changed[field] = value;
+                assert!(check(&plan, &changed).is_err(), "{field}");
+            }
+        }
+        plan.workers.get_mut("fixture").unwrap().inbox =
+            "/var/lib/foreign/.tentaflake-worker/inbox".into();
+        config["workspace"] = json!("/var/lib/foreign");
+        // The immutable config and WorkerSpec agree, but refer to another
+        // workspace. Their agreement alone cannot authorize its results.
+        check_worker_config(&plan, "fixture", &plan.workers["fixture"], &config).unwrap();
+        assert!(check(&plan, &config).is_err());
+        plan.volumes.clear();
+        assert!(check(&plan, &config).is_err());
+    }
+
+    struct ResultsFixture {
+        path: PathBuf,
+        anchor: File,
+        uid: u32,
+        gid: u32,
+    }
+
+    impl ResultsFixture {
+        fn new() -> Self {
+            static SEQUENCE: AtomicU64 = AtomicU64::new(0);
+            let path = std::env::temp_dir().join(format!(
+                "tentaflake-worker-results-{}-{}",
+                std::process::id(),
+                SEQUENCE.fetch_add(1, Ordering::Relaxed)
+            ));
+            DirBuilder::new().mode(0o700).create(&path).unwrap();
+            let anchor = tentaflake_admission::protected_path::open_at(
+                libc::AT_FDCWD,
+                path.as_os_str(),
+                libc::O_RDONLY | libc::O_DIRECTORY,
+            )
+            .unwrap();
+            for child in ["state", "state/results"] {
+                DirBuilder::new()
+                    .mode(0o750)
+                    .create(path.join(child))
+                    .unwrap();
+                fs::set_permissions(path.join(child), fs::Permissions::from_mode(0o750)).unwrap();
+            }
+            let metadata = fs::metadata(path.join("state")).unwrap();
+            Self {
+                path,
+                anchor,
+                uid: metadata.uid(),
+                gid: metadata.gid(),
+            }
+        }
+
+        fn state(&self) -> Result<File, String> {
+            // Production anchors at / with owner 0. The same traversal is
+            // exercised from an explicit owned fixture FD without root access.
+            open_relative(&self.anchor, Path::new("state"), self.uid)
+        }
+
+        fn observe(&self) -> Result<(), String> {
+            results_directories(self.uid, self.gid, || self.state())
+        }
+    }
+
+    impl Drop for ResultsFixture {
+        fn drop(&mut self) {
+            fs::remove_dir_all(&self.path).unwrap();
+        }
+    }
+
+    #[test]
+    fn results_observation_allows_owned_publication_without_changing_directory_identity() {
+        let fixture = ResultsFixture::new();
+        fixture.observe().unwrap();
+        let opens = Cell::new(0);
+        results_directories(fixture.uid, fixture.gid, || {
+            opens.set(opens.get() + 1);
+            if opens.get() == 2 {
+                fs::write(fixture.path.join("state/results/new-result"), b"fixture").unwrap();
+            }
+            fixture.state()
+        })
+        .unwrap();
+        assert_eq!(opens.get(), 2);
+        assert_eq!(
+            fs::read(fixture.path.join("state/results/new-result")).unwrap(),
+            b"fixture"
+        );
+    }
+
+    #[test]
+    fn results_observation_refuses_missing_symlink_foreign_and_writable_directories() {
+        for case in [
+            "missing",
+            "symlink",
+            "file",
+            "state-mode",
+            "results-mode",
+            "parent-mode",
+            "owner",
+            "group",
+        ] {
+            let fixture = ResultsFixture::new();
+            let results = fixture.path.join("state/results");
+            match case {
+                "missing" | "symlink" | "file" => {
+                    fs::remove_dir(&results).unwrap();
+                    if case == "symlink" {
+                        symlink(&fixture.path, &results).unwrap();
+                    } else if case == "file" {
+                        fs::write(&results, b"fixture").unwrap();
+                    }
+                }
+                "state-mode" => fs::set_permissions(
+                    fixture.path.join("state"),
+                    fs::Permissions::from_mode(0o770),
+                )
+                .unwrap(),
+                "results-mode" => {
+                    fs::set_permissions(&results, fs::Permissions::from_mode(0o777)).unwrap()
+                }
+                "parent-mode" => {
+                    fs::set_permissions(&fixture.path, fs::Permissions::from_mode(0o777)).unwrap()
+                }
+                "owner" | "group" => {}
+                _ => unreachable!(),
+            }
+            let result = results_directories(
+                if case == "owner" {
+                    fixture.uid ^ 1
+                } else {
+                    fixture.uid
+                },
+                if case == "group" {
+                    fixture.gid ^ 1
+                } else {
+                    fixture.gid
+                },
+                || fixture.state(),
+            );
+            assert!(result.is_err(), "{case}");
+            if case == "missing" {
+                assert!(
+                    !results.exists(),
+                    "observation must not repair missing state"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn results_observation_refuses_state_or_results_replacement_during_observation() {
+        for (target, symlinked) in [
+            ("state", false),
+            ("state/results", false),
+            ("state", true),
+            ("state/results", true),
+        ] {
+            let fixture = ResultsFixture::new();
+            let opens = Cell::new(0);
+            let result = results_directories(fixture.uid, fixture.gid, || {
+                opens.set(opens.get() + 1);
+                if opens.get() == 2 {
+                    let old = fixture.path.join("previous");
+                    fs::rename(fixture.path.join(target), &old).unwrap();
+                    if symlinked {
+                        symlink(old, fixture.path.join(target)).unwrap();
+                    } else {
+                        DirBuilder::new()
+                            .mode(0o750)
+                            .create(fixture.path.join(target))
+                            .unwrap();
+                        if target == "state" {
+                            DirBuilder::new()
+                                .mode(0o750)
+                                .create(fixture.path.join("state/results"))
+                                .unwrap();
+                        }
+                    }
+                }
+                fixture.state()
+            });
+            assert_eq!(opens.get(), 2);
+            assert!(result.is_err(), "{target}, symlink={symlinked}");
+        }
     }
 
     #[test]

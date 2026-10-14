@@ -137,10 +137,18 @@ storage receipts already Present, proving owner initialization finished. A valid
 Btrfs image alone cannot prove that step. Incomplete images may only remain
 charged during abort; recovery must never rerun ownership or creation helpers.
 
-Remaining Worker requirements include exact grants, aggregate private storage
-and compute, daemon-generation job recovery and exact results-mount validation.
-The next bounded slice binds the controller's read-only results mount to its
-declared Worker and verifies protected directory identity, without granting access.
+The stacked Worker results prerequisite requires the exact requested Worker's
+read-only binding, independently of live declaration equality. Runtime observation
+binds immutable workspace/UID/GID settings to the quota owner and checks protected
+state/results directory identities without repairs. Seven regressions pass,
+including the reproduced foreign, writable and unrequested declaration failures,
+directory replacement and legitimate result publication. `just fast` passes
+**463 Rust tests** plus static/helper checks; the generated Nix plan passes the
+closed Rust loader. The actual offline CLI Nix package passes **358 tests**, with
+four intentional helpers ignored. No Worker readiness evidence or grant is added.
+
+Remaining Worker requirements include general read-only mount authority, exact
+grants, aggregate private storage and compute, and daemon-generation job recovery.
 The OCI Worker-request path stays closed until those requirements are verified.
 General artifact acquisition also needs durable uncertainty handling; the guarded
 Worker loader alone does not establish that for every image creator.

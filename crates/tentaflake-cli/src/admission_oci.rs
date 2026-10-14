@@ -397,6 +397,7 @@ pub(crate) fn validate_runtime(
         return Err("invalid image provenance policy".into());
     }
     let limits = containment(plan, id, spec)?;
+    crate::admission_worker::validate_results_mounts(plan, id, &limits.mounts)?;
     if instance.requested_capabilities.is_empty()
         && (!c.networks.is_empty()
             || !c.environment_files.is_empty()
@@ -880,6 +881,7 @@ fn readiness(
     now: u64,
 ) -> Result<ReadinessSnapshot, String> {
     let instance = &plan.instances[id];
+    crate::admission_worker::observe_results(plan, id)?;
     let mut result = ReadinessSnapshot {
         generation: plan.policy.generation.clone(),
         sources: Vec::new(),
@@ -1801,6 +1803,120 @@ pub(crate) mod tests {
             "State":{"Running":false,"Paused":false,"Restarting":false,"Dead":false,"Status":"created"}
         });
         (plan, spec, receipt, image_config, observed)
+    }
+
+    fn worker_results_fixture() -> (HostPlan, RuntimeSpec) {
+        let (mut plan, mut spec, _, _, _) = fixture();
+        plan.instances
+            .get_mut("agent-fixture")
+            .unwrap()
+            .requested_capabilities = vec![tentaflake_admission::Capability::Worker];
+        let store = "/nix/store/00000000000000000000000000000000-worker";
+        plan.workers.insert(
+            "agent-fixture".into(),
+            serde_json::from_value(json!({
+                "executable": format!("{store}/bin/tentaflake-worker"),
+                "config": format!("{store}/worker.json"),
+                "unit": "tentaflake-worker-agent-fixture.service",
+                "watcher": "tentaflake-worker-agent-fixture.path",
+                "inbox": "/var/lib/agent-fixture/work+space/.tentaflake-worker/inbox",
+                "stateDir": "/var/lib/tentaflake-worker-agent-fixture"
+            }))
+            .unwrap(),
+        );
+        plan.worker_image = Some(
+            serde_json::from_value(json!({
+                "config": format!("{store}/image.json"),
+                "unit": "tentaflake-worker-image.service"
+            }))
+            .unwrap(),
+        );
+        crate::admission_worker::validate_plan(&plan).unwrap();
+        spec.container.volumes.push(
+            "/var/lib/tentaflake-worker-agent-fixture/results:/run/tentaflake-worker/results:ro"
+                .into(),
+        );
+        (plan, spec)
+    }
+
+    #[test]
+    fn worker_results_binding_requires_the_exact_owned_readonly_mount() {
+        let (plan, spec) = worker_results_fixture();
+        validate_runtime(&plan, "agent-fixture", &spec).unwrap();
+        let mut accepted = Vec::new();
+        for case in [
+            "missing",
+            "foreign-source",
+            "wrong-destination",
+            "alias",
+            "writable",
+            "undeclared",
+        ] {
+            let (mut plan, mut spec) = worker_results_fixture();
+            spec.container.volumes.pop();
+            match case {
+                "missing" => {}
+                "foreign-source" => spec.container.volumes.push(
+                    "/var/lib/tentaflake-worker-foreign/results:/run/tentaflake-worker/results:ro".into(),
+                ),
+                "wrong-destination" => spec.container.volumes.push(
+                    "/var/lib/tentaflake-worker-agent-fixture/results:/run/other-results:ro".into(),
+                ),
+                "alias" => spec.container.volumes.extend([
+                    "/var/lib/tentaflake-worker-agent-fixture/results:/run/tentaflake-worker/results:ro".into(),
+                    "/var/lib/tentaflake-worker-agent-fixture/results:/run/other-results:ro".into(),
+                ]),
+                // This source has a valid writable quota. That must not let it
+                // replace the separate, read-only Worker result capability.
+                "writable" => spec.container.volumes.push(
+                    "/var/lib/agent-fixture/work+space:/run/tentaflake-worker/results:rw".into(),
+                ),
+                "undeclared" => {
+                    plan.workers.clear();
+                    plan.worker_image = None;
+                    spec.container.volumes.push(
+                        "/var/lib/tentaflake-worker-agent-fixture/results:/run/tentaflake-worker/results:ro".into(),
+                    );
+                }
+                _ => unreachable!(),
+            }
+            if validate_runtime(&plan, "agent-fixture", &spec).is_ok() {
+                accepted.push(case);
+            }
+        }
+        assert!(
+            accepted.is_empty(),
+            "accepted invalid Worker results bindings: {accepted:?}"
+        );
+    }
+
+    #[test]
+    fn worker_results_cannot_be_attached_under_a_different_capability_request() {
+        let (mut plan, spec) = worker_results_fixture();
+        plan.instances
+            .get_mut("agent-fixture")
+            .unwrap()
+            .requested_capabilities = vec![tentaflake_admission::Capability::Model];
+        assert!(validate_runtime(&plan, "agent-fixture", &spec).is_err());
+    }
+
+    #[test]
+    fn worker_results_reject_overlapping_sources_and_destinations_alongside_the_valid_pair() {
+        for alias in [
+            "/var/lib:/all-state:ro",
+            "/var/lib/tentaflake-worker-agent-fixture:/private-worker:ro",
+            "/var/lib/tentaflake-worker-agent-fixture/results/job:/one-job:ro",
+            "/var/lib/tentaflake-worker-foreign/results:/other-worker:ro",
+            "/var/lib/agent-fixture:/run/tentaflake-worker:ro",
+            "/var/lib/agent-fixture:/run/tentaflake-worker/results/shadow:ro",
+        ] {
+            let (plan, mut spec) = worker_results_fixture();
+            spec.container.volumes.push(alias.into());
+            assert!(
+                validate_runtime(&plan, "agent-fixture", &spec).is_err(),
+                "{alias}"
+            );
+        }
     }
 
     pub(crate) fn template_plan_fixture() -> HostPlan {

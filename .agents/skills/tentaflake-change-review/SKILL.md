@@ -1,7 +1,7 @@
 ---
 name: tentaflake-change-review
 description: Review a Tentaflake change for a concrete requirement, proportionate verification, synchronized docs and a complete PR.
-version: 1.1.16
+version: 1.1.17
 ---
 
 # Tentaflake change review
@@ -51,6 +51,12 @@ independently assert that the public absolute-path API still refuses foreign
 root ownership. Never relax production ownership policy to fit a sandbox.
 Use a process-wide counter for concurrent fixture names; PID plus a nanosecond
 clock reading alone collided in parallel CI diagnostics tests.
+
+Validate mount declarations against their capability owner before comparing live
+mounts with those declarations. Worker shape-validation regressions exposed
+accepted foreign, writable and unrequested results bindings; matching those
+declarations does not establish their authority.
+Keep pure plan checks separate from runtime filesystem observation and grants.
 
 VM lifecycle fixtures must inspect container readiness after a unit becomes
 active. A successful `systemctl stop` may unload the unit; assert inactive state

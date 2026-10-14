@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 ### Fixed
+- Bind declared controller results mounts to the exact requested Worker and
+  verify protected results directories without granting Worker runtime admission.
 - Mark crashed OCI supervisors Unknown through an exact-invocation post-stop
   hook, retaining container identity and resource charges without daemon mutation.
 - Fence Worker queue mutations and image loading with published host authority;
