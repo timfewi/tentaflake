@@ -7,7 +7,6 @@
 let
   cfg = config.tentaflake.security;
   secure = cfg.profile != "dev";
-  bool = value: if value then "true" else "false";
   inherit (import ../lib/resourceLimits.nix { inherit lib; })
     maxMemoryBytes
     maxTmpfsBytes
@@ -15,175 +14,7 @@ let
     sizeBytes
     validCpus
     validResource
-    ociResources
-    ociTmpfs
     ;
-  allOptions = container: (container.extraOptions or [ ]) ++ (container.preRunExtraOptions or [ ]);
-  hasOption =
-    prefix: container:
-    lib.any (option: option == prefix || lib.hasPrefix "${prefix}=" option) (allOptions container);
-  pathWithin = root: path: path == root || lib.hasPrefix "${root}/" path;
-  dangerousMountRoots = [
-    "/"
-    "/dev"
-    "/etc"
-    "/home"
-    "/proc"
-    "/root"
-    "/run"
-    "/sys"
-    "/var/lib/containers"
-    "/var/lib/docker"
-    "/var/lib/tentaflake-worker-state-volumes"
-    "/var/lib/tentaflake-workspace-volumes"
-    "/var/run"
-  ];
-  mountSafe =
-    name: volume:
-    let
-      parts = lib.splitString ":" volume;
-      source = if parts == [ ] then "" else lib.head parts;
-    in
-    (
-      builtins.hasAttr name (lib.attrByPath [ "tentaflake" "research" "agents" ] { } config)
-      && volume == "/run/tentaflake-research/${name}:/run/tentaflake-research:ro"
-    )
-    || (
-      source != ""
-      && !(lib.any (root: pathWithin root source) dangerousMountRoots)
-      && !(lib.hasSuffix ".sock" source)
-    );
-  portPrivate = port: lib.hasPrefix "127.0.0.1:" port || lib.hasPrefix "[::1]:" port;
-  nonRootUser = user: user != null && lib.match "^[1-9][0-9]*:[1-9][0-9]*$" user != null;
-  resourcesComplete =
-    container:
-    lib.all (prefix: hasOption prefix container) [
-      "--cpus"
-      "--memory"
-      "--memory-swap"
-      "--pids-limit"
-      "--ulimit"
-    ];
-  agentContainers = lib.filterAttrs (
-    _: container: (container.labels."io.tentaflake.agent" or "false") == "true"
-  ) config.virtualisation.oci-containers.containers;
-  agentRecord =
-    name: container:
-    let
-      user = container.user or null;
-      capabilitiesEmpty =
-        !(lib.any (value: value == true) (lib.attrValues (container.capabilities or { })));
-      imagePinned = lib.match ".+@sha256:[0-9a-fA-F]{64}" container.image != null;
-      brokered = (container.labels."io.tentaflake.brokered-egress" or "false") == "true";
-      brokerPolicy = lib.attrByPath [ name ] null config.tentaflake.broker.agents;
-      llmBrokerEnabled = brokerPolicy != null && brokerPolicy.enable && brokerPolicy.llm.enable;
-      fetchBrokerEnabled = brokerPolicy != null && brokerPolicy.enable && brokerPolicy.fetch.enable;
-      llmEndpoint =
-        if llmBrokerEnabled then "${brokerPolicy.gateway}:${toString brokerPolicy.llm.port}" else "-";
-      fetchEndpoint =
-        if fetchBrokerEnabled then "${brokerPolicy.gateway}:${toString brokerPolicy.fetch.port}" else "-";
-      brokerNetwork = if brokered && brokerPolicy != null then brokerPolicy.networkName else "-";
-      worker = lib.attrByPath [ name ] null config.tentaflake.worker.agents;
-      workerEnabled = worker != null && worker.enable;
-      quota = lib.attrByPath [ name ] null config.tentaflake.workspaceQuota.agents;
-      quotaEnabled = quota != null && quota.enable;
-      seccompConfined = !hasOption "--security-opt=seccomp=unconfined" container;
-      apparmorConfined =
-        if config.virtualisation.oci-containers.backend == "docker" then
-          hasOption "--security-opt=apparmor=docker-default" container
-        else
-          config.security.apparmor.enable && !hasOption "--security-opt=apparmor=unconfined" container;
-      provenancePolicy = lib.attrByPath [ name ] null config.tentaflake.imageProvenance.agents;
-      provenanceGateConfigured = provenancePolicy != null && provenancePolicy.enable;
-      liveResources = ociResources (allOptions container);
-      liveTmpfs = ociTmpfs (allOptions container);
-      declaredMounts = if secure then builtins.toJSON (container.volumes or [ ]) else "-";
-      declaredTmpfs = if secure && liveTmpfs != null then builtins.toJSON liveTmpfs else "-";
-      declaredPortsAbsent = if secure then bool ((container.ports or [ ]) == [ ]) else "-";
-      declaredLiveResources =
-        if secure && liveResources != null then builtins.toJSON liveResources else "-";
-      instance = config.tentaflake.agentInstances.${name} or null;
-      declaredCapabilities =
-        if instance == null then
-          "-"
-        else
-          builtins.toJSON (
-            {
-              schemaVersion = 1;
-              requested = instance.requestedCapabilities;
-              research = builtins.hasAttr name (lib.attrByPath [ "tentaflake" "research" "agents" ] { } config);
-              stateQuota = quotaEnabled && quota.state != null;
-              inherit (instance) requireStateQuota;
-            }
-            // lib.optionalAttrs (instance.runtimeImage != null) {
-              inherit (instance) runtimeImage;
-            }
-          );
-      fields = [
-        "agent"
-        name
-        (container.labels."io.tentaflake.security-profile" or "unknown")
-        (bool (hasOption "--network=none" container || brokered))
-        (bool (lib.all portPrivate (container.ports or [ ])))
-        (bool (!(container.privileged or false)))
-        (bool (nonRootUser user))
-        (bool capabilitiesEmpty)
-        (bool (hasOption "--security-opt=no-new-privileges:true" container))
-        (bool (hasOption "--read-only" container))
-        (bool (lib.all (mountSafe name) (container.volumes or [ ])))
-        (bool (
-          hasOption "--runtime=runsc" container || lib.elem "runsc" (container.preRunExtraOptions or [ ])
-        ))
-        (bool (resourcesComplete container))
-        (bool imagePinned)
-        (bool ((container.environmentFiles or [ ]) == [ ] || brokered))
-        (bool workerEnabled)
-        (bool quotaEnabled)
-        (bool seccompConfined)
-        (bool apparmorConfined)
-        (bool provenanceGateConfigured)
-        (bool brokered)
-        (bool llmBrokerEnabled)
-        llmEndpoint
-        (bool fetchBrokerEnabled)
-        fetchEndpoint
-        brokerNetwork
-        declaredMounts
-        declaredTmpfs
-        declaredPortsAbsent
-        declaredLiveResources
-        declaredCapabilities
-      ];
-    in
-    lib.concatStringsSep "\t" fields;
-  securityManifest = lib.concatStringsSep "\n" (
-    [
-      "manifest\t3"
-      (lib.concatStringsSep "\t" [
-        "host"
-        cfg.profile
-        (bool config.services.openssh.enable)
-        (bool (
-          agentContainers != { }
-          && lib.all (container: (container.labels."io.tentaflake.brokered-egress" or "false") == "true") (
-            lib.attrValues agentContainers
-          )
-        ))
-        (bool config.security.apparmor.enable)
-        (bool (!lib.elem "docker" (config.users.users.${config.tentaflake.adminUser}.extraGroups or [ ])))
-        (bool config.tentaflake.backup.enable)
-        (toString config.tentaflake.backup.lastSuccessMaxAgeHours)
-      ])
-      (lib.concatStringsSep "\t" [
-        "management"
-        config.tentaflake.management.transport
-        (bool config.tentaflake.management.enable)
-        (bool config.tentaflake.management.capabilities.privateConnectivity)
-        config.tentaflake.management.capabilities.sshAuthorization
-      ])
-    ]
-    ++ lib.mapAttrsToList agentRecord agentContainers
-  );
 in
 {
   options.tentaflake.security = {
@@ -206,22 +37,22 @@ in
       memory = lib.mkOption {
         type = lib.types.str;
         default = "2g";
-        description = "Per-agent memory limit passed to the OCI runtime.";
+        description = "Per-environment memory limit passed to the OCI runtime.";
       };
       memorySwap = lib.mkOption {
         type = lib.types.str;
         default = "2g";
-        description = "Per-agent memory plus swap ceiling. Equal to memory disables additional swap.";
+        description = "Per-environment memory plus swap ceiling. Equal to memory disables additional swap.";
       };
       cpus = lib.mkOption {
         type = lib.types.str;
         default = "2.0";
-        description = "Per-agent CPU quota in OCI --cpus syntax.";
+        description = "Per-environment CPU quota in OCI --cpus syntax.";
       };
       nofile = lib.mkOption {
         type = lib.types.ints.positive;
         default = 4096;
-        description = "Per-agent open-file ulimit.";
+        description = "Per-environment open-file ulimit.";
       };
       pidsLimit = lib.mkOption {
         type = lib.types.ints.positive;
@@ -310,7 +141,6 @@ in
         security boundary for untrusted 24/7 agents.
       '';
 
-      environment.etc."tentaflake/security.tsv".text = securityManifest + "\n";
     }
 
     (lib.mkIf secure {
