@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 ### Fixed
+- Bound Worker artifact pipes, raw TAR metadata, trailer and client exit under
+  one deadline without buffering the archive. Retain dispatch identity on
+  uncertain transfer outcomes; fully observed invalid archives remain unavailable.
 - Keep guest Nix's store-mutating registration out of prebuilt, read-only
   admission VM fixtures, including publication specialisations.
 - Pin each worker dispatch to a complete locally resolved image ID with pulls

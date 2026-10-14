@@ -6,7 +6,7 @@ use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
 use std::os::unix::ffi::{OsStrExt, OsStringExt};
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt, symlink};
 use std::path::{Component, Path, PathBuf};
-use std::process::{Command, Output, Stdio};
+use std::process::{Command, Output};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -715,8 +715,13 @@ fn execute(config: &Config, workspace_fd: RawFd, request: &JobRequest) -> Result
             }
             if let Some(marker) = read_completion_marker(config, &container)?
                 && handled_marker.as_ref() != Some(&marker)
-                && let Some(export) =
-                    export_artifacts_if_stable(config, &container, &artifact_export, &marker)?
+                && let Some(export) = export_artifacts_if_stable(
+                    config,
+                    &container,
+                    &artifact_export,
+                    &marker,
+                    deadline,
+                )?
             {
                 command_ok(
                     runtime(config).args(["kill", "--signal=USR1", &container]),
@@ -851,6 +856,7 @@ fn export_artifacts_if_stable(
     container: &str,
     destination: &Path,
     marker: &CompletionMarker,
+    deadline: Instant,
 ) -> Result<Option<ArtifactExport>> {
     if destination.exists() {
         fs::remove_dir_all(destination)
@@ -861,39 +867,24 @@ fn export_artifacts_if_stable(
         .map_err(|error| format!("chmod artifact staging: {error}"))?;
 
     let mut archive_command = runtime(config);
-    archive_command
-        .args(["exec", container, "sh", "-c"])
-        .arg(
-            "test ! -d /workspace/artifacts || ".to_owned()
-                + "exec tar -C /workspace/artifacts -cf - .",
-        )
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    let mut archive_child = archive_command
-        .spawn()
-        .map_err(|error| format!("start artifact archive stream: {error}"))?;
-    let archive_stdout = archive_child
-        .stdout
-        .take()
-        .ok_or_else(|| "artifact archive stream has no stdout".to_string())?;
-    let archive_stderr = archive_child
-        .stderr
-        .take()
-        .ok_or_else(|| "artifact archive stream has no stderr".to_string())?;
-    let stderr_thread = thread::spawn(move || drain_bounded(archive_stderr, 8192));
+    archive_command.args(["exec", container, "sh", "-c"]).arg(
+        "test ! -d /workspace/artifacts || ".to_owned()
+            + "exec tar -C /workspace/artifacts -cf - .",
+    );
+    let mut stream = runtime::ArtifactStream::start(
+        &mut archive_command,
+        artifact_wire_limit(config.max_snapshot_bytes, config.max_snapshot_entries)?,
+        deadline,
+    )?;
     let imported = import_artifact_tar(
-        archive_stdout,
+        &mut stream,
         destination,
         config.max_snapshot_bytes,
         config.max_snapshot_entries,
     );
-    let archive_status = archive_child
-        .wait()
-        .map_err(|error| format!("wait for artifact archive stream: {error}"))?;
-    let archive_stderr = stderr_thread
-        .join()
-        .map_err(|_| "artifact stderr reader panicked".to_string())?
-        .map_err(|error| format!("read artifact archive stderr: {error}"))?;
+    // A rejected archive can still have a bounded, fully observed producer.
+    // Transport uncertainty instead propagates and retains the dispatch intent.
+    let (archive_status, archive_stderr) = stream.finish()?;
 
     let (available, diagnostic) = match (archive_status.success(), imported) {
         (true, Ok(entries)) => (entries > 0, None),
@@ -926,23 +917,50 @@ fn import_artifact_tar<R: Read>(
     let mut archive = tar::Archive::new(reader);
     let entries = archive
         .entries()
-        .map_err(|error| format!("read archive entries: {error}"))?;
+        .map_err(|error| format!("read archive entries: {error}"))?
+        .raw(true);
     let mut bytes_left = max_bytes;
     let mut entries_left = max_entries;
     let mut imported = 0_u64;
+    let mut long_name: Option<PathBuf> = None;
 
     for entry in entries {
         if entries_left == 0 {
             return Err("artifact entry limit exceeded".into());
         }
-        entries_left -= 1;
         let mut entry = entry.map_err(|error| format!("read archive entry: {error}"))?;
-        let path = normalize_archive_path(
-            &entry
-                .path()
-                .map_err(|error| format!("read artifact path: {error}"))?,
-        )?;
         let entry_type = entry.header().entry_type();
+        if entry_type.is_gnu_longname() {
+            if long_name.is_some() || entry.size() == 0 || entry.size() > ARTIFACT_PATH_BYTES {
+                return Err("artifact archive has an invalid long name".into());
+            }
+            let mut bytes = Vec::with_capacity(entry.size() as usize);
+            entry
+                .read_to_end(&mut bytes)
+                .map_err(|_| "read artifact long name")?;
+            if bytes.len() as u64 != entry.size() || bytes.pop() != Some(0) || bytes.contains(&0) {
+                return Err("artifact archive has an invalid long name".into());
+            }
+            long_name = Some(PathBuf::from(OsString::from_vec(bytes)));
+            continue;
+        }
+        entries_left -= 1;
+        // Raw iteration rejects unsupported PAX/sparse/link records before the
+        // library can allocate their metadata or expand sparse data.
+        if !entry_type.is_file() && !entry_type.is_dir() {
+            return Err("artifact archive contains a link or special file".into());
+        }
+        if entry_type.is_dir() && entry.size() != 0 {
+            return Err("artifact directory has a nonempty payload".into());
+        }
+        let raw_path = match long_name.take() {
+            Some(path) => path,
+            None => entry
+                .path()
+                .map_err(|error| format!("read artifact path: {error}"))?
+                .into_owned(),
+        };
+        let path = normalize_archive_path(&raw_path)?;
         imported += 1;
 
         if path.as_os_str().is_empty() && entry_type.is_dir() {
@@ -958,9 +976,6 @@ fn import_artifact_tar<R: Read>(
             fs::set_permissions(&output_path, fs::Permissions::from_mode(0o750))
                 .map_err(|error| format!("chmod artifact directory: {error}"))?;
             continue;
-        }
-        if !entry_type.is_file() {
-            return Err("artifact archive contains a link or special file".into());
         }
         let size = entry.size();
         if size > bytes_left {
@@ -988,10 +1003,29 @@ fn import_artifact_tar<R: Read>(
         fs::set_permissions(&output_path, fs::Permissions::from_mode(mode))
             .map_err(|error| format!("chmod artifact file: {error}"))?;
     }
+    if long_name.is_some() {
+        return Err("artifact archive has an orphan long name".into());
+    }
     Ok(imported)
 }
 
+// GNU tar uses at most one bounded long-name record per accepted entry and
+// pads its final output to a 10 KiB record. Count headers and padding even when
+// the importer rejects an entry or stops at the TAR end marker.
+const ARTIFACT_PATH_BYTES: u64 = 4096;
+
+fn artifact_wire_limit(max_bytes: u64, max_entries: u64) -> Result<u64> {
+    max_entries
+        .checked_mul(512 + 512 + 512 + ARTIFACT_PATH_BYTES)
+        .and_then(|overhead| max_bytes.checked_add(overhead))
+        .and_then(|total| total.checked_add(10 * 1024))
+        .ok_or_else(|| "artifact wire limit overflow".into())
+}
+
 fn normalize_archive_path(path: &Path) -> Result<PathBuf> {
+    if path.as_os_str().len() >= ARTIFACT_PATH_BYTES as usize {
+        return Err("artifact path limit exceeded".into());
+    }
     let mut normalized = PathBuf::new();
     for component in path.components() {
         match component {
@@ -1003,20 +1037,6 @@ fn normalize_archive_path(path: &Path) -> Result<PathBuf> {
         }
     }
     Ok(normalized)
-}
-
-fn drain_bounded(mut reader: impl Read, max: usize) -> io::Result<Vec<u8>> {
-    let mut kept = Vec::with_capacity(max.min(8192));
-    let mut buffer = [0_u8; 8192];
-    loop {
-        let read = reader.read(&mut buffer)?;
-        if read == 0 {
-            break;
-        }
-        let remaining = max.saturating_sub(kept.len());
-        kept.extend_from_slice(&buffer[..read.min(remaining)]);
-    }
-    Ok(kept)
 }
 
 fn append_runtime_policy(command: &mut Command, config: &Config, container: &str, snapshot: &Path) {
@@ -1773,6 +1793,88 @@ mod tests {
         assert!(error.contains("link or special file"), "{error}");
         assert!(!destination.join("escape").exists());
         fs::remove_dir_all(destination).unwrap();
+    }
+
+    fn append_raw_tar_record(archive: &mut Vec<u8>, kind: u8, size: u64, data: &[u8]) {
+        let mut header = tar::Header::new_gnu();
+        header.set_path("record").unwrap();
+        header.set_entry_type(tar::EntryType::new(kind));
+        header.set_mode(0o600);
+        header.set_size(size);
+        header.set_cksum();
+        archive.extend_from_slice(header.as_bytes());
+        archive.extend_from_slice(data);
+        archive.resize(archive.len().next_multiple_of(512), 0);
+    }
+
+    #[test]
+    fn artifact_import_accepts_bounded_gnu_long_names() {
+        let mut archive = Vec::new();
+        let path = format!("{}/tool", "a".repeat(200));
+        let name = format!("{path}\0");
+        append_raw_tar_record(&mut archive, b'L', name.len() as u64, name.as_bytes());
+        append_raw_tar_record(&mut archive, b'0', 4, b"test");
+        archive.extend_from_slice(&[0; 1024]);
+        let destination = temp_dir("artifact-long-name");
+        assert_eq!(
+            import_artifact_tar(archive.as_slice(), &destination, 4, 1).unwrap(),
+            1
+        );
+        assert_eq!(fs::read(destination.join(path)).unwrap(), b"test");
+        fs::remove_dir_all(destination).unwrap();
+    }
+
+    #[test]
+    fn artifact_import_rejects_hidden_metadata_before_reading_its_payload() {
+        for (kind, size) in [
+            (b'L', 4097),
+            (b'x', 1 << 40),
+            (b'g', 1 << 40),
+            (b'K', 1 << 40),
+            (b'S', 1 << 40),
+            (b'5', 1),
+        ] {
+            let mut archive = Vec::new();
+            append_raw_tar_record(&mut archive, kind, size, &[]);
+            let destination = temp_dir("artifact-metadata");
+            let error = import_artifact_tar(archive.as_slice(), &destination, 4, 1).unwrap_err();
+            assert!(
+                error.contains("long name")
+                    || error.contains("special file")
+                    || error.contains("nonempty payload"),
+                "{error}"
+            );
+            assert_eq!(fs::read_dir(&destination).unwrap().count(), 0);
+            fs::remove_dir_all(destination).unwrap();
+        }
+    }
+
+    #[test]
+    fn artifact_import_rejects_double_orphan_and_malformed_long_names() {
+        for names in [
+            vec![b"path\0".as_slice(), b"other\0"],
+            vec![b"path\0"],
+            vec![b"unterminated"],
+            vec![b"bad\0path\0"],
+            vec![b"../escape\0"],
+        ] {
+            let mut archive = Vec::new();
+            for name in &names {
+                append_raw_tar_record(&mut archive, b'L', name.len() as u64, name);
+            }
+            // A single valid name without the next record is an orphan. All
+            // other cases also have a following regular file to exercise use.
+            if names != [b"path\0".as_slice()] {
+                append_raw_tar_record(&mut archive, b'0', 0, &[]);
+            }
+            archive.extend_from_slice(&[0; 1024]);
+            let destination = temp_dir("artifact-invalid-long-name");
+            assert!(import_artifact_tar(archive.as_slice(), &destination, 4, 2).is_err());
+            assert_eq!(fs::read_dir(&destination).unwrap().count(), 0);
+            fs::remove_dir_all(destination).unwrap();
+        }
+        assert!(artifact_wire_limit(u64::MAX, 1).is_err());
+        assert!(artifact_wire_limit(1, u64::MAX).is_err());
     }
 
     #[test]

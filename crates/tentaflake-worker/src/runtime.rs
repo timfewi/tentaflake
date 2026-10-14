@@ -2,7 +2,7 @@
 use crate::{Config, Result};
 use std::io::{self, Read};
 use std::os::fd::AsRawFd;
-use std::process::{Child, Command, Output, Stdio};
+use std::process::{Child, ChildStderr, ChildStdout, Command, ExitStatus, Output, Stdio};
 use std::time::{Duration, Instant};
 
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(10);
@@ -103,6 +103,168 @@ fn nonblocking(pipe: &impl AsRawFd) -> Result<()> {
         return Err("cannot bound runtime response".into());
     }
     Ok(())
+}
+
+/// Streams one archive without collecting its payload or delegating reads to a
+/// thread. The deadline covers both pipes, the TAR trailer and client exit.
+pub(super) struct ArtifactStream {
+    child: RunningChild,
+    stdout: ChildStdout,
+    stderr: ChildStderr,
+    stdout_eof: bool,
+    stderr_eof: bool,
+    stderr_bytes: Vec<u8>,
+    remaining: u64,
+    deadline: Instant,
+    failure: Option<String>,
+}
+
+impl ArtifactStream {
+    pub(super) fn start(command: &mut Command, limit: u64, deadline: Instant) -> Result<Self> {
+        let deadline = deadline.min(Instant::now() + COMMAND_TIMEOUT);
+        if Instant::now() >= deadline {
+            return Err("artifact stream timed out; dispatch intent retained".into());
+        }
+        let mut child = RunningChild(
+            command
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()
+                .map_err(|_| "cannot launch artifact stream")?,
+        );
+        let stdout = child.0.stdout.take().ok_or("missing archive stdout")?;
+        let stderr = child.0.stderr.take().ok_or("missing archive stderr")?;
+        nonblocking(&stdout)?;
+        nonblocking(&stderr)?;
+        Ok(Self {
+            child,
+            stdout,
+            stderr,
+            stdout_eof: false,
+            stderr_eof: false,
+            stderr_bytes: Vec::new(),
+            remaining: limit,
+            deadline,
+            failure: None,
+        })
+    }
+
+    fn check_deadline(&self) -> io::Result<()> {
+        if Instant::now() >= self.deadline {
+            return Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "artifact stream timed out; dispatch intent retained",
+            ));
+        }
+        Ok(())
+    }
+
+    fn pump_stderr(&mut self) -> io::Result<bool> {
+        if self.stderr_eof {
+            return Ok(false);
+        }
+        let mut bytes = [0; 8192];
+        match self.stderr.read(&mut bytes) {
+            Ok(0) => {
+                self.stderr_eof = true;
+                Ok(true)
+            }
+            Ok(n) => {
+                if n > 8192 - self.stderr_bytes.len() {
+                    return Err(io::Error::other(
+                        "artifact stderr limit exceeded; dispatch intent retained",
+                    ));
+                }
+                self.stderr_bytes.extend_from_slice(&bytes[..n]);
+                Ok(true)
+            }
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    io::ErrorKind::WouldBlock | io::ErrorKind::Interrupted
+                ) =>
+            {
+                Ok(false)
+            }
+            Err(_) => Err(io::Error::other(
+                "cannot read artifact stderr; dispatch intent retained",
+            )),
+        }
+    }
+
+    fn read_stdout(&mut self, bytes: &mut [u8]) -> io::Result<usize> {
+        if bytes.is_empty() {
+            return Ok(0);
+        }
+        loop {
+            self.check_deadline()?;
+            let progressed = self.pump_stderr()?;
+            if self.stdout_eof {
+                return Ok(0);
+            }
+            // Bound each read even if the TAR parser requests a large buffer.
+            let len = bytes.len().min(8192);
+            match self.stdout.read(&mut bytes[..len]) {
+                Ok(n) => {
+                    self.remaining = self.remaining.checked_sub(n as u64).ok_or_else(|| {
+                        io::Error::other(
+                            "artifact wire byte limit exceeded; dispatch intent retained",
+                        )
+                    })?;
+                    self.stdout_eof = n == 0;
+                    return Ok(n);
+                }
+                Err(error)
+                    if matches!(
+                        error.kind(),
+                        io::ErrorKind::WouldBlock | io::ErrorKind::Interrupted
+                    ) => {}
+                Err(_) => {
+                    return Err(io::Error::other(
+                        "cannot read artifact stdout; dispatch intent retained",
+                    ));
+                }
+            }
+            if !progressed {
+                std::thread::sleep(Duration::from_millis(5));
+            }
+        }
+    }
+
+    pub(super) fn finish(mut self) -> Result<(ExitStatus, Vec<u8>)> {
+        if let Some(error) = self.failure.take() {
+            return Err(error);
+        }
+        // The TAR parser can stop early at an end marker or reject a header.
+        // Neither proves EOF or process completion. Drain within the SAME cap.
+        io::copy(&mut self, &mut io::sink()).map_err(|error| error.to_string())?;
+        loop {
+            self.check_deadline().map_err(|error| error.to_string())?;
+            let progressed = self.pump_stderr().map_err(|error| error.to_string())?;
+            if let Some(status) = self
+                .child
+                .0
+                .try_wait()
+                .map_err(|_| "cannot observe artifact client")?
+                && self.stderr_eof
+            {
+                return Ok((status, std::mem::take(&mut self.stderr_bytes)));
+            }
+            if !progressed {
+                std::thread::sleep(Duration::from_millis(5));
+            }
+        }
+    }
+}
+
+impl Read for ArtifactStream {
+    fn read(&mut self, bytes: &mut [u8]) -> io::Result<usize> {
+        let result = self.read_stdout(bytes);
+        if let Err(error) = &result {
+            self.failure = Some(error.to_string());
+        }
+        result
+    }
 }
 
 fn capture(command: &mut Command, limit: usize, timeout: Duration) -> Result<(Output, bool)> {
@@ -266,5 +428,48 @@ mod tests {
         .unwrap_err();
         assert!(error.contains("timed out"));
         assert!(started.elapsed() < Duration::from_secs(2));
+    }
+
+    #[test]
+    fn artifact_stream_preserves_payload_stderr_and_status() {
+        let mut stream = ArtifactStream::start(
+            &mut shell("printf abcd; printf xyz >&2; exit 7"),
+            4,
+            Instant::now() + Duration::from_secs(2),
+        )
+        .unwrap();
+        let mut data = Vec::new();
+        stream.read_to_end(&mut data).unwrap();
+        let (status, stderr) = stream.finish().unwrap();
+        assert_eq!(data, b"abcd");
+        assert_eq!(stderr, b"xyz");
+        assert_eq!(status.code(), Some(7));
+    }
+
+    #[test]
+    fn artifact_finish_bounds_trailer_stderr_and_process_exit_and_reaps_child() {
+        for (script, limit, error) in [
+            ("while :; do :; done", 100, "timed out"),
+            ("exec 1>&- 2>&-; while :; do :; done", 100, "timed out"),
+            ("while :; do printf abcdefgh; done", 100, "wire byte limit"),
+            ("while :; do printf abcdefgh >&2; done", 100, "stderr limit"),
+        ] {
+            let stream = ArtifactStream::start(
+                &mut shell(script),
+                limit,
+                Instant::now() + Duration::from_millis(250),
+            )
+            .unwrap();
+            let pid = stream.child.0.id() as libc::pid_t;
+            assert!(stream.finish().unwrap_err().contains(error), "{script}");
+            assert_eq!(
+                unsafe { libc::waitpid(pid, std::ptr::null_mut(), libc::WNOHANG) },
+                -1
+            );
+            assert_eq!(
+                io::Error::last_os_error().raw_os_error(),
+                Some(libc::ECHILD)
+            );
+        }
     }
 }
