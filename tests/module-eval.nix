@@ -899,7 +899,19 @@ assert
     fields = lib.splitString "\t" (builtins.unsafeDiscardStringContext (lib.head agentLines));
     resources = builtins.fromJSON (lib.elemAt fields 29);
   in
-  lib.length fields == 30
+  lib.length fields == 31
+  &&
+    builtins.fromJSON (lib.elemAt fields 30) == {
+      schemaVersion = 1;
+      requested = [
+        "model"
+        "research"
+        "worker"
+      ];
+      research = false;
+      stateQuota = false;
+      requireStateQuota = false;
+    }
   && builtins.fromJSON (lib.elemAt fields 26) == hermesCapsule.volumes
   &&
     builtins.fromJSON (lib.elemAt fields 27) == {
@@ -938,7 +950,7 @@ assert !(lib.hasInfix "safe.directory='*'" gitScript);
 assert !(lib.hasInfix "case \"$url\" in *github.com*" gitScript);
 assert capsule.config.tentaflake.security.profile == "balanced";
 assert import ./management-policy.nix { inherit pkgs; };
-assert lib.hasPrefix "manifest\t2\n" capsuleManifest;
+assert lib.hasPrefix "manifest\t3\n" capsuleManifest;
 assert lib.hasInfix "host\tbalanced\tfalse\tfalse\ttrue\ttrue\tfalse\t36\n" capsuleManifest;
 assert lib.hasInfix "management\ttailscale\ttrue\ttrue\ttailnet-policy" capsuleManifest;
 assert lib.hasInfix "agent\thermes-hermes-fixture\tbalanced" capsuleManifest;

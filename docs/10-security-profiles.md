@@ -11,12 +11,16 @@ is implemented yet.
 
 Phase A provides the containment baseline. A stopped balanced scaffold may
 omit a broker and remains `network=none`. An automatically started balanced
-controller must have an enabled broker policy, disposable worker, fixed
+legacy controller must have an enabled broker policy, disposable worker, fixed
 workspace quota, and research relay or evaluation fails. Brokered capsules join one dedicated
 internal network. Neither path gives an agent a real provider credential or
 general egress. [Web research](16-research.md) uses only `secure-research-tool`;
 model calls remain on the LLM broker. Retrieved content remains untrusted.
 See [the worker guide](13-disposable-worker.md).
+Generic instances instead require their explicitly requested model, Research
+and worker grants, plus fixed-size workspace and private-state quotas. Missing
+grants also block manual starts; unrequested grants fail evaluation. See the
+[generic contract](agent-adapters.md#generic-isolated-workload).
 
 ## Profiles
 
@@ -27,7 +31,7 @@ tentaflake.security.profile = "balanced";
 | Profile | Intended use | Network and credentials |
 |---|---|---|
 | `dev` | trusted local development and migration | legacy host networking, env files, and loopback ports may be configured |
-| `balanced` | installed 24/7 baseline | stopped scaffolds may use `network=none`; auto-start requires one isolated LLM broker network, worker, quota, and research relay |
+| `balanced` | installed 24/7 baseline | generic instances require exact requested grants and both quotas; legacy auto-start retains broker, worker, workspace quota and Research gates |
 | `strict` | future high-risk workloads | evaluation error until a tested MicroVM/separate-kernel implementation exists |
 
 There is no automatic fallback between profiles.
@@ -66,13 +70,17 @@ overrides cannot bypass the final checks. It enforces:
   the public OpenSSH module is rejected. See the
   [management contract](11-tailscale-management.md#host-contract-and-migration).
 - normalized mount paths; `.` and `..` escapes are rejected;
-- an enabled broker, disposable worker, fixed-size workspace quota, and research relay before
-  a secure controller may set `autoStart = true`.
+- exact capability and storage declarations before automatic startup, with
+  legacy requirements retained and the generic manual-start guard enforced.
 
 Default per-agent limits are configurable under
 `tentaflake.security.resources`: `memory = "2g"`, `memorySwap = "2g"`,
 `cpus = "2.0"`, `nofile = 4096`, `tmpfsSize = "256m"`, and
-`runTmpfsSize = "64m"`. PID defaults remain runtime-builder specific.
+`runTmpfsSize = "64m"`. Generic `pidsLimit` defaults to 512; legacy PID defaults
+remain builder-specific. Generic overrides may only reduce host ceilings.
+Manifest v3 records exact effective OCI limits and requested capabilities;
+missing or ambiguous resource declarations remain unknown. Older manifests
+remain readable with conservative admission diagnostics.
 
 `tentaflake.workspaceQuota.agents` provides a backend-independent hard
 workspace ceiling by mounting a fixed-size Btrfs image before the controller.
@@ -145,8 +153,8 @@ Choose one of two explicit paths:
 
 The second path restores compatibility; it is not recommended for untrusted
 24/7 agents. Legacy `agents.json` entries with direct environment files or
-service ports require dev. The schema-v1 generic `agents` array accepts stopped
-balanced adapter declarations; see [agent adapters](agent-adapters.md).
+service ports require dev. The schema-v1 generic `agents` array accepts balanced
+declarations; onboarding imports remain stopped. See [agent adapters](agent-adapters.md).
 
 The former `tentaflake.networking.egress` option is renamed to
 `tentaflake.networking.legacyPortEgress`. It is permitted only in `dev`. It
@@ -187,7 +195,8 @@ AppArmor, Docker-group membership, broker presence, networking, ports,
 privilege, user, capabilities, `no-new-privileges`, root writability, mounts,
 resource flags, `runsc`, digest pins, environment files, and disposable-worker
 presence. Finding IDs are stable and critical/high findings return a non-zero
-exit code. `TFSEC-020` is high severity when a secure agent has no worker;
+exit code. `TFSEC-020` is high severity when a requested worker is missing
+(older manifests conservatively retain the mandatory-worker requirement);
 `TFSEC-021` reports a missing managed workspace ceiling; `TFSEC-022` and
 `TFSEC-023` cover declarative Seccomp/AppArmor confinement. `TFSEC-024` warns
 when no publisher-signature start gate is configured. `TFSEC-026` reports a
@@ -198,9 +207,12 @@ root-disk pressure. `TFSEC-033` marks unavailable live OCI evidence and
 unreachable broker unknown, `TFSEC-036` is a high-severity explicit unhealthy
 response, and `TFSEC-037` detects inconsistent broker labels/modes/endpoints.
 `TFSEC-038` keeps legacy/incomplete management declarations unknown;
-`TFSEC-039` reports a disabled declared private SSH policy. The generated
-manifest starts with `manifest<TAB>2` and separates host policy from its typed
-management record. Legacy enable flags never prove private operator access.
+`TFSEC-039` reports a disabled declared private SSH policy. `TFSEC-040` and
+`TFSEC-041` report missing requested model and Research grants, `TFSEC-042`
+a missing required private-state quota, and `TFSEC-043` unrequested grants.
+The generated manifest starts with `manifest<TAB>3`, retaining the v2 management
+record and appending typed per-instance capability declarations. Legacy enable
+flags never prove private operator access; declarations never prove live readiness.
 
 The check combines declarative desired-state evidence with narrow live probes
 for Tailscale Serve/Funnel, backup freshness, root-disk pressure, and narrow

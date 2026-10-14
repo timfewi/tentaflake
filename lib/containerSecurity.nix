@@ -203,9 +203,23 @@ in
       workerEnabled ? false,
       workspaceQuotaEnabled ? false,
       researchPolicyEnabled ? false,
+      requestedCapabilities ? [
+        "model"
+        "research"
+        "worker"
+      ],
+      requireStateQuota ? false,
+      stateQuotaEnabled ? false,
     }:
     let
       secure = isSecure profile;
+      requested = capability: lib.elem capability requestedCapabilities;
+      missingAdmission =
+        lib.optional (requested "model" && !brokerPolicyEnabled) "model"
+        ++ lib.optional (requested "research" && !researchPolicyEnabled) "research"
+        ++ lib.optional (requested "worker" && !workerEnabled) "worker"
+        ++ lib.optional (!workspaceQuotaEnabled) "workspace-quota"
+        ++ lib.optional (requireStateQuota && !stateQuotaEnabled) "state-quota";
       merged = lib.recursiveUpdate baseConfig overrides;
       effectiveAutomaticStart = automaticStart || (merged.autoStart or false);
       extraOptions = merged.extraOptions or [ ];
@@ -253,6 +267,7 @@ in
       ];
     in
     {
+      inherit missingAdmission;
       assertions = [
         {
           assertion = lib.match "^[a-z0-9][a-z0-9-]*$" name != null;
@@ -265,20 +280,24 @@ in
           message = "tentaflake: secure agent ${name} may not be privileged.";
         }
         {
-          assertion = !effectiveAutomaticStart || brokerPolicyEnabled;
+          assertion = !effectiveAutomaticStart || !requested "model" || brokerPolicyEnabled;
           message = "tentaflake: automatically started secure agent ${name} requires an enabled broker policy; keep it stopped while defining the policy.";
         }
         {
-          assertion = !effectiveAutomaticStart || workerEnabled;
+          assertion = !effectiveAutomaticStart || !requested "worker" || workerEnabled;
           message = "tentaflake: automatically started secure agent ${name} requires an enabled disposable worker; keep it stopped while wiring runtime tools to the worker queue.";
         }
         {
-          assertion = !effectiveAutomaticStart || researchPolicyEnabled;
+          assertion = !effectiveAutomaticStart || !requested "research" || researchPolicyEnabled;
           message = "tentaflake: automatically started secure agent ${name} requires its isolated Research relay; web tools must use secure-research-tool.";
         }
         {
           assertion = !effectiveAutomaticStart || workspaceQuotaEnabled;
           message = "tentaflake: automatically started secure agent ${name} requires an enabled fixed-size workspace quota; keep it stopped until the quota migration is complete.";
+        }
+        {
+          assertion = !effectiveAutomaticStart || !requireStateQuota || stateQuotaEnabled;
+          message = "tentaflake: automatically started secure agent ${name} requires an enabled fixed-size private state quota.";
         }
         {
           assertion = (merged.user or owner) == owner;

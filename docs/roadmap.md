@@ -24,14 +24,25 @@ at `20e0273`. This is workflow evidence, not runtime acceptance.
 Next: capability admission [#116](https://github.com/timfewi/tentaflake/issues/116),
 real coding-agent acceptance [#136](https://github.com/timfewi/tentaflake/issues/136),
 and the versioned CLI/UI environment API [#152](https://github.com/timfewi/tentaflake/issues/152).
-Generic model/Research capabilities still fail closed; no dynamic host API is
-implemented. The [v1 API contract](19-host-api.md) now owns 47 routes, exact grants,
-policy-bound plans, durable receipts, workspace/files and stream schemas. Its
-local-only validator passes 38 valid and 38 rejected examples; `just fast` passes
-122 Rust and 29 routing tests. Review tightened creation authority, receipt
+The [v1 API contract](19-host-api.md), merged in [PR #155](https://github.com/timfewi/tentaflake/pull/155),
+owns 47 routes, exact grants, policy-bound plans, durable receipts, workspace/files
+and stream schemas. Its local-only validator passes 38 valid and 38 rejected
+examples. Review tightened creation authority, receipt
 recovery and native-writer file conflicts. These are contract/source checks only.
 The separately owned UI still needs generated types and transport migration;
 the host service, matching CLI and live interaction acceptance remain next.
+
+Generic declarative model/Research/worker admission now covers exact requests,
+both storage quotas, resource ceilings and v3 diagnostics. Local `just fast`
+passes 130 Rust tests and 29 routing regressions; the adapter policy/helper check
+also passes, including generated manual-start refusal. Broader module evaluation
+requires an uncached Research client closure; no local dependency rebuild was
+started. Added generic startup and Research projection VM regressions await CI.
+The explicit gate exposed a VM-fixture import recursion; focused evaluation
+reproduced it and passes after making the import independent of node `pkgs`.
+The full runtime/build gate is being rerun for that fix.
+Live readiness, bounded aggregate decisions and recovery remain outstanding;
+no dynamic host API is implemented.
 
 The [base-image catalog](20-base-images.md) adds Debian 13 and Ubuntu 26.04 LTS
 platform manifest selection with an offline metadata validator. The 2026-10-13
@@ -52,7 +63,7 @@ host owner. No host deployment or live runtime acceptance is claimed here.
 
 Completed: #115 common runtime/catalog in [PR #139](https://github.com/timfewi/tentaflake/pull/139)
 and #135 installed-host onboarding in [PR #140](https://github.com/timfewi/tentaflake/pull/140),
-merged after green CI. Both issues are closed. Generic definitions remain stopped;
+merged after green CI. Both issues are closed. Generic imports default to stopped;
 OpenClaw and coding-agent vendor acceptance remain outstanding. No host activation
 or publication of these unreleased changes was performed.
 

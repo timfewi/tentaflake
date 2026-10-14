@@ -47,7 +47,7 @@ let
 
 in
 {
-  inherit enabled paths;
+  inherit enabled paths server;
   assertions = lib.optionals (enabled && adapter != null) [
     {
       assertion = integration.supported;

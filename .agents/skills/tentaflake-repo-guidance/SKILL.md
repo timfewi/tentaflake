@@ -48,7 +48,7 @@ relevant source and guide. Avoid loading unrelated references.
 - Prioritize the planned common isolated runtime and installed-host onboarding
   before employee/company features. Keep native agent hooks separate from common
   containment; adding a preset must not create another security implementation.
-- Balanced effective `autoStart = true` requires the exact LLM broker, worker,
+- Legacy balanced effective `autoStart = true` requires the exact LLM broker, worker,
   quota and Research relay. Incomplete stopped capsules may remain offline.
   `strict` fails closed; `dev` is a compatibility profile.
 - Model calls use the LLM broker; web uses only `secure-research-tool`.
@@ -82,6 +82,9 @@ relevant source and guide. Avoid loading unrelated references.
   `ReadWritePaths` creates bind mounts: identify the exact loop backing image,
   never infer quota readiness from a mount point or filesystem type alone.
 - Keep exact runtime resource/mount/network expectations and unknown evidence.
+  Generic requests bound grants and resource overrides; both fixed-size quotas
+  gate automatic and manual starts. Manifest v3 records requested capabilities;
+  old or incomplete evidence stays unknown. See the adapter guide for projection.
   Reject bind sources below writable mounts; generic source parents remain
   unmounted, root-owned and private, with startup checks for symlinks.
   Read the [threat model](../../../docs/15-threat-model.md) for authority changes.

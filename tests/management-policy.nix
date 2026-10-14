@@ -107,7 +107,7 @@ assert lib.elem "--ssh" valid.services.tailscale.extraSetFlags;
 assert lib.elem "--advertise-tags=tag:agent-host" valid.services.tailscale.extraUpFlags;
 assert
   !(lib.any (flag: lib.hasPrefix "--advertise-tags" flag) valid.services.tailscale.extraSetFlags);
-assert lib.hasPrefix "manifest\t2\nhost\tbalanced\tfalse\tfalse\t" manifest;
+assert lib.hasPrefix "manifest\t3\nhost\tbalanced\tfalse\tfalse\t" manifest;
 assert lib.hasInfix "\nmanagement\ttailscale\ttrue\ttrue\ttailnet-policy\n" manifest;
 assert lib.hasInfix "host\tbalanced\tfalse\tfalse\ttrue\ttrue\tfalse\t36\n" capsuleManifest;
 assert lib.hasInfix "host\tbalanced\tfalse\ttrue\ttrue\ttrue\tfalse\t36\n" brokerManifest;
@@ -115,6 +115,25 @@ assert lib.all (name: lib.hasInfix "agent\t${name}\tbalanced" capsuleManifest) [
   "hermes-management-hermes"
   "zeroclaw-management-zero"
 ];
+assert lib.all (
+  line:
+  let
+    fields = lib.splitString "\t" (builtins.unsafeDiscardStringContext line);
+  in
+  builtins.length fields == 31
+  &&
+    builtins.fromJSON (lib.elemAt fields 30) == {
+      schemaVersion = 1;
+      requested = [
+        "model"
+        "research"
+        "worker"
+      ];
+      research = false;
+      stateQuota = false;
+      requireStateQuota = false;
+    }
+) (lib.filter (lib.hasPrefix "agent\t") (lib.splitString "\n" capsuleManifest));
 assert denies "private management transport" disabledAlias;
 assert denies "private management transport" disabled;
 assert denies "private management transport" absentService;

@@ -120,6 +120,81 @@ let
     tentaflake.networking.enable = lib.mkForce true;
     tentaflake.research.agents.hermes-policy.uid = lib.mkForce 62106;
   };
+  genericResearchEval =
+    changes: extra:
+    evaluate { } (
+      lib.recursiveUpdate {
+        imports = [
+          (builders.mkAgent {
+            adapter = "generic";
+            name = "policy";
+            definition = {
+              schemaVersion = 1;
+              image = builders.constants.hermesImage;
+              command = [ "/app/agent" ];
+              lifecycle = "service";
+              capabilities = [ "research" ];
+            }
+            // changes;
+          })
+        ];
+        tentaflake.research.agents.generic-policy.uid = 62107;
+        tentaflake.workspaceQuota.agents.generic-policy = {
+          enable = true;
+          workspace = "/var/lib/generic-policy/workspace";
+          ownerUid = 10000;
+          ownerGid = 10000;
+          sizeMiB = 128;
+          state = {
+            path = "/var/lib/generic-policy/state";
+            sizeMiB = 128;
+          };
+        };
+      } extra
+    );
+  genericResearch = genericResearchEval { } { };
+  genericContainer = genericResearch.virtualisation.oci-containers.containers.generic-policy;
+  genericClient = import ../lib/researchClient.nix {
+    inherit lib pkgs;
+    config = genericResearch;
+    containerName = "generic-policy";
+    settings = null;
+  };
+  genericUnrequested = genericResearchEval { capabilities = [ ]; } { };
+  genericMissingMount = genericResearchEval { } {
+    virtualisation.oci-containers.containers.generic-policy.volumes = lib.mkForce (
+      lib.remove "/run/tentaflake-research/generic-policy:/run/tentaflake-research:ro" genericContainer.volumes
+    );
+  };
+  genericWithModel =
+    genericResearchEval
+      {
+        capabilities = [
+          "model"
+          "research"
+        ];
+      }
+      {
+        tentaflake.networking.enable = lib.mkForce true;
+        tentaflake.broker.agents.generic-policy = {
+          enable = true;
+          networkName = "tf-generic-policy";
+          subnet = "10.203.45.0/30";
+          gateway = "10.203.45.1";
+          llm = {
+            enable = true;
+            providerCredentialFile = "/run/credentials/fixture-provider";
+            upstreamBaseUrl = "https://api.example.invalid/v1/";
+            allowedModels = [
+              {
+                name = "fixture-model";
+                inputMicrousdPerMillion = 1;
+                outputMicrousdPerMillion = 1;
+              }
+            ];
+          };
+        };
+      };
   client = import ../lib/researchClient.nix {
     inherit lib pkgs;
     config = valid;
@@ -151,4 +226,43 @@ assert failures zeroValid == [ ];
 assert denies "only local stdio MCP" zeroRemote;
 assert lib.assertMsg (failures secureExample == [ ]) (builtins.toJSON (failures secureExample));
 assert secureExample.virtualisation.oci-containers.containers.hermes-assistant.autoStart;
+assert lib.assertMsg (failures genericResearch == [ ]) (builtins.toJSON (failures genericResearch));
+assert genericContainer.autoStart;
+assert genericContainer.networks == [ ];
+assert genericContainer.environmentFiles == [ ];
+assert
+  genericContainer.environment.TENTAFLAKE_RESEARCH_COMMAND
+  == "${genericResearch.tentaflake.research.clientPackage}/bin/research-client";
+assert genericContainer.environment.TENTAFLAKE_RESEARCH_SOCKET == "/run/tentaflake-research/socket";
+assert lib.elem "--network=none" genericContainer.extraOptions;
+assert
+  genericContainer.volumes == [
+    "/var/lib/generic-policy/state:/state:rw"
+    "/var/lib/generic-policy/workspace:/workspace:rw"
+  ]
+  ++ genericClient.volumes;
+assert lib.elem "tentaflake-research-generic-policy.socket"
+  genericResearch.systemd.services.docker-generic-policy.requires;
+assert
+  !(lib.hasInfix "Generic runtime admission refused:" genericResearch.systemd.services.docker-generic-policy.preStart);
+assert denies "generic Research relay must match" genericUnrequested;
+assert denies "retain its exact read-only" genericMissingMount;
+assert lib.assertMsg (failures genericWithModel == [ ]) (
+  builtins.toJSON (failures genericWithModel)
+);
+assert
+  genericWithModel.virtualisation.oci-containers.containers.generic-policy.networks
+  == [ "tf-generic-policy" ];
+assert
+  genericWithModel.virtualisation.oci-containers.containers.generic-policy.environmentFiles
+  == [ "/run/tentaflake-broker/generic-policy/agent.env" ];
+assert
+  genericWithModel.virtualisation.oci-containers.containers.generic-policy.volumes
+  == genericContainer.volumes;
+assert
+  genericWithModel.virtualisation.oci-containers.containers.generic-policy.environment.TENTAFLAKE_RESEARCH_COMMAND
+  == genericContainer.environment.TENTAFLAKE_RESEARCH_COMMAND;
+assert
+  genericWithModel.virtualisation.oci-containers.containers.generic-policy.environment.TENTAFLAKE_RESEARCH_SOCKET
+  == genericContainer.environment.TENTAFLAKE_RESEARCH_SOCKET;
 pkgs.runCommand "tentaflake-research-policy" { } "touch $out"
