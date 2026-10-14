@@ -24,10 +24,12 @@ PRs #156–#158 are merged. Full run `38489147597` passed configuration,
 package, installed-flake, runtime VM and Research VM gates on capability head
 `0bca488`; the dependent CLI/package inputs retain their passing focused evidence.
 Main is `1abddbc`. Combined storage/publication/OCI PR #166 contains the reviewed
-#159/#164/#165 commits. Full run `38492331687` on `b50e279` exposed stale
-inline-helper assertions before runtime tests. The repair binds wrappers to the
-exported helpers and checks their actual guard content; its focused helper gate
-passes. Replacement full run `38494405219` tests `c05f5e4` against `1abddbc`.
+#159/#164/#165 commits. Earlier full runs exposed stale helper assertions and
+an incidental `home.mount` with `LoadState=not-found` during bootstrap. The
+reviewed repair `d482fa7` ignores only fully inert, undeclared mount objects
+absent from both installed-file inventories; required mounts remain strict.
+Full run `38501763347` tests that repair against `1abddbc`; static/Rust and
+Research preparation and flake evaluation passed, with runtime VM evidence still pending.
 Component PRs remain open until inclusion is accepted; their superseded bootstrap
 paths must not be merged separately.
 
@@ -166,7 +168,8 @@ because their Research closure is unavailable. The model fixture now extends
 the existing OCI node; its no-build evaluation and rendered Python compile pass.
 Its explicit local-mock broker package also passes all 40 tests. `just fast`
 passes formatting, lint, workspace Rust and the declared helper/contract checks.
-Parent helper-assertion repair `c05f5e4` is integrated. Next: obtain remote VM evidence.
+Parent mount-observation repair `d482fa7` is integrated at `74d6da7`;
+93 focused admission tests and CLI Clippy pass. Next: obtain remote VM evidence.
 Provider/vendor acceptance remains
 separate. Optional workers also need their dispatcher migrated
 into maintenance fencing.
@@ -179,20 +182,27 @@ the new authenticated upstream readiness RPC. Exact controller generation,
 fresh response and lease expiry remain required before each dispatch step.
 The socket and partial-frame regression tests use real local Linux/Unix sockets.
 After correcting contradictory mount flags and accepted-socket pathname handling,
-123 focused admission tests and CLI all-target Clippy pass, including the final
-expiry check after daemon observations. `just fast` passes 334 Rust tests and
-the declared static/helper checks. The actual CLI Nix package passes 75 core,
+126 focused admission tests and CLI all-target Clippy pass after the reviewed
+parent merge `7d74610`, including strict socket metadata and the final expiry
+check after daemon observations. Both generated offline/model plans pass the
+real Rust loader. Before that merge, `just fast` passed 334 Rust tests and
+the declared static/helper checks; the actual CLI Nix package passed 75 core,
 180 CLI and nine integration tests, including the new Linux socket observations.
-Nix formatting and scoped lint pass. Full Research projection evaluation is pending: the pinned
-client closure is unavailable locally. The separate `research-admission-plan`
-recipe preserves that preparation boundary. Upstream readiness commit `73eabe4`
+Nix formatting and scoped lint pass. Pinned client closure preparation passes
+17 library, six curl and five transport tests. Full Research projection still
+requires the service package; its preflight selects that package, one closure
+helper and 17.9 MiB of substitutes. That gate remains in the remote queue.
+The separate `research-admission-plan` recipe preserves the preparation boundary.
+Upstream readiness commit `73eabe4`
 has passed its own fast checks but still awaits its serialized package CI/merge;
 the downstream input remains at `91ce540`, so no usable live Research admission
 or lifecycle/real-VPN VM acceptance is claimed. Next: prepare and evaluate the
 Research projections, integrate the reviewed upstream pin, then exercise the
-actual start path. PR #166's remote VM has now identified an incidental
-`home.mount` with `LoadState=not-found` in bootstrap inventory; its focused repair
-is being reviewed independently before the next serialized runtime gate.
+actual start path. The existing Research VM now includes owned Generic start,
+lease/relay/backend refusals, exact-CID stop and generation renewal. Scoped Nix
+lint and the rendered Python script/helper syntax checks pass; node configuration
+evaluation and execution remain pending. Its dummy interface and observation
+producer establish no real VPN or provider acceptance.
 
 The [base-image catalog](20-base-images.md) adds Debian 13 and Ubuntu 26.04 LTS
 platform manifest selection with an offline metadata validator. The 2026-10-13

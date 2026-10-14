@@ -269,8 +269,14 @@ duplicate relay UIDs, legacy fetch rejection and disabled summarization. The VM
 runs the real stdio client and service inside real Docker/gVisor capsules with
 Hermes and ZeroClaw UID values, verifies the generated settings, performs MCP
 initialization and job creation, and checks direct IP and offline-fetch denial.
-Its container image is a synthetic Python probe. It does not run the actual
-vendor agent images or prove their MCP discovery behavior.
+The extended fixture also exercises an owned Generic start through fenced
+bootstrap, quota owners, the durable ledger and exact container identity. It
+covers missing/expired controller leases, draining/offline modes, relay path/UID
+drift, unavailable backends, dependency stop and a fresh controller generation.
+This extension still awaits its upstream input and VM gate. Its dummy interface
+and local observation producer are test inputs, not real VPN evidence. The
+container image is a synthetic Python probe; vendor images and native MCP
+discovery remain separate acceptance work.
 
 Observer option evaluations cover direct module exposure, defaults, selected
 link/path/handshake/peer/drain arguments and refusal of invalid combinations.
