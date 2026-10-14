@@ -162,8 +162,11 @@ systemctl start docker-generic-NAME.service
 systemctl stop docker-generic-NAME.service
 ```
 
-Acquisition loads the immutable archive and checks its exact local image ID;
+Acquisition requires the supported classic Docker image store, loads the immutable
+archive and checks its exact configuration digest and unchanged daemon identity;
 it creates no runtime claim. Registry acquisition is a separate operator step.
+The containerd image store's manifest IDs are unsupported; changing an existing
+store requires the explicit [operator migration boundary](14-workspace-quota.md#guarded-storage-lifecycle).
 The admission supervisor never pulls, loads or logs in while starting a capsule.
 The instance revision covers the final OCI configuration and image source.
 Before create, a durable claim records boot, Docker process and supervisor

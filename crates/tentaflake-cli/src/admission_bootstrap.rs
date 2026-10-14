@@ -137,6 +137,11 @@ fn supported_settings(settings: &Value) -> bool {
         return false;
     };
     settings.get("live-restore") == Some(&Value::Bool(false))
+        && settings
+            .get("features")
+            .and_then(Value::as_object)
+            .and_then(|features| features.get("containerd-snapshotter"))
+            == Some(&Value::Bool(false))
         && [
             "containerd",
             "containerd-namespace",
@@ -150,7 +155,7 @@ fn supported_settings(settings: &Value) -> bool {
 
 /// Support the current NixOS Docker module's internal-containerd contract only.
 /// No extra flags may select another daemon state tree or external containerd.
-fn daemon_config(plan: &HostPlan, unit: &UnitObservation) -> Result<PathBuf, String> {
+pub(crate) fn daemon_config(plan: &HostPlan, unit: &UnitObservation) -> Result<PathBuf, String> {
     let service = unit
         .service
         .as_ref()
@@ -175,7 +180,7 @@ fn daemon_config(plan: &HostPlan, unit: &UnitObservation) -> Result<PathBuf, Str
     let settings: Value = serde_json::from_slice(&read_store_document(&path, 1024 * 1024)?)
         .map_err(|_| "invalid immutable Docker configuration")?;
     if !supported_settings(&settings) {
-        return Err("bootstrap requires live-restore=false, internal containerd and default Docker state paths/namespaces".into());
+        return Err("admission requires live-restore=false, features.containerd-snapshotter=false, internal containerd and default Docker state paths/namespaces".into());
     }
     Ok(path)
 }
@@ -603,7 +608,7 @@ mod tests {
 
     #[test]
     fn backend_contract_rejects_live_restore_external_state_and_surviving_clients_or_shims() {
-        let settings = serde_json::json!({"live-restore": false, "hosts": ["fd://"], "runtimes": {"runsc": {"path": "/nix/store/runsc"}}});
+        let settings = serde_json::json!({"live-restore": false, "features": {"containerd-snapshotter": false}, "hosts": ["fd://"], "runtimes": {"runsc": {"path": "/nix/store/runsc"}}});
         assert!(supported_settings(&settings));
         for value in [
             serde_json::json!({}),
@@ -612,6 +617,19 @@ mod tests {
         ] {
             assert!(!supported_settings(&value));
         }
+        for value in [
+            Value::Null,
+            serde_json::json!({}),
+            serde_json::json!({"containerd-snapshotter": true}),
+            serde_json::json!({"containerd-snapshotter": "false"}),
+        ] {
+            let mut changed = settings.clone();
+            changed["features"] = value;
+            assert!(!supported_settings(&changed));
+        }
+        let mut missing = settings.clone();
+        missing.as_object_mut().unwrap().remove("features");
+        assert!(!supported_settings(&missing));
         for key in [
             "containerd",
             "containerd-namespace",

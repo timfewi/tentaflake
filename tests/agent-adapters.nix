@@ -633,6 +633,16 @@ assert lib.hasInfix "runtime-start" localSupervisor.serviceConfig.ExecStart;
 assert lib.hasInfix "runtime-stop" localSupervisor.serviceConfig.ExecStop;
 assert !localContainer.autoRemoveOnStop;
 assert !localGeneric.virtualisation.docker.daemon.settings.live-restore;
+assert !localGeneric.virtualisation.docker.daemon.settings.features.containerd-snapshotter;
+assert lib.any (lib.hasInfix "requires the classic Docker image store") (
+  failures (
+    genericEval { image = localImage; } (
+      lib.recursiveUpdate localPolicy {
+        virtualisation.docker.daemon.settings.features.containerd-snapshotter = true;
+      }
+    )
+  )
+);
 assert !localGeneric.systemd.services.docker-prune.enable;
 assert lib.any (lib.hasInfix "requires Docker automatic pruning disabled") (
   failures (

@@ -1,7 +1,7 @@
 ---
 name: tentaflake-change-review
 description: Review a Tentaflake change for a concrete requirement, proportionate verification, synchronized docs and a complete PR.
-version: 1.1.13
+version: 1.1.14
 ---
 
 # Tentaflake change review
@@ -89,6 +89,10 @@ in the build check. Do not add evaluation-time reads of helper derivations.
   migrations without silent security downgrades. Registry images stay digest-pinned
   except for the explicit dev-only escape hatch. Local images require immutable
   Nix descriptors and exact image-ID checks; do not imply registry provenance.
+  Verify the actual Docker store contract: Docker 29's containerd store resolves
+  manifest/index IDs, while archive descriptors contain config IDs. Keep the
+  supported classic-store setting explicit and verify live driver status; a
+  successful load does not prove the descriptor ID is addressable.
 - Keep unaccepted runtimes described as unsupported/stopped.
 - Add relevant changes under `Unreleased` in `CHANGELOG.md`; preserve history.
 - When committing, use Conventional Commits and `git commit -s` for DCO.
