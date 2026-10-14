@@ -167,12 +167,21 @@ pub struct ApiOperation {
     pub result: Option<CreateResult>,
     #[serde(default)]
     pub abort: Option<CreateAbortReceipt>,
+    #[serde(default)]
+    pub recovery: Option<CreateRecoveryReceipt>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct CreateAbortReceipt {
     /// Exact original CAS for historical retries; no new release permission.
+    pub expected_ledger_revision: u64,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct CreateRecoveryReceipt {
+    /// Exact original CAS for historical retries; never another observation.
     pub expected_ledger_revision: u64,
 }
 
@@ -191,7 +200,8 @@ pub struct CreateAbortStorageObservation {
     pub state: CreateAbortStorageState,
 }
 
-/// The observer holds the outer host fence and performs no helpers/mutations.
+/// The observer holds the outer host fence and performs no mutating helpers.
+/// Bounded read-only verification of the exact existing images is permitted.
 /// Unknown requires proof that the exact stored supervisor and all descendants
 /// cannot still dispatch. Queued has never had a permit and requires None.
 pub struct CreateAbortObservation {
@@ -596,7 +606,7 @@ impl Ledger {
     pub fn api_environments(
         &self,
         authority: &PublishedAuthority,
-    ) -> Result<Vec<(EnvironmentRecord, PublishedAuthority)>, LedgerError> {
+    ) -> Result<Vec<(EnvironmentRecord, ApiOperation)>, LedgerError> {
         let _lock = self.lock(false)?;
         let state = self.read()?;
         if *authority != state.published {
@@ -604,7 +614,7 @@ impl Ledger {
         }
         // This immutable creation-operation link remains separate from future
         // current runtime operations, so removing a template cannot hide its
-        // retained paths, units or owner from maintenance inventory.
+        // original authority, supervisor, paths or owner from maintenance.
         Ok(state
             .api
             .environments
@@ -616,7 +626,7 @@ impl Ledger {
                     .iter()
                     .find(|op| op.mutation.operation_id == environment.operation_id)
                     .expect("validated creation operation");
-                (environment.clone(), operation.authority.clone())
+                (environment.clone(), operation.clone())
             })
             .collect())
     }
@@ -807,6 +817,7 @@ impl Ledger {
             storage_operations,
             result: None,
             abort: None,
+            recovery: None,
         };
         state.api.workspaces.push(WorkspaceRecord {
             id: spec.workspace_id.clone(),
@@ -984,16 +995,20 @@ impl CreationPermit<'_> {
 }
 
 impl Ledger {
-    /// Explicit recovery after the old supervisor and all descendants are
-    /// fenced. The observer must prove BOTH exact existing images Present and
-    /// unmounted, with no staging data or remaining creator. It must never
-    /// create, delete or infer success from an absent process/image. Failure
-    /// keeps both charges and Unknown. No recovery path returns a permit.
+    /// Explicit operator recovery after the old supervisor and descendants are
+    /// fenced. BOTH native rows must already be Present: filesystem validity
+    /// alone cannot prove ownership initialization completed. The observer must
+    /// verify both exact existing images are unmounted, with no staging data or
+    /// remaining creator/writer. Bounded read-only verification is permitted;
+    /// mutating helpers, creation, deletion and repair are forbidden. Failure
+    /// keeps both charges and Unknown. Exact terminal retries return history
+    /// without observing again; no recovery path returns a permit.
     pub fn api_recover_create(
         &self,
-        context: &ApiContext,
+        authority: &PublishedAuthority,
         operation_id: &str,
-        expected_revision: u64,
+        expected_ledger_revision: u64,
+        now: u64,
         observe: impl FnOnce(
             &ApiOperation,
             &EnvironmentSpec,
@@ -1002,23 +1017,31 @@ impl Ledger {
     ) -> Result<ApiOperation, LedgerError> {
         let _lock = self.lock(false)?;
         let mut state = self.read()?;
-        state.api_context(context)?;
-        state.require_stable()?;
-        if state.revision != expected_revision {
-            return Err(LedgerError::StaleRevision);
+        authority.validate()?;
+        if *authority != state.published {
+            return Err(LedgerError::StaleAuthority);
+        }
+        if !id(operation_id) || now == 0 {
+            return Err(LedgerError::Invalid("API recovery identity or time"));
         }
         let operation = state
             .api
             .operations
             .iter()
-            .position(|op| {
-                op.mutation.operation_id == operation_id
-                    && op.mutation.key.host == context.host
-                    && op.mutation.key.principal == context.principal
-            })
+            .position(|op| op.mutation.operation_id == operation_id)
             .ok_or(LedgerError::Conflict)?;
         let op = &state.api.operations[operation];
-        if op.state != ApiOperationState::Unknown || context.now < op.updated_at {
+        if let Some(recovery) = &op.recovery {
+            if recovery.expected_ledger_revision != expected_ledger_revision {
+                return Err(LedgerError::StaleRevision);
+            }
+            return Ok(op.clone());
+        }
+        state.require_stable()?;
+        if state.revision != expected_ledger_revision {
+            return Err(LedgerError::StaleRevision);
+        }
+        if op.state != ApiOperationState::Unknown || now < op.updated_at {
             return Err(LedgerError::Conflict);
         }
         let environment = state
@@ -1028,7 +1051,7 @@ impl Ledger {
             .position(|env| env.operation_id == operation_id)
             .ok_or(LedgerError::Invalid("create environment"))?;
         let spec = &state.api.environments[environment].spec;
-        let indexes: Vec<_> = spec
+        let allocations: Vec<_> = spec
             .instance
             .storage
             .iter()
@@ -1036,23 +1059,23 @@ impl Ledger {
                 state
                     .storage
                     .iter()
-                    .position(|row| row.allocation.id == wanted.id)
+                    .find(|row| row.allocation.id == wanted.id)
                     .expect("validated allocation")
+                    .allocation
+                    .clone()
             })
             .collect();
-        let allocations: Vec<_> = indexes
+        if allocations
             .iter()
-            .map(|index| state.storage[*index].allocation.clone())
-            .collect();
-        observe(op, spec, &allocations).map_err(|_| LedgerError::Context)?;
-        for index in indexes {
-            if state.storage[index].allocation.state != StorageState::Present {
-                state.advance()?;
-                state.storage[index].allocation.state = StorageState::Present;
-                state.storage[index].updated_revision = state.revision;
-            }
+            .any(|row| row.state != StorageState::Present)
+        {
+            return Err(LedgerError::NotQuiescent);
         }
-        state.finish_create(operation, environment, context.now)?;
+        observe(op, spec, &allocations).map_err(|_| LedgerError::Context)?;
+        state.finish_create(operation, environment, now)?;
+        state.api.operations[operation].recovery = Some(CreateRecoveryReceipt {
+            expected_ledger_revision,
+        });
         self.write(&state)?;
         Ok(state.api.operations[operation].clone())
     }
@@ -1061,7 +1084,8 @@ impl Ledger {
     /// outer host fence and authenticates the current installed maintenance plan.
     /// The observer must fence the exact recorded supervisor and all descendants,
     /// then inspect BOTH original slots (including staging, mounts, loops and
-    /// open writers). It must not create, delete, unmount or run helpers. Failure
+    /// open writers). It must not create, delete, unmount or run mutating helpers;
+    /// bounded read-only verification is permitted. Failure
     /// leaves all charges unchanged. A queued operation has never had a permit,
     /// but still requires exact absence; Unknown may retain stopped images.
     pub fn api_abort_create(
@@ -1396,6 +1420,16 @@ impl State {
             }
             if (op.state == ApiOperationState::Aborted) != op.abort.is_some() {
                 return Err(LedgerError::Invalid("API abort outcome"));
+            }
+            if let Some(recovery) = &op.recovery
+                && (op.state != ApiOperationState::Succeeded
+                    || op
+                        .claimed_revision
+                        .is_none_or(|claim| recovery.expected_ledger_revision <= claim)
+                    || recovery.expected_ledger_revision.checked_add(1)
+                        != Some(op.updated_revision))
+            {
+                return Err(LedgerError::Invalid("API recovery outcome or revision"));
             }
             let mut all_present = true;
             let mut all_released = true;

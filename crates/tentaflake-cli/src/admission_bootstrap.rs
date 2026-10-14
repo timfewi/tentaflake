@@ -88,7 +88,13 @@ fn offline_runtime(unit: &UnitObservation, plan: &HostPlan, path: &Path) -> bool
 }
 
 fn unit_inventory(plan: &HostPlan, path: &Path) -> Result<Vec<String>, String> {
-    admission_runtime::offline_units(plan, path, None)
+    // Only first bootstrap reaches this helper after proving no ledger exists.
+    admission_runtime::offline_units(
+        plan,
+        path,
+        None,
+        &crate::admission_creation::CreationInventory::initial(),
+    )
 }
 
 fn boot_id() -> Result<String, String> {

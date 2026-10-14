@@ -15,6 +15,7 @@ const RUNTIME_CATALOG: &str = include_str!("../../../adapters/catalog.json");
 mod admission;
 mod admission_bootstrap;
 mod admission_creation;
+mod admission_creation_recovery;
 mod admission_evidence;
 mod admission_host;
 mod admission_oci;
@@ -2813,6 +2814,7 @@ fn print_help() {
            tentaflake admission image-acquire <generated-store-plan> <instance-id>\n\
            tentaflake admission worker-load-recover <generated-store-plan> <ledger-revision> <load-claimed-revision>\n\
            tentaflake admission storage-recover <generated-store-plan> <allocation-id>\n\
+           tentaflake admission create-recover|create-abort <generated-store-plan> <operation-id> <expected-ledger-revision>\n\
            tentaflake admission publication status [--hide]\n\
            tentaflake admission publication begin <candidate-store-plan> <operation-id> <expected-ledger-revision>\n\
            tentaflake admission publication finish|cancel <operation-id> <expected-ledger-revision>\n\

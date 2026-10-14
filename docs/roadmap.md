@@ -45,8 +45,11 @@ Current integration work:
   during storage-VM shutdown: the early store unmount removed the shutdown
   executable. Commit `5248ac3` keeps only both immutable harness-store mounts
   available through final shutdown; focused checks and source review pass.
-  Replacement run `38536113968` is pending; OCI/crash and Research VM evidence
-  remain outstanding.
+  Replacement run `38536113968` passed storage/publication and normal shutdown
+  in 5 seconds, then first reached OCI and failed explicit local image acquisition
+  with a bounded runtime-observation error. Its preceding Docker load also
+  reported an unexpected manifest descriptor; the cause is under investigation.
+  OCI/crash and Research VM acceptance remain outstanding.
 - **Model/Research integration:** PR #167 and the upstream Research readiness
   work still need their relevant runtime gates and final public pin integration.
   Exact requested capabilities and live evidence remain prerequisites; neither
@@ -90,8 +93,14 @@ publication retain their authority closures through official Nix registration.
 The internal bounded creator reconstructs exact original bindings, counts its
 reserved pair once and executes helpers only for a new claim. It requires empty
 Docker/loop/dynamic-mount inventories; historical claims perform no work.
-`just fast` passes **430 Rust tests** plus static/helper gates; the actual offline
-Nix CLI package passes **325 tests**, including all 126 admission tests. Three
+Root creation recovery/abort now verifies stopped historical units and paths,
+both protected roots, complete charged inventory and original read-only helpers.
+Claimed work requires a changed boot; successful recovery requires both native
+receipts already Present. Exact terminal retries skip original-template loads
+and live observations. Publication and Worker/native recovery prepare historical
+maintenance inventory outside their ledger callbacks, avoiding recursive locks.
+`just fast` passes **445 Rust tests** plus static/helper gates; the actual offline
+Nix CLI package passes **340 tests**, including all 130 admission tests. Three
 intentional subprocess helpers are ignored in each full test inventory. All 20
 static helper paths are unchanged; actual rendered dynamic-helper tests pass
 argument refusals, Btrfs creation/verification and sibling-slot isolation. Offline
@@ -100,16 +109,16 @@ daemon/GC registration and runtime acceptance remain unverified; HTTP creation
 still returns `501`.
 New code reads old v3 files; older binaries reject the new field once written.
 
-Resume here: implement trusted abort/absence and recovery collectors, include all
-retained dynamic units/paths in maintenance, and obtain actual supervised-creation
-VM evidence. Only then connect HTTP planning/queueing and exact grants. Keep
+Resume here: obtain actual supervised creation/recovery VM evidence, including
+partial outcomes and historical retries.
+Only then connect HTTP planning/queueing and exact grants. Keep
 creation within installed policy without rebuilding the host. Follow with
 workspace/files/streams and the matching
 CLI, then actual client and coding-agent acceptance. Preserve private v3 ledger
 history; consumed login tokens and uncertain resource claims must never become
 fresh retries through restart, pruning or publication.
 
-Initial recovery should require a changed boot for claimed work; the receipt
+Initial recovery requires a changed boot for claimed work; the receipt
 does not record an old cgroup. Successful recovery also requires both native
 storage receipts already Present, proving owner initialization finished. A valid
 Btrfs image alone cannot prove that step. Incomplete images may only remain

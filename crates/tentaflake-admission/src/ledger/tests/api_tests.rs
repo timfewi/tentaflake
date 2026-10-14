@@ -197,7 +197,8 @@ fn stopped_creation_uses_native_storage_once_and_stable_resource_revisions() {
         Ok(ApiLookup::Found(_))
     ));
     let retained = reopened.api_environments(&changed.authority).unwrap();
-    assert_eq!(retained[0].1, authority("policy-1"));
+    assert_eq!(retained[0].1, completed);
+    assert_eq!(retained[0].1.authority, authority("policy-1"));
     assert_eq!(retained[0].0.spec.template_revision, "template-1");
 }
 
@@ -247,43 +248,345 @@ fn partial_creation_retains_both_charges_and_recovery_never_recreates() {
     ));
     assert!(matches!(
         reopened.api_recover_create(
-            &api_context(),
+            &authority("policy-1"),
             "api-op-1",
             snapshot.revision - 1,
+            101,
             |_, _, _| panic!("stale observation")
         ),
         Err(LedgerError::StaleRevision)
     ));
+    let observed = std::cell::Cell::new(false);
     assert!(matches!(
         reopened.api_recover_create(
-            &api_context(),
+            &authority("policy-1"),
             "api-op-1",
             snapshot.revision,
-            |_, _, _| Err("missing final image".into())
+            101,
+            |_, _, _| {
+                observed.set(true);
+                Ok(())
+            }
         ),
-        Err(LedgerError::Context)
+        Err(LedgerError::NotQuiescent)
     ));
+    assert!(
+        !observed.get(),
+        "filesystem validity cannot prove owner initialization"
+    );
     assert_eq!(reopened.snapshot().unwrap(), snapshot);
-    let recovered = reopened
+    assert_eq!(
+        reopened.api_environments(&authority("policy-1")).unwrap()[0]
+            .1
+            .state,
+        ApiOperationState::Unknown
+    );
+}
+
+fn prepared_creation(ledger: &Ledger) {
+    queue(ledger);
+    let mut permit = claim(ledger);
+    for kind in [StorageKind::Workspace, StorageKind::State] {
+        permit.provision(kind, |_| Ok(())).unwrap();
+    }
+    // Model a lost supervisor after both initialized images were durably
+    // recorded, before confirming the complete stopped environment.
+    drop(permit);
+}
+
+#[test]
+fn recovery_preserves_native_rows_and_exact_history_across_publication() {
+    let fixture = Fixture::new();
+    let ledger = fixture.ledger_with(inventory(&[]));
+    prepared_creation(&ledger);
+    let before = ledger.read().unwrap();
+    let revision = before.revision;
+    let recovered = ledger
         .api_recover_create(
-            &api_context(),
+            &authority("policy-1"),
             "api-op-1",
-            snapshot.revision,
+            revision,
+            101,
             |op, spec, rows| {
                 assert_eq!(op.execution, Some(execution()));
-                assert_eq!(spec.instance.id, "env-a");
+                assert_eq!(spec, &self::spec("env-a"));
                 assert_eq!(rows.len(), 2);
+                assert!(rows.iter().all(|row| row.state == StorageState::Present));
+                assert!(matches!(ledger.snapshot(), Err(LedgerError::Busy)));
                 Ok(())
             },
         )
         .unwrap();
     assert_eq!(recovered.state, ApiOperationState::Succeeded);
+    assert_eq!(recovered.updated_revision, revision + 1);
+    assert_eq!(
+        recovered
+            .recovery
+            .as_ref()
+            .unwrap()
+            .expected_ledger_revision,
+        revision
+    );
+    let reopened = fixture.open("ledger").unwrap();
+    let after = reopened.read().unwrap();
+    assert_eq!(after.storage, before.storage);
+    assert_eq!(after.api.grants_revision, before.api.grants_revision);
+    assert_eq!(
+        after.api.environments[0].spec,
+        before.api.environments[0].spec
+    );
+    assert_eq!(
+        reopened.api_environments(&authority("policy-1")).unwrap()[0].1,
+        recovered
+    );
+    let request = publication(&reopened, "after-recovery", "policy-2");
+    reopened.begin_publication(&request).unwrap();
+    // Durable history is readable even while live work is fenced by Pending.
+    let pending = fs::read(fixture.path().join(STATE)).unwrap();
+    assert_eq!(
+        reopened
+            .api_recover_create(
+                &authority("policy-1"),
+                "api-op-1",
+                revision,
+                102,
+                |_, _, _| panic!("terminal retry during Pending must not observe"),
+            )
+            .unwrap(),
+        recovered
+    );
+    assert_eq!(fs::read(fixture.path().join(STATE)).unwrap(), pending);
+    reopened
+        .finish_publication(
+            "after-recovery",
+            reopened.snapshot().unwrap().revision,
+            |_, _| installed(&request.candidate),
+        )
+        .unwrap();
+    reopened
+        .consume_operator_login(&request.candidate, &"d".repeat(64))
+        .unwrap();
+    let stable = fs::read(fixture.path().join(STATE)).unwrap();
+    assert_eq!(
+        reopened
+            .api_recover_create(
+                &request.candidate,
+                "api-op-1",
+                revision,
+                200,
+                |_, _, _| panic!("terminal retry after publication must not observe"),
+            )
+            .unwrap(),
+        recovered
+    );
     assert!(matches!(
         reopened.api_recover_create(
-            &api_context(),
+            &request.candidate,
             "api-op-1",
-            reopened.snapshot().unwrap().revision,
-            |_, _, _| panic!("terminal recovery replay")
+            revision + 1,
+            200,
+            |_, _, _| panic!("changed CAS"),
+        ),
+        Err(LedgerError::StaleRevision)
+    ));
+    assert!(matches!(
+        reopened.api_recover_create(
+            &authority("policy-1"),
+            "api-op-1",
+            revision,
+            200,
+            |_, _, _| panic!("stale authority"),
+        ),
+        Err(LedgerError::StaleAuthority)
+    ));
+    assert_eq!(fs::read(fixture.path().join(STATE)).unwrap(), stable);
+}
+
+#[test]
+fn recovery_refusals_and_write_failure_preserve_uncertain_creation() {
+    let fixture = Fixture::new();
+    let ledger = fixture.ledger_with(inventory(&[]));
+    prepared_creation(&ledger);
+    let revision = ledger.snapshot().unwrap().revision;
+    let before = fs::read(fixture.path().join(STATE)).unwrap();
+    assert!(matches!(
+        ledger.api_recover_create(
+            &authority("policy-2"),
+            "api-op-1",
+            revision,
+            101,
+            |_, _, _| panic!("wrong authority"),
+        ),
+        Err(LedgerError::StaleAuthority)
+    ));
+    assert!(matches!(
+        ledger.api_recover_create(
+            &authority("policy-1"),
+            "missing-op",
+            revision,
+            101,
+            |_, _, _| panic!("unknown operation"),
+        ),
+        Err(LedgerError::Conflict)
+    ));
+    assert!(matches!(
+        ledger.api_recover_create(
+            &authority("policy-1"),
+            "api-op-1",
+            revision - 1,
+            101,
+            |_, _, _| panic!("stale CAS"),
+        ),
+        Err(LedgerError::StaleRevision)
+    ));
+    for time in [0, 99] {
+        assert!(
+            ledger
+                .api_recover_create(
+                    &authority("policy-1"),
+                    "api-op-1",
+                    revision,
+                    time,
+                    |_, _, _| panic!("invalid time"),
+                )
+                .is_err()
+        );
+    }
+    assert!(matches!(
+        ledger.api_recover_create(
+            &authority("policy-1"),
+            "api-op-1",
+            revision,
+            101,
+            |_, _, _| Err("missing image or incomplete fence".into()),
+        ),
+        Err(LedgerError::Context)
+    ));
+    assert_eq!(fs::read(fixture.path().join(STATE)).unwrap(), before);
+    fs::create_dir(fixture.path().join(STAGING)).unwrap();
+    assert!(matches!(
+        ledger.api_recover_create(
+            &authority("policy-1"),
+            "api-op-1",
+            revision,
+            101,
+            |_, _, _| Ok(()),
+        ),
+        Err(LedgerError::Io(_))
+    ));
+    assert_eq!(fs::read(fixture.path().join(STATE)).unwrap(), before);
+    let reopened = fixture.open("ledger").unwrap();
+    assert_eq!(
+        reopened.api_environments(&authority("policy-1")).unwrap()[0]
+            .1
+            .state,
+        ApiOperationState::Unknown
+    );
+    assert!(matches!(
+        reopened.begin_publication(&publication(&reopened, "still-uncertain", "policy-2")),
+        Err(LedgerError::NotQuiescent)
+    ));
+}
+
+#[test]
+fn ordinary_completion_has_no_invented_recovery_retry() {
+    let fixture = Fixture::new();
+    let ledger = fixture.ledger_with(inventory(&[]));
+    queue(&ledger);
+    let mut permit = claim(&ledger);
+    for kind in [StorageKind::Workspace, StorageKind::State] {
+        permit.provision(kind, |_| Ok(())).unwrap();
+    }
+    let completed = permit.complete(101).unwrap();
+    assert!(completed.recovery.is_none());
+    let before = fs::read(fixture.path().join(STATE)).unwrap();
+    assert!(matches!(
+        ledger.api_recover_create(
+            &authority("policy-1"),
+            "api-op-1",
+            completed.updated_revision,
+            102,
+            |_, _, _| panic!("ordinary completion is not a recovery retry"),
+        ),
+        Err(LedgerError::Conflict)
+    ));
+    assert_eq!(fs::read(fixture.path().join(STATE)).unwrap(), before);
+}
+
+#[test]
+fn recovery_receipt_requires_exact_terminal_revision_and_closed_shape() {
+    let fixture = Fixture::new();
+    let ledger = fixture.ledger_with(inventory(&[]));
+    prepared_creation(&ledger);
+    let revision = ledger.snapshot().unwrap().revision;
+    let unknown: serde_json::Value =
+        serde_json::from_slice(&fs::read(fixture.path().join(STATE)).unwrap()).unwrap();
+    ledger
+        .api_recover_create(
+            &authority("policy-1"),
+            "api-op-1",
+            revision,
+            101,
+            |_, _, _| Ok(()),
+        )
+        .unwrap();
+    let valid: serde_json::Value =
+        serde_json::from_slice(&fs::read(fixture.path().join(STATE)).unwrap()).unwrap();
+    for case in 0..6 {
+        let mut invalid = valid.clone();
+        match case {
+            0 => invalid["api"]["operations"][0]["recovery"]["expectedLedgerRevision"] = 0.into(),
+            1 => {
+                invalid["api"]["operations"][0]["recovery"]["expectedLedgerRevision"] =
+                    (revision + 1).into()
+            }
+            2 => {
+                invalid["api"]["operations"][0]["recovery"]["expectedLedgerRevision"] =
+                    (revision - 1).into()
+            }
+            3 => {
+                invalid["api"]["operations"][0]["recovery"]["expectedLedgerRevision"] =
+                    u64::MAX.into()
+            }
+            4 => invalid["api"]["operations"][0]["recovery"]["unknownField"] = true.into(),
+            5 => {
+                invalid = unknown.clone();
+                invalid["api"]["operations"][0]["recovery"] =
+                    valid["api"]["operations"][0]["recovery"].clone();
+            }
+            _ => unreachable!(),
+        }
+        fs::write(
+            fixture.path().join(STATE),
+            serde_json::to_vec(&invalid).unwrap(),
+        )
+        .unwrap();
+        assert!(
+            fixture.open("ledger").is_err(),
+            "accepted recovery forgery {case}"
+        );
+    }
+    // An older completed record has no recorded recovery CAS. It stays readable
+    // and charged, but cannot manufacture historical recovery permission.
+    let mut old = valid;
+    old["api"]["operations"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("recovery");
+    fs::write(
+        fixture.path().join(STATE),
+        serde_json::to_vec(&old).unwrap(),
+    )
+    .unwrap();
+    let reopened = fixture.open("ledger").unwrap();
+    assert_eq!(reopened.snapshot().unwrap().storage.len(), 2);
+    assert!(matches!(
+        reopened.api_recover_create(
+            &authority("policy-1"),
+            "api-op-1",
+            revision + 1,
+            102,
+            |_, _, _| panic!("old record has no recovery receipt"),
         ),
         Err(LedgerError::Conflict)
     ));
@@ -1162,9 +1465,10 @@ fn process_death_before_or_between_helpers_can_abort_only_with_fenced_exact_slot
         assert_eq!(reopened.read().unwrap().storage.len(), 2);
         assert!(matches!(
             reopened.api_recover_create(
-                &api_context(),
+                &authority("policy-1"),
                 "api-op-1",
                 aborted.updated_revision,
+                102,
                 |_, _, _| panic!("aborted cannot recreate")
             ),
             Err(LedgerError::Conflict)
@@ -1465,7 +1769,7 @@ fn release_tombstone_forgery_and_inconsistent_abort_history_are_rejected() {
 }
 
 #[test]
-fn old_v3_creation_rows_without_abort_or_release_fields_remain_charged() {
+fn old_v3_creation_rows_without_terminal_receipts_or_releases_remain_charged() {
     let fixture = Fixture::new();
     let ledger = fixture.ledger_with(inventory(&[]));
     queue(&ledger);
@@ -1475,6 +1779,10 @@ fn old_v3_creation_rows_without_abort_or_release_fields_remain_charged() {
         .as_object_mut()
         .unwrap()
         .remove("abort");
+    old["api"]["operations"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("recovery");
     for row in old["storage"].as_array_mut().unwrap() {
         row.as_object_mut().unwrap().remove("release");
     }

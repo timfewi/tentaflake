@@ -1,6 +1,7 @@
 //! Explicit stopped-host publication. This records authority, never installs a
 //! system configuration, drains services or retries an uncertain host action.
 use crate::OutputMode;
+use crate::admission_creation::{CreationInventory, maintenance_inventory};
 use crate::admission_host::{HostPlan, load_plan};
 use crate::admission_runtime::{
     LEDGER, authority, installed, offline_units, offline_workloads, require_root,
@@ -8,8 +9,8 @@ use crate::admission_runtime::{
 use std::path::Path;
 use tentaflake_admission::host_fence as admission_fence;
 use tentaflake_admission::ledger::{
-    Ledger, PublicationBegin, PublicationObservation, PublicationReceipt, PublicationRequest,
-    PublishedAuthority,
+    Ledger, PublicationBegin, PublicationObservation, PublicationOutcome, PublicationReceipt,
+    PublicationRequest, PublishedAuthority,
 };
 use tentaflake_admission::{ReservationSnapshot, ReservationState, StorageState, identifier};
 
@@ -139,7 +140,8 @@ fn begin(
     // Once Pending exists, normal storage recovery is intentionally blocked.
     // Refuse uncertain claims now, rather than creating an unfinishable change.
     quiescent(&snapshot, expected)?;
-    observe_offline(&current, current_path, None)?;
+    let dynamic = maintenance_inventory(ledger, &status.published, &fence)?;
+    observe_offline(&current, current_path, None, &dynamic)?;
     let nix_store = current
         .tools
         .nix_store
@@ -148,7 +150,7 @@ fn begin(
         .ok_or("publication requires a plan with the Nix retention tool")?;
     crate::admission_retention::retain(&status.published, nix_store, &fence)?;
     crate::admission_retention::retain(&candidate, nix_store, &fence)?;
-    observe_offline(&current, current_path, None)?;
+    observe_offline(&current, current_path, None, &dynamic)?;
     let request = PublicationRequest {
         operation_id: operation.into(),
         expected_ledger_revision: expected,
@@ -169,13 +171,14 @@ fn observe_offline(
     desired: &HostPlan,
     desired_path: &Path,
     other: Option<&HostPlan>,
+    dynamic: &CreationInventory,
 ) -> Result<(), String> {
     installed(desired_path)?;
-    offline_units(desired, desired_path, other)?;
+    offline_units(desired, desired_path, other, dynamic)?;
     offline_workloads(desired)?;
     // Reobserve after the complete inventory. A reload, new queued job or
     // changed installation cannot be mistaken for the first observation.
-    offline_units(desired, desired_path, other)?;
+    offline_units(desired, desired_path, other, dynamic)?;
     offline_workloads(desired)?;
     installed(desired_path)
 }
@@ -189,7 +192,15 @@ fn finalize(
     if !identifier(operation) {
         return Err("invalid publication operation identifier".into());
     }
-    let _fence = admission_fence::exclusive()?;
+    let fence = admission_fence::exclusive()?;
+    // Prepare immutable historical paths before entering the ledger callback.
+    // Terminal retries must not reload old manifests or repeat host observations.
+    let dynamic = ledger
+        .publication_receipt(operation)
+        .map_err(|error| error.to_string())?
+        .filter(|receipt| receipt.outcome == PublicationOutcome::Pending)
+        .map(|receipt| maintenance_inventory(ledger, &receipt.request.expected_authority, &fence))
+        .transpose()?;
     let observe = |receipt: &PublicationReceipt, _snapshot: &ReservationSnapshot| {
         let previous = recorded_plan(&receipt.request.expected_authority)?;
         let candidate = recorded_plan(&receipt.request.candidate)?;
@@ -198,7 +209,14 @@ fn finalize(
         } else {
             (&previous, &candidate, &receipt.request.expected_authority)
         };
-        observe_offline(desired, Path::new(&reference.manifest_path), Some(other))?;
+        observe_offline(
+            desired,
+            Path::new(&reference.manifest_path),
+            Some(other),
+            dynamic
+                .as_ref()
+                .ok_or("publication maintenance inventory unavailable")?,
+        )?;
         Ok(PublicationObservation {
             installed: reference.clone(),
             mutators_fenced: true,

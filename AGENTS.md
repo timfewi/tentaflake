@@ -162,7 +162,7 @@ are already published or require access to another repository for public checks.
   Native entrypoints cannot bypass dynamic ownership; unresolved work fences
   publication and keeps both charges. Operator abort releases only proven-absent
   slots and preserves tombstones; retained images stay charged. Public create
-  remains `501` until trusted recovery collectors and runtime acceptance are complete;
+  remains `501` until supervised creation/recovery runtime acceptance is complete;
   see `docs/19-host-api.md` for migration limits. Creation templates retain their
   original catalog and private source details; never validate old authorities
   against a newer catalog or serialize private template configuration publicly.
@@ -172,7 +172,11 @@ are already published or require access to another repository for public checks.
   The internal creation oneshot revalidates original bindings and counts its
   reserved pair once before claiming work. Only a new permit may run helpers;
   errors retain Unknown. Keep the initial empty-Docker/no-loop restriction until
-  concurrent lifecycle and historical maintenance collectors are verified.
+  concurrent lifecycle is verified. Maintenance inventories include historical
+  creation units and paths after template removal or grant revocation. Explicit
+  root recovery/abort only observes: claimed work needs a changed boot; successful
+  recovery needs both native rows already Present. Preserve original templates,
+  storage charges and historical terminal retries without rerunning helpers.
 - CLI help is configuration-free; management commands require generated
   host configuration and inventory.
 - `crates/tentaflake-cli/src/api` and `modules/api.nix` own the optional private

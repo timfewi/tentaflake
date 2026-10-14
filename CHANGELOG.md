@@ -51,12 +51,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   grants and scoped operation recovery, with atomic workspace/state charges and
   once-only supervisor claims. Explicit operator abort retains stopped images and
   releases only proven-absent slots while preserving identities and history.
-  Public creation remains unsupported pending actual lifecycle/recovery collectors.
+  Public creation remains unsupported pending actual lifecycle/recovery acceptance.
 - Project opt-in offline creation templates with their original reviewed catalog
   and shared dynamic quota helpers; private source settings remain host-owned.
 - Reconstruct exact dynamic storage bindings and supervise accepted creation
   through one bounded systemd invocation. Reserved pairs count once against
   physical headroom; failed helpers keep Unknown and historical claims never replay.
+- Add read-only root creation recovery/abort with exact revision retries and
+  historical unit/path maintenance. Claimed work requires a changed boot;
+  success requires both native preparation receipts. Missing evidence keeps
+  every charge, and existing images are never recreated or repaired.
 - Retain bootstrap and publication manifests through official Nix GC-root
   registration before recording their authority; preserve roots after uncertain
   outcomes and refuse conflicting entries without replacement.

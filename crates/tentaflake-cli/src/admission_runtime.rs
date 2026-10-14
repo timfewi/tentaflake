@@ -403,11 +403,13 @@ pub(crate) fn offline_units(
     plan: &HostPlan,
     path: &Path,
     other: Option<&HostPlan>,
+    creation: &crate::admission_creation::CreationInventory,
 ) -> Result<Vec<String>, String> {
     let mut inventory: BTreeSet<_> = crate::admission_bootstrap::runtime_units(plan, path, other)?
         .into_iter()
         .collect();
     inventory.extend(crate::admission_worker::offline(plan, other)?);
+    inventory.extend(crate::admission_creation::offline(plan, path, creation)?);
     let mut names = quota_unit_names(plan, other);
     names.extend(admission_systemd::list_quota_units(&plan.tools.busctl)?);
     for name in &names {
@@ -418,7 +420,7 @@ pub(crate) fn offline_units(
     // already completed. Inspect all available mount units, including unloaded
     // files, rather than inferring their absence from the new plan.
     for observed in admission_systemd::observe_mount_units(&plan.tools.busctl, &names)? {
-        maintenance_mount(&observed, plan, other)?;
+        maintenance_mount(&observed, plan, other, &creation.volumes)?;
     }
     inventory.extend(names);
     if inventory.len() > 2048 {
@@ -435,8 +437,9 @@ fn maintenance_mount(
     observed: &UnitObservation,
     plan: &HostPlan,
     other: Option<&HostPlan>,
+    dynamic: &[VolumeSpec],
 ) -> Result<(), String> {
-    validate_maintenance_mount(observed, plan, other)
+    validate_maintenance_mount(observed, plan, other, dynamic)
         .map_err(|error| format!("{error}: {}", observed.mount_context()))
 }
 
@@ -444,6 +447,7 @@ fn validate_maintenance_mount(
     observed: &UnitObservation,
     plan: &HostPlan,
     other: Option<&HostPlan>,
+    dynamic: &[VolumeSpec],
 ) -> Result<(), String> {
     if observed.load_state == "masked" && stopped(observed) {
         return Ok(());
@@ -475,13 +479,17 @@ fn validate_maintenance_mount(
                 .volumes
                 .iter()
                 .chain(other.into_iter().flat_map(|plan| &plan.volumes))
-                .any(|volume| overlaps(target, &volume.spec.mount_path))))
+                .map(|volume| &volume.spec)
+                .chain(dynamic)
+                .any(|volume| overlaps(target, &volume.mount_path))))
         || (active
             && plan
                 .volumes
                 .iter()
                 .chain(other.into_iter().flat_map(|plan| &plan.volumes))
-                .any(|volume| target.starts_with(&volume.spec.mount_path)))
+                .map(|volume| &volume.spec)
+                .chain(dynamic)
+                .any(|volume| target.starts_with(&volume.mount_path)))
     {
         return Err("a native mount can cover managed storage during maintenance".into());
     }
@@ -635,10 +643,8 @@ pub(crate) fn recover(path: &Path, id: &str) -> Result<u8, String> {
     require_root()?;
     let plan = load_plan(path)?;
     let volume = volume(&plan, id)?;
-    let _fence = admission_fence::exclusive()?;
+    let fence = admission_fence::exclusive()?;
     installed(path)?;
-    offline_units(&plan, path, None)?;
-    offline_workloads(&plan)?;
     let ledger = Ledger::open(Path::new(LEDGER)).map_err(|_| "admission ledger unavailable")?;
     let snapshot = ledger
         .snapshot()
@@ -649,6 +655,10 @@ pub(crate) fn recover(path: &Path, id: &str) -> Result<u8, String> {
     if publication.published != authority(&plan, path) || publication.pending.is_some() {
         return Err("storage recovery requires stable installed authority".into());
     }
+    let creation =
+        crate::admission_creation::maintenance_inventory(&ledger, &publication.published, &fence)?;
+    offline_units(&plan, path, None, &creation)?;
+    offline_workloads(&plan)?;
     ledger
         .reconcile_storage(id, snapshot.revision, |receipt| {
             if !allocation_matches(&receipt.allocation, volume) {
@@ -936,20 +946,48 @@ mod tests {
             unit.sub_state = sub_state.into();
             // The former mount is outside the new plan, but still part of the
             // transition's protected paths even when no old unit file remains.
-            assert!(maintenance_mount(&unit, &desired, None).is_ok());
-            assert!(maintenance_mount(&unit, &desired, Some(&old)).is_err());
+            assert!(maintenance_mount(&unit, &desired, None, &[]).is_ok());
+            assert!(maintenance_mount(&unit, &desired, Some(&old), &[]).is_err());
         }
         unit.mount.as_mut().unwrap().where_path = desired.volumes[0]
             .spec
             .mount_path
             .to_string_lossy()
             .into_owned();
-        assert!(maintenance_mount(&unit, &desired, Some(&old)).is_err());
+        assert!(maintenance_mount(&unit, &desired, Some(&old), &[]).is_err());
         unit.load_state = "masked".into();
         unit.mount = None;
-        assert!(maintenance_mount(&unit, &desired, Some(&old)).is_ok());
+        assert!(maintenance_mount(&unit, &desired, Some(&old), &[]).is_ok());
         unit.job.id = 9;
-        assert!(maintenance_mount(&unit, &desired, Some(&old)).is_err());
+        assert!(maintenance_mount(&unit, &desired, Some(&old), &[]).is_err());
+    }
+
+    #[test]
+    fn historical_dynamic_mounts_remain_protected_after_template_removal() {
+        let (plan, mut unit) = stopped_fixture();
+        let mut volume = plan.volumes[0].spec.clone();
+        volume.mount_path =
+            "/var/lib/tentaflake-environments/env-11111111111111111111111111111111/workspace"
+                .into();
+        unit.id = "dynamic.mount".into();
+        unit.service = None;
+        unit.mount = Some(crate::admission_systemd::MountObservation {
+            what: "tmpfs".into(),
+            where_path: volume.mount_path.to_string_lossy().into_owned(),
+            filesystem_type: "tmpfs".into(),
+        });
+        for state in ["active", "inactive"] {
+            unit.active_state = state.into();
+            assert!(maintenance_mount(&unit, &plan, None, &[]).is_ok());
+            assert!(maintenance_mount(&unit, &plan, None, std::slice::from_ref(&volume)).is_err());
+        }
+        unit.mount.as_mut().unwrap().where_path = "/var/lib/tentaflake-environments".into();
+        assert!(maintenance_mount(&unit, &plan, None, std::slice::from_ref(&volume)).is_err());
+        unit.active_state = "active".into();
+        assert!(
+            maintenance_mount(&unit, &plan, None, std::slice::from_ref(&volume)).is_ok(),
+            "stable ancestor is retained"
+        );
     }
 
     #[test]
@@ -993,21 +1031,21 @@ mod tests {
             where_path: "/run".into(),
             filesystem_type: "tmpfs".into(),
         });
-        assert!(maintenance_mount(&unit, &plan, None).is_ok());
+        assert!(maintenance_mount(&unit, &plan, None, &[]).is_ok());
         let mut pts = unit.clone();
         pts.id = "dev-pts.mount".into();
         let mount = pts.mount.as_mut().unwrap();
         mount.what = "devpts".into();
         mount.where_path = "/dev/pts".into();
         mount.filesystem_type = "devpts".into();
-        assert!(maintenance_mount(&pts, &plan, None).is_ok());
+        assert!(maintenance_mount(&pts, &plan, None, &[]).is_ok());
         for source in ["overlay", "/"] {
             let mut overlay = unit.clone();
             let mount = overlay.mount.as_mut().unwrap();
             mount.what = source.into();
             mount.filesystem_type = "overlay".into();
             assert!(
-                maintenance_mount(&overlay, &plan, None)
+                maintenance_mount(&overlay, &plan, None, &[])
                     .unwrap_err()
                     .starts_with("overlay native mounts are unsupported")
             );
@@ -1018,7 +1056,7 @@ mod tests {
             mount.what = "scheme://private-credential@host/path".into();
             mount.filesystem_type = kind.into();
             assert_eq!(
-                maintenance_mount(&unsupported, &plan, None).unwrap_err(),
+                maintenance_mount(&unsupported, &plan, None, &[]).unwrap_err(),
                 format!(
                     "native mount source cannot be proven independent of backing images: unit=run.mount, type={kind}, source=other"
                 )
@@ -1028,7 +1066,7 @@ mod tests {
         let mut bind = unit.clone();
         bind.mount.as_mut().unwrap().what = "/".into();
         bind.mount.as_mut().unwrap().filesystem_type = "none".into();
-        assert!(maintenance_mount(&bind, &plan, None).is_ok());
+        assert!(maintenance_mount(&bind, &plan, None, &[]).is_ok());
         for mutate in [
             |unit: &mut UnitObservation| unit.job.id = 5,
             |unit: &mut UnitObservation| unit.active_state = "activating".into(),
@@ -1052,15 +1090,15 @@ mod tests {
         ] {
             let mut changed = unit.clone();
             mutate(&mut changed);
-            assert!(maintenance_mount(&changed, &plan, None).is_err());
+            assert!(maintenance_mount(&changed, &plan, None, &[]).is_err());
         }
         unit.mount.as_mut().unwrap().where_path = plan.volumes[0]
             .spec
             .mount_path
             .to_string_lossy()
             .into_owned();
-        assert!(maintenance_mount(&unit, &plan, None).is_err());
+        assert!(maintenance_mount(&unit, &plan, None, &[]).is_err());
         unit.mount.as_mut().unwrap().where_path = "/".into();
-        assert!(maintenance_mount(&unit, &plan, None).is_ok());
+        assert!(maintenance_mount(&unit, &plan, None, &[]).is_ok());
     }
 }

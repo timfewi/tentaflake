@@ -99,16 +99,17 @@ Unrelated login consumption does not change resource or grant revisions.
 This slice accepts only nonexpiring installed creation and issued grants.
 Ordinary native runtime/storage entrypoints refuse these dynamic identities;
 publication refuses queued or unresolved work. Partial creation retains both
-charges. Explicit recovery can recognize exact existing, stopped images after
-helpers are fenced. A separate operator abort releases only slots proven absent,
+charges. Explicit recovery recognizes exact existing, stopped images only when
+both native receipts already record completed preparation. A separate operator
+abort releases only slots proven absent,
 retains exact stopped images, and revokes effective grants. Queued work requires
 both slots absent; claimed work additionally binds the fenced original supervisor.
 Missing staging, mount, loop and writer evidence refuses the whole abort. Durable
 release markers preserve all original IDs and history; nothing authorizes their
 reuse or recreation. Exact terminal retries perform no observation or mutation.
-Trusted absence/fence collectors and runtime acceptance are still required before
-enabling public creation. These are library guarantees and collector obligations,
-not evidence of a working HTTP create or VM lifecycle.
+The root maintenance collectors implement these observations; actual supervised
+creation/recovery VM acceptance is still required before enabling public creation.
+Library and collector checks do not establish a working HTTP create or VM lifecycle.
 
 Existing private v3 ledgers without the new API field remain readable. Once a
 new writer persists that field, older binaries reject it; rollback must preserve
@@ -130,7 +131,35 @@ once. Initial execution requires an empty Docker inventory, no attached loops
 and no dynamic mounts. Each sibling volume is created, mounted, initialized,
 unmounted and verified; failures preserve Unknown and all remaining charges.
 Historical claims return without helper execution. This internal owner does not
-enable HTTP queueing, recovery or general concurrent environment lifecycle.
+enable HTTP queueing or general concurrent environment lifecycle.
+
+Explicit root reconciliation uses the current installed store plan, original
+operation ID and expected ledger revision (reported by `admission publication status`):
+
+```bash
+tentaflake admission create-recover <generated-store-plan> <operation-id> <expected-ledger-revision>
+tentaflake admission create-abort <generated-store-plan> <operation-id> <expected-ledger-revision>
+```
+
+Claimed work requires a different boot from its recorded execution because the
+receipt does not retain an old cgroup identity. Queued work has no execution and
+may be aborted in the same boot when both slots are absent. Operators must first
+drain all launchers, mounts and loops; these commands never stop services or
+delete staging. The collectors require both protected backing directories,
+authenticate the original retained template, scan every slot against retained
+charges and run only its bounded read-only verifier for existing target images.
+They repeat the inventory and stopped-host observations before committing.
+Successful recovery requires both native rows already Present: a valid Btrfs
+image cannot prove owner initialization completed. Otherwise abort can retain
+verified images and release only proven-absent slots. An error preserves all
+charges; no path repeats creation or ownership helpers.
+
+Maintenance includes recorded dynamic paths and creation units after template
+removal or grant revocation. Current templates are checked through a fixed
+metadata-only systemd instance, which is never started; unknown or removed
+launchers must be absent or masked and drained. Exact terminal abort/recovery
+retries return the durable receipt without loading an old template or observing
+storage again, including after publication. Keep its original expected revision.
 
 ## HTTPS CLI client
 

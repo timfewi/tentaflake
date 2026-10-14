@@ -4,7 +4,7 @@
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::os::unix::fs::MetadataExt;
 use std::path::Path;
@@ -180,6 +180,7 @@ pub(crate) fn load_unit(busctl: &Path, name: &str) -> Result<UnitObservation, St
 enum MetadataScope {
     Required,
     IncidentalMount,
+    IncidentalCreation,
 }
 
 fn valid_busctl(busctl: &Path) -> bool {
@@ -307,7 +308,7 @@ fn observe_mount_inventory(
     let mut observed = Vec::new();
     let mut inert = BTreeSet::new();
     for name in inventory.names {
-        let scope = if required.contains(&name) || inventory.installed.contains(&name) {
+        let scope = if required.contains(&name) || inventory.installed.contains_key(&name) {
             MetadataScope::Required
         } else {
             MetadataScope::IncidentalMount
@@ -344,6 +345,87 @@ pub(crate) fn list_worker_units(busctl: &Path) -> Result<Vec<String>, String> {
         worker_name,
     )
     .map(|inventory| inventory.names.into_iter().collect())
+}
+
+pub(crate) const CREATION_TEMPLATE: &str = "tentaflake-environment-create@.service";
+
+/// Bare templates are file metadata, not loadable service instances. Preserve
+/// file states so callers can require removed creators to be absent or masked.
+pub(crate) fn list_creation_units(busctl: &Path) -> Result<UnitInventory, String> {
+    list_units(
+        busctl,
+        &["tentaflake-environment-create@*.service"],
+        creation_name,
+    )
+}
+
+pub(crate) fn creation_operation(name: &str) -> Option<&str> {
+    let operation = name
+        .strip_prefix("tentaflake-environment-create@")?
+        .strip_suffix(".service")?;
+    (operation.len() <= 96
+        && operation
+            .as_bytes()
+            .first()
+            .is_some_and(u8::is_ascii_alphanumeric)
+        && operation
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"_.-".contains(&b)))
+    .then_some(operation)
+}
+
+fn creation_name(name: &str) -> bool {
+    name == CREATION_TEMPLATE || creation_operation(name).is_some()
+}
+
+/// An incidental unavailable object is accepted only after exact inert metadata
+/// checks. The caller must bracket this observation with successful file lists.
+pub(crate) fn load_creation_unit(
+    busctl: &Path,
+    name: &str,
+    required: bool,
+) -> Result<UnitObservation, String> {
+    if creation_operation(name).is_none() {
+        return Err("invalid concrete creation unit".into());
+    }
+    let observed = observe_unit(
+        busctl,
+        name,
+        "LoadUnit",
+        if required {
+            MetadataScope::Required
+        } else {
+            MetadataScope::IncidentalCreation
+        },
+    )?;
+    if observed.load_state == "not-found" {
+        validate_inert_creation(&observed)?;
+    }
+    Ok(observed)
+}
+
+fn validate_inert_creation(unit: &UnitObservation) -> Result<(), String> {
+    let service = unit
+        .service
+        .as_ref()
+        .ok_or("missing creation service metadata")?;
+    if creation_operation(&unit.id).is_none()
+        || !inert_metadata(unit)
+        || unit.mount.is_some()
+        || service.main_pid != 0
+        || service.control_pid != 0
+        || !service.control_group.is_empty()
+        || !service.exec_start.is_empty()
+        || !service.exec_stop.is_empty()
+        || !service.exec_start_pre.is_empty()
+        || !service.exec_start_post.is_empty()
+        || !service.exec_stop_post.is_empty()
+        || !service.exec_reload.is_empty()
+        || !service.exec_condition.is_empty()
+    {
+        return Err("unavailable creation unit has live or configured metadata".into());
+    }
+    Ok(())
 }
 
 /// Path triggers are an independent launcher: a stopped service alone is not
@@ -405,9 +487,9 @@ fn worker_path_properties(bytes: &[u8], service: &str, inbox: &Path) -> Result<b
         && Path::new(&paths[0].1) == inbox)
 }
 
-struct UnitInventory {
-    names: BTreeSet<String>,
-    installed: BTreeSet<String>,
+pub(crate) struct UnitInventory {
+    pub names: BTreeSet<String>,
+    pub installed: BTreeMap<String, String>,
 }
 
 fn list_units(
@@ -437,19 +519,16 @@ fn list_units(
     let mut names: BTreeSet<_> = parse_listed_units(&list("ListUnitsByPatterns")?, valid_name)?
         .into_iter()
         .collect();
-    let installed: BTreeSet<_> = parse_listed_files(&list("ListUnitFilesByPatterns")?, valid_name)?
-        .into_iter()
-        .collect();
-    names.extend(installed.iter().cloned());
+    let installed = parse_listed_files(&list("ListUnitFilesByPatterns")?, valid_name)?;
+    names.extend(installed.keys().cloned());
     if names.len() > 512 {
         return Err("systemd unit listing limit exceeded".into());
     }
     Ok(UnitInventory { names, installed })
 }
 
-fn inert_mount_metadata(unit: &UnitObservation) -> bool {
-    mount_name(&unit.id)
-        && unit.load_state == "not-found"
+fn inert_metadata(unit: &UnitObservation) -> bool {
+    unit.load_state == "not-found"
         && unit.active_state == "inactive"
         && unit.sub_state == "dead"
         && unit.job.id == 0
@@ -459,7 +538,8 @@ fn inert_mount_metadata(unit: &UnitObservation) -> bool {
 }
 
 fn validate_inert_mount(unit: &UnitObservation) -> Result<(), String> {
-    if !inert_mount_metadata(unit)
+    if !mount_name(&unit.id)
+        || !inert_metadata(unit)
         || unit.service.is_some()
         || unit
             .mount
@@ -473,9 +553,9 @@ fn validate_inert_mount(unit: &UnitObservation) -> Result<(), String> {
 
 fn ensure_uninstalled(
     inert: &BTreeSet<String>,
-    installed: &BTreeSet<String>,
+    installed: &BTreeMap<String, String>,
 ) -> Result<(), String> {
-    if !inert.is_disjoint(installed) {
+    if inert.iter().any(|name| installed.contains_key(name)) {
         return Err("mount unit files changed during observation".into());
     }
     Ok(())
@@ -645,7 +725,10 @@ fn parse_metadata(
 ) -> Result<UnitObservation, String> {
     let unit = parse_unit(bytes, name)?;
     if !(matches!(unit.load_state.as_str(), "loaded" | "masked")
-        || scope == MetadataScope::IncidentalMount && inert_mount_metadata(&unit))
+        || scope == MetadataScope::IncidentalMount && mount_name(name) && inert_metadata(&unit)
+        || scope == MetadataScope::IncidentalCreation
+            && creation_operation(name).is_some()
+            && inert_metadata(&unit))
     {
         return Err(format!(
             "systemd unit metadata is unavailable: {} has LoadState={}",
@@ -869,13 +952,16 @@ fn worker_name(name: &str) -> bool {
         && (name.ends_with(".service") || name.ends_with(".path"))
 }
 
-fn parse_listed_files(bytes: &[u8], valid_name: fn(&str) -> bool) -> Result<Vec<String>, String> {
+fn parse_listed_files(
+    bytes: &[u8],
+    valid_name: fn(&str) -> bool,
+) -> Result<BTreeMap<String, String>, String> {
     let [files]: [Vec<(String, String)>; 1] =
         property(&mut records(bytes, 1, MAX_LIST_BYTES)?, "a(ss)")?;
     if files.len() > 512 {
         return Err("systemd unit listing limit exceeded".into());
     }
-    let mut names = BTreeSet::new();
+    let mut names = BTreeMap::new();
     for (path, state) in files {
         let name = path
             .rsplit('/')
@@ -898,12 +984,12 @@ fn parse_listed_files(bytes: &[u8], valid_name: fn(&str) -> bool) -> Result<Vec<
                     | "transient"
                     | "bad"
             )
-            || !names.insert(name.to_owned())
+            || names.insert(name.to_owned(), state).is_some()
         {
             return Err("invalid, duplicate or aliased systemd unit files".into());
         }
     }
-    Ok(names.into_iter().collect())
+    Ok(names)
 }
 
 fn absolute_path(value: &str) -> bool {
@@ -1255,7 +1341,10 @@ mod tests {
         );
         let files = br#"{"type":"a(ss)","data":[[["/etc/systemd/system/docker-removed.service","masked"],["/etc/systemd/system/podman-removed.service","disabled"]]]}"#;
         assert_eq!(
-            parse_listed_files(files, runtime_name).unwrap(),
+            parse_listed_files(files, runtime_name)
+                .unwrap()
+                .into_keys()
+                .collect::<Vec<_>>(),
             ["docker-removed.service", "podman-removed.service"]
         );
     }
@@ -1299,7 +1388,10 @@ mod tests {
         ]);
         let fixture = serde_json::json!({"type":"a(ss)","data":[[file.clone()]]});
         assert_eq!(
-            parse_listed_files(&serde_json::to_vec(&fixture).unwrap(), quota_name).unwrap(),
+            parse_listed_files(&serde_json::to_vec(&fixture).unwrap(), quota_name)
+                .unwrap()
+                .into_keys()
+                .collect::<Vec<_>>(),
             ["tentaflake-workspace-quota-old.service"]
         );
         for mode in 0..6 {
@@ -1397,7 +1489,10 @@ mod tests {
         assert!(parse_listed_units(&serde_json::to_vec(&value).unwrap(), mount_name).is_err());
         let files = br#"{"type":"a(ss)","data":[[["/etc/systemd/system/var-lib-old.mount","disabled"],["/run/systemd/generator/-.mount","generated"]]]}"#;
         assert_eq!(
-            parse_listed_files(files, mount_name).unwrap(),
+            parse_listed_files(files, mount_name)
+                .unwrap()
+                .into_keys()
+                .collect::<Vec<_>>(),
             ["-.mount", "var-lib-old.mount"]
         );
         assert!(parse_listed_files(files, quota_name).is_err());
@@ -1506,9 +1601,9 @@ mod tests {
         UnitInventory {
             names: BTreeSet::from(["home.mount".into()]),
             installed: if installed {
-                BTreeSet::from(["home.mount".into()])
+                BTreeMap::from([("home.mount".into(), "static".into())])
             } else {
-                BTreeSet::new()
+                BTreeMap::new()
             },
         }
     }
@@ -1558,6 +1653,90 @@ mod tests {
             .unwrap();
             assert_eq!(result.len(), 1);
             assert_eq!(result[0].load_state, state);
+        }
+    }
+
+    #[test]
+    fn creation_inventory_preserves_template_mask_and_exact_operation_names() {
+        let files = serde_json::json!({"type":"a(ss)","data":[[
+            ["/etc/systemd/system/tentaflake-environment-create@.service","masked"],
+            ["/etc/systemd/system/tentaflake-environment-create@op-1.service","static"]]]});
+        let parsed =
+            parse_listed_files(&serde_json::to_vec(&files).unwrap(), creation_name).unwrap();
+        assert_eq!(parsed[CREATION_TEMPLATE], "masked");
+        assert_eq!(
+            parsed["tentaflake-environment-create@op-1.service"],
+            "static"
+        );
+        assert!(creation_operation(CREATION_TEMPLATE).is_none());
+        for operation in ["op-1", "maintenance-probe", "A.b_2"] {
+            assert_eq!(
+                creation_operation(&format!(
+                    "tentaflake-environment-create@{operation}.service"
+                )),
+                Some(operation)
+            );
+        }
+        for operation in ["", ".hidden", "../escape", "x@y", "x*", "space name"] {
+            assert!(
+                creation_operation(&format!(
+                    "tentaflake-environment-create@{operation}.service"
+                ))
+                .is_none()
+            );
+        }
+        assert!(
+            creation_operation(&format!(
+                "tentaflake-environment-create@{}.service",
+                "a".repeat(97)
+            ))
+            .is_none()
+        );
+        let mut listed = listing();
+        listed["data"][0][0][0] = serde_json::json!("tentaflake-environment-create@op-1.service");
+        assert_eq!(
+            parse_listed_units(&serde_json::to_vec(&listed).unwrap(), creation_name).unwrap(),
+            ["tentaflake-environment-create@op-1.service"]
+        );
+        listed["data"][0][0][5] = serde_json::json!("other.service");
+        assert!(parse_listed_units(&serde_json::to_vec(&listed).unwrap(), creation_name).is_err());
+    }
+
+    #[test]
+    fn incidental_creation_absence_requires_empty_bracketed_service_metadata() {
+        let name = "tentaflake-environment-create@old.service";
+        let wire = missing_mount_wire().replace("home.mount", name);
+        assert!(parse_metadata(wire.as_bytes(), name, MetadataScope::Required).is_err());
+        assert!(parse_metadata(wire.as_bytes(), name, MetadataScope::IncidentalMount).is_err());
+        let mut unit =
+            parse_metadata(wire.as_bytes(), name, MetadataScope::IncidentalCreation).unwrap();
+        let mut service = parse_service(SERVICE.as_bytes()).unwrap();
+        service.main_pid = 0;
+        service.control_group.clear();
+        service.exec_start.clear();
+        unit.service = Some(service);
+        validate_inert_creation(&unit).unwrap();
+        for case in 0..10 {
+            let mut changed = unit.clone();
+            match case {
+                0 => changed.job.id = 1,
+                1 => changed.invocation_id = [1; 16],
+                2 => changed.fragment_path = "/etc/systemd/system/old.service".into(),
+                3 => changed.need_daemon_reload = true,
+                4 => changed.active_state = "failed".into(),
+                5 => changed.service.as_mut().unwrap().control_pid = 1,
+                6 => changed.service.as_mut().unwrap().control_group = "/remaining".into(),
+                7 => {
+                    changed.service.as_mut().unwrap().exec_start =
+                        parse_service(SERVICE.as_bytes()).unwrap().exec_start
+                }
+                8 => {
+                    changed.service.as_mut().unwrap().exec_condition =
+                        parse_service(SERVICE.as_bytes()).unwrap().exec_start
+                }
+                _ => changed.service = None,
+            }
+            assert!(validate_inert_creation(&changed).is_err(), "case {case}");
         }
     }
 

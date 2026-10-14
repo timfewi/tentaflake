@@ -312,7 +312,7 @@ pub(crate) fn recover_image(path: &Path, expected: &str, claimed: &str) -> Resul
     let expected = revision(expected)?;
     let claimed = revision(claimed)?;
     crate::admission_runtime::require_root()?;
-    let _fence = host_fence::exclusive()?;
+    let fence = host_fence::exclusive()?;
     installed(path)?;
     let plan = load_plan(path)?;
     let ledger = Ledger::open(Path::new(LEDGER)).map_err(|error| error.to_string())?;
@@ -320,6 +320,8 @@ pub(crate) fn recover_image(path: &Path, expected: &str, claimed: &str) -> Resul
         .publication_status()
         .map_err(|error| error.to_string())?;
     check_published_authority(&plan, path, &status)?;
+    let dynamic =
+        crate::admission_creation::maintenance_inventory(&ledger, &status.published, &fence)?;
     ledger
         .recover_worker_image_load(expected, claimed, |receipt| {
             // The core checks both revisions and Unknown under this same lock. Do
@@ -337,7 +339,7 @@ pub(crate) fn recover_image(path: &Path, expected: &str, claimed: &str) -> Resul
             // Unknown blocks publication, so the matching current authority is the
             // recorded plan. Fence every known launcher, including legacy OCI and
             // quota units which could otherwise restart the stopped backend.
-            crate::admission_runtime::offline_units(&plan, path, None)?;
+            crate::admission_runtime::offline_units(&plan, path, None, &dynamic)?;
             crate::admission_bootstrap::stopped_backend(&plan)?;
             installed(path)
         })

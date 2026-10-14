@@ -48,14 +48,25 @@ pub(crate) fn validate_specs(specs: &[VolumeSpec]) -> Result<(), String> {
 }
 
 /// Import every existing slot, including removed definitions and size drift.
-/// Missing roots are errors, absent desired images create no row, and every
-/// imported row remains Unknown until separately verified by a trusted host.
+/// The workspace root must exist; its state child may be absent. Missing images
+/// create no row, and imported rows remain Unknown pending trusted verification.
 pub fn scan_inventory(specs: &[VolumeSpec]) -> Result<StorageInventory, String> {
+    scan_fixed(specs, false)
+}
+
+/// Recovery may interpret a missing slot only inside both existing protected
+/// roots. This never creates or repairs a directory and still returns Unknown
+/// rows: the caller owns exact binding and read-only filesystem verification.
+pub(crate) fn scan_recovery_inventory(specs: &[VolumeSpec]) -> Result<StorageInventory, String> {
+    scan_fixed(specs, true)
+}
+
+fn scan_fixed(specs: &[VolumeSpec], require_state: bool) -> Result<StorageInventory, String> {
     if unsafe { libc::geteuid() } != 0 {
         return Err("quota inventory requires root".into());
     }
     let root = Path::new(VOLUME_ROOT);
-    scan_at(specs, root, 0, || open_root(root, 0))
+    scan_at(specs, root, 0, require_state, || open_root(root, 0))
 }
 
 /// Explicit bootstrap only. Create the two fixed roots without repairing any
@@ -506,10 +517,14 @@ fn scan_at(
     specs: &[VolumeSpec],
     root: &Path,
     owner_uid: u32,
+    require_state: bool,
     reopen_root: impl Fn() -> Result<File, String>,
 ) -> Result<StorageInventory, String> {
     let specs = declared_slots(specs, root)?;
     let directories = scan_pool(owner_uid, true, reopen_root)?;
+    if require_state && directories.len() != 2 {
+        return Err("quota recovery requires both existing protected roots".into());
+    }
     let allocations: BTreeMap<_, _> = observed_slots(&directories)
         .map(|(id, kind, meta)| {
             let binding = specs
@@ -781,7 +796,14 @@ mod tests {
             root: &Path,
             owner_uid: u32,
         ) -> Result<StorageInventory, String> {
-            scan_at(specs, root, owner_uid, || self.open(root, owner_uid))
+            scan_at(specs, root, owner_uid, false, || self.open(root, owner_uid))
+        }
+
+        fn recovery_scan(&self, specs: &[VolumeSpec]) -> Result<StorageInventory, String> {
+            let owner_uid = unsafe { libc::geteuid() };
+            scan_at(specs, &self.root, owner_uid, true, || {
+                self.open(&self.root, owner_uid)
+            })
         }
         fn initialize(&self) {
             ensure_roots_at(&self.root, unsafe { libc::geteuid() }, |path| {
@@ -871,6 +893,51 @@ mod tests {
         );
         assert_eq!(inventory.allocations[2].bytes, 1);
         assert!(inventory.allocations[2].binding.is_none());
+    }
+
+    #[test]
+    fn recovery_requires_existing_state_root_without_repairing_it() {
+        let fixture = Fixture::new();
+        let specs = [
+            fixture.spec(StorageKind::Workspace, "agent-a"),
+            fixture.spec(StorageKind::State, "agent-a"),
+        ];
+        fixture.image(StorageKind::Workspace, "agent-a", MIN_STORAGE_BYTES);
+        let original = fixture.scan(&specs).unwrap();
+        assert_eq!(original.allocations.len(), 1);
+        assert!(fixture.recovery_scan(&specs).is_err());
+        assert!(!fixture.root.join("state").exists());
+        assert_eq!(
+            fixture.scan(&specs).unwrap().allocations,
+            original.allocations
+        );
+        fixture.initialize();
+        let empty_state = fixture.recovery_scan(&specs).unwrap();
+        assert!(empty_state.complete);
+        assert_eq!(empty_state.allocations, original.allocations);
+        fixture.image(StorageKind::State, "agent-a", MIN_STORAGE_BYTES);
+        let inventory = fixture.recovery_scan(&specs).unwrap();
+        assert_eq!(
+            inventory.allocations,
+            fixture.scan(&specs).unwrap().allocations
+        );
+        assert_eq!(inventory.allocations.len(), 2);
+        assert!(
+            inventory
+                .allocations
+                .iter()
+                .all(|row| row.state == StorageState::Unknown && row.binding.is_some())
+        );
+        fs::set_permissions(
+            fixture.root.join("state"),
+            fs::Permissions::from_mode(0o777),
+        )
+        .unwrap();
+        assert!(fixture.recovery_scan(&specs).is_err());
+        assert_eq!(
+            fs::metadata(fixture.root.join("state")).unwrap().mode() & 0o7777,
+            0o777
+        );
     }
 
     #[test]
@@ -973,7 +1040,7 @@ mod tests {
             let fixture = Fixture::new();
             let uid = unsafe { libc::geteuid() };
             let opens = Cell::new(0);
-            let result = scan_at(&[], &fixture.root, uid, || {
+            let result = scan_at(&[], &fixture.root, uid, false, || {
                 opens.set(opens.get() + 1);
                 if opens.get() == 2 {
                     let previous = fixture.anchor_path.join("previous-volumes");
