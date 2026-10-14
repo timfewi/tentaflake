@@ -7,6 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 ### Fixed
+- Capture CLI refusal diagnostics from stderr in publication VM assertions.
 - Keep guest Nix's store-mutating registration out of prebuilt, read-only
   admission VM fixtures, including publication specialisations.
 - Pin each worker dispatch to a complete locally resolved image ID with pulls

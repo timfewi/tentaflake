@@ -346,7 +346,8 @@
     def publication(action, *arguments, success=True):
         command = shlex.join(["tentaflake", "admission", "publication", action, *map(str, arguments)])
         if not success:
-            return storage.fail(command)
+            # The CLI reports refusals on stderr; fail still checks the exit status.
+            return storage.fail(command + " 2>&1")
         return json.loads(storage.succeed(command))
 
     def install_storage_generation(system, plan):
@@ -447,7 +448,7 @@
             uncertain = publication("status")
             uncertain_ledger = storage_snapshot()
             error = publication("begin", storage_plan, "unknown-refused", uncertain["ledgerRevision"], success=False)
-            assert "publication requires retained runtime claims and Present storage; recover uncertain state before beginning" in error
+            assert "publication requires retained runtime claims and Present storage; recover uncertain state before beginning" in error, error
             assert publication("status") == uncertain and uncertain["pending"] is None
             assert storage_snapshot() == uncertain_ledger
         finally:
