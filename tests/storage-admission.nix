@@ -324,6 +324,7 @@ in
     storage_state = storage_volumes["state:generic-storage"]
     storage_workspace = storage_volumes["workspace:generic-storage"]
     storage_ledger = "/var/lib/tentaflake-admission/ledger.json"
+    storage_refusals = {}
     storage_worker = storage_manifest["workers"]["generic-storage"]
     storage_worker_image = storage_manifest["workerImage"]
     storage_worker_units = [storage_worker["watcher"], storage_worker["unit"], storage_worker_image["unit"]]
@@ -361,17 +362,51 @@ in
             arguments.append(allocation)
         return shlex.join(arguments)
 
+    def storage_owner_state(unit):
+        output = storage.succeed("systemctl show --property=ActiveState,Result,ExecMainStatus,InvocationID " + shlex.quote(unit))
+        return dict(line.split("=", 1) for line in output.splitlines())
+
+    def record_storage_refusal(unit, previous):
+        state = storage_owner_state(unit)
+        invocation = state["InvocationID"]
+        assert len(invocation) == 32 and all(char in "0123456789abcdef" for char in invocation), (unit, state)
+        assert invocation != previous, (unit, state)
+        assert state["ActiveState"] == "failed" and state["Result"] == "exit-code" and state["ExecMainStatus"] == "2", (unit, state)
+        storage_refusals[unit] = invocation
+
+    def refuse_storage_start(volume):
+        # A workspace start first starts its state owner; that prerequisite is
+        # the exact refusal expected by these storage and Pending scenarios.
+        instance = volume["spec"]["allocationId"].split(":", 1)[1]
+        refused_unit = storage_volumes["state:" + instance]["units"]["owner"]
+        previous = storage_owner_state(refused_unit)["InvocationID"]
+        storage.fail("systemctl start " + shlex.quote(volume["units"]["owner"]))
+        record_storage_refusal(refused_unit, previous)
+
     def stop_storage_units():
-        failed_before = {
-            unit for unit in storage_units
-            if storage.succeed("systemctl show --value --property=ActiveState " + shlex.quote(unit)).strip() == "failed"
-        }
+        failed_before = set()
+        for unit in storage_units:
+            state = storage_owner_state(unit)
+            if state["ActiveState"] == "failed":
+                assert storage_refusals.get(unit) == state["InvocationID"], (unit, state)
+                assert state["Result"] == "exit-code" and state["ExecMainStatus"] == "2", (unit, state)
+                failed_before.add(unit)
         storage.succeed("timeout 150s systemctl stop " + shlex.join(storage_units))
         for unit in storage_units:
             state = storage.succeed("systemctl show --value --property=ActiveState " + shlex.quote(unit)).strip()
             assert state == "inactive" or (unit in failed_before and state == "failed"), (unit, state)
         jobs = storage.succeed("systemctl list-jobs --no-legend --no-pager --full")
         assert all(not set(storage_units).intersection(line.split()) for line in jobs.splitlines()), jobs
+        # Clear only proven CLI refusals after their stop/no-job evidence. A
+        # successful stop can unload its unit, so never reset all owners blindly.
+        for unit in failed_before:
+            state = storage_owner_state(unit)
+            if state["ActiveState"] == "failed":
+                assert state["InvocationID"] == storage_refusals[unit], (unit, state)
+                assert state["Result"] == "exit-code" and state["ExecMainStatus"] == "2", (unit, state)
+                storage.succeed("systemctl reset-failed " + shlex.quote(unit))
+                assert storage_owner_state(unit)["ActiveState"] == "inactive", unit
+        storage_refusals.clear()
 
     def storage_snapshot():
         return json.loads(storage.succeed(f"cat {storage_ledger}"))
@@ -394,7 +429,7 @@ in
         storage.succeed("umask 077; printf %s " + shlex.quote(request) + " > " + shlex.quote(storage_worker_pending))
         worker_refuses_mutations()
         for volume in storage_volumes.values():
-            storage.fail("systemctl start " + shlex.quote(volume["units"]["owner"]))
+            refuse_storage_start(volume)
             assert_storage_absent(volume)
             for field in ("prepare", "mount"):
                 unit = volume["units"][field]
@@ -450,7 +485,7 @@ in
             assert 96 * 1024 * 1024 <= remaining <= 160 * 1024 * 1024, remaining
             assert remaining < required, (remaining, required)
             unit = storage_state["units"]["owner"]
-            storage.fail("systemctl start " + shlex.quote(unit))
+            refuse_storage_start(storage_state)
             assert "storage admission failed; no image creation authorized" in storage.succeed(
                 "journalctl --no-pager -o cat -n 30 -u " + shlex.quote(unit)
             )
@@ -521,7 +556,7 @@ in
     with subtest("aggregate storage refuses a second environment without creating images"):
         for kind in ("state", "workspace"):
             volume = storage_volumes[f"{kind}:generic-overbudget"]
-            storage.fail("systemctl start " + shlex.quote(volume["units"]["owner"]))
+            refuse_storage_start(volume)
             assert_storage_absent(volume)
         assert storage_snapshot() == charged
         stop_storage_units()
@@ -531,7 +566,7 @@ in
         saved = "/var/lib/storage-state-image.saved"
         storage.succeed("mv " + shlex.join([image, saved]))
         try:
-            storage.fail("systemctl start " + shlex.quote(storage_state["units"]["owner"]))
+            refuse_storage_start(storage_state)
             assert_storage_absent(storage_state)
             stop_storage_units()
             storage.fail(storage_command("storage-recover", "state:generic-storage"))
@@ -541,7 +576,7 @@ in
         staging = image + ".new"
         storage.succeed("printf incomplete > " + shlex.quote(staging))
         try:
-            storage.fail("systemctl start " + shlex.quote(storage_state["units"]["owner"]))
+            refuse_storage_start(storage_state)
             assert storage.succeed("cat " + shlex.quote(staging)).strip() == "incomplete"
             assert image_identity(storage_state) == identities["state:generic-storage"]
             assert storage_snapshot() == charged
@@ -558,21 +593,21 @@ in
     with subtest("stale installed authority and unsafe or missing ledgers fail closed"):
         storage.succeed("ln -sfn " + shlex.join([stale_storage_plan, "/etc/tentaflake/admission.json"]))
         try:
-            storage.fail("systemctl start " + shlex.quote(storage_state["units"]["owner"]))
+            refuse_storage_start(storage_state)
             worker_refuses_mutations()
         finally:
             storage.succeed("ln -sfn " + shlex.join([storage_plan, "/etc/tentaflake/admission.json"]))
         stop_storage_units()
         storage.succeed("chmod 0777 /var/lib/tentaflake-admission")
         try:
-            storage.fail("systemctl start " + shlex.quote(storage_state["units"]["owner"]))
+            refuse_storage_start(storage_state)
             worker_refuses_mutations()
         finally:
             storage.succeed("chmod 0700 /var/lib/tentaflake-admission")
         stop_storage_units()
         storage.succeed("mv /var/lib/tentaflake-admission /var/lib/storage-ledger.saved")
         try:
-            storage.fail("systemctl start " + shlex.quote(storage_state["units"]["owner"]))
+            refuse_storage_start(storage_state)
             worker_refuses_mutations()
             storage.succeed("test ! -e /var/lib/tentaflake-admission")
         finally:
@@ -605,12 +640,15 @@ in
     def install_storage_generation(system, plan):
         # NixOS may try wanted quota units during activation. Pending must refuse
         # those starts; exit 4 is accepted only for these expected failed units.
+        previous = {unit: storage_owner_state(unit)["InvocationID"] for unit in storage_units}
         code, output = storage.execute(shlex.quote(system + "/bin/switch-to-configuration") + " test")
         assert code in (0, 4), (code, output)
         failed = storage.succeed("systemctl list-units --state=failed --no-legend --plain").splitlines()
         failed_names = {line.split()[0] for line in failed if line.strip()}
         assert failed_names.issubset(set(storage_units)), (failed_names, output)
         assert code == 0 or failed_names, output
+        for unit in failed_names:
+            record_storage_refusal(unit, previous[unit])
         assert storage.succeed("readlink -f /run/current-system").strip() == system
         assert storage.succeed("readlink -f /etc/tentaflake/admission.json").strip() == plan
         storage.succeed("systemctl daemon-reload")
@@ -736,7 +774,7 @@ in
         publication("finish", "publish-capacity", stable["ledgerRevision"], success=False)
         publication("finish", "publish-capacity", pending["ledgerRevision"], success=False)
         assert publication("status") == pending
-        storage.fail("systemctl start " + shlex.quote(storage_workspace["units"]["owner"]))
+        refuse_storage_start(storage_workspace)
         stop_storage_units()
         assert publication("status") == pending
         assert storage_snapshot()["storage"] == charged["storage"]
@@ -789,7 +827,7 @@ in
         obstacle = unused_state["spec"]["mountPath"] + "/publication-obstacle"
         storage.succeed("printf preserved > " + shlex.quote(obstacle))
         try:
-            storage.fail("systemctl start " + shlex.quote(unused_state["units"]["owner"]))
+            refuse_storage_start(unused_state)
             stop_storage_units()
             allocations = [receipt["allocation"] for receipt in storage_snapshot()["storage"]]
             unknown = [allocation for allocation in allocations if allocation["id"] == unused_state["spec"]["allocationId"]]
