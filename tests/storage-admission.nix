@@ -133,8 +133,16 @@
         return shlex.join(arguments)
 
     def stop_storage_units():
-        storage.succeed("systemctl stop " + shlex.join(storage_units))
-        storage.succeed("systemctl reset-failed " + shlex.join(storage_units))
+        failed_before = {
+            unit for unit in storage_units
+            if storage.succeed("systemctl show --value --property=ActiveState " + shlex.quote(unit)).strip() == "failed"
+        }
+        storage.succeed("timeout 150s systemctl stop " + shlex.join(storage_units))
+        for unit in storage_units:
+            state = storage.succeed("systemctl show --value --property=ActiveState " + shlex.quote(unit)).strip()
+            assert state == "inactive" or (unit in failed_before and state == "failed"), (unit, state)
+        jobs = storage.succeed("systemctl list-jobs --no-legend --no-pager --full")
+        assert all(not set(storage_units).intersection(line.split()) for line in jobs.splitlines()), jobs
 
     def storage_snapshot():
         return json.loads(storage.succeed(f"cat {storage_ledger}"))
