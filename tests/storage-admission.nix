@@ -61,6 +61,9 @@
         }
       ) names;
 
+      # No guest Nix operations: its closure-registration service attempts to
+      # change store ownership, which the read-only shared store cannot support.
+      nix.enable = false;
       virtualisation = {
         # These tests execute prebuilt closures; admission does not support the
         # VM harness's writable-store overlay with unobserved backing options.

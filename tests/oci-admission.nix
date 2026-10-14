@@ -66,6 +66,8 @@ let
         inherit name definition;
       }
     ) names;
+    # These prebuilt-only guests do not need Nix's store-mutating registration.
+    nix.enable = false;
     virtualisation = {
       # Use prebuilt closures through the harness's read-only bind mount; an
       # overlay store has backing options outside the maintenance contract.
