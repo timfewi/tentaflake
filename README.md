@@ -43,8 +43,8 @@ installation remain under development.
 The opt-in [experimental HTTP service](docs/19-host-api.md#experimental-authentication-service)
 implements discovery, operator sessions, published capacity reporting, explicitly
 granted installed-catalog lists, read-only template planning and owned operation
-receipt reads; dynamic environment mutations remain
-unsupported while their admission and lifecycle integration is developed.
+receipt reads and stopped offline creation. Runtime start/stop remain
+unsupported; generated-host lifecycle acceptance is a separate gate.
 The matching `tentaflake api --origin …` client uses protected bearer files and
 explicit operation recovery without automatic mutation retries.
 
@@ -62,7 +62,7 @@ Ubuntu 26.04 LTS platform pins. Metadata checks do not establish runtime accepta
 | Installed NixOS host | Core |
 | Adapter registry and Hermes/ZeroClaw builders | Core |
 | Rust `tentaflake` CLI | Core |
-| Private HTTP host API | Experimental discovery/sessions/capacity/catalog/plans/receipt reads, opt-in; environment mutations unsupported |
+| Private HTTP host API | Experimental discovery/sessions/capacity/catalog/plans/receipt reads and stopped creation, opt-in; runtime lifecycle unsupported |
 | Rust LLM/fetch policy broker | Core, opt-in per agent |
 | `secure-research-tool` web research | Pinned public service; explicit generic grant, required for legacy balanced auto-start |
 | Disposable no-egress tool worker | Core; explicit generic grant, required for legacy balanced auto-start |

@@ -64,6 +64,8 @@ pub(crate) enum AuthError {
     Forbidden,
     CursorExpired,
     PlanStale,
+    IdempotencyConflict,
+    IdempotencyExpired,
     QuotaExceeded,
     RateLimited,
     Capacity,
@@ -83,6 +85,8 @@ impl AuthError {
             Self::Origin | Self::Forbidden => "forbidden",
             Self::CursorExpired => "cursor_expired",
             Self::PlanStale => "plan_stale",
+            Self::IdempotencyConflict => "idempotency_conflict",
+            Self::IdempotencyExpired => "idempotency_expired",
             Self::QuotaExceeded => "quota_exceeded",
             Self::RateLimited | Self::Capacity => "rate_limited",
             Self::Unsupported => "unsupported",
@@ -96,7 +100,11 @@ impl AuthError {
             Self::Invalid => 400,
             Self::Unauthenticated | Self::SessionExpired | Self::SessionRevoked => 401,
             Self::Csrf | Self::Origin | Self::Forbidden => 403,
-            Self::CursorExpired | Self::PlanStale | Self::QuotaExceeded => 409,
+            Self::CursorExpired
+            | Self::PlanStale
+            | Self::IdempotencyConflict
+            | Self::IdempotencyExpired
+            | Self::QuotaExceeded => 409,
             Self::RateLimited | Self::Capacity => 429,
             Self::Unsupported => 501,
             Self::NotFound => 404,
@@ -187,6 +195,19 @@ pub(crate) struct Sessions {
 }
 
 impl Sessions {
+    #[cfg(test)]
+    pub(super) fn fixture_expire_after(&mut self, cookie: &str, remaining: Duration) -> Instant {
+        let value = cookie.strip_prefix(&format!("{COOKIE}=")).unwrap();
+        let session = self.sessions.get_mut(&sha256(value.as_bytes())).unwrap();
+        let now = Clock::now().unwrap();
+        session.issued = Clock {
+            monotonic: now.monotonic - ABSOLUTE + remaining,
+            unix_seconds: now.unix_seconds - ABSOLUTE.as_secs() + remaining.as_secs(),
+        };
+        session.touched = now.monotonic;
+        now.monotonic + remaining
+    }
+
     #[cfg(test)]
     pub(super) fn fixture_login(&mut self, current: AuthContext<'_>) -> NewSession {
         let mut headers = HeaderMap::new();
@@ -450,6 +471,16 @@ impl Sessions {
         current: AuthContext<'_>,
         clock: Clock,
     ) -> Result<(), AuthError> {
+        self.check_active_with(auth, current, clock, read_secret)
+    }
+
+    fn check_active_with(
+        &self,
+        auth: &Authenticated,
+        current: AuthContext<'_>,
+        clock: Clock,
+        read: impl FnMut(&Path) -> Result<Vec<u8>, AuthError>,
+    ) -> Result<(), AuthError> {
         valid_context(current)?;
         if auth.principal_id != current.principal_id
             || auth.binding != current.auth_binding
@@ -479,7 +510,7 @@ impl Sessions {
                 let secret = self.read_independent(
                     path,
                     self.settings.operator_credential.as_deref(),
-                    read_secret,
+                    read,
                 )?;
                 if hmac::verify(&self.comparisons, &secret, tag.as_ref()).is_err() {
                     return Err(AuthError::SessionRevoked);
@@ -1214,6 +1245,48 @@ mod tests {
         fn drop(&mut self) {
             let _ = fs::remove_dir_all(&self.path);
         }
+    }
+
+    #[test]
+    fn final_active_check_rereads_rotated_bearer_from_protected_file() {
+        let f = SecretFixture::new();
+        let path = f.path.join("secret");
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+        fs::write(&path, BEARER).unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o400)).unwrap();
+        let mut sessions = Sessions::new(settings()).unwrap();
+        let bearer_path = sessions.settings.bearer_credential.clone().unwrap();
+        let read = |path: &Path| {
+            if path == bearer_path {
+                f.read()
+            } else {
+                fixture_secret(path)
+            }
+        };
+        let mut request = headers();
+        request.insert(
+            "authorization",
+            format!("Bearer {}", std::str::from_utf8(BEARER).unwrap())
+                .parse()
+                .unwrap(),
+        );
+        let now = clock();
+        let auth = sessions
+            .authenticate_with(&request, RequestKind::Mutation, current(), now, read)
+            .unwrap();
+        assert_eq!(
+            sessions.check_active_with(&auth, current(), now, read),
+            Ok(())
+        );
+
+        let replacement = f.path.join("replacement");
+        fs::write(&replacement, b"rotated-synthetic-bearer-0123456789").unwrap();
+        fs::set_permissions(&replacement, fs::Permissions::from_mode(0o400)).unwrap();
+        fs::rename(replacement, path).unwrap();
+        assert_eq!(
+            sessions.check_active_with(&auth, current(), now, read),
+            Err(AuthError::SessionRevoked)
+        );
     }
 
     #[test]

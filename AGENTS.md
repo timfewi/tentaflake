@@ -178,8 +178,8 @@ are already published or require access to another repository for public checks.
   Native entrypoints cannot bypass dynamic ownership; unresolved work fences
   publication and keeps both charges. Operator abort releases only proven-absent
   slots and preserves tombstones; retained images stay charged. Public create
-  remains `501` until supervised creation/recovery runtime acceptance is complete;
-  see `docs/19-host-api.md` for migration limits. Creation templates retain their
+  uses exact cached plans and once-only supervised queueing; runtime start stays closed.
+  See `docs/19-host-api.md` for migration limits. Creation templates retain their
   original catalog and private source details; never validate old authorities
   against a newer catalog or serialize private template configuration publicly.
   Bootstrap/publication retain authority closures through official Nix GC-root
@@ -213,7 +213,7 @@ are already published or require access to another repository for public checks.
   never free resources, grants or live readiness. Operation reads return only the
   original host/principal receipt and stored revisions. Pending/old-epoch missing
   keys remain Unknown; recheck auth/binding after ledger reads. Never serialize
-  private authority or supervisor fields. Resource mutations stay unsupported.
+  private authority or supervisor fields. Runtime mutations stay unsupported.
   Catalog reads require the exact installed principal/catalog grant. Project only
   safe installed-template image metadata; no private source details or inferred
   creation permission. Public catalog/grant revisions bind their actual content,
@@ -224,7 +224,12 @@ are already published or require access to another repository for public checks.
   do not allocate, register GC roots or write ledger rows during preview. Cache
   exact candidates with bounded monotonic/wall expiry, recheck authority before
   responding, and never equate a valid plan with a reservation or runtime grant.
-  Public creation/lifecycle remain unavailable until their commit path is verified.
+  Stopped create first resolves the original scoped key/digest, before cache or
+  current creation grants. Reuse the shared physical observer and atomic two-row
+  queue. Only New may hand off once after final auth/response and fence release;
+  failed handoff keeps Queued, and history never replays. Reconstruct public
+  historical configuration only from its retained original manifest; usage remains
+  unknown. Runtime mutations stay closed pending their own integration.
   The HTTPS client uses protected caller-owned bearer files and the same wire
   contract. Explicit `--ca-file` accepts bounded protected public CA material;
   preserve default trust, certificate/hostname verification and credential rules.

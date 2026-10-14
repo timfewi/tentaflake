@@ -147,10 +147,10 @@ def main():
             relay.serve_forever()
     elif len(sys.argv) == 3 and sys.argv[1] == "operation":
         # IDs are public receipt data; the driver supplies only its exact fixture IDs.
-        assert sys.argv[2].startswith("op-") and all(c.isalnum() or c in "-_" for c in sys.argv[2])
+        assert sys.argv[2].startswith(("op-", "plan-op-")) and len(sys.argv[2]) <= 96 and all(c.isascii() and (c.isalnum() or c in "-_") for c in sys.argv[2])
         print(json.dumps(request("GET", "/api/v1/operations/" + sys.argv[2])))
     elif sys.argv[1:] == ["unsupported"]:
-        response = request("POST", "/api/v1/environments", b'{"planId":"fixture","startAfterCreate":false}')
+        response = request("POST", "/api/v1/environments/fixture/start", b'{}')
         assert response["status"] == 501 and response["body"]["error"]["code"] == "unsupported"
     elif sys.argv[1:] == ["catalog"]:
         print(json.dumps(request("GET", "/api/v1/catalog/images?limit=1", catalog=True)))

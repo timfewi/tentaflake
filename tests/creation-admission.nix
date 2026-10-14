@@ -1,5 +1,5 @@
-# Real stopped creation and root reconciliation. The ignored Rust harness only
-# prepares accepted/core-interrupted records; it adds no production CLI bypass.
+# Public stopped creation and root reconciliation. The ignored Rust harness only
+# prepares additional interrupted records; it adds no production CLI bypass.
 { self }:
 {
   node = import ./fixtures/creation-node.nix { inherit self; };
@@ -114,14 +114,14 @@
     """
         return creation.succeed(shlex.join(["python3", "-c", script]))
 
-    def creation_plan_file(request):
-        path = api_root + "/plan-request.json"
+    def creation_request_file(request, name="plan-request.json"):
+        path = api_root + "/" + name
         script = "import pathlib,sys; pathlib.Path(sys.argv[1]).write_text(sys.argv[2])"
         creation.succeed(shlex.join(["python3", "-c", script, path, json.dumps(request)]))
         return path
 
     def creation_plan_refused(request, status, code):
-        path = creation_plan_file(request)
+        path = creation_request_file(request)
         before, files = creation_fingerprint(), creation_files()
         result, output = creation.execute(creation_api_command(["plan", path]) + " 2>&1", timeout=30)
         assert result == 2 and f"HTTP {status}, {code}" in output
@@ -234,7 +234,7 @@
         creation.succeed(shlex.join(["timeout", "--kill-after=3s", "25s", "python3", api_probe, "unsupported"]), timeout=30)
         status, output = creation.execute(creation_api_command(["create", api_root + "/unsupported-create.json", "--epoch", current_epoch,
             "--key", "12345678-1234-4234-8234-123456789abc"]) + " 2>&1", timeout=30)
-        assert status == 2 and "HTTP 501, unsupported" in output
+        assert status == 2 and "HTTP 409, plan_stale" in output
         assert creation_fingerprint() == before
 
     with subtest("installed CLI plans exact stopped creation without reserving or creating anything"):
@@ -244,7 +244,7 @@
                             "config": {"image": image["id"], "isolation": "container", "agentRuntime": None,
                                        "tools": [], "skills": [], "capabilities": [],
                                        "resources": {"cpu": 1, "memoryMiB": 256, "storageMiB": 128}}}
-        path = creation_plan_file(planning_request)
+        path = creation_request_file(planning_request)
         before, files = creation_fingerprint(), creation_files()
         started = int(creation.succeed("date +%s").strip())
         preview = creation_api(["plan", path])
@@ -278,21 +278,39 @@
         assert creation.succeed("docker image ls --quiet --no-trunc").strip() == ""
         creation_stopped()
 
-    with subtest("actual creation supervisor prepares both volumes exactly once"):
-        created = creation_seed("op-supervised", "01" * 16, "queue")
-        assert creation_op("op-supervised")["state"] == "queued"
-        creation_api_read("op-supervised")
-        rows = creation_rows(created["environmentId"])
-        assert len(rows) == 2 and all(row["allocation"]["state"] == "unknown" for row in rows)
-        unit = "tentaflake-environment-create@op-supervised.service"
-        creation.succeed("timeout 320s systemctl start " + shlex.quote(unit), timeout=325)
-        observed = creation_op("op-supervised")
+    with subtest("public creation hands the exact candidate to its supervisor once"):
+        create_request = {"planId": preview["id"], "startAfterCreate": False}
+        create_file = creation_request_file(create_request, "create-request.json")
+        create_key = "12345678-1234-4234-8234-123456789abd"
+        create_arguments = ["create", create_file, "--epoch", current_epoch, "--key", create_key]
+        accepted = json.loads(creation.succeed(creation_api_command(create_arguments), timeout=30))
+        supervised_op = accepted["operation"]["id"]
+        environment = accepted["environment"]
+        assert accepted["operation"]["state"] == "queued" and accepted["operation"]["result"] is None
+        assert environment["state"] == "provisioning" and environment["usage"] is None
+        assert environment["id"] == preview["resolved"]["environmentId"]
+        assert environment["workspace"]["id"] == preview["resolved"]["workspaceId"]
+        assert environment["workspace"]["usedBytes"] is None
+        assert environment["config"] == planning_request["config"] and environment["name"] == planning_request["name"]
+        assert not environment["availability"]["available"] and environment["active"] is None
+        assert environment["revisions"]["grants"] != preview["revisions"]["grants"]
+        created = {"environmentId": environment["id"], "operationId": supervised_op,
+                   "volumes": [{"imagePath": root + "/" + environment["id"] + ".img"}
+                               for root in ["/var/lib/tentaflake-workspace-volumes/state",
+                                            "/var/lib/tentaflake-workspace-volumes"]]}
+        unit = "tentaflake-environment-create@" + supervised_op + ".service"
+        # No driver StartUnit here: only the authenticated production API may
+        # hand off this first creation. Observe its durable terminal outcome.
+        completed = "import json,sys; d=json.load(open(sys.argv[1])); assert any(o['mutation']['operationId']==sys.argv[2] and o['state']=='succeeded' for o in d['api']['operations'])"
+        creation.wait_until_succeeds(shlex.join(["python3", "-c", completed, creation_ledger, supervised_op]), timeout=320)
+        creation.wait_until_succeeds("test $(systemctl show --value --property=ActiveState " + shlex.quote(unit) + ") = inactive", timeout=30)
+        observed = creation_op(supervised_op)
         assert observed["state"] == "succeeded" and observed["recovery"] is None, observed
-        supervised_receipt = creation_api_read("op-supervised")
+        supervised_receipt = creation_api_read(supervised_op)
         assert observed["execution"]["bootId"] == creation_boot
         assert observed["execution"]["supervisor"]["unit"] == unit
-        assert all(row["allocation"]["state"] == "present" and row["release"] is None
-                   for row in creation_rows(created["environmentId"]))
+        rows = creation_rows(created["environmentId"])
+        assert len(rows) == 2 and all(row["allocation"]["state"] == "present" and row["release"] is None for row in rows)
         creation_stopped()
         # Check actual filesystem ownership independently of the owner's native
         # receipt. Read-only loops/mounts cannot repair a no-op ownership helper.
@@ -316,6 +334,11 @@
         images = {volume["imagePath"]: creation_fingerprint(volume["imagePath"])
                   for volume in created["volumes"]}
         before = creation_fingerprint()
+        duplicate = creation_api(create_arguments)
+        assert duplicate["operation"] == supervised_receipt
+        assert duplicate["environment"]["state"] == "stopped"
+        assert duplicate["environment"]["workspace"]["usedBytes"] is None
+        assert duplicate["environment"]["id"] == created["environmentId"]
         creation.succeed("timeout 320s systemctl start " + shlex.quote(unit), timeout=325)
         assert creation_fingerprint() == before, "historical start changed the ledger"
         for path, identity in images.items():
@@ -386,7 +409,9 @@
     assert creation.succeed("readlink -f /etc/tentaflake/admission.json").strip() == creation_plan
     creation_stopped()
     creation_api_start(seed=True)
-    assert creation_api_read("op-supervised") == supervised_receipt
+    creation_request_file(create_request, "create-request.json")
+    assert creation_api_read(supervised_op) == supervised_receipt
+    assert creation_api(create_arguments)["operation"] == supervised_receipt
     assert creation_api_read("op-queued-abort") == aborted_receipt
 
     with subtest("staging and live creators or loop mappings refuse abort without ledger writes"):
@@ -512,7 +537,7 @@
             key: value for key, value in before_login.items() if key not in ("revision", "operatorLogins")}
         assert creation_api(["session"])["revisions"] == catalog_session["revisions"]
         assert json.loads(creation_api_probe("catalog")) == wire
-        assert creation_api_read("op-supervised") == supervised_receipt
+        assert creation_api_read(supervised_op) == supervised_receipt
         creation_api_probe("cookie-active")
         creation_plan_refused(planning_request, 409, "plan_stale")
 
@@ -528,7 +553,8 @@
         planning_request["revisions"] = creation_api(["session"])["revisions"]
         creation_plan_refused(planning_request, 503, "unavailable")
         creation_api_missing("unknown")
-        assert creation_api_read("op-supervised") == supervised_receipt
+        assert creation_api_read(supervised_op) == supervised_receipt
+        assert creation_api(create_arguments)["operation"] == supervised_receipt
         assert creation_api_read("op-queued-abort") == aborted_receipt
         creation_api_probe("cookie-active")
         creation_api_stop()
@@ -550,7 +576,11 @@
         planning_request["revisions"] = final_session["revisions"]
         creation_plan_refused(planning_request, 403, "forbidden")
         creation_api_missing("absent")
-        assert creation_api_read("op-supervised") == supervised_receipt
+        assert creation_api_read(supervised_op) == supervised_receipt
+        historical = creation_api(create_arguments)
+        assert historical["operation"] == supervised_receipt
+        assert historical["environment"]["config"] == planning_request["config"]
+        assert historical["environment"]["workspace"]["usedBytes"] is None
         assert creation_api_read("op-queued-abort") == aborted_receipt
         before = creation_fingerprint()
         creation.succeed(shlex.join(["install", "-m", "0600", "/dev/null", staging]))

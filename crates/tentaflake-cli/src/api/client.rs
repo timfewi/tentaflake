@@ -1348,55 +1348,107 @@ mod tests {
     }
 
     #[test]
-    fn actual_cli_create_receives_owner_unsupported_for_a_valid_bounded_body() {
-        use crate::api::{owner::operation_tests, server};
-        use tentaflake_admission::ledger::api::ApiOperationState;
+    fn actual_cli_create_and_recovery_decode_the_real_owner_receipt_without_retry() {
+        use crate::api::owner::operation_tests;
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
             .unwrap();
-        let (api, cookie, backend) = operation_tests::fixture(ApiOperationState::Queued);
-        let session = runtime.block_on(operation_tests::http(
+        let (api, cookie, backend) = operation_tests::planning_fixture();
+        let (session, plan, payload) = runtime.block_on(operation_tests::creation_request(
             api.clone(),
             &cookie,
-            "/api/v1/session",
+            &backend,
         ));
-        let session: Value =
-            serde_json::from_str(session.split_once("\r\n\r\n").unwrap().1).unwrap();
-        let body = br#"{"planId":"fixture","startAfterCreate":false}"#.to_vec();
-        let header = format!(
-            "POST /api/v1/environments HTTP/1.1\r\nHost: host.example.invalid\r\nOrigin: https://host.example.invalid\r\nCookie: {cookie}\r\nX-Tentaflake-CSRF: {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n",
-            session["csrfToken"].as_str().unwrap(),
-            body.len()
-        );
-        let actual = runtime.block_on(server::tests::exchange(
-            api,
-            [header.as_bytes(), &body].concat(),
-        ));
-        assert!(actual.starts_with("HTTP/1.1 501"));
-        assert_eq!(backend.reads(), 0);
+        let fixture = Fixture::new();
+        fixture.write("create.json", &payload);
         let command = parse(&[
             "create",
-            "fixture.json",
+            fixture.path.join("create.json").to_str().unwrap(),
             "--epoch",
             operation_tests::EPOCH,
             "--key",
             UUID,
         ])
         .unwrap();
+        let sent = read_body(command.request.body_file.as_ref().unwrap()).unwrap();
+        let actual = runtime.block_on(operation_tests::post_create(
+            api.clone(),
+            &cookie,
+            session["csrfToken"].as_str().unwrap(),
+            operation_tests::EPOCH,
+            UUID,
+            &sent,
+        ));
+        assert!(actual.starts_with("HTTP/1.1 202"));
         let (origin, handle) = tls_fixture(Some(actual.into_bytes()));
-        let failure = execute(
+        let result = execute(
             &trusted_client(),
             &origin,
             &command.request,
-            Some(body.clone()),
+            Some(sent.clone()),
             Some(TOKEN),
         )
-        .unwrap_err();
-        assert!(failure.contains("HTTP 501, unsupported"));
+        .unwrap();
+        assert_eq!(
+            result.value["environment"]["id"],
+            plan["resolved"]["environmentId"]
+        );
+        assert_eq!(result.value["operation"]["state"], "queued");
+        assert!(result.value["environment"]["workspace"]["usedBytes"].is_null());
         let requests = handle.join().unwrap();
         assert_eq!(requests.len(), 1);
-        assert!(requests[0].ends_with(&body));
+        assert!(requests[0].ends_with(&sent));
+        assert_eq!(backend.creation_counts(), (1, 1));
+        // A lost HTTP response does not cause another mutation request. The
+        // caller explicitly recovers the same scoped key using the real owner.
+        let (origin, handle) = tls_fixture(None);
+        assert!(
+            execute(
+                &trusted_client(),
+                &origin,
+                &command.request,
+                Some(sent),
+                Some(TOKEN)
+            )
+            .is_err()
+        );
+        assert_eq!(handle.join().unwrap().len(), 1);
+        let target = format!(
+            "/api/v1/operations?idempotencyKey={UUID}&mutationEpoch={}&method=POST&target=%2Fapi%2Fv1%2Fenvironments",
+            operation_tests::EPOCH
+        );
+        let actual = runtime.block_on(operation_tests::http(api, &cookie, &target));
+        assert!(actual.starts_with("HTTP/1.1 200"));
+        let command = parse(&[
+            "recover",
+            "--epoch",
+            operation_tests::EPOCH,
+            "--key",
+            UUID,
+            "--method",
+            "POST",
+            "--target",
+            "/api/v1/environments",
+        ])
+        .unwrap();
+        let (origin, handle) = tls_fixture(Some(actual.into_bytes()));
+        let recovered = execute(
+            &trusted_client(),
+            &origin,
+            &command.request,
+            None,
+            Some(TOKEN),
+        )
+        .unwrap();
+        assert_eq!(recovered.value["state"], "found");
+        assert_eq!(recovered.value["retrySafe"], false);
+        assert_eq!(
+            recovered.value["operation"]["id"],
+            result.value["operation"]["id"]
+        );
+        assert_eq!(handle.join().unwrap().len(), 1);
+        assert_eq!(backend.creation_counts(), (1, 1));
     }
 
     #[test]

@@ -1,5 +1,5 @@
-//! Bounded, selected systemd observations and explicit metadata loading. These
-//! calls never start/stop units or establish a fence; callers own synchronization.
+//! Bounded systemd observations, metadata loading, and the exact once-only
+//! creation handoff. Callers own durable authority and synchronization.
 
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
@@ -471,6 +471,15 @@ pub(crate) fn load_creation_unit(
     name: &str,
     required: bool,
 ) -> Result<UnitObservation, String> {
+    load_creation_unit_until(busctl, name, required, Instant::now() + OBSERVATION_TIMEOUT)
+}
+
+pub(crate) fn load_creation_unit_until(
+    busctl: &Path,
+    name: &str,
+    required: bool,
+    deadline: Instant,
+) -> Result<UnitObservation, String> {
     if creation_operation(name).is_none() {
         return Err("invalid concrete creation unit".into());
     }
@@ -483,12 +492,70 @@ pub(crate) fn load_creation_unit(
         } else {
             MetadataScope::IncidentalCreation
         },
-        Instant::now() + OBSERVATION_TIMEOUT,
+        observation_deadline(deadline, Instant::now()),
     )?;
     if observed.load_state == "not-found" {
         validate_inert_creation(&observed)?;
     }
     Ok(observed)
+}
+
+/// Only a newly queued durable create authorizes this single no-wait call.
+/// Timeout/failure cannot establish that the manager did not enqueue the job.
+pub(crate) fn start_creation_unit(
+    busctl: &Path,
+    name: &str,
+    deadline: Instant,
+) -> Result<(), String> {
+    if creation_operation(name).is_none() {
+        return Err("invalid creation unit".into());
+    }
+    let remaining = deadline
+        .checked_duration_since(Instant::now())
+        .filter(|d| !d.is_zero())
+        .ok_or("creation handoff deadline exceeded")?;
+    let mut command = bus_command(busctl);
+    command.args([
+        "call",
+        DESTINATION,
+        "/org/freedesktop/systemd1",
+        "org.freedesktop.systemd1.Manager",
+        "StartUnit",
+        "ss",
+        name,
+        "fail",
+    ]);
+    let output = crate::output_with_timeout(&mut command, remaining.min(CALL_TIMEOUT))
+        .map_err(|_| "creation handoff outcome unavailable")?;
+    if !output.status.success() || !output.stderr.is_empty() || Instant::now() >= deadline {
+        return Err("creation handoff outcome unavailable".into());
+    }
+    creation_job(&output.stdout)
+}
+
+fn creation_job(bytes: &[u8]) -> Result<(), String> {
+    let value = records(bytes, 1, 4096)?
+        .next()
+        .ok_or("missing creation job")?;
+    let path = value
+        .data
+        .as_array()
+        .filter(|rows| rows.len() == 1)
+        .and_then(|rows| rows[0].as_str())
+        .ok_or("invalid creation job")?;
+    let id = path
+        .strip_prefix("/org/freedesktop/systemd1/job/")
+        .ok_or("invalid creation job")?;
+    if value.signature != "o"
+        || id.is_empty()
+        || id.starts_with('0')
+        || id.len() > 10
+        || !id.bytes().all(|b| b.is_ascii_digit())
+        || id.parse::<u32>().is_err()
+    {
+        return Err("invalid creation job".into());
+    }
+    Ok(())
 }
 
 fn validate_inert_creation(unit: &UnitObservation) -> Result<(), String> {
@@ -714,16 +781,7 @@ fn observation_deadline(deadline: Instant, now: Instant) -> Instant {
     deadline.min(now + OBSERVATION_TIMEOUT)
 }
 
-fn read_bus(
-    busctl: &Path,
-    arguments: &[&str],
-    deadline: Instant,
-    max_bytes: usize,
-) -> Result<Vec<u8>, String> {
-    let remaining = deadline
-        .checked_duration_since(Instant::now())
-        .filter(|remaining| !remaining.is_zero())
-        .ok_or("systemd observation deadline exceeded")?;
+fn bus_command(busctl: &Path) -> Command {
     let mut command = Command::new(busctl);
     command.env_clear().args([
         "--system",
@@ -734,6 +792,20 @@ fn read_bus(
         "--json=short",
         "--",
     ]);
+    command
+}
+
+fn read_bus(
+    busctl: &Path,
+    arguments: &[&str],
+    deadline: Instant,
+    max_bytes: usize,
+) -> Result<Vec<u8>, String> {
+    let remaining = deadline
+        .checked_duration_since(Instant::now())
+        .filter(|remaining| !remaining.is_zero())
+        .ok_or("systemd observation deadline exceeded")?;
+    let mut command = bus_command(busctl);
     command.args(arguments);
     // The shared reader caps captured stdout+stderr and kills only this read-only
     // client on timeout. Never use this path for start/stop or other mutations.
@@ -1283,6 +1355,25 @@ fn unit_name(value: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn creation_handoff_requires_one_bounded_exact_job_object() {
+        creation_job(br#"{"type":"o","data":["/org/freedesktop/systemd1/job/1"]}"#).unwrap();
+        for response in [
+            r#"{"type":"s","data":["/org/freedesktop/systemd1/job/1"]}"#,
+            r#"{"type":"o","data":["/org/freedesktop/systemd1/job/0"]}"#,
+            r#"{"type":"o","data":["/org/freedesktop/systemd1/job/01"]}"#,
+            r#"{"type":"o","data":["/org/freedesktop/systemd1/job/4294967296"]}"#,
+            r#"{"type":"o","data":["/org/freedesktop/systemd1/unit/1"]}"#,
+            r#"{"type":"o","data":["/org/freedesktop/systemd1/job/1","/org/freedesktop/systemd1/job/2"]}"#,
+            r#"{"type":"o","data":[]}"#,
+            r#"{"type":"o","data":["/org/freedesktop/systemd1/job/1"],"extra":true}"#,
+            r#"{"type":"o","data":["/org/freedesktop/systemd1/job/1"]} {}"#,
+        ] {
+            assert!(creation_job(response.as_bytes()).is_err());
+        }
+        assert!(creation_job(&vec![b' '; 4097]).is_err());
+    }
 
     #[test]
     fn worker_path_requires_exact_scalar_properties_and_one_owned_trigger() {

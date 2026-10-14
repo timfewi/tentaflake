@@ -24,9 +24,165 @@ struct State {
     change_on_preview: bool,
     native_change_on_preview: bool,
     preview_failure: Option<AuthError>,
+    created: Option<(
+        tentaflake_admission::ledger::api::OwnedCreate,
+        Arc<crate::admission_host::HostPlan>,
+    )>,
+    queues: usize,
+    starts: usize,
+    revoke_on_queue: bool,
+    queue_wait_until: Option<std::time::Instant>,
+    handoff_gate: Option<Arc<(Mutex<bool>, std::sync::Condvar)>>,
 }
 
 impl Fixture {
+    // Only privileged ledger/unit observations are replaced here. These records
+    // do not pretend to prove persistence or storage accounting; core/VM own it.
+    pub(super) fn create_receipt(
+        &self,
+        context: &ApiContext,
+        request: &crate::api::creation::Request,
+    ) -> Result<Option<tentaflake_admission::ledger::api::OwnedCreate>, AuthError> {
+        let mut state = self.state.lock().unwrap();
+        if state.unavailable {
+            return Err(AuthError::Unavailable);
+        }
+        assert_eq!(context.authority, state.current.authority);
+        let Some((receipt, _)) = &state.created else {
+            return Ok(None);
+        };
+        if receipt.operation.mutation.key != request.key {
+            return Ok(None);
+        }
+        if receipt.operation.mutation.request_digest != request.digest {
+            return Err(AuthError::IdempotencyConflict);
+        }
+        let mut receipt = receipt.clone();
+        receipt.grants = state.grants.clone();
+        if state.revoke_on_read {
+            state.current.binding.push_str("-changed");
+        }
+        Ok(Some(receipt))
+    }
+    pub(super) fn original(
+        &self,
+        receipt: &tentaflake_admission::ledger::api::OwnedCreate,
+    ) -> Result<Arc<crate::admission_host::HostPlan>, AuthError> {
+        let state = self.state.lock().unwrap();
+        let (stored, plan) = state.created.as_ref().ok_or(AuthError::Unavailable)?;
+        assert_eq!(receipt.operation.authority, stored.operation.authority);
+        Ok(plan.clone())
+    }
+    pub(super) fn queue(
+        &self,
+        context: &ApiContext,
+        mutation: &tentaflake_admission::ledger::api::ApiMutation,
+        prepared: &crate::api::planning::Prepared,
+        authorize: impl FnOnce() -> Result<(), AuthError>,
+    ) -> Result<tentaflake_admission::ledger::api::ApiQueued, AuthError> {
+        use tentaflake_admission::ledger::api::{
+            ApiQueued, EnvironmentRecord, EnvironmentState, OwnedCreate, WorkspaceRecord,
+        };
+        self.preview(prepared)?;
+        if let Some(until) = self.state.lock().unwrap().queue_wait_until {
+            let wait = until.saturating_duration_since(std::time::Instant::now());
+            assert!(wait <= Duration::from_secs(2));
+            std::thread::sleep(wait);
+        }
+        authorize()?;
+        let mut state = self.state.lock().unwrap();
+        assert!(state.created.is_none());
+        let spec = &prepared.creation.environment;
+        let operation = ApiOperation {
+            mutation: mutation.clone(),
+            authority: context.authority.clone(),
+            environment_id: spec.instance.id.clone(),
+            state: ApiOperationState::Queued,
+            created_at: context.now,
+            updated_at: context.now,
+            queued_revision: 9,
+            claimed_revision: None,
+            updated_revision: 9,
+            execution: None,
+            storage_operations: vec![
+                "private-storage-state".into(),
+                "private-storage-workspace".into(),
+            ],
+            result: None,
+            abort: None,
+            recovery: None,
+        };
+        state.grants.extend(spec.grants.clone());
+        state.grants_revision += 1;
+        let receipt = OwnedCreate {
+            operation: operation.clone(),
+            environment: EnvironmentRecord {
+                host: context.host.clone(),
+                spec: spec.clone(),
+                state: EnvironmentState::Provisioning,
+                operation_id: mutation.operation_id.clone(),
+                created_at: context.now,
+                revision: 9,
+            },
+            workspace: WorkspaceRecord {
+                id: spec.workspace_id.clone(),
+                environment_id: spec.instance.id.clone(),
+                owner_id: context.principal.clone(),
+                allocation_id: spec
+                    .instance
+                    .storage
+                    .iter()
+                    .find(|row| row.kind == tentaflake_admission::StorageKind::Workspace)
+                    .unwrap()
+                    .id
+                    .clone(),
+                revision: 9,
+            },
+            grants: state.grants.clone(),
+        };
+        let plan = state.current.host_plan.clone();
+        state.created = Some((receipt, plan));
+        state.queues += 1;
+        if state.revoke_on_queue {
+            state.current.binding.push_str("-changed");
+        }
+        Ok(ApiQueued::New(Box::new(operation)))
+    }
+    pub(super) fn start(&self, operation: &str) {
+        let mut state = self.state.lock().unwrap();
+        assert_eq!(
+            operation,
+            state
+                .created
+                .as_ref()
+                .unwrap()
+                .0
+                .operation
+                .mutation
+                .operation_id
+        );
+        state.starts += 1;
+        let gate = state.handoff_gate.clone();
+        drop(state);
+        if let Some(gate) = gate {
+            let (lock, changed) = &*gate;
+            let (released, timeout) = changed
+                .wait_timeout_while(lock.lock().unwrap(), Duration::from_secs(3), |released| {
+                    !*released
+                })
+                .unwrap();
+            assert!(
+                *released && !timeout.timed_out(),
+                "fixture handoff was not released"
+            );
+        }
+        // No supervisor is run: the handoff's result can never mark success.
+    }
+    pub(in crate::api) fn creation_counts(&self) -> (usize, usize) {
+        let state = self.state.lock().unwrap();
+        (state.queues, state.starts)
+    }
+
     pub(super) fn grants(
         &self,
         context: &ApiContext,
@@ -93,7 +249,11 @@ impl Fixture {
         if state.unavailable {
             return Err(AuthError::Unavailable);
         }
-        let op = &state.operation;
+        let op = state
+            .created
+            .as_ref()
+            .map(|(receipt, _)| &receipt.operation)
+            .unwrap_or(&state.operation);
         let owned =
             op.mutation.key.principal == context.principal && op.mutation.key.host == context.host;
         let found = owned
@@ -185,6 +345,12 @@ pub(in crate::api) fn fixture(state: ApiOperationState) -> (Arc<Api>, String, Ar
             change_on_preview: false,
             native_change_on_preview: false,
             preview_failure: None,
+            created: None,
+            queues: 0,
+            starts: 0,
+            revoke_on_queue: false,
+            queue_wait_until: None,
+            handoff_gate: None,
         }),
     });
     let config: Config = serde_json::from_value(json!({
@@ -783,5 +949,386 @@ fn unsupported_plan_rechecks_auth_after_its_last_grant_read() {
                 401,
             );
             assert_eq!(backend.state.lock().unwrap().previews, 0);
+        });
+}
+
+pub(in crate::api) async fn post_create(
+    api: Arc<Api>,
+    cookie: &str,
+    csrf: &str,
+    epoch: &str,
+    key: &str,
+    payload: &[u8],
+) -> String {
+    let head = format!(
+        "POST /api/v1/environments HTTP/1.1\r\nHost: host.example.invalid\r\nOrigin: https://host.example.invalid\r\nCookie: {cookie}\r\nX-Tentaflake-CSRF: {csrf}\r\nContent-Type: application/json\r\nIdempotency-Epoch: {epoch}\r\nIdempotency-Key: {key}\r\nContent-Length: {}\r\n\r\n",
+        payload.len()
+    );
+    server::tests::exchange(api, [head.as_bytes(), payload].concat()).await
+}
+
+pub(in crate::api) async fn creation_request(
+    api: Arc<Api>,
+    cookie: &str,
+    backend: &Fixture,
+) -> (Value, Value, Vec<u8>) {
+    let session = body(&http(api.clone(), cookie, "/api/v1/session").await, 200);
+    let request = plan_request(backend, session["revisions"].clone());
+    let plan = body(
+        &post_plan(
+            api,
+            cookie,
+            session["csrfToken"].as_str().unwrap(),
+            &serde_json::to_vec(&request).unwrap(),
+        )
+        .await,
+        200,
+    );
+    let payload =
+        serde_json::to_vec(&json!({"planId":plan["id"],"startAfterCreate":false})).unwrap();
+    (session, plan, payload)
+}
+
+#[test]
+fn stopped_create_http_queues_once_and_preserves_exact_history_without_cached_authority() {
+    use tentaflake_admission::ledger::api::{CreateResult, EnvironmentState};
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap()
+        .block_on(async {
+            let (api, cookie, backend) = planning_fixture();
+            let (session, plan, payload) = creation_request(api.clone(), &cookie, &backend).await;
+            let csrf = session["csrfToken"].as_str().unwrap();
+            let first = post_create(api.clone(), &cookie, csrf, EPOCH, KEY, &payload).await;
+            let accepted = body(&first, 202);
+            let op = accepted["operation"]["id"].as_str().unwrap();
+            assert!(first.contains(&format!("operation-id: {op}\r\n")));
+            assert_eq!(
+                accepted["environment"]["id"],
+                plan["resolved"]["environmentId"]
+            );
+            assert_eq!(
+                accepted["environment"]["workspace"]["id"],
+                plan["resolved"]["workspaceId"]
+            );
+            assert_eq!(accepted["environment"]["config"], plan["request"]["config"]);
+            assert_eq!(accepted["environment"]["state"], "provisioning");
+            assert_eq!(accepted["operation"]["state"], "queued");
+            assert!(accepted["environment"]["usage"].is_null());
+            assert!(accepted["environment"]["workspace"]["usedBytes"].is_null());
+            assert!(accepted["environment"]["active"].is_null());
+            let fresh = body(&http(api.clone(), &cookie, "/api/v1/session").await, 200);
+            assert_eq!(accepted["environment"]["revisions"], fresh["revisions"]);
+            assert_ne!(fresh["revisions"]["grants"], session["revisions"]["grants"]);
+            for private in [
+                "/nix/store/",
+                "/var/lib/",
+                "public-base",
+                "sourceRevision",
+                "claimedRevision",
+                "private-storage",
+                "supervisor",
+            ] {
+                assert!(!first.contains(private));
+            }
+            *api.plans.lock().unwrap() = crate::api::planning::Cache::default();
+            assert_eq!(
+                body(
+                    &post_create(
+                        api.clone(),
+                        &cookie,
+                        csrf,
+                        EPOCH,
+                        &KEY.to_uppercase(),
+                        &payload
+                    )
+                    .await,
+                    202
+                ),
+                accepted
+            );
+            // Same logical JSON with different accepted bytes is a different intent.
+            let mut changed = payload.clone();
+            changed.push(b' ');
+            assert_eq!(
+                body(
+                    &post_create(api.clone(), &cookie, csrf, EPOCH, KEY, &changed).await,
+                    409
+                )["error"]["code"],
+                "idempotency_conflict"
+            );
+            {
+                let mut state = backend.state.lock().unwrap();
+                state.pending = true;
+                let (receipt, _) = state.created.as_mut().unwrap();
+                receipt.operation.state = ApiOperationState::Unknown;
+                receipt.operation.updated_revision = 10;
+                receipt.environment.state = EnvironmentState::Unknown;
+                receipt.environment.revision = 10;
+            }
+            let unknown = body(
+                &post_create(api.clone(), &cookie, csrf, EPOCH, KEY, &payload).await,
+                202,
+            );
+            assert_eq!(unknown["operation"]["state"], "unknown");
+            assert_eq!(unknown["environment"]["state"], "unknown");
+            {
+                let mut state = backend.state.lock().unwrap();
+                let (receipt, _) = state.created.as_mut().unwrap();
+                receipt.operation.state = ApiOperationState::Succeeded;
+                receipt.operation.updated_revision = 11;
+                receipt.environment.state = EnvironmentState::Stopped;
+                receipt.environment.revision = 11;
+                receipt.workspace.revision = 11;
+                receipt.operation.result = Some(CreateResult {
+                    environment_id: receipt.environment.spec.instance.id.clone(),
+                    environment_revision: 11,
+                    workspace_id: receipt.workspace.id.clone(),
+                    workspace_revision: 11,
+                });
+            }
+            let complete = body(
+                &post_create(api.clone(), &cookie, csrf, EPOCH, KEY, &payload).await,
+                202,
+            );
+            assert_eq!(complete["environment"]["state"], "stopped");
+            assert_eq!(
+                complete["operation"]["result"]["resources"][0]["revision"],
+                "r11"
+            );
+            {
+                let mut state = backend.state.lock().unwrap();
+                let mut removed = crate::admission_template::tests::fixture_plan();
+                removed.creation_templates.clear();
+                state.current.host_plan = Arc::new(removed);
+                state.current.catalog = crate::api::catalog::Catalog::default();
+                state.current.epoch = "later-epoch".into();
+                state.current.binding = "later-binding".into();
+                state.grants.clear();
+                let (receipt, _) = state.created.as_mut().unwrap();
+                receipt.operation.state = ApiOperationState::Aborted;
+                receipt.operation.result = None;
+                receipt.environment.state = EnvironmentState::Aborted;
+            }
+            // A fresh authenticated principal can read exact old intent after a
+            // publication/revocation. No current template or create grant is used.
+            let current = backend.current().unwrap();
+            let login = api
+                .sessions
+                .lock()
+                .unwrap()
+                .fixture_login(current.context(&api.config));
+            let cookie2 = login.set_cookie.split(';').next().unwrap();
+            let aborted = body(
+                &post_create(
+                    api.clone(),
+                    cookie2,
+                    &login.auth.csrf_token,
+                    EPOCH,
+                    KEY,
+                    &payload,
+                )
+                .await,
+                202,
+            );
+            assert_eq!(aborted["operation"]["state"], "failed");
+            assert_eq!(
+                aborted["environment"]["config"],
+                accepted["environment"]["config"]
+            );
+            assert_eq!(aborted["environment"]["revisions"]["host"], "later-epoch");
+            assert_eq!(backend.creation_counts(), (1, 1));
+            body(
+                &post_create(api.clone(), &cookie, csrf, EPOCH, KEY, &payload).await,
+                401,
+            );
+        });
+}
+
+#[test]
+fn stopped_create_http_refuses_invalid_stale_foreign_or_pending_before_any_queue() {
+    tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap().block_on(async {
+        for case in 0..10 {
+            let (api,cookie,backend)=planning_fixture();
+            let (session,plan,mut payload)=creation_request(api.clone(),&cookie,&backend).await;
+            let mut csrf=session["csrfToken"].as_str().unwrap().to_owned();
+            let mut epoch=EPOCH;
+            let expected=match case {
+                0=>{csrf="wrong".into();403},
+                1=>{payload=b"not JSON".to_vec();400},
+                2=>{payload=serde_json::to_vec(&json!({"planId":plan["id"],"startAfterCreate":true})).unwrap();501},
+                3=>{*api.plans.lock().unwrap()=Default::default();409},
+                4=>{epoch="retired-epoch";409},
+                5=>{backend.state.lock().unwrap().grants_revision+=1;409},
+                6=>{backend.state.lock().unwrap().pending=true;503},
+                7=>{let mut cache=api.plans.lock().unwrap();let mut prepared=cache.take(plan["id"].as_str().unwrap()).unwrap();prepared.principal="other-principal".into();cache.insert(prepared,Clock::now().unwrap()).unwrap();409},
+                8=>{let mut changed=crate::admission_template::tests::fixture_plan();changed.creation_templates.clear();backend.state.lock().unwrap().current.host_plan=Arc::new(changed);403},
+                _=>{payload=serde_json::to_vec(&json!({"planId":plan["id"],"startAfterCreate":false,"command":"unexpected"})).unwrap();400},
+            };
+            let reply=body(&post_create(api,&cookie,&csrf,epoch,KEY,&payload).await,expected);
+            if case==4 { assert_eq!(reply["error"]["code"],"idempotency_expired"); }
+            assert_eq!(backend.creation_counts(),(0,0),"case {case}");
+        }
+        let (api,cookie,backend)=planning_fixture();
+        let session=body(&http(api.clone(),&cookie,"/api/v1/session").await,200);
+        let current=backend.current().unwrap();
+        let request=crate::api::planning::Request::parse(&serde_json::to_vec(&plan_request(&backend,session["revisions"].clone())).unwrap()).unwrap();
+        let mut old=Clock::now().unwrap();old.unix_seconds-=301;old.monotonic-=Duration::from_secs(301);
+        let expired=crate::api::planning::prepare(&current.host_plan,&current,&api.config,request,0,old).unwrap().unwrap();
+        let plan=api.plans.lock().unwrap().insert(expired,old).unwrap();
+        let payload=serde_json::to_vec(&json!({"planId":plan["id"],"startAfterCreate":false})).unwrap();
+        assert_eq!(body(&post_create(api,&cookie,session["csrfToken"].as_str().unwrap(),EPOCH,KEY,&payload).await,409)["error"]["code"],"plan_stale");
+        assert_eq!(backend.creation_counts(),(0,0));
+    });
+}
+
+#[test]
+fn stopped_create_expiry_during_observation_never_queues_or_issues_grants() {
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap()
+        .block_on(async {
+            let (api, cookie, backend) = planning_fixture();
+            let (session, _, payload) = creation_request(api.clone(), &cookie, &backend).await;
+            let before = {
+                let state = backend.state.lock().unwrap();
+                (state.previews, state.grants.clone(), state.grants_revision)
+            };
+            let expires = api
+                .sessions
+                .lock()
+                .unwrap()
+                .fixture_expire_after(&cookie, Duration::from_secs(1));
+            backend.state.lock().unwrap().queue_wait_until = Some(expires);
+            let response = post_create(
+                api,
+                &cookie,
+                session["csrfToken"].as_str().unwrap(),
+                EPOCH,
+                KEY,
+                &payload,
+            )
+            .await;
+            assert_eq!(body(&response, 401)["error"]["code"], "session_expired");
+            let state = backend.state.lock().unwrap();
+            assert_eq!(
+                state.previews,
+                before.0 + 1,
+                "the request must reach the slow observation before expiring"
+            );
+            assert_eq!(
+                (state.queues, state.starts),
+                (0, 0),
+                "expired authentication must not reach the durable queue boundary"
+            );
+            assert!(state.created.is_none());
+            assert_eq!(state.grants, before.1);
+            assert_eq!(state.grants_revision, before.2);
+        });
+}
+
+#[test]
+fn stopped_create_late_revocation_keeps_receipt_without_handoff_or_replay() {
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap()
+        .block_on(async {
+            let (api, cookie, backend) = planning_fixture();
+            let (session, _, payload) = creation_request(api.clone(), &cookie, &backend).await;
+            backend.state.lock().unwrap().revoke_on_queue = true;
+            body(
+                &post_create(
+                    api.clone(),
+                    &cookie,
+                    session["csrfToken"].as_str().unwrap(),
+                    EPOCH,
+                    KEY,
+                    &payload,
+                )
+                .await,
+                401,
+            );
+            assert_eq!(backend.creation_counts(), (1, 0));
+            let current = backend.current().unwrap();
+            let login = api
+                .sessions
+                .lock()
+                .unwrap()
+                .fixture_login(current.context(&api.config));
+            let cookie = login.set_cookie.split(';').next().unwrap();
+            let retained = body(
+                &post_create(api, cookie, &login.auth.csrf_token, EPOCH, KEY, &payload).await,
+                202,
+            );
+            assert_eq!(retained["operation"]["state"], "queued");
+            assert_eq!(backend.creation_counts(), (1, 0));
+        });
+}
+
+#[test]
+fn stopped_create_unix_disconnect_never_releases_work_or_replays_the_accepted_queue() {
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap()
+        .block_on(async {
+            let (api, cookie, backend) = planning_fixture();
+            let (session, _, payload) = creation_request(api.clone(), &cookie, &backend).await;
+            let gate = Arc::new((Mutex::new(false), std::sync::Condvar::new()));
+            backend.state.lock().unwrap().handoff_gate = Some(gate.clone());
+            let request = hyper::Request::builder()
+                .method("POST")
+                .uri("/api/v1/environments")
+                .header("host", "host.example.invalid")
+                .header("origin", "https://host.example.invalid")
+                .header("cookie", &cookie)
+                .header("x-tentaflake-csrf", session["csrfToken"].as_str().unwrap())
+                .header("content-type", "application/json")
+                .header("idempotency-key", KEY)
+                .header("idempotency-epoch", EPOCH)
+                .body(())
+                .unwrap();
+            let (parts, _) = request.into_parts();
+            let client = tokio::spawn(super::exchange(
+                api.clone(),
+                parts,
+                Bytes::from(payload.clone()),
+            ));
+            tokio::time::timeout(Duration::from_secs(2), async {
+                while backend.creation_counts().1 == 0 {
+                    tokio::time::sleep(Duration::from_millis(5)).await;
+                }
+            })
+            .await
+            .unwrap();
+            client.abort();
+            let _ = client.await;
+            assert_eq!(api.work.available_permits(), 0);
+            *gate.0.lock().unwrap() = true;
+            gate.1.notify_all();
+            tokio::time::timeout(Duration::from_secs(2), async {
+                while api.work.available_permits() == 0 {
+                    tokio::time::sleep(Duration::from_millis(5)).await;
+                }
+            })
+            .await
+            .unwrap();
+            let retained = body(
+                &post_create(
+                    api.clone(),
+                    &cookie,
+                    session["csrfToken"].as_str().unwrap(),
+                    EPOCH,
+                    KEY,
+                    &payload,
+                )
+                .await,
+                202,
+            );
+            assert_eq!(retained["operation"]["state"], "queued");
+            assert_eq!(backend.creation_counts(), (1, 1));
         });
 }

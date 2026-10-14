@@ -5,6 +5,7 @@ mod catalog;
 mod client;
 mod config;
 mod control;
+mod creation;
 mod credential;
 mod operations;
 mod owner;

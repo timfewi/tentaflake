@@ -285,7 +285,7 @@ impl Prepared {
         Ok(())
     }
 
-    fn live(&self, clock: Clock) -> bool {
+    pub(super) fn live(&self, clock: Clock) -> bool {
         clock.unix_seconds >= self.created.unix_seconds
             && clock.unix_seconds < self.expires_at
             && clock
@@ -326,6 +326,17 @@ pub(super) struct Cache {
 }
 
 impl Cache {
+    // A cached candidate is consumed only after historical key lookup. Losing a
+    // candidate before queueing is a stale plan, never authority to rebuild it.
+    pub(super) fn take(&mut self, id: &str) -> Result<Prepared, AuthError> {
+        let index = self
+            .entries
+            .iter()
+            .position(|entry| entry.id == id)
+            .ok_or(AuthError::PlanStale)?;
+        Ok(self.entries.swap_remove(index))
+    }
+
     pub(super) fn room(
         &mut self,
         binding: &str,
@@ -384,7 +395,9 @@ impl Cache {
 pub(super) fn preview_error(error: tentaflake_admission::ledger::LedgerError) -> AuthError {
     use tentaflake_admission::{ReasonCode, ledger::LedgerError};
     match error {
-        LedgerError::StaleRevision | LedgerError::StaleAuthority => AuthError::PlanStale,
+        LedgerError::StaleRevision | LedgerError::StaleAuthority | LedgerError::Conflict => {
+            AuthError::PlanStale
+        }
         LedgerError::StorageDenied(decision)
             if decision
                 .reasons

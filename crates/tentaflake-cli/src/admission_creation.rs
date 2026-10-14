@@ -1,5 +1,4 @@
-//! Once-only stopped storage provisioning. HTTP queueing/recovery remain closed
-//! until their collectors and integration tests are connected to this owner.
+//! Once-only stopped storage provisioning under the original accepted authority.
 use crate::admission_host::{HostPlan, load_plan};
 use crate::admission_runtime::{self, LEDGER, authority, installed, require_root};
 use crate::admission_storage::{CreationTargets, VolumeSpec, check_creation_space};
@@ -57,6 +56,23 @@ fn guarded_unit(observed: &UnitObservation, plan: &HostPlan, path: &Path, operat
                 path.to_string_lossy().as_ref(),
                 operation,
             ]
+}
+
+/// Authenticate the installed supervisor without starting or granting it work.
+/// The API may hand this exact unit to systemd only after a new durable queue.
+pub(crate) fn prepare_start(
+    plan: &HostPlan,
+    path: &Path,
+    operation: &str,
+    deadline: std::time::Instant,
+) -> Result<String, String> {
+    let name = unit(operation)?;
+    let observed =
+        admission_systemd::load_creation_unit_until(&plan.tools.busctl, &name, true, deadline)?;
+    if !guarded_unit(&observed, plan, path, operation) || !admission_runtime::stopped(&observed) {
+        return Err("creation requires the exact drained installed supervisor".into());
+    }
+    Ok(name)
 }
 
 fn valid_invocation(

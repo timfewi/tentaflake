@@ -159,7 +159,7 @@ impl Read {
     }
 }
 
-fn project(operation: &ApiOperation) -> Result<Value, AuthError> {
+pub(super) fn project(operation: &ApiOperation) -> Result<Value, AuthError> {
     let (state, error) = match operation.state {
         ApiOperationState::Queued => ("queued", Value::Null),
         ApiOperationState::Unknown => (

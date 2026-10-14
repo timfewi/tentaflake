@@ -174,23 +174,29 @@ impl Api {
             now: Clock::now()?.unix_seconds,
         };
         let (revision, durable) = self.durable_grants(&context)?;
+        Ok((self.effective_grants(current, auth, durable)?, revision))
+    }
+
+    fn effective_grants(
+        &self,
+        current: &Current,
+        auth: &Authenticated,
+        durable: Vec<ActionGrant>,
+    ) -> Result<Vec<Value>, AuthError> {
         let create = crate::admission_template::creation_grant(
             &current.host_plan,
             &self.config.host,
             &auth.principal_id,
         )
         .map_err(|_| AuthError::Unavailable)?;
-        Ok((
-            super::catalog::grants(
-                self.config
-                    .catalog_read_grant
-                    .clone()
-                    .into_iter()
-                    .chain(create),
-                durable,
-            )?,
-            revision,
-        ))
+        super::catalog::grants(
+            self.config
+                .catalog_read_grant
+                .clone()
+                .into_iter()
+                .chain(create),
+            durable,
+        )
     }
 
     fn durable_grants(&self, context: &ApiContext) -> Result<(u64, Vec<ActionGrant>), AuthError> {
@@ -230,62 +236,24 @@ impl Api {
             fixture.preview(&prepared)?;
             return finish(prepared);
         }
-        crate::admission_runtime::require_root().map_err(|_| AuthError::Unavailable)?;
-        let fence = tentaflake_admission::host_fence::exclusive_existing()
-            .map_err(|_| AuthError::Unavailable)?;
-        let ledger = Ledger::open(Path::new(crate::admission_runtime::LEDGER))
-            .map_err(|_| AuthError::Unavailable)?;
-        let inventory =
-            crate::admission_creation::maintenance_inventory(&ledger, &current.authority, &fence)
-                .map_err(|_| AuthError::Unavailable)?;
-        let context = ApiContext {
-            authority: current.authority.clone(),
-            host: prepared.host.clone(),
-            principal: prepared.principal.clone(),
-            epoch: current.epoch.clone(),
-            now: Clock::now()?.unix_seconds,
-        };
-        let plan = &current.host_plan;
-        let mut specs: Vec<_> = plan
-            .volumes
-            .iter()
-            .map(|volume| volume.spec.clone())
-            .collect();
-        specs.extend(inventory.volumes);
-        specs.extend(prepared.creation.volumes.iter().cloned());
-        ledger
+        let host = super::creation::Host::open()?;
+        let context = super::creation::context(
+            &current.authority,
+            &prepared.host,
+            &prepared.principal,
+            &current.epoch,
+        )?;
+        let check = host.check(&current.host_plan, &self.plan, &prepared, started)?;
+        host.ledger
             .api_preview_create(
                 &context,
                 &prepared.operation_id,
                 &prepared.creation.environment,
                 prepared.native_grants_revision,
-                |authority, snapshot, _| {
-                    if authority != &prepared.authority
-                        || authority != &current.authority
-                        || started.monotonic.elapsed() >= super::planning::DEADLINE
-                    {
-                        return Err("preview authority or deadline changed".into());
-                    }
-                    crate::admission_runtime::installed(&self.plan)?;
-                    prepared.check_source(plan)?;
-                    crate::admission_storage::check_creation_space(
-                        &specs,
-                        &snapshot.storage,
-                        crate::admission_storage::CreationTargets::New(&prepared.creation.volumes),
-                        plan.physical_space_headroom_bytes,
-                    )?;
-                    crate::admission_runtime::installed(&self.plan)?;
-                    if started.monotonic.elapsed() >= super::planning::DEADLINE {
-                        return Err("preview deadline exceeded".into());
-                    }
-                    Ok(tentaflake_admission::ledger::api::CreatePolicy {
-                        policy: plan.policy.clone(),
-                        create_grant: prepared.create_grant.clone(),
-                        issued_grants: prepared.creation.environment.grants.clone(),
-                    })
-                },
+                |authority, snapshot, _| check.observe(authority, snapshot),
             )
             .map_err(super::planning::preview_error)?;
+        drop(check);
         // The core lock is released; keep the outer fence through final public
         // authority checks and cache admission so publication cannot interleave.
         finish(prepared)
@@ -356,6 +324,213 @@ impl Api {
                 .insert(prepared, now)?;
             Ok(json_reply(StatusCode::OK, reply))
         })
+    }
+
+    fn create_receipt(
+        &self,
+        host: Option<&super::creation::Host>,
+        context: &ApiContext,
+        request: &super::creation::Request,
+    ) -> Result<Option<tentaflake_admission::ledger::api::OwnedCreate>, AuthError> {
+        #[cfg(test)]
+        if let Some(fixture) = &self.fixture {
+            return fixture.create_receipt(context, request);
+        }
+        host.ok_or(AuthError::Unavailable)?
+            .ledger
+            .api_create_receipt(context, &request.key, &request.digest)
+            .map_err(super::creation::receipt_error)
+    }
+
+    fn created_reply(
+        &self,
+        current: &Current,
+        auth: &Authenticated,
+        sessions: &Sessions,
+        receipt: tentaflake_admission::ledger::api::OwnedCreate,
+        started: Clock,
+    ) -> Result<Reply, AuthError> {
+        #[cfg(test)]
+        let original = if let Some(fixture) = &self.fixture {
+            fixture.original(&receipt)?
+        } else {
+            Arc::new(super::creation::original(&receipt)?)
+        };
+        #[cfg(not(test))]
+        let original = super::creation::original(&receipt)?;
+        // The exact linked records and effective resource grants share one
+        // locked read. No second snapshot can mix a later grants revision into it.
+        let grants = self.effective_grants(current, auth, receipt.grants.clone())?;
+        let revision =
+            super::catalog::grants_revision(&self.config.host, &auth.principal_id, &grants);
+        let reply = super::creation::reply(&receipt, &original, current.revisions(&revision))?;
+        let fresh = self.current()?;
+        let now = Clock::now()?;
+        sessions.check_active(auth, fresh.context(&self.config), now)?;
+        super::planning::finish_clock(started, now)?;
+        Ok(reply)
+    }
+
+    fn create(
+        &self,
+        current: &Current,
+        auth: &Authenticated,
+        sessions: &Sessions,
+        parts: &hyper::http::request::Parts,
+        body: &[u8],
+    ) -> Result<Reply, AuthError> {
+        use tentaflake_admission::ledger::api::ApiQueued;
+        let started = Clock::now()?;
+        let request = super::creation::Request::parse(
+            &parts.headers,
+            body,
+            &self.config.host,
+            &auth.principal_id,
+        )?;
+        #[cfg(test)]
+        let host = if self.fixture.is_some() {
+            None
+        } else {
+            Some(super::creation::Host::open()?)
+        };
+        #[cfg(not(test))]
+        let host = Some(super::creation::Host::open()?);
+        let context = super::creation::context(
+            &current.authority,
+            &self.config.host,
+            &auth.principal_id,
+            &current.epoch,
+        )?;
+        // Historic exact-key ownership is independent of current create grants,
+        // cache lifetime, epoch or Pending. It can never authorize another job.
+        if let Some(receipt) = self.create_receipt(host.as_ref(), &context, &request)? {
+            return self.created_reply(current, auth, sessions, receipt, started);
+        }
+        if request.start {
+            return Err(AuthError::Unsupported);
+        }
+        if request.key.epoch != current.epoch {
+            return Err(AuthError::IdempotencyExpired);
+        }
+        if crate::admission_template::creation_grant(
+            &current.host_plan,
+            &self.config.host,
+            &auth.principal_id,
+        )
+        .map_err(|_| AuthError::Unavailable)?
+        .is_none()
+        {
+            return Err(AuthError::Forbidden);
+        }
+        let prepared = self
+            .plans
+            .lock()
+            .map_err(|_| AuthError::Unavailable)?
+            .take(&request.plan_id)?;
+        let (_, revisions, native) = self.public_authority(current, auth, sessions)?;
+        if prepared.host != self.config.host
+            || prepared.principal != auth.principal_id
+            || prepared.authority != current.authority
+            || prepared.binding != current.binding
+            || !prepared.live(Clock::now()?)
+            || prepared.native_grants_revision != native
+            || !prepared.request.matches_revisions(&revisions)
+        {
+            return Err(AuthError::PlanStale);
+        }
+        prepared
+            .check_source(&current.host_plan)
+            .map_err(|_| AuthError::PlanStale)?;
+        let mutation = request.mutation(&prepared);
+        let authorize =
+            || sessions.check_active(auth, current.context(&self.config), Clock::now()?);
+        let (outcome, unit) = if let Some(host) = &host {
+            let deadline = started.monotonic + super::planning::DEADLINE;
+            let unit = crate::admission_creation::prepare_start(
+                &current.host_plan,
+                &self.plan,
+                &prepared.operation_id,
+                deadline,
+            )
+            .map_err(|_| AuthError::Unavailable)?;
+            crate::admission_retention::retain(
+                &current.authority,
+                current
+                    .host_plan
+                    .tools
+                    .nix_store
+                    .as_deref()
+                    .ok_or(AuthError::Unavailable)?,
+                &host.fence,
+            )
+            .map_err(|_| AuthError::Unavailable)?;
+            let check = host.check(&current.host_plan, &self.plan, &prepared, started)?;
+            let mut authorization_error = None;
+            let outcome = host
+                .ledger
+                .api_queue_create(
+                    &context,
+                    &mutation,
+                    &prepared.creation.environment,
+                    prepared.native_grants_revision,
+                    |authority, snapshot, _| {
+                        // observe binds the callback authority to the fenced
+                        // current plan. Recheck session expiry and the current
+                        // bearer after slow reads, before either charge exists.
+                        let policy = check.observe(authority, snapshot)?;
+                        authorize().map_err(|error| {
+                            authorization_error = Some(error);
+                            "creation authentication changed".to_owned()
+                        })?;
+                        Ok(policy)
+                    },
+                )
+                // Matching-key digest conflicts were resolved above under this
+                // same fence. A new candidate/native-ID collision is stale.
+                .map_err(|error| {
+                    authorization_error.unwrap_or_else(|| super::planning::preview_error(error))
+                })?;
+            (outcome, Some(unit))
+        } else {
+            #[cfg(test)]
+            {
+                (
+                    self.fixture
+                        .as_ref()
+                        .ok_or(AuthError::Unavailable)?
+                        .queue(&context, &mutation, &prepared, authorize)?,
+                    None,
+                )
+            }
+            #[cfg(not(test))]
+            {
+                return Err(AuthError::Unavailable);
+            }
+        };
+        let receipt = self
+            .create_receipt(host.as_ref(), &context, &request)?
+            .ok_or(AuthError::Unavailable)?;
+        let reply = self.created_reply(current, auth, sessions, receipt, started)?;
+        // Finish response construction and authorization under the fence. The
+        // supervisor takes the same fence; release it before the no-wait handoff.
+        drop(host);
+        if matches!(outcome, ApiQueued::New(_)) {
+            #[cfg(test)]
+            if let Some(fixture) = &self.fixture {
+                fixture.start(&mutation.operation_id);
+            }
+            if let Some(unit) = unit {
+                // This single attempt may have reached systemd even on error.
+                // Durable Queued is the truthful response either way; a retry
+                // only returns history. Explicit operator recovery resolves it.
+                let _ = crate::admission_systemd::start_creation_unit(
+                    &current.host_plan.tools.busctl,
+                    &unit,
+                    started.monotonic + super::planning::DEADLINE,
+                );
+            }
+        }
+        Ok(reply)
     }
 
     fn operation(
@@ -473,6 +648,9 @@ impl Api {
         }
         if path == "/api/v1/plans" && request.method == Method::POST {
             return self.plan(&current, &auth, &sessions, &request, body);
+        }
+        if path == "/api/v1/environments" && request.method == Method::POST {
+            return self.create(&current, &auth, &sessions, &request, body);
         }
         if let Some(operation) = operation {
             require_empty(body)?;
@@ -673,11 +851,11 @@ mod tests {
             let csrf_token = session["csrfToken"].as_str().unwrap();
             let cookie = cookie.as_str();
             for (method, path, payload, csrf, credential, status) in [
-                ("POST", "/api/v1/environments", body.as_str(), csrf_token, cookie, 501),
+                ("POST", "/api/v1/environments/fixture/start", body.as_str(), csrf_token, cookie, 501),
                 // Unsupported handlers must not parse or dispatch an opaque body.
-                ("POST", "/api/v1/environments", "not JSON", csrf_token, cookie, 501),
-                ("POST", "/api/v1/environments", body.as_str(), "wrong", cookie, 403),
-                ("POST", "/api/v1/environments", body.as_str(), csrf_token, unknown_cookie.as_str(), 401),
+                ("POST", "/api/v1/environments/fixture/start", "not JSON", csrf_token, cookie, 501),
+                ("POST", "/api/v1/environments/fixture/start", body.as_str(), "wrong", cookie, 403),
+                ("POST", "/api/v1/environments/fixture/start", body.as_str(), csrf_token, unknown_cookie.as_str(), 401),
                 ("GET", "/api/v1/session", "{}", csrf_token, cookie, 400),
                 ("DELETE", "/api/v1/session", "{}", csrf_token, cookie, 400),
                 ("GET", "/api/v1/capabilities", "{}", csrf_token, cookie, 400),

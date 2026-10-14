@@ -67,15 +67,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   budget reservation or upstream dispatch, omit session IDs from audit logs,
   and keep arbitrary client headers excluded. Clients still own ID propagation.
 ### Added
+- Accept exact cached plans for stopped offline creation through the authenticated
+  host API and CLI, with atomic storage charges, once-only supervisor handoff and
+  original-intent receipt recovery. Unknown usage remains explicit; runtime
+  lifecycle and generated-host acceptance stay separate.
 - Preview exact installed creation templates through the authenticated host API
   and CLI, using existing principal policy and read-only capacity checks. Bounded
-  plans reserve nothing; public creation and lifecycle mutations remain unsupported.
+  plans reserve nothing and never imply runtime admission.
 - Read installed template-owned image/block catalogs through an explicit published
   principal/catalog grant, with scoped pagination, truthful content/grant revisions
-  and matching CLI commands. Environment mutations remain unsupported.
+  and matching CLI commands.
 - Read original-principal operation receipts and exact scoped recovery keys through
   the authenticated host owner, with stable historical revisions and conservative
-  Pending/old-epoch absence. Resource mutations remain unsupported.
+  Pending/old-epoch absence.
 - Support explicit protected private CA bundles for the HTTPS CLI without
   disabling certificate or hostname verification.
 - Authenticate requested Research admission through held relay peers, exact backend
@@ -90,7 +94,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   grants and scoped operation recovery, with atomic workspace/state charges and
   once-only supervisor claims. Explicit operator abort retains stopped images and
   releases only proven-absent slots while preserving identities and history.
-  Public creation remains unsupported pending actual lifecycle/recovery acceptance.
+  Actual lifecycle/recovery acceptance remains a separate runtime gate.
 - Project opt-in offline creation templates with their original reviewed catalog
   and shared dynamic quota helpers; private source settings remain host-owned.
 - Reconstruct exact dynamic storage bindings and supervise accepted creation

@@ -1,9 +1,9 @@
 # Host environment API v1
 
 Status: authoritative contract for [#152](https://github.com/timfewi/tentaflake/issues/152),
-with experimental discovery, sessions, published capacity reporting,
-original-principal operation reads and an HTTPS CLI client. Dynamic environment
-lifecycle remains unavailable through HTTP. Schema validation, unit tests and
+with experimental discovery, sessions, capacity/catalog reads, template planning,
+stopped creation, original-principal operation reads and an HTTPS CLI client.
+Runtime lifecycle remains unavailable through HTTP. Schema validation, unit tests and
 fixtures do not establish vendor, guest, private HTTPS relay or live-host
 acceptance. Existing installed-host `agent plan`/`agent import` commands retain
 their documented stopped configuration-file behavior.
@@ -58,7 +58,8 @@ contents. Secrets do not appear in service arguments, responses or logs.
 
 The implemented routes are `GET /api/meta`, `GET/POST/DELETE /api/v1/session`,
 authenticated `GET /api/v1/capabilities`, catalog image/block lists,
-`POST /api/v1/plans` and both operation reads described below. Discovery
+`POST /api/v1/plans`, stopped `POST /api/v1/environments` and both operation reads
+described below. Discovery
 reports an implemented backend because this service handles real requests; it
 does not assert that environment features exist. Sessions return the configured
 catalog grant, if any, the template-derived host creation grant, and the current
@@ -68,9 +69,8 @@ and Research reserves, bounded by per-instance limits. These are declarations,
 not currently free capacity or live admission. Fractional ceilings that cannot
 fit the integer request protocol report zero. Resource actions remain disabled
 and both isolation choices explicitly lack API runtime acceptance. Other
-authenticated operations, including environment lists and mutations, return
-`unsupported`; the real UI remains blocked on those
-implementations. Bearer authentication uses its independently configured file;
+authenticated operations, including environment lists and runtime mutations,
+return `unsupported`; complete UI workflows still need those implementations. Bearer authentication uses its independently configured file;
 cookie logout does not revoke that operator-managed credential.
 Public OIDC negotiation routes also return `unsupported`; no provider or redirect
 flow is enabled.
@@ -94,8 +94,8 @@ The catalog exposes only deduplicated public image metadata from installed
 creation templates, validated against their retained original catalog. Private
 source names, commands, environment, paths and principal lists are never returned.
 An installation without templates returns empty lists. Blocks are currently empty;
-image availability remains unsupported and evidence empty while public creation
-is unavailable. Listing does not pull an image or probe a provider.
+image availability remains unsupported and evidence empty until runtime
+acceptance is established. Listing does not pull an image or probe a provider.
 
 `revisions.catalog` hashes the actual public image/block projection;
 `revisions.grants` hashes the canonical effective grants for this host/principal.
@@ -176,7 +176,7 @@ the generated API owner and installed CLI, using guest-only credentials and an
 explicitly trusted local TLS relay. Its queued/Unknown/success/abort, Pending and
 post-publication history assertions are written but have not run; unit fixtures
 alone do not prove that deployment.
-Public creation, start and stop remain `501 unsupported`.
+Runtime start and stop remain `501 unsupported`; stopped creation is described below.
 
 ## Installed-template planning
 
@@ -205,17 +205,62 @@ never reconstruct a missing plan under new authority. The cache holds exact
 candidate identities/specifications, not a second ledger or retained host plans.
 
 A valid preview reserves nothing and proves neither runtime admission nor
-successful creation. Public creation/start/stop remain unavailable and their
-feature flags stay disabled. Focused HTTP/Unix/HTTPS tests exercise planning and
+successful creation. The stopped-create path below consumes a still-valid plan;
+runtime start/stop and capability-backed creation remain unavailable. Feature
+availability remains conservative until actual lifecycle acceptance. Focused HTTP/Unix/HTTPS tests exercise planning and
 refusals with a private privileged-observer fixture; separate core tests exercise
 the real read-only ledger transition. The existing creation VM has assertions
 for the generated owner and installed CLI, including unchanged ledger/filesystem
 state, Pending and publication revocation; actual VM acceptance is still pending.
 
+## Stopped creation
+
+`POST /api/v1/environments` accepts exactly `{"planId":"…","startAfterCreate":false}`,
+with `Content-Type: application/json`, the session's `Idempotency-Epoch` and a
+caller-selected `Idempotency-Key` UUID. `startAfterCreate: true` remains unsupported.
+The `tentaflake api … create FILE --epoch E --key UUID` command sends the file's
+exact bytes. Preserve those bytes, epoch and key for recovery.
+
+Only the original authenticated principal can retrieve a matching accepted intent.
+Exact historical key/digest lookup precedes cached-plan, current-create-grant,
+expiry and Pending checks. A duplicate returns its retained operation/environment
+view; it never submits another job, including after owner restart, publication,
+grant revocation or Unknown. Changed bytes under the same scoped key return
+`409 idempotency_conflict`. This narrow original-intent view grants no general
+resource-read permission. Missing or stale plans return `409 plan_stale`; the
+owner never reconstructs them. A new key in a retired or unknown epoch returns
+`409 idempotency_expired`; exact historical receipts still resolve first.
+New work revalidates exact current public revisions,
+private grant CAS, template bindings and both storage decisions under the common
+host fence and ledger lock. After the slow observations, session expiry and current
+bearer credentials are checked again inside the queue callback before committing
+either storage charge or any proposed grant.
+
+A newly queued operation records both native charges and its exact proposed grants
+before one bounded, no-wait systemd handoff to the existing creation supervisor.
+Response construction and final authentication happen under the fence before
+handoff. `202` means the durable intent was accepted; it does not prove the job
+started or storage preparation succeeded. A timeout, lost response or failed
+handoff keeps the durable Queued receipt without automatically retrying or marking
+success. Use `recover --epoch E --key UUID --method POST --target
+/api/v1/environments` to find it. Explicit root creation recovery/abort resolves
+uncertainty; a queued operation whose job never started requires the existing
+proven-absence abort before forming a new plan and intent.
+
+The response carries `Operation-Id` and `{operation, environment}`. Environment
+configuration is reconstructed from the retained original authority, even after
+its template is removed. Resource and operation revisions remain their recorded
+revisions; `environment.revisions` contains coherent current public revisions,
+including the effective grants read with that receipt. `usage`, workspace
+`usedBytes` and `active` are null: creation does not measure usage or admit a
+runtime. HTTP/Unix/HTTPS fixtures cover the owner/client boundary with explicit
+privileged-observer substitutes; the generated-owner/supervisor VM remains the
+separate runtime acceptance gate.
+
 ## Private ledger foundation
 
-`tentaflake-admission::ledger::api` implements library transactions for stopped,
-offline environments; public creation still returns HTTP `501 unsupported`.
+`tentaflake-admission::ledger::api` owns the stopped, offline creation transactions
+used by the HTTP owner and the internal supervisor.
 The existing ledger atomically records the operation, exact issued action grants,
 environment/workspace identities and both native storage charges. Operation keys
 bind host, principal, epoch, method, canonical target and exact request digest.
@@ -237,8 +282,8 @@ Missing staging, mount, loop and writer evidence refuses the whole abort. Durabl
 release markers preserve all original IDs and history; nothing authorizes their
 reuse or recreation. Exact terminal retries perform no observation or mutation.
 The root maintenance collectors implement these observations; actual supervised
-creation/recovery VM acceptance is still required before enabling public creation.
-Library and collector checks do not establish a working HTTP create or VM lifecycle.
+creation/recovery VM acceptance is still required. Library and collector checks
+do not establish a working installed-host lifecycle.
 
 Existing private v3 ledgers without the new API field remain readable. Once a
 new writer persists that field, older binaries reject it; rollback must preserve
