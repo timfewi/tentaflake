@@ -43,11 +43,39 @@ let
     ];
   workspace = raw.workspace or "/workspace";
   lifecycle = raw.lifecycle or "stopped";
+  imageSource = raw.image or null;
+  localImage = fields "image" [ "kind" "descriptor" ] imageSource;
+  descriptorValue = localImage.descriptor or null;
+  descriptor =
+    if builtins.isPath descriptorValue then
+      "${descriptorValue}"
+    else if lib.isDerivation descriptorValue || builtins.isString descriptorValue then
+      toString descriptorValue
+    else
+      fail "local image descriptor must be a Nix derivation or contextual store path.";
+  runtimeImage =
+    if builtins.isString imageSource then
+      {
+        kind = "registry";
+        reference = (import ./pinnedImage.nix { inherit lib; }) "generic" false imageSource;
+      }
+    else if
+      (localImage.kind or null) != "local-artifact"
+      || !builtins.hasContext descriptor
+      || builtins.match "/nix/store/[0-9abcdfghijklmnpqrsvwxyz]{32}-[A-Za-z0-9+._=-]+" descriptor == null
+      || lib.any (part: part == "." || part == "..") (lib.splitString "/" descriptor)
+    then
+      fail "local image requires an immutable contextual descriptor directly in the Nix store."
+    else
+      {
+        kind = "local-artifact";
+        inherit descriptor;
+      };
 in
 if (raw.schemaVersion or null) != 1 then
   fail "schemaVersion must be 1."
-else if !(raw ? image) || !builtins.isString raw.image then
-  fail "image must be a digest-pinned OCI reference."
+else if !(raw ? image) || !(builtins.isString imageSource || builtins.isAttrs imageSource) then
+  fail "image must be a digest-pinned OCI reference or a local artifact descriptor."
 else if
   !builtins.isList command
   || command == [ ]
@@ -95,7 +123,10 @@ then
 else
   {
     schemaVersion = 1;
-    image = (import ./pinnedImage.nix { inherit lib; }) "generic" false raw.image;
+    # The local projection is a source locator, never an OCI reference. Only the
+    # admission supervisor may resolve the descriptor and dispatch its image ID.
+    image = if runtimeImage.kind == "registry" then runtimeImage.reference else runtimeImage.descriptor;
+    inherit runtimeImage;
     inherit
       command
       ownership

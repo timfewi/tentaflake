@@ -25,7 +25,7 @@ const UNIT_PROPERTIES: [&str; 8] = [
     "NeedDaemonReload",
     "InvocationID",
 ];
-const SERVICE_PROPERTIES: [&str; 10] = [
+const SERVICE_PROPERTIES: [&str; 17] = [
     "MainPID",
     "ControlGroup",
     "ExecStart",
@@ -36,6 +36,13 @@ const SERVICE_PROPERTIES: [&str; 10] = [
     "KillMode",
     "TimeoutStartUSec",
     "TimeoutStopUSec",
+    "Restart",
+    "NotifyAccess",
+    "ExecStartPre",
+    "ExecStartPost",
+    "ExecStopPost",
+    "ExecReload",
+    "ExecCondition",
 ];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -77,6 +84,13 @@ pub(crate) struct ServiceObservation {
     pub kill_mode: String,
     pub timeout_start_usec: u64,
     pub timeout_stop_usec: u64,
+    pub restart: String,
+    pub notify_access: String,
+    pub exec_start_pre: Vec<ExecCommand>,
+    pub exec_start_post: Vec<ExecCommand>,
+    pub exec_stop_post: Vec<ExecCommand>,
+    pub exec_reload: Vec<ExecCommand>,
+    pub exec_condition: Vec<ExecCommand>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -203,6 +217,15 @@ pub(crate) fn list_quota_units(busctl: &Path) -> Result<Vec<String>, String> {
 /// Include native mount files that are installed but not currently loaded.
 pub(crate) fn list_mount_units(busctl: &Path) -> Result<Vec<String>, String> {
     list_units(busctl, &["*.mount"], mount_name)
+}
+
+/// Include old OCI launchers even when absent from the currently desired plan.
+pub(crate) fn list_runtime_units(busctl: &Path) -> Result<Vec<String>, String> {
+    list_units(
+        busctl,
+        &["docker-*.service", "podman-*.service"],
+        runtime_name,
+    )
 }
 
 fn list_units(
@@ -435,6 +458,20 @@ fn parse_service(bytes: &[u8]) -> Result<ServiceObservation, String> {
     let kill_mode: String = property(&mut values, "s")?;
     let timeout_start_usec = property(&mut values, "t")?;
     let timeout_stop_usec = property(&mut values, "t")?;
+    let restart: String = property(&mut values, "s")?;
+    let notify_access: String = property(&mut values, "s")?;
+    let exec_start_pre = parse_exec(property(&mut values, "a(sasbttttuii)")?)?;
+    let exec_start_post = parse_exec(property(&mut values, "a(sasbttttuii)")?)?;
+    let exec_stop_post = parse_exec(property(&mut values, "a(sasbttttuii)")?)?;
+    let exec_reload = parse_exec(property(&mut values, "a(sasbttttuii)")?)?;
+    let exec_condition = parse_exec(property(&mut values, "a(sasbttttuii)")?)?;
+    if !matches!(
+        restart.as_str(),
+        "no" | "on-success" | "on-failure" | "on-abnormal" | "on-watchdog" | "on-abort" | "always"
+    ) || !matches!(notify_access.as_str(), "none" | "main" | "exec" | "all")
+    {
+        return Err("invalid systemd service policy".into());
+    }
     if !(control_group.is_empty() || absolute_path(&control_group))
         || !(matches!(
             service_type.as_str(),
@@ -470,6 +507,13 @@ fn parse_service(bytes: &[u8]) -> Result<ServiceObservation, String> {
         kill_mode,
         timeout_start_usec,
         timeout_stop_usec,
+        restart,
+        notify_access,
+        exec_start_pre,
+        exec_start_post,
+        exec_stop_post,
+        exec_reload,
+        exec_condition,
     })
 }
 
@@ -574,6 +618,12 @@ fn quota_name(name: &str) -> bool {
 
 fn mount_name(name: &str) -> bool {
     unit_name(name) && name.ends_with(".mount")
+}
+
+fn runtime_name(name: &str) -> bool {
+    unit_name(name)
+        && name.ends_with(".service")
+        && (name.starts_with("docker-") || name.starts_with("podman-"))
 }
 
 fn parse_listed_files(bytes: &[u8], valid_name: fn(&str) -> bool) -> Result<Vec<String>, String> {
@@ -689,7 +739,14 @@ mod tests {
 {"type":"b","data":false}
 {"type":"s","data":"control-group"}
 {"type":"t","data":90000000}
-{"type":"t","data":90000000}"#;
+{"type":"t","data":90000000}
+{"type":"s","data":"no"}
+{"type":"s","data":"main"}
+{"type":"a(sasbttttuii)","data":[]}
+{"type":"a(sasbttttuii)","data":[]}
+{"type":"a(sasbttttuii)","data":[]}
+{"type":"a(sasbttttuii)","data":[]}
+{"type":"a(sasbttttuii)","data":[]}"#;
 
     #[test]
     fn parses_observed_selected_properties_without_aliasing() {
@@ -869,6 +926,30 @@ mod tests {
             "tentaflake-state-quota-example.service", "Quota fixture", "loaded", "inactive", "dead", "",
             "/org/freedesktop/systemd1/unit/tentaflake_2dstate_2dquota_2dexample_2eservice", 0, "", "/"
         ]]]})
+    }
+
+    #[test]
+    fn runtime_inventory_covers_both_backends_and_rejects_aliases() {
+        for name in ["docker-removed.service", "podman-removed.service"] {
+            let mut value = listing();
+            value["data"][0][0][0] = Value::String(name.into());
+            assert_eq!(
+                parse_listed_units(&serde_json::to_vec(&value).unwrap(), runtime_name).unwrap(),
+                [name]
+            );
+            value["data"][0][0][5] = Value::String("alias.service".into());
+            assert!(
+                parse_listed_units(&serde_json::to_vec(&value).unwrap(), runtime_name).is_err()
+            );
+        }
+        assert!(
+            parse_listed_units(&serde_json::to_vec(&listing()).unwrap(), runtime_name).is_err()
+        );
+        let files = br#"{"type":"a(ss)","data":[[["/etc/systemd/system/docker-removed.service","masked"],["/etc/systemd/system/podman-removed.service","disabled"]]]}"#;
+        assert_eq!(
+            parse_listed_files(files, runtime_name).unwrap(),
+            ["docker-removed.service", "podman-removed.service"]
+        );
     }
 
     #[test]

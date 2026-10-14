@@ -22,6 +22,7 @@ let
       inherit (definition.ownership) uid gid;
       runnable = true;
       requestedCapabilities = definition.capabilities;
+      inherit (definition) runtimeImage;
       requireStateQuota = true;
     };
 in
@@ -71,6 +72,8 @@ in
         requested = capability: lib.elem capability d.capabilities;
         ceilings = config.tentaflake.security.resources;
         resources = ceilings // d.resources;
+        localImage = d.runtimeImage.kind == "local-artifact";
+        effectiveContainer = config.virtualisation.oci-containers.containers.${container};
         resourceValue =
           key: value:
           if key == "cpus" then
@@ -125,6 +128,8 @@ in
           inherit backend owner;
           name = container;
           inherit resources stateQuotaEnabled;
+          inherit (d) runtimeImage;
+          admissionEnabled = config.tentaflake.security.admission != null;
           inherit (resources) pidsLimit;
           requestedCapabilities = d.capabilities;
           requireStateQuota = true;
@@ -161,8 +166,9 @@ in
             ]
             ++ lib.optional workerEnabled "${workerResults}:/run/tentaflake-worker/results:ro"
             ++ research.volumes;
-            extraOptions = [ "--workdir=${d.workspace}" ];
-          };
+            workdir = d.workspace;
+          }
+          // lib.optionalAttrs localImage { pull = "never"; };
           brokerPolicyEnabled = modelEnabled;
           researchPolicyEnabled = research.enabled;
           inherit workerEnabled;
@@ -172,6 +178,23 @@ in
       in
       {
         assertions = result.assertions ++ [
+          {
+            assertion = effectiveContainer.image == d.image;
+            message = "tentaflake: generic effective image must match its declared runtime image source.";
+          }
+          {
+            assertion =
+              effectiveContainer.imageFile == null
+              && effectiveContainer.imageStream == null
+              && (
+                !localImage
+                || (
+                  effectiveContainer.pull == "never"
+                  && lib.all (value: value == null) (lib.attrValues effectiveContainer.login)
+                )
+              );
+            message = "tentaflake: generic runtime images forbid imageFile/imageStream and local artifacts forbid registry login or pull fallback.";
+          }
           {
             assertion = !brokerEnabled || (requested "model" && modelEnabled && !broker.fetch.enable);
             message = "tentaflake: generic model broker must match its requested capability and disable the legacy fetch broker.";

@@ -190,6 +190,8 @@ in
       baseConfig,
       overrides ? { },
       allowMutableImage ? false,
+      runtimeImage ? null,
+      admissionEnabled ? false,
       allowedWritableSources,
       allowedWritableDestinations,
       pidsLimit,
@@ -221,6 +223,12 @@ in
         ++ lib.optional (!workspaceQuotaEnabled) "workspace-quota"
         ++ lib.optional (requireStateQuota && !stateQuotaEnabled) "state-quota";
       merged = lib.recursiveUpdate baseConfig overrides;
+      localImage = runtimeImage != null && runtimeImage.kind == "local-artifact";
+      image =
+        if localImage then
+          runtimeImage.descriptor
+        else
+          pinnedImage name (allowMutableImage && !secure) merged.image;
       effectiveAutomaticStart = automaticStart || (merged.autoStart or false);
       extraOptions = merged.extraOptions or [ ];
       preRunExtraOptions = merged.preRunExtraOptions or [ ];
@@ -269,6 +277,20 @@ in
     {
       inherit missingAdmission;
       assertions = [
+        {
+          assertion = !localImage || (secure && backend == "docker" && admissionEnabled);
+          message = "tentaflake: local image artifacts require configured secure Docker admission.";
+        }
+        {
+          assertion =
+            !localImage
+            || (
+              merged.image == runtimeImage.descriptor
+              && (merged.pull or "missing") == "never"
+              && lib.all (value: value == null) (lib.attrValues (merged.login or { }))
+            );
+          message = "tentaflake: local image artifacts must retain their descriptor source and forbid registry login or pull fallback.";
+        }
         {
           assertion = lib.match "^[a-z0-9][a-z0-9-]*$" name != null;
           message = "tentaflake: agent name ${name} must contain only lowercase ASCII letters, digits, and hyphens.";
@@ -333,7 +355,7 @@ in
         }
         {
           assertion = (merged.imageFile or null) == null && (merged.imageStream or null) == null;
-          message = "tentaflake: secure agent ${name} may not replace its reviewed registry digest with a caller-supplied image archive or stream.";
+          message = "tentaflake: secure agent ${name} may not replace its declared image source with a caller-supplied image archive or stream.";
         }
         {
           assertion = !(containsSensitiveValue (merged.environment or { }));
@@ -364,7 +386,7 @@ in
         if !secure then
           merged
           // {
-            image = pinnedImage name allowMutableImage merged.image;
+            inherit image;
             labels = labels // {
               "io.tentaflake.agent" = "true";
               "io.tentaflake.security-profile" = profile;
@@ -373,7 +395,7 @@ in
         else
           merged
           // {
-            image = pinnedImage name false merged.image;
+            inherit image;
             user = owner;
             privileged = false;
             capabilities = capabilities // {

@@ -63,6 +63,7 @@
       # ── Shared agent builders ──
       inherit ((import ./lib { inherit pkgs lib; }))
         mkAgent
+        mkLocalImage
         adapters
         runtimeCatalog
         baseImages
@@ -130,6 +131,7 @@
           adapters
           runtimeCatalog
           baseImages
+          mkLocalImage
           constants
           ;
       };
@@ -158,6 +160,7 @@
           in
           pkgs.runCommand "tentaflake-agent-adapters"
             {
+              passthru.admissionPlan = tests.admissionPlan;
               nativeBuildInputs = [
                 pkgs.python3
                 pkgs.bash

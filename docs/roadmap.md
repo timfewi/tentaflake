@@ -127,14 +127,27 @@ agent, strict guest-kernel execution and the private VPS deployment remain in
 scope. Publication APIs still require trusted drain/install/fence proof; library
 or source checks do not establish runtime isolation or vendor acceptance.
 
-The first OCI integration slice should use offline Generic workloads. Bind the
-complete effective OCI specification in the instance revision, persist a runtime
-intent with boot/daemon/supervisor identity in the claim, then bind one exact CID
-before starting it. Replace all existing name-based cleanup and implicit-pull
-hooks together. A killed Docker client or an absent-container observation does
-not fence an outstanding daemon request: uncertain work must stay charged and
-must never replay. Real budget/start/stop/crash/CID VM evidence precedes merging;
-image acquisition and external capabilities retain their separate acceptance.
+The OCI slice in `feat/oci-runtime` now binds the complete effective specification
+to schema-3 host plans and persists boot/daemon/supervisor/image identity before
+create, then one full CID before start. It replaces the whole admitted Docker
+unit, refreshes actual prerequisites around create/start, and retains uncertain
+claims without replay. Normal exact-CID stop/removal retains storage. Public
+`mkLocalImage` builds immutable descriptors without IFD; explicit acquisition
+loads the archive separately and proves the local image ID without claiming
+registry provenance.
+
+Checkpoint: the OCI implementation, explicit stopped-Docker bootstrap fence and
+old/new runtime-unit publication inventory are ready for runtime verification.
+The pinned fast gate passed 288 Rust tests and 17 bounded archive tests. The
+final CLI Nix package passes 220 tests, including the added inert-socket
+regression; formatting and Clippy pass. The actual generated Nix plan passes the
+closed Rust loader. Adapter and expanded VM definitions evaluate and the
+rendered Python compiles. Two sequential OCI nodes cover budget denial,
+exact-CID retirement, foreign-name refusal and a real supervisor/daemon crash;
+neither node has run. Owners are the CLI OCI/bootstrap supervisors, admission
+module, image contract/helper and storage/OCI VM fixtures. The next step is the
+full remote runtime gate after the predecessor PRs; it must pass before merge.
+External capability collectors and automatic Unknown recovery remain unfinished.
 
 The [base-image catalog](20-base-images.md) adds Debian 13 and Ubuntu 26.04 LTS
 platform manifest selection with an offline metadata validator. The 2026-10-13

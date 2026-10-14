@@ -33,7 +33,10 @@ lists existing quota images as Unknown and always reports incomplete bootstrap
 evidence. Explicit [storage bootstrap and guarded quota services](docs/14-workspace-quota.md#guarded-storage-lifecycle)
 connect volume claims to image creation and mounting. Root operators can use the
 explicit [stopped-host publication protocol](docs/14-workspace-quota.md#changing-the-published-host-plan)
-when installing another configuration. Aggregate OCI lifecycle integration,
+when installing another configuration. The experimental
+[OCI admission supervisor](docs/agent-adapters.md#local-images-and-host-admission)
+binds durable claims to exact container identities and supports separately
+acquired local Nix images. Runtime acceptance, external capability collectors,
 automated installation and the host API service remain under development.
 
 Discover presets with `tentaflake runtimes --json`. A digest-pinned image and

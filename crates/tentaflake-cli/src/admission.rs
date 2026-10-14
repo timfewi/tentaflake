@@ -11,11 +11,24 @@ const MAX_SNAPSHOT_BYTES: u64 = 4 * 1024 * 1024;
 
 pub(crate) fn run(args: &[String], mode: OutputMode) -> Result<u8, String> {
     match args {
+        [command, file, id] if command == "image-acquire" => {
+            return crate::admission_oci::acquire(Path::new(file), id);
+        }
+        [command, file, id] if command == "runtime-start" || command == "runtime-stop" => {
+            return crate::admission_oci::lifecycle(
+                Path::new(file),
+                id,
+                command == "runtime-start",
+            );
+        }
         [command, rest @ ..] if command == "publication" => {
             return crate::admission_publication::run(rest, mode);
         }
         [command, file] if command == "bootstrap" => {
             return crate::admission_runtime::bootstrap(Path::new(file));
+        }
+        [command, file] if command == "bootstrap-fence" => {
+            return crate::admission_bootstrap::fence(Path::new(file));
         }
         [command, file, id] if command == "volume-start" || command == "volume-stop" => {
             return crate::admission_runtime::lifecycle(

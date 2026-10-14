@@ -224,7 +224,7 @@ assert lib.elem "  exec ${stateHelpers.create}" prepareLines;
 assert lib.elem "  exec ${stateHelpers.verify}" prepareLines;
 assert services.tentaflake-state-quota-hermes-quota.script == "exec ${ownerHelper}";
 assert config.tentaflake.admissionManifest == null;
-assert plan.schemaVersion == 2;
+assert plan.schemaVersion == 3;
 assert plan.physicalSpaceHeadroomBytes == 67108864;
 assert plan.policy.generation == "fixture-authority";
 assert builtins.stringLength plan.policy.revision == 71;

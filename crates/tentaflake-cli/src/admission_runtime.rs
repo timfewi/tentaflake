@@ -202,7 +202,7 @@ fn command(path: &Path) -> Command {
     command
 }
 
-fn observe(path: &Path, args: &[&str]) -> Result<Vec<u8>, String> {
+pub(crate) fn observe(path: &Path, args: &[&str]) -> Result<Vec<u8>, String> {
     let output = crate::output_with_timeout(command(path).args(args), Duration::from_secs(10))
         .map_err(|_| "bounded storage observation failed")?;
     if !output.status.success()
@@ -350,7 +350,7 @@ pub(crate) fn lifecycle(path: &Path, id: &str, start: bool) -> Result<u8, String
     Ok(0)
 }
 
-fn stopped(observed: &UnitObservation) -> bool {
+pub(crate) fn stopped(observed: &UnitObservation) -> bool {
     matches!(observed.active_state.as_str(), "inactive" | "failed")
         && observed.job.id == 0
         && !observed.need_daemon_reload
@@ -403,13 +403,17 @@ pub(crate) fn offline_units(
     plan: &HostPlan,
     path: &Path,
     other: Option<&HostPlan>,
-) -> Result<(), String> {
+) -> Result<Vec<String>, String> {
+    let mut inventory: BTreeSet<_> = crate::admission_bootstrap::runtime_units(plan, path, other)?
+        .into_iter()
+        .collect();
     let mut names = quota_unit_names(plan, other);
     names.extend(admission_systemd::list_quota_units(&plan.tools.busctl)?);
-    for name in names {
-        let observed = admission_systemd::load_unit(&plan.tools.busctl, &name)?;
+    for name in &names {
+        let observed = admission_systemd::load_unit(&plan.tools.busctl, name)?;
         offline_quota_unit(&observed, plan, path)?;
     }
+    inventory.extend(names);
     // Removed definitions can leave a native mount job whose prepare dependency
     // already completed. Inspect all available mount units, including unloaded
     // files, rather than inferring their absence from the new plan.
@@ -417,7 +421,10 @@ pub(crate) fn offline_units(
         let observed = admission_systemd::load_unit(&plan.tools.busctl, &name)?;
         maintenance_mount(&observed, plan, other)?;
     }
-    Ok(())
+    if inventory.len() > 2048 {
+        return Err("maintenance unit inventory limit exceeded".into());
+    }
+    Ok(inventory.into_iter().collect())
 }
 
 fn overlaps(left: &Path, right: &Path) -> bool {
@@ -530,14 +537,19 @@ pub(crate) fn offline_workloads(plan: &HostPlan) -> Result<(), String> {
             "--host",
             "unix:///var/run/docker.sock",
             "ps",
+            "--all",
             "--quiet",
             "--no-trunc",
         ],
     )?
     .is_empty()
     {
-        return Err("bootstrap or recovery requires all Docker workloads stopped".into());
+        return Err("maintenance requires the Docker container inventory to be empty".into());
     }
+    offline_loops(plan)
+}
+
+pub(crate) fn offline_loops(plan: &HostPlan) -> Result<(), String> {
     no_backing_loops(&observe(
         &plan.tools.losetup,
         &["--list", "--json", "--output", "NAME,BACK-FILE"],
@@ -564,7 +576,7 @@ pub(crate) fn bootstrap(path: &Path) -> Result<u8, String> {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
         _ => return Err("bootstrap requires a genuinely absent ledger; never delete an existing ledger to retry".into()),
     }
-    offline_units(&plan, path, None)?;
+    crate::admission_bootstrap::verify(&plan, path)?;
     offline_workloads(&plan)?;
     ensure_backing_roots()?;
     let mut inventory = scan_inventory(&specs(&plan))?;
@@ -582,7 +594,7 @@ pub(crate) fn bootstrap(path: &Path) -> Result<u8, String> {
         }
     }
     installed(path)?;
-    offline_units(&plan, path, None)?;
+    crate::admission_bootstrap::verify(&plan, path)?;
     offline_workloads(&plan)?;
     // Only this fenced path may assert completeness. Diagnostic inventory never
     // supplies this flag, and callers cannot submit an inventory JSON file.
@@ -676,6 +688,13 @@ mod tests {
                 kill_mode: "control-group".into(),
                 timeout_start_usec: 300_000_000,
                 timeout_stop_usec: 120_000_000,
+                restart: "no".into(),
+                notify_access: "none".into(),
+                exec_start_pre: vec![],
+                exec_start_post: vec![],
+                exec_stop_post: vec![],
+                exec_reload: vec![],
+                exec_condition: vec![],
             }),
         };
         (plan, observed)

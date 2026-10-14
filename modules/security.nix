@@ -107,13 +107,18 @@ let
         if instance == null then
           "-"
         else
-          builtins.toJSON {
-            schemaVersion = 1;
-            requested = instance.requestedCapabilities;
-            research = builtins.hasAttr name (lib.attrByPath [ "tentaflake" "research" "agents" ] { } config);
-            stateQuota = quotaEnabled && quota.state != null;
-            inherit (instance) requireStateQuota;
-          };
+          builtins.toJSON (
+            {
+              schemaVersion = 1;
+              requested = instance.requestedCapabilities;
+              research = builtins.hasAttr name (lib.attrByPath [ "tentaflake" "research" "agents" ] { } config);
+              stateQuota = quotaEnabled && quota.state != null;
+              inherit (instance) requireStateQuota;
+            }
+            // lib.optionalAttrs (instance.runtimeImage != null) {
+              inherit (instance) runtimeImage;
+            }
+          );
       fields = [
         "agent"
         name

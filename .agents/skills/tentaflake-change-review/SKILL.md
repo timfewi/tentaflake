@@ -43,8 +43,9 @@ root ownership. Never relax production ownership policy to fit a sandbox.
 
 - Keep the template generic and secret-free; deployment policy belongs in forks.
 - Preserve identified consumers and state. Document intentional API changes and
-  migrations without silent security downgrades. Images stay digest-pinned
-  except for the explicit dev-only escape hatch.
+  migrations without silent security downgrades. Registry images stay digest-pinned
+  except for the explicit dev-only escape hatch. Local images require immutable
+  Nix descriptors and exact image-ID checks; do not imply registry provenance.
 - Keep unaccepted runtimes described as unsupported/stopped.
 - Add relevant changes under `Unreleased` in `CHANGELOG.md`; preserve history.
 - When committing, use Conventional Commits and `git commit -s` for DCO.

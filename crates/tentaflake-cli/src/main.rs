@@ -13,9 +13,11 @@ use std::time::{Duration, Instant, SystemTime};
 
 const RUNTIME_CATALOG: &str = include_str!("../../../adapters/catalog.json");
 mod admission;
+mod admission_bootstrap;
 mod admission_evidence;
 mod admission_fence;
 mod admission_host;
+mod admission_oci;
 mod admission_publication;
 mod admission_runtime;
 mod admission_storage;
@@ -107,6 +109,8 @@ struct DeclaredCapabilities {
     research: bool,
     state_quota: bool,
     require_state_quota: bool,
+    #[serde(default)]
+    runtime_image: Option<tentaflake_admission::ledger::RuntimeImage>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -655,6 +659,10 @@ fn parse_declared_capabilities(
     }
     let declared: DeclaredCapabilities = serde_json::from_str(value).map_err(|_| invalid())?;
     if declared.schema_version != 1
+        || declared
+            .runtime_image
+            .as_ref()
+            .is_some_and(|image| image.validate().is_err())
         || declared.requested.len() > 6
         || declared
             .requested
@@ -1031,12 +1039,21 @@ fn security_findings(state: &SecurityState) -> Vec<Finding> {
         );
         check_agent(
             &mut findings,
-            agent.image_pinned,
+            agent.image_pinned
+                || agent
+                    .declared_capabilities
+                    .as_ref()
+                    .is_some_and(|declared| {
+                        matches!(
+                            &declared.runtime_image,
+                            Some(tentaflake_admission::ledger::RuntimeImage::LocalArtifact { .. })
+                        )
+                    }),
             "TFSEC-012",
             "high",
             agent,
-            "container image is not pinned to a SHA-256 digest",
-            "pin the reviewed image digest",
+            "container image has no declared immutable source",
+            "pin the reviewed registry digest or configure a local Nix image descriptor; acquisition and provenance require separate evidence",
         );
         check_agent(
             &mut findings,
@@ -2780,6 +2797,8 @@ fn print_help() {
            tentaflake admission explain <snapshot-file> [--hide]\n\
            tentaflake admission inventory <generated-store-plan> [--hide]\n\
            tentaflake admission bootstrap <generated-store-plan>\n\
+           tentaflake admission bootstrap-fence <generated-store-plan>\n\
+           tentaflake admission image-acquire <generated-store-plan> <instance-id>\n\
            tentaflake admission storage-recover <generated-store-plan> <allocation-id>\n\
            tentaflake admission publication status [--hide]\n\
            tentaflake admission publication begin <candidate-store-plan> <operation-id> <expected-ledger-revision>\n\
@@ -2988,6 +3007,50 @@ mod tests {
             live_container_security_from_manifest(&state.agents[0], None, "docker", Some("none")),
             LiveContainerState::Unknown
         );
+    }
+
+    #[test]
+    fn local_image_declaration_is_immutable_source_without_registry_or_live_evidence() {
+        let mut declaration = offline_capability_declaration();
+        declaration["runtimeImage"] = serde_json::json!({
+            "kind": "local-artifact",
+            "descriptor": "/nix/store/00000000000000000000000000000000-local-image.json",
+        });
+        let mut state =
+            parse_security_state(&capability_manifest(&declaration.to_string())).unwrap();
+        let agent = &mut state.agents[0];
+        agent.image_pinned = false;
+        assert_eq!(
+            live_container_security_from_manifest(agent, None, "docker", Some("none")),
+            LiveContainerState::Unknown
+        );
+        assert!(
+            !security_findings(&state)
+                .iter()
+                .any(|finding| finding.id == "TFSEC-012")
+        );
+        assert!(!state.agents[0].image_pinned);
+
+        declaration["runtimeImage"] = serde_json::json!({
+            "kind": "registry",
+            "reference": format!("example.invalid/image@sha256:{}", "0".repeat(64)),
+        });
+        state.agents[0].declared_capabilities =
+            parse_declared_capabilities(&declaration.to_string(), 1).unwrap();
+        assert!(
+            security_findings(&state)
+                .iter()
+                .any(|finding| finding.id == "TFSEC-012")
+        );
+        for image in [
+            serde_json::json!({"kind": "local-artifact", "descriptor": "/tmp/image.json"}),
+            serde_json::json!({"kind": "local-artifact", "descriptor": "/nix/store/00000000000000000000000000000000-image/../other"}),
+            serde_json::json!({"kind": "local-artifact", "descriptor": "/nix/store/00000000000000000000000000000000-image", "verified": true}),
+            serde_json::json!({"kind": "registry", "reference": "example.invalid/image:latest"}),
+        ] {
+            declaration["runtimeImage"] = image;
+            assert!(parse_declared_capabilities(&declaration.to_string(), 1).is_err());
+        }
     }
 
     #[test]

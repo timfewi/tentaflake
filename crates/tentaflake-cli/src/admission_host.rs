@@ -4,9 +4,11 @@ use crate::OutputMode;
 use crate::admission_storage::{VolumeSpec, scan_inventory, validate_specs};
 use serde::Deserialize;
 use std::collections::BTreeMap;
+use std::ffi::CString;
 use std::fmt::Write as _;
-use std::fs::{self, OpenOptions};
+use std::fs::{File, OpenOptions};
 use std::io::Read;
+use std::os::fd::{AsRawFd, FromRawFd};
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::path::{Component, Path, PathBuf};
 use tentaflake_admission::{HostPolicy, Instance, identifier, validate_authority, validate_policy};
@@ -21,6 +23,7 @@ pub(crate) struct HostPlan {
     pub policy: HostPolicy,
     pub instances: BTreeMap<String, Instance>,
     pub volumes: Vec<Volume>,
+    pub runtimes: BTreeMap<String, crate::admission_oci::RuntimeSpec>,
     pub tools: Tools,
 }
 
@@ -112,12 +115,15 @@ fn mount_unit(path: &Path) -> String {
 
 impl HostPlan {
     fn validate(&self) -> Result<(), String> {
-        if self.schema_version != 2
+        if self.schema_version != 3
             || !identifier(&self.policy.generation)
             || !identifier(&self.policy.revision)
             || !validate_policy(&self.policy).is_empty()
         {
             return Err("invalid host admission policy".into());
+        }
+        for (id, runtime) in &self.runtimes {
+            crate::admission_oci::validate_runtime(self, id, runtime)?;
         }
         let specs: Vec<_> = self
             .volumes
@@ -223,42 +229,78 @@ fn parse_plan(bytes: &[u8]) -> Result<HostPlan, String> {
     Ok(plan)
 }
 
-pub(crate) fn load_plan(path: &Path) -> Result<HostPlan, String> {
-    if !store_path(path) || path.parent() != Some(Path::new("/nix/store")) {
-        return Err("host admission requires the exact generated store file".into());
+/// Open a regular immutable store file without following any component symlink.
+/// Tool executables may use normal store symlinks separately; documents/archives
+/// are authenticated bytes, so their complete ancestry is checked here.
+pub(crate) fn open_store_file(path: &Path) -> Result<File, String> {
+    if !store_path(path) {
+        return Err("immutable input must name a normalized store file".into());
     }
-    for parent in ["/", "/nix", "/nix/store"] {
-        let metadata =
-            fs::symlink_metadata(parent).map_err(|_| "cannot inspect host plan ancestry")?;
+    let mut directory = OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_NONBLOCK)
+        .open("/")
+        .map_err(|_| "cannot open immutable input ancestry")?;
+    let parts: Vec<_> = path.components().skip(1).collect();
+    for (index, part) in parts.iter().enumerate() {
+        let metadata = directory
+            .metadata()
+            .map_err(|_| "cannot inspect immutable input ancestry")?;
+        // index 0 checks '/', 1 '/nix', 2 the canonical '/nix/store'.
         if !metadata.is_dir()
             || metadata.uid() != 0
-            || (metadata.mode() & 0o022 != 0 && metadata.mode() & 0o1000 == 0)
+            || (metadata.mode() & 0o022 != 0 && !(index == 2 && metadata.mode() & 0o1000 != 0))
         {
-            return Err("unsafe host plan ancestry".into());
+            return Err("unsafe immutable input ancestry".into());
         }
+        let name = CString::new(part.as_os_str().as_encoded_bytes())
+            .map_err(|_| "invalid immutable input component")?;
+        let last = index + 1 == parts.len();
+        let flags = libc::O_RDONLY
+            | libc::O_NOFOLLOW
+            | libc::O_NONBLOCK
+            | libc::O_CLOEXEC
+            | if last { 0 } else { libc::O_DIRECTORY };
+        let fd = unsafe { libc::openat(directory.as_raw_fd(), name.as_ptr(), flags) };
+        if fd < 0 {
+            return Err("cannot open immutable input component".into());
+        }
+        directory = unsafe { File::from_raw_fd(fd) };
     }
-    let file = OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
-        .open(path)
-        .map_err(|_| "cannot open host admission plan")?;
-    let metadata = file
+    let metadata = directory
         .metadata()
-        .map_err(|_| "cannot inspect host admission plan")?;
-    if !metadata.is_file()
-        || metadata.uid() != 0
-        || metadata.mode() & 0o222 != 0
-        || metadata.len() > MAX_PLAN_BYTES
+        .map_err(|_| "cannot inspect immutable input")?;
+    if !metadata.is_file() || metadata.uid() != 0 || metadata.mode() & 0o222 != 0 {
+        return Err("immutable input must be a protected root-owned regular file".into());
+    }
+    Ok(directory)
+}
+
+pub(crate) fn read_store_document(path: &Path, limit: u64) -> Result<Vec<u8>, String> {
+    if path.parent() != Some(Path::new("/nix/store")) {
+        return Err("immutable document requires the exact generated store file".into());
+    }
+    let file = open_store_file(path)?;
+    if file
+        .metadata()
+        .map_err(|_| "cannot inspect immutable document")?
+        .len()
+        > limit
     {
-        return Err(
-            "host admission plan must be an immutable root-owned file of at most 4 MiB".into(),
-        );
+        return Err("immutable document exceeds its limit".into());
     }
     let mut bytes = Vec::new();
-    file.take(MAX_PLAN_BYTES + 1)
+    file.take(limit + 1)
         .read_to_end(&mut bytes)
-        .map_err(|_| "cannot read host admission plan")?;
-    parse_plan(&bytes)
+        .map_err(|_| "cannot read immutable document")?;
+    if bytes.len() as u64 > limit {
+        return Err("immutable document exceeds its limit".into());
+    }
+    Ok(bytes)
+}
+
+pub(crate) fn load_plan(path: &Path) -> Result<HostPlan, String> {
+    parse_plan(&read_store_document(path, MAX_PLAN_BYTES)?)
 }
 
 pub(crate) fn inventory(path: &Path, mode: OutputMode) -> Result<u8, String> {
@@ -371,11 +413,12 @@ pub(crate) mod tests {
         .map(|(name, binary)| (name, format!("{STORE}/bin/{binary}")))
         .collect();
         json!({
-            "schemaVersion": 2,
+            "schemaVersion": 3,
             "physicalSpaceHeadroomBytes": 1073741824,
             "policy": recorded.snapshot.policy,
             "instances": BTreeMap::from([(INSTANCE, instance)]),
             "volumes": volumes,
+            "runtimes": {},
             "tools": tools
         })
     }
@@ -389,9 +432,22 @@ pub(crate) mod tests {
     }
 
     #[test]
+    #[ignore = "requires an explicitly built generated Nix HostPlan"]
+    fn generated_nix_plan_matches_closed_host_schema() {
+        let path = std::env::var_os("TENTAFLAKE_TEST_ADMISSION_PLAN")
+            .expect("set the generated immutable plan path");
+        let plan =
+            load_plan(Path::new(&path)).expect("generated Nix plan must match the host loader");
+        assert!(
+            !plan.runtimes.is_empty(),
+            "fixture must cover an actual runtime projection"
+        );
+    }
+
+    #[test]
     fn accepts_nix_shaped_plan_without_live_files_or_readiness() {
         let plan = parse_fixture(&plan_fixture()).unwrap();
-        assert_eq!(plan.schema_version, 2);
+        assert_eq!(plan.schema_version, 3);
         assert_eq!(plan.instances[INSTANCE].owner_id, "host-root");
         assert_eq!(plan.volumes.len(), 2);
         assert_eq!(

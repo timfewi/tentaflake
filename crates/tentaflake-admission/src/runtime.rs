@@ -108,23 +108,11 @@ fn store_file(value: &str) -> bool {
         })
 }
 
-impl RuntimeIntent {
-    pub(crate) fn validate(&self, request: &AdmissionRequest) -> Result<(), LedgerError> {
-        let boot = self.boot_id.as_bytes();
-        let valid_boot = boot.len() == 36
-            && boot.iter().enumerate().all(|(index, byte)| {
-                if [8, 13, 18, 23].contains(&index) {
-                    *byte == b'-'
-                } else {
-                    byte.is_ascii_digit() || (b'a'..=b'f').contains(byte)
-                }
-            })
-            && boot
-                .iter()
-                .any(|byte| (b'1'..=b'9').contains(byte) || (b'a'..=b'f').contains(byte));
-        let valid_process = |pid: u32, ticks: u64| pid > 0 && pid <= i32::MAX as u32 && ticks > 0;
-        let unit = &self.supervisor.unit;
-        let valid_image = match &self.image {
+impl RuntimeImage {
+    /// Validate the source locator syntax. This neither authenticates a store
+    /// file nor proves the presence, content or provenance of an acquired image.
+    pub fn validate(&self) -> Result<(), LedgerError> {
+        let valid = match self {
             RuntimeImage::Registry { reference } => {
                 reference.len() <= 512
                     && reference.split_once('@').is_some_and(|(name, pin)| {
@@ -142,6 +130,30 @@ impl RuntimeIntent {
             }
             RuntimeImage::LocalArtifact { descriptor } => store_file(descriptor),
         };
+        if !valid {
+            return Err(LedgerError::Invalid("runtime image source"));
+        }
+        Ok(())
+    }
+}
+
+impl RuntimeIntent {
+    pub(crate) fn validate(&self, request: &AdmissionRequest) -> Result<(), LedgerError> {
+        self.image.validate()?;
+        let boot = self.boot_id.as_bytes();
+        let valid_boot = boot.len() == 36
+            && boot.iter().enumerate().all(|(index, byte)| {
+                if [8, 13, 18, 23].contains(&index) {
+                    *byte == b'-'
+                } else {
+                    byte.is_ascii_digit() || (b'a'..=b'f').contains(byte)
+                }
+            })
+            && boot
+                .iter()
+                .any(|byte| (b'1'..=b'9').contains(byte) || (b'a'..=b'f').contains(byte));
+        let valid_process = |pid: u32, ticks: u64| pid > 0 && pid <= i32::MAX as u32 && ticks > 0;
+        let unit = &self.supervisor.unit;
         if !valid_boot
             || !identifier(&self.daemon.id)
             || !invocation(&self.daemon.invocation_id)
@@ -157,7 +169,6 @@ impl RuntimeIntent {
             || !identifier(&self.runtime_generation)
             || !identifier(&self.spec_revision)
             || self.spec_revision != request.expected.instance
-            || !valid_image
             || !digest(&self.image_id)
         {
             return Err(LedgerError::Invalid("runtime dispatch identity"));

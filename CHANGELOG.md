@@ -19,6 +19,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   budget reservation or upstream dispatch, omit session IDs from audit logs,
   and keep arbitrary client headers excluded. Clients still own ID propagation.
 ### Added
+- Experimental aggregate Docker admission for offline Generic workloads, with
+  durable host/daemon/supervisor/image intent, exact container-ID binding before
+  start, conservative uncertain outcomes and storage retention on stop. Local
+  Docker archives use immutable Nix descriptors and explicit image acquisition;
+  runtime and vendor acceptance remain separate gates.
 - Reviewed Debian 13 and Ubuntu 26.04 LTS base-image metadata, platform-specific
   immutable Nix selection, and offline digest-chain regression checks. This
   catalog does not acquire layers or establish signature/runtime acceptance.

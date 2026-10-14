@@ -142,8 +142,13 @@ are already published or require access to another repository for public checks.
   workloads, Retained compute and Present storage before persisting Pending.
   Finish/cancel observe both plans' unit/path union under the fence; identical
   terminal retries return history without repeating observations or installation.
-  Installation remains an explicit operator action. OCI aggregate gating and
-  automated host orchestration remain unfinished. See `docs/14-workspace-quota.md`.
+  Installation remains an explicit operator action. The OCI supervisor owns the
+  complete admitted Docker unit: no implicit pull/load, name-based cleanup or
+  automatic restart. Persist exact boot/daemon/supervisor/image identity before
+  create and the full CID before start; unknown outcomes retain charges without
+  replay. Local `mkLocalImage` descriptors prove content identity, not registry
+  provenance. Real lifecycle VM evidence and external capability collectors
+  remain required. See `docs/agent-adapters.md` and `docs/14-workspace-quota.md`.
 - CLI help is configuration-free; management commands require generated
   host configuration and inventory.
 - `api/v1/openapi.json` owns the host API wire contract; clients consume its

@@ -136,12 +136,38 @@ image before reading it. The supervisor mounts in the host namespace with
 `loop,nodev,nosuid,noatime`; state starts before workspace and stops after it.
 
 First bootstrap is an explicit maintenance operation. Stop all Docker workloads
-and quota services, detach all loop devices, and load the generated
-guarded units before running as root:
+and quota services, detach all loop devices, and load the generated guarded
+units. Fence any historical custom launchers as well: discovery covers the
+declared units and conventional `docker-*`/`podman-*` services, not arbitrary
+operator scripts. Keep exclusive control of the host during this maintenance
+window. Then run this sequence as root:
 
 ```bash
+systemctl stop docker.service docker.socket
+tentaflake admission bootstrap-fence "$(readlink -f /etc/tentaflake/admission.json)"
+systemctl start docker.service
 tentaflake admission bootstrap "$(readlink -f /etc/tentaflake/admission.json)"
 ```
+
+`bootstrap-fence` records a root-private volatile proof that the runtime units,
+Docker and its socket were stopped. Bootstrap requires a later Docker process,
+the same boot, installed plan and owned unit inventory, and an empty container
+inventory. This fences outstanding requests from the old, unaccounted Docker
+generation; merely stopping its client or observing no containers is insufficient.
+Perform the sequence in one maintenance window without switching generations
+between steps. A missing proof after a crash or reboot requires repeating the
+stopped-Docker phase. Neither command restarts Docker automatically or creates
+runtime authority from the proof alone.
+
+The supported backend is the declared NixOS Docker package with `docker.socket`,
+its generated configuration, internal containerd and default state paths and
+namespaces. Extra daemon flags and `live-restore` are refused. Admission disables
+live restore, masks `docker-prune.service` and rejects automatic pruning so
+retained container identities survive. Other Docker/Podman clients, daemons,
+containerd, shims and OCI runtime processes must also be stopped; the command
+does not terminate them. A corrupt or unfinished volatile proof under
+`/run/tentaflake-admission-bootstrap` requires operator inspection or a reboot
+before repeating the maintenance sequence.
 
 Bootstrap refuses an existing or partial `/var/lib/tentaflake-admission` ledger,
 queued or surviving legacy quota work, unmasked file-backed native mount units,
@@ -187,9 +213,11 @@ tentaflake admission storage-recover "$(readlink -f /etc/tentaflake/admission.js
 Recovery only records a verified existing image as Present. It never recreates,
 resizes, deletes, rebinds or releases storage. Preserve partial files for explicit
 repair. A changed admission manifest blocks new starts until explicitly
-published; never reset existing authority as a workaround. This storage path
-does not yet account for aggregate OCI compute or
-establish model, Research, strict-kernel or vendor acceptance.
+published; never reset existing authority as a workaround. The
+[OCI admission supervisor](agent-adapters.md#local-images-and-host-admission)
+separately accounts for aggregate compute and retains storage after a normal
+stop. Storage recovery establishes no model, Research, strict-kernel or vendor
+acceptance.
 
 ### Changing the published host plan
 

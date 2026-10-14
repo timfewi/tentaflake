@@ -99,7 +99,7 @@ operations. Workspace and state must match the instance paths and UID/GID.
 Both quotas are required for generic startup, including a manual start.
 Private state quotas remain optional for legacy adapters.
 
-Unknown versions/fields, root ownership, unpinned images, extra mounts,
+Unknown versions/fields, root ownership, mutable image sources, extra mounts,
 environment/credential inputs, malformed commands and unsupported capabilities
 fail before a module is produced. Definitions are non-secret, including command
 arguments. Native shell/files run inside the ordinary gVisor capsule; this
@@ -129,6 +129,55 @@ generic contract. After an explicitly authorized host update, an operator
 may start an admitted workload and attach with
 `tentaflake shell generic-NAME` or `tentaflake exec generic-NAME -- ...`.
 These source fixtures do not establish vendor support or live isolation evidence.
+
+### Local images and host admission
+
+A Nix definition can select a locally built Docker archive through the public
+`mkLocalImage` helper:
+
+```nix
+definition.image = {
+  kind = "local-artifact";
+  descriptor = tentaflake.lib.x86_64-linux.mkLocalImage archive;
+};
+```
+
+`archive` is a `pkgs.dockerTools.buildImage` result or another immutable Docker
+archive with its Nix dependency context. The helper builds a bounded JSON
+descriptor containing the actual image configuration SHA-256 and platform;
+it does not import build results during evaluation. Descriptors are direct
+Nix store files. Local artifact definitions require configured Docker host
+admission, both quotas and `pull = "never"`. JSON imports cannot fabricate the
+required Nix dependency context. Registry digest strings remain supported.
+Local artifacts have no invented registry digest or Cosign signature evidence;
+registry provenance requirements reject them.
+
+After installing the reviewed configuration and completing the stopped-host
+[storage bootstrap](14-workspace-quota.md#guarded-storage-lifecycle), root can
+explicitly acquire the local image:
+
+```bash
+tentaflake admission image-acquire "$(readlink -f /etc/tentaflake/admission.json)" generic-NAME
+systemctl start docker-generic-NAME.service
+systemctl stop docker-generic-NAME.service
+```
+
+Acquisition loads the immutable archive and checks its exact local image ID;
+it creates no runtime claim. Registry acquisition is a separate operator step.
+The admission supervisor never pulls, loads or logs in while starting a capsule.
+The instance revision covers the final OCI configuration and image source.
+Before create, a durable claim records boot, Docker process and supervisor
+identity. The returned full container ID must be durably bound before start.
+Systemd reports ready only after the running container passes inspection and
+the ledger records Active. Output is forwarded to the service journal.
+
+Normal stop uses the owned full ID, verifies the container stopped, removes that
+exact container and retains its storage charge. Name collisions, failed writes,
+interrupted mutations and ambiguous observations keep compute reserved as
+Unknown; repeating a request never authorizes another create. Foreign containers
+are never removed by name. Automatic recovery from these uncertain claims is
+not implemented. This first lifecycle slice targets offline Generic workloads;
+external capability collectors and vendor acceptance remain separate work.
 
 ### OpenShell reuse decision
 

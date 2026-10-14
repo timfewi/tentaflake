@@ -22,7 +22,39 @@ let
   zeroResources = lib.genAttrs resourceFields (_: 0);
   volumes = lib.attrValues config.tentaflake.admissionVolumes;
   instanceNames = lib.unique (map (volume: volume.spec.instanceId) volumes);
+  runtimeNames = lib.filter (name: lib.hasAttr name config.tentaflake.agentInstances) instanceNames;
+  containers = config.virtualisation.oci-containers.containers;
   revision = value: "sha256:${builtins.hashString "sha256" (builtins.toJSON value)}";
+  runtime =
+    name:
+    let
+      container = containers.${name};
+      declaredImage = config.tentaflake.agentInstances.${name}.runtimeImage;
+      provenance = config.tentaflake.imageProvenance.agents.${name} or null;
+    in
+    {
+      image =
+        if declaredImage != null then
+          declaredImage
+        else
+          {
+            kind = "registry";
+            reference = container.image;
+          };
+      unit = "${container.serviceName}.service";
+      # Project the complete final OCI input, not a second containment policy.
+      # These removed source/backend fields are either represented by `image`
+      # or explicitly forbidden below. Do not read rendered systemd commands:
+      # those commands depend on this manifest and would introduce a cycle.
+      container = builtins.removeAttrs container [
+        "image"
+        "imageFile"
+        "imageStream"
+        "podman"
+      ];
+      provenance = if provenance != null && provenance.enable then provenance else null;
+    };
+  runtimes = lib.genAttrs runtimeNames runtime;
   instance =
     name:
     let
@@ -63,9 +95,15 @@ let
         }) owned;
       };
     in
-    definition // { revision = revision definition; };
+    definition
+    // {
+      revision = revision {
+        inherit definition;
+        runtime = runtimes.${name} or null;
+      };
+    };
   plan = {
-    schemaVersion = 2;
+    schemaVersion = 3;
     inherit (cfg) physicalSpaceHeadroomBytes;
     policy = {
       generation = cfg.authorityEpoch;
@@ -87,7 +125,7 @@ let
       grants = [ ];
     };
     instances = lib.genAttrs instanceNames instance;
-    inherit volumes;
+    inherit volumes runtimes;
     tools = {
       cli = "${pkgs.callPackage ../pkgs/tentaflake-cli { }}/bin/tentaflake";
       systemctl = "${pkgs.systemd}/bin/systemctl";
@@ -155,15 +193,100 @@ in
     environment.etc = lib.mkIf (cfg != null) {
       "tentaflake/admission.json".source = config.tentaflake.admissionManifest;
     };
-    assertions = lib.optionals (cfg != null) [
-      {
-        assertion = security.profile == "balanced";
-        message = "tentaflake host admission currently requires the balanced container profile.";
+    assertions =
+      lib.optionals (cfg != null) [
+        {
+          assertion = security.profile == "balanced";
+          message = "tentaflake host admission currently requires the balanced container profile.";
+        }
+        {
+          assertion = config.virtualisation.oci-containers.backend == "docker";
+          message = "tentaflake host admission currently requires Docker evidence; other backends are not inferred ready.";
+        }
+        {
+          assertion = !config.virtualisation.docker.daemon.settings.live-restore;
+          message = "tentaflake host admission requires Docker live-restore disabled so explicit stopped-daemon bootstrap can fence legacy dispatch.";
+        }
+        {
+          assertion = !config.virtualisation.docker.autoPrune.enable;
+          message = "tentaflake host admission requires Docker automatic pruning disabled to preserve exact retained container identities.";
+        }
+      ]
+      ++ lib.optionals (cfg != null) (
+        map (name: {
+          assertion =
+            let
+              container = containers.${name};
+            in
+            container.serviceName == "docker-${name}"
+            && name != "prune"
+            && container.imageFile == null
+            && container.imageStream == null
+            && container.podman == null
+            && lib.all (value: value == null) (lib.attrValues container.login)
+            && container.preRunExtraOptions == [ ]
+            && container.pull == "never"
+            && !container.autoRemoveOnStop;
+          message = "tentaflake admitted runtime ${name} requires the owned Docker supervisor, separately acquired images, and retained exact container identities.";
+        }) runtimeNames
+      );
+
+    virtualisation.docker.daemon.settings.live-restore = lib.mkIf (cfg != null) (lib.mkDefault false);
+
+    virtualisation.oci-containers.containers = lib.mkIf (cfg != null) (
+      lib.genAttrs runtimeNames (_: {
+        pull = lib.mkDefault "never";
+        autoRemoveOnStop = lib.mkDefault false;
+      })
+    );
+
+    systemd.services = lib.mkIf (cfg != null) (
+      lib.genAttrs (map (name: "docker-${name}") runtimeNames) (
+        unit:
+        let
+          name = lib.removePrefix "docker-" unit;
+          command =
+            action:
+            lib.escapeShellArgs [
+              manifest.tools.cli
+              "admission"
+              action
+              (toString config.tentaflake.admissionManifest)
+              name
+            ];
+        in
+        {
+          # Existing quota, capability and provenance Requires/After edges stay
+          # attached to this unit. Acquisition is never a start hook.
+          script = lib.mkForce "";
+          preStart = lib.mkForce "";
+          postStart = lib.mkForce "";
+          preStop = lib.mkForce "";
+          postStop = lib.mkForce "";
+          reload = lib.mkForce "";
+          serviceConfig = {
+            Type = lib.mkForce "notify";
+            NotifyAccess = lib.mkForce "main";
+            RemainAfterExit = lib.mkForce false;
+            Restart = lib.mkForce "no";
+            KillMode = lib.mkForce "control-group";
+            TimeoutStartSec = lib.mkForce 300;
+            TimeoutStopSec = lib.mkForce 120;
+            ExecCondition = lib.mkForce [ ];
+            ExecStartPre = lib.mkForce [ ];
+            ExecStart = lib.mkForce (command "runtime-start");
+            ExecStartPost = lib.mkForce [ ];
+            ExecStop = lib.mkForce (command "runtime-stop");
+            ExecStopPost = lib.mkForce [ ];
+            ExecReload = lib.mkForce [ ];
+          };
+        }
+      )
+      // {
+        # NixOS defines this service even when its timer is disabled. Mask it
+        # so bootstrap can prove it cannot mutate the stopped runtime inventory.
+        docker-prune.enable = lib.mkForce false;
       }
-      {
-        assertion = config.virtualisation.oci-containers.backend == "docker";
-        message = "tentaflake host admission currently requires Docker evidence; other backends are not inferred ready.";
-      }
-    ];
+    );
   };
 }

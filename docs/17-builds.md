@@ -13,6 +13,10 @@ the formatting command; treefmt's `--ci` writes changes before reporting failure
 
 Use `just eval` explicitly for read-only flake evaluation, including focused
 adapter evaluation and the required non-VM Research closure preparation.
+`just admission-plan` separately checks an actual generated runtime plan through
+the closed Rust loader. Its read-only fixture copy drops Nix dependency context
+to avoid building the referenced tools/images; production plans retain it.
+`just local-image` checks bounded archive parsing without loading Docker images.
 
 CI and `just eval` use `scripts/eval_flake.py` after that preparation. It discovers
 the full output/check inventory without evaluating derivations, then runs

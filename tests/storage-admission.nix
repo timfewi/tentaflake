@@ -64,6 +64,7 @@
       virtualisation = {
         oci-containers.backend = "docker";
         docker.enable = true;
+        docker.daemon.settings."live-restore" = false;
         memorySize = 768;
         diskSize = 2048;
       };
@@ -139,8 +140,16 @@
         return shlex.join(arguments)
 
     def stop_storage_units():
-        storage.succeed("systemctl stop " + shlex.join(storage_units))
-        storage.succeed("systemctl reset-failed " + shlex.join(storage_units))
+        failed_before = {
+            unit for unit in storage_units
+            if storage.succeed("systemctl show --value --property=ActiveState " + shlex.quote(unit)).strip() == "failed"
+        }
+        storage.succeed("timeout 150s systemctl stop " + shlex.join(storage_units))
+        for unit in storage_units:
+            state = storage.succeed("systemctl show --value --property=ActiveState " + shlex.quote(unit)).strip()
+            assert state == "inactive" or (unit in failed_before and state == "failed"), (unit, state)
+        jobs = storage.succeed("systemctl list-jobs --no-legend --no-pager --full")
+        assert all(not set(storage_units).intersection(line.split()) for line in jobs.splitlines()), jobs
 
     def storage_snapshot():
         return json.loads(storage.succeed(f"cat {storage_ledger}"))
@@ -169,6 +178,14 @@
         storage.fail(storage_command("volume-start", "state:generic-storage"))
         storage.fail(storage_command("bootstrap", plan=stale_storage_plan))
         storage.succeed("test ! -e /var/lib/tentaflake-admission")
+        storage.fail(storage_command("bootstrap"))
+        docker_units = ["docker.service"]
+        if storage.succeed("systemctl show --value --property=LoadState docker.socket").strip() != "not-found":
+            docker_units.append("docker.socket")
+        storage.succeed("timeout 150s systemctl stop " + shlex.join(docker_units))
+        storage.succeed(storage_command("bootstrap-fence"))
+        storage.succeed("timeout 150s systemctl start docker.service")
+        storage.wait_for_unit("docker.service")
         storage.succeed(storage_command("bootstrap"))
         initial = storage_snapshot()
         assert initial["storage"] == [] and initial["receipts"] == [], initial
