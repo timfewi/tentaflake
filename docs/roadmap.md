@@ -182,16 +182,19 @@ remote runtime settings, records a durable intent before create and a full CID
 before start, and uses only that CID for subsequent operations. Unknown create
 outcomes preserve the claim/snapshot and refuse automatic drain or approve
 recovery; a terminal result cannot override the intent. Ordinary runtime output
-and client duration are bounded, without claiming daemon cancellation.
-The configured Podman package supplies its declared gVisor runtime. The fast gate
-passes 359 Rust tests and static/helper checks; the actual offline Worker Nix
-package passes 40 unit, three probe CLI and eight queue CLI tests. Its fixture
-uses the supported 0750 result layout because Nix forbids chmod setgid; the VM
-exercises the actual tmpfiles layout. Scoped Nix lint/format, actual Docker and
-Podman worker option projections with IFD disabled, and compilation of the
-rendered 2,293-line VM script pass. Real VM execution remains pending.
-The same Worker change is isolated in [PR #169](https://github.com/timfewi/tentaflake/pull/169)
-on the OCI parent, with its own 314-test fast gate and focused Nix projection.
+and client duration are bounded, without claiming daemon cancellation. Artifact
+streaming bounds both pipes, TAR metadata/trailers and client exit without
+buffering the archive; uncertain transfers retain intent and full CID, while
+fully observed invalid archives still complete without artifacts.
+The configured Podman package supplies its declared gVisor runtime. The same
+Worker source is isolated in [PR #169](https://github.com/timfewi/tentaflake/pull/169)
+on the OCI parent: its fast gate passes 322 Rust tests and static/helper checks;
+the actual offline Worker Nix package passes 45 unit, three probe CLI and eleven
+queue CLI tests. Fixtures use supported 0750 result permissions because Nix
+forbids chmod setgid; the VM checks the real tmpfiles mode 2750. Focused
+Docker/Podman projections with IFD disabled select that tested package and
+confirm configured runtimes and private tmpfiles. The rendered standalone
+2,137-line VM script compiles. Real VM execution remains pending.
 Next: project immutable Worker and image-loader configuration into HostPlan,
 without a configuration reference back to that generated plan. Guard supported
 drain/approve/deny/load paths against Pending or mismatched published authority,
@@ -201,8 +204,8 @@ path and image-loader units, fence removed/legacy launchers, and require bounded
 proof that running claims and job directories are empty; unknown evidence
 refuses maintenance. Preserve standalone behavior when admission is disabled
 and no prior ledger exists; an existing ledger must not silently lose its guard.
-This step grants no Worker capability. Add daemon-generation recovery, bound
-the artifact stream and replace the Worker read-only-mount validation skip with
+This step grants no Worker capability. Add daemon-generation recovery and
+replace the Worker read-only-mount validation skip with
 exact results-mount validation before enabling grants. Private worker
 data/retention remain outside admitted workspace/state volumes; worker compute
 still relies on explicit host reserves.

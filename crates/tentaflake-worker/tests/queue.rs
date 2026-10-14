@@ -76,6 +76,46 @@ esac
         fs::write(runtime, format!("{prefix}{body}")).unwrap();
     }
 
+    fn completed_runtime(&self, archive: &str) {
+        let cid = "cd".repeat(32);
+        self.runtime_script(&format!(
+            r#"
+case "$1" in
+image) printf '%s\n' 'sha256:{}';;
+ps) exit 0;;
+create)
+  [[ -f '{}'/state/jobs/job_1/dispatch.json ]] || exit 92
+  printf '%s\n' '{cid}';;
+start)
+  [[ "$2" == '{cid}' && "$(<'{}'/state/jobs/job_1/container.json)" == *'{cid}'* ]] || exit 93;;
+inspect)
+  [[ "$3" == '{cid}' ]] || exit 94
+  case "$2" in
+    *Running*) if [[ -f '{}'/released ]]; then printf 'false\n'; else printf 'true\n'; fi;;
+    *ExitCode*) printf '0\n';;
+    *) exit 95;; esac;;
+exec)
+  [[ "$2" == '{cid}' ]] || exit 95
+  if [[ "$3" == head ]]; then printf 'TFW1:{}:0\n'; else
+    printf '%s\n' "$$" > '{}'/archive-pid
+    {archive}
+  fi;;
+kill) [[ "$2" == --signal=USR1 && "$3" == '{cid}' ]] || exit 95; : > '{}'/released;;
+logs) [[ "$2" == '{cid}' ]] || exit 96; printf 'ok\n';;
+rm) [[ "$2" == --force && "$3" == '{cid}' ]] || exit 97;;
+*) exit 98;;
+esac
+"#,
+            "ab".repeat(32),
+            self.root.display(),
+            self.root.display(),
+            self.root.display(),
+            "ab".repeat(16),
+            self.root.display(),
+            self.root.display()
+        ));
+    }
+
     fn submit(&self) {
         fs::write(self.root.join("workspace/.tentaflake-worker/inbox/job_1.json"),
             br#"{"version":1,"id":"job_1","action_class":"local-reversible","argv":["true"],"timeout_seconds":1}"#).unwrap();
@@ -167,41 +207,7 @@ fn sigkill_at_dispatch_boundary_preserves_intent_and_restart_does_not_replay_or_
 #[test]
 fn confirmed_create_persists_identity_before_start_and_uses_cid_for_every_followup() {
     let f = Fixture::new();
-    let cid = "cd".repeat(32);
-    f.runtime_script(&format!(
-        r#"
-case "$1" in
-image) printf '%s\n' 'sha256:{}';;
-ps) exit 0;;
-create)
-  [[ -f '{}'/state/jobs/job_1/dispatch.json ]] || exit 92
-  printf '%s\n' '{cid}';;
-start)
-  [[ "$2" == '{cid}' && "$(<'{}'/state/jobs/job_1/container.json)" == *'{cid}'* ]] || exit 93;;
-inspect)
-  [[ "$3" == '{cid}' ]] || exit 94
-  case "$2" in
-    *Running*) if [[ -f '{}'/released ]]; then printf 'false\n'; else printf 'true\n'; fi;;
-    *ExitCode*) printf '0\n';;
-    *) exit 95;; esac;;
-exec)
-  [[ "$2" == '{cid}' ]] || exit 95
-  if [[ "$3" == head ]]; then printf 'TFW1:{}:0\n'; else
-    for ((i=0; i<1024; i++)); do printf '\0'; done
-  fi;;
-kill) [[ "$2" == --signal=USR1 && "$3" == '{cid}' ]] || exit 95; : > '{}'/released;;
-logs) [[ "$2" == '{cid}' ]] || exit 96; printf 'ok\n';;
-rm) [[ "$2" == --force && "$3" == '{cid}' ]] || exit 97;;
-*) exit 98;;
-esac
-"#,
-        "ab".repeat(32),
-        f.root.display(),
-        f.root.display(),
-        f.root.display(),
-        "ab".repeat(16),
-        f.root.display()
-    ));
+    f.completed_runtime(r"for ((i=0; i<1024; i++)); do printf '\0'; done");
     f.submit();
     let output = f.command(&["drain"]).output().unwrap();
     assert!(
@@ -367,4 +373,121 @@ fn interrupted_private_write_keeps_inbox_and_restart_captures_complete_request()
         !f.root.join("calls").exists(),
         "unapproved request must never dispatch"
     );
+}
+
+#[test]
+fn artifact_stream_timeout_retains_dispatch_and_exact_identity() {
+    let f = Fixture::new();
+    let sleep = std::env::split_paths(&std::env::var_os("PATH").unwrap())
+        .map(|path| path.join("sleep"))
+        .find(|path| path.is_file())
+        .unwrap();
+    // A real, finite child exposes the old unbounded wait without leaving a
+    // hanging test process when this regression is run against the old code.
+    f.completed_runtime(&format!("exec '{}' 3", sleep.display()));
+    f.submit();
+    let output = f.command(&["drain"]).output().unwrap();
+    assert!(
+        !output.status.success(),
+        "a stream outlived the job deadline"
+    );
+    assert!(String::from_utf8_lossy(&output.stderr).contains("timed out"));
+    assert_retained_artifact_dispatch(&f);
+}
+
+fn assert_retained_artifact_dispatch(f: &Fixture) {
+    let job = f.root.join("state/jobs/job_1");
+    assert!(job.join("dispatch.json").is_file());
+    assert!(job.join("input").is_dir());
+    let cid: serde_json::Value =
+        serde_json::from_slice(&fs::read(job.join("container.json")).unwrap()).unwrap();
+    assert_eq!(cid["containerId"], "cd".repeat(32));
+    assert!(f.root.join("state/running/job_1.json").is_file());
+    assert!(!f.root.join("state/results/job_1/result.json").exists());
+    assert!(!f.root.join("released").exists());
+    let pid: libc::pid_t = fs::read_to_string(f.root.join("archive-pid"))
+        .unwrap()
+        .trim()
+        .parse()
+        .unwrap();
+    assert_eq!(
+        unsafe { libc::kill(pid, 0) },
+        -1,
+        "archive client still exists"
+    );
+    assert_eq!(
+        std::io::Error::last_os_error().raw_os_error(),
+        Some(libc::ESRCH)
+    );
+    let calls = fs::read(f.root.join("calls")).unwrap();
+    assert!(!f.command(&["drain"]).output().unwrap().status.success());
+    assert_eq!(fs::read(f.root.join("calls")).unwrap(), calls);
+}
+
+#[test]
+fn artifact_trailer_and_rejected_producer_cannot_escape_stream_bounds() {
+    let sleep = std::env::split_paths(&std::env::var_os("PATH").unwrap())
+        .map(|path| path.join("sleep"))
+        .find(|path| path.is_file())
+        .unwrap();
+    for (archive, diagnostic) in [
+        (
+            format!(
+                "for ((i=0; i<1024; i++)); do printf '\\0'; done; exec '{}' 3",
+                sleep.display()
+            ),
+            "timed out",
+        ),
+        (
+            "printf -v bytes '%65536s' ''; for ((i=0; i<16; i++)); do printf '%s' \"$bytes\"; done"
+                .into(),
+            "wire byte limit",
+        ),
+        (
+            "for ((i=0; i<1024; i++)); do printf '\\0'; done; printf -v bytes '%65536s' ''; for ((i=0; i<16; i++)); do printf '%s' \"$bytes\"; done".into(),
+            "wire byte limit",
+        ),
+        (
+            "printf -v bytes '%16384s' ''; printf '%s' \"$bytes\" >&2".into(),
+            "stderr limit",
+        ),
+    ] {
+        let f = Fixture::new();
+        f.completed_runtime(&archive);
+        f.submit();
+        let output = f.command(&["drain"]).output().unwrap();
+        assert!(!output.status.success(), "{archive}");
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains(diagnostic),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_retained_artifact_dispatch(&f);
+    }
+}
+
+#[test]
+fn fully_observed_invalid_artifact_still_releases_completed_capsule() {
+    let f = Fixture::new();
+    f.completed_runtime("printf 'malformed tar header'");
+    f.submit();
+    let output = f.command(&["drain"]).output().unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let result: serde_json::Value =
+        serde_json::from_slice(&fs::read(f.root.join("state/results/job_1/result.json")).unwrap())
+            .unwrap();
+    assert_eq!(result["status"], "succeeded");
+    assert_eq!(result["artifacts_available"], false);
+    assert!(
+        fs::read_to_string(f.root.join("state/results/job_1/job.log"))
+            .unwrap()
+            .contains("artifact archive rejected")
+    );
+    assert!(f.root.join("released").exists());
+    assert!(!f.root.join("state/running/job_1.json").exists());
+    assert!(!f.root.join("state/jobs/job_1").exists());
 }
