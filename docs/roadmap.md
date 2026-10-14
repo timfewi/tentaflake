@@ -241,23 +241,25 @@ remote runtime settings, syncs an intent before create and a full CID before
 start, and uses only that CID afterward. Unknown create outcomes preserve the
 claim/snapshot and block automatic drain or approve recovery, even with a
 terminal result. Ordinary runtime output and client duration are bounded;
-client termination proves no daemon cancellation. The configured Podman package
+client termination proves no daemon cancellation. Artifact transfer now bounds
+both pipes, total client lifetime and raw TAR metadata/trailers without buffering
+the archive. Transport uncertainty retains the intent and full CID; fully observed
+invalid archives still complete without artifacts. The configured Podman package
 supplies its declared gVisor runtime. Legacy migration and backup rollback
 review remain documented; no worker authority or backup sources change.
 
-The standalone fast gate passed 314 Rust tests and static/helper checks.
-Focused Docker/Podman projections with IFD disabled confirmed both backends
-use the tested Worker package, the configured Podman runtime and private
-tmpfiles layout; the 2136-line rendered VM script compiled. Byte-identical
-Worker package inputs passed an actual offline Nix package build with 40 unit,
-three probe CLI and eight queue CLI tests. Its fixtures use supported 0750
-result permissions because Nix forbids chmod setgid; the VM checks the real
-tmpfiles mode 2750. Real VM execution remains pending. No local VM or system
-build ran for this split.
+The standalone fast gate passed 322 Rust tests and static/helper checks. The
+actual offline Worker Nix package passed 45 unit, three probe CLI and eleven
+queue CLI tests. A real CLI child reproduced the former artifact deadline
+escape before the fix. Fixtures use supported 0750 result permissions because
+Nix forbids chmod setgid; the VM checks the real tmpfiles mode 2750. Earlier
+Docker/Podman projections with IFD disabled verified configured runtimes and
+private tmpfiles; refreshing them against the final package is pending.
+Real VM execution remains pending. No local VM or system build ran.
 
 Optional Worker requests still fail closed in owned OCI admission. Next: bind
 the collector and worker launcher inventory to the common maintenance fence,
-add daemon-generation recovery and bound the artifact stream. Replace the Worker
+add daemon-generation recovery. Replace the Worker
 read-only-mount validation skip with exact results-mount validation before
 enabling grants. Private worker data/retention remain outside admitted
 workspace/state volumes; worker compute still relies on explicit host reserves.

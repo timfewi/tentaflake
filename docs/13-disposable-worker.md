@@ -67,10 +67,10 @@ select local mode. Inherited Docker/Podman connection settings are excluded.
 Ordinary runtime queries and mutations have a ten-second client deadline and
 a combined 64 KiB response ceiling. Job log capture uses `maxLogBytes` directly,
 so truncation bounds memory as well as the published file. Killing a timed-out
-client does not prove cancellation by the runtime daemon. The artifact tar
-stream deadline, automatic recovery tied to a daemon generation, common host
-fence and aggregate Worker resource/storage admission still require separate
-implementation.
+client does not prove cancellation by the runtime daemon. Artifact streaming
+has the same ten-second ceiling, shortened to the remaining job deadline.
+Automatic recovery tied to a daemon generation, the common host fence and
+aggregate Worker resource/storage admission still require separate implementation.
 
 ## Inspect queue prerequisites
 
@@ -189,7 +189,19 @@ archive through `docker exec` or `podman exec` from inside the `runsc` mount
 namespace while the bounded tmpfs is still mounted. Its host importer enforces
 the snapshot byte and entry ceilings, accepts only relative regular files and
 directories, rejects links and special files, and normalizes result
-permissions. The worker rechecks the completion marker to exclude a concurrent
+permissions. Streaming covers stdout, stderr, trailing TAR bytes and client exit
+under one deadline; no archive-sized buffer or detached reader is used. The wire
+ceiling is `maxSnapshotBytes + 5632 * maxSnapshotEntries + 10240` bytes, including
+bounded GNU long names, headers and padding; stderr is limited to 8 KiB. GNU long
+names are limited to 4096 bytes including their terminator; PAX and sparse
+metadata are refused before payload allocation. A fully observed invalid archive
+still produces unavailable artifacts and a diagnostic. A timeout, excess wire
+output or I/O failure preserves the dispatch intent, full CID and snapshot for
+operator recovery. Existing error cleanup may still attempt removal by that exact
+CID; the retained intent does not assert the container remains running. Terminating
+the direct client proves no daemon cancellation. Separate marker, log and cleanup
+commands retain their own deadlines; the stream ceiling is not a total job-return
+deadline. The worker rechecks the completion marker to exclude a concurrent
 handoff and only then signals the wrapper to exit. The import lands in the
 worker's private result directory and is exposed read-only to the controller:
 
