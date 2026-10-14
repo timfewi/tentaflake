@@ -1,12 +1,12 @@
 //! Explicit stopped-host publication. This records authority, never installs a
 //! system configuration, drains services or retries an uncertain host action.
 use crate::OutputMode;
-use crate::admission_fence;
 use crate::admission_host::{HostPlan, load_plan};
 use crate::admission_runtime::{
     LEDGER, authority, installed, offline_units, offline_workloads, require_root,
 };
 use std::path::Path;
+use tentaflake_admission::host_fence as admission_fence;
 use tentaflake_admission::ledger::{
     Ledger, PublicationBegin, PublicationObservation, PublicationReceipt, PublicationRequest,
     PublishedAuthority,
@@ -24,6 +24,10 @@ pub(crate) fn run(args: &[String], mode: OutputMode) -> Result<u8, String> {
                 redact_authority(&mut status.published);
                 if let Some(receipt) = &mut status.pending {
                     redact_receipt(receipt);
+                }
+                if let Some(load) = &mut status.worker_image_load {
+                    redact_authority(&mut load.authority);
+                    load.configuration = "redacted".into();
                 }
             }
             emit(&status)

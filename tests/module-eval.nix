@@ -656,6 +656,69 @@ let
     workerCapsule.config.tentaflake.admissionVolumes."workspace:hermes-worker".helpers;
   workerPrepareLines = lib.splitString "\n" workerCapsule.config.systemd.services.tentaflake-workspace-quota-prepare-hermes-worker.script;
   workerAttempt = builtins.tryEval workerCapsule.config.system.build.toplevel.drvPath;
+  guardedWorker = workerCapsule.extendModules {
+    modules = [
+      {
+        tentaflake.security.admission = {
+          authorityEpoch = "worker-module-fixture";
+          capacity = {
+            memoryBytes = 4294967296;
+            memorySwapBytes = 4294967296;
+            nanoCpus = 4000000000;
+            pids = 1024;
+            workspaceBytes = 1073741824;
+            stateBytes = 1073741824;
+          };
+          hostReserve = lib.genAttrs [
+            "memoryBytes"
+            "memorySwapBytes"
+            "nanoCpus"
+            "pids"
+            "workspaceBytes"
+            "stateBytes"
+          ] (_: 0);
+          researchReserve = lib.genAttrs [
+            "memoryBytes"
+            "memorySwapBytes"
+            "nanoCpus"
+            "pids"
+            "workspaceBytes"
+            "stateBytes"
+          ] (_: 0);
+          maxActive = 2;
+        };
+      }
+    ];
+  };
+  guardedWorkerPlan = builtins.fromJSON guardedWorker.config.tentaflake.admissionManifest.text;
+  guardedWorkerSpec = guardedWorkerPlan.workers.hermes-worker;
+  guardedWorkerService = guardedWorker.config.systemd.services.tentaflake-worker-hermes-worker;
+  legacyWorkerInputs = workerCapsule.config.tentaflake.worker.maintenance;
+  podmanWorkerInputs = podmanCapsule.config.tentaflake.worker.maintenance;
+  reservedWorkerNames =
+    map
+      (
+        name:
+        workerCapsule.extendModules {
+          modules = [
+            {
+              virtualisation.oci-containers.containers.${name} = {
+                image = builders.constants.hermesImage;
+                autoStart = false;
+                volumes = [ "/var/lib/${name}/workspace:/workspace" ];
+              };
+              tentaflake.worker.agents.${name} = {
+                enable = true;
+                workspace = "/var/lib/${name}/workspace";
+              };
+            }
+          ];
+        }
+      )
+      [
+        "image"
+        "state-volumes"
+      ];
   tooSmallQuota = workerCapsule.extendModules {
     modules = [ { tentaflake.workspaceQuota.agents.hermes-worker.sizeMiB = lib.mkForce 32; } ];
   };
@@ -972,9 +1035,9 @@ assert
     "runsc"
   ];
 assert lib.elem pkgs.gvisor podmanCapsule.config.virtualisation.podman.extraRuntimes;
-assert lib.hasPrefix
-  "${lib.getExe podmanCapsule.config.virtualisation.podman.package} load --input "
-  podmanCapsule.config.systemd.services.tentaflake-worker-image.serviceConfig.ExecStart;
+assert
+  podmanCapsule.config.systemd.services.tentaflake-worker-image.serviceConfig.ExecStart
+  == "${guardedWorkerPlan.tools.cli} admission worker-load ${podmanWorkerInputs.image.config}";
 assert podmanContainer.networks == [ "tf-hermes-podman" ];
 assert lib.hasInfix "--interface-name \"$bridge\""
   podmanCapsule.config.systemd.services.tentaflake-broker-network-hermes-podman-fixture.script;
@@ -1149,11 +1212,57 @@ assert lib.elem "tentaflake-workspace-quota-hermes-worker.service"
   workerCapsule.config.systemd.services.docker-hermes-worker.requires;
 assert lib.elem "  exec ${workerQuotaHelpers.create}" workerPrepareLines;
 assert lib.elem "  exec ${workerQuotaHelpers.verify}" workerPrepareLines;
-assert lib.hasInfix " load --input "
-  workerCapsule.config.systemd.services.tentaflake-worker-image.serviceConfig.ExecStart;
-assert lib.hasPrefix
-  "${lib.getExe workerCapsule.config.virtualisation.docker.package} load --input "
-  workerCapsule.config.systemd.services.tentaflake-worker-image.serviceConfig.ExecStart;
+assert
+  workerService.serviceConfig.ReadWritePaths == [
+    "/var/lib/tentaflake-worker-hermes-worker"
+    "/var/lib/hermes-worker/workspace/.tentaflake-worker/inbox"
+  ];
+assert
+  guardedWorkerService.serviceConfig.ReadWritePaths == workerService.serviceConfig.ReadWritePaths
+  ++ [
+    "/var/lib/tentaflake-admission.lock"
+    "/var/lib/tentaflake-admission/.lock"
+  ];
+assert guardedWorkerService.serviceConfig.ProtectSystem == "strict";
+assert guardedWorkerService.serviceConfig.ReadOnlyPaths == [ "/var/lib/hermes-worker/workspace" ];
+assert guardedWorkerPlan.workers == guardedWorker.config.tentaflake.worker.maintenance.workers;
+assert guardedWorkerPlan.workerImage == guardedWorker.config.tentaflake.worker.maintenance.image;
+assert
+  builtins.attrNames guardedWorkerSpec == [
+    "config"
+    "executable"
+    "inbox"
+    "stateDir"
+    "unit"
+    "watcher"
+  ];
+assert
+  guardedWorkerSpec.config
+  == toString guardedWorker.config.environment.etc."tentaflake/workers/hermes-worker.json".source;
+assert guardedWorkerSpec.executable == lib.getExe guardedWorker.config.tentaflake.worker.package;
+assert guardedWorkerSpec.unit == "tentaflake-worker-hermes-worker.service";
+assert guardedWorkerSpec.watcher == "tentaflake-worker-hermes-worker.path";
+assert guardedWorkerSpec.inbox == "/var/lib/hermes-worker/workspace/.tentaflake-worker/inbox";
+assert guardedWorkerSpec.stateDir == "/var/lib/tentaflake-worker-hermes-worker";
+assert
+  guardedWorkerService.serviceConfig.ExecStart
+  == "${guardedWorkerSpec.executable} --config ${guardedWorkerSpec.config} drain";
+assert
+  guardedWorker.config.systemd.services.tentaflake-worker-image.serviceConfig.ExecStart
+  == "${guardedWorkerPlan.tools.cli} admission worker-load ${guardedWorkerPlan.workerImage.config}";
+assert
+  workerCapsule.config.systemd.services.tentaflake-worker-image.serviceConfig.ExecStart
+  == "${guardedWorkerPlan.tools.cli} admission worker-load ${legacyWorkerInputs.image.config}";
+assert lib.all (
+  fixture:
+  lib.any (
+    item:
+    !item.assertion
+    &&
+      item.message
+      == "tentaflake worker names must be lowercase safe OCI identifiers up to 48 characters; image and state-volumes are reserved."
+  ) fixture.config.assertions
+) reservedWorkerNames;
 assert lib.hasInfix "host\tbalanced\tfalse\ttrue\ttrue\ttrue\tfalse\t36\n" brokerManifest;
 assert lib.hasInfix "management\ttailscale\ttrue\ttrue\ttailnet-policy" brokerManifest;
 assert
@@ -1264,6 +1373,21 @@ assert (builtins.head tailscalePolicy.ssh).action == "check";
 # Parse the configured flags with the pinned CLI. --help avoids contacting a
 # daemon, while an unsupported flag before it still fails during parsing.
 pkgs.runCommand "tentaflake-module-evaluation" { } ''
+  # Read the actual generated JSON artifacts without introducing IFD.
+  ${lib.getExe pkgs.jq} -e --arg cli '${guardedWorkerPlan.tools.cli}' \
+    '.admission_cli == $cli and .agent == "hermes-worker"' ${guardedWorkerSpec.config} >/dev/null
+  ${lib.getExe pkgs.jq} -e '.admission_cli == null' ${legacyWorkerInputs.workers.hermes-worker.config} >/dev/null
+  ${lib.getExe pkgs.jq} -e --arg runtime '${lib.getExe guardedWorker.config.virtualisation.docker.package}' \
+    --arg archive '${guardedWorker.config.tentaflake.worker.image}' \
+    '.schemaVersion == 1 and .enforced == true and .backend == "docker" and .runtime == $runtime and .archive == $archive' \
+    ${guardedWorkerPlan.workerImage.config} >/dev/null
+  ${lib.getExe pkgs.jq} -e --arg runtime '${lib.getExe workerCapsule.config.virtualisation.docker.package}' \
+    --arg archive '${workerCapsule.config.tentaflake.worker.image}' \
+    '.schemaVersion == 1 and .enforced == false and .backend == "docker" and .runtime == $runtime and .archive == $archive' \
+    ${legacyWorkerInputs.image.config} >/dev/null
+  ${lib.getExe pkgs.jq} -e --arg runtime '${lib.getExe podmanCapsule.config.virtualisation.podman.package}' \
+    '.schemaVersion == 1 and .enforced == false and .backend == "podman" and .runtime == $runtime' \
+    ${podmanWorkerInputs.image.config} >/dev/null
   # Quota services delegate to immutable helpers. Check the selected artifacts
   # here, without importing derivation contents during module evaluation.
   grep -Fq 'refusing unsafe worker control path' ${workerQuotaHelpers.owner}

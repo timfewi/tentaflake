@@ -1,11 +1,11 @@
 //! Outer host mutation fence. Unlike the transactional ledger lock, this lock
 //! must survive supervisor death while a trusted helper still holds its FD.
 
-use crate::admission_storage::open_root;
+use crate::protected_path::open_root;
 use std::ffi::CString;
 use std::fs::{File, Metadata};
 use std::io;
-use std::os::fd::{AsRawFd, FromRawFd};
+use std::os::fd::{AsRawFd, FromRawFd, RawFd};
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::MetadataExt;
 use std::os::unix::process::CommandExt;
@@ -20,11 +20,11 @@ const LOCK_TIMEOUT: Duration = Duration::from_secs(5);
 /// LOCK_UN: that would also unlock the description inherited by live helpers.
 #[must_use = "retain the host fence throughout the supervised mutation"]
 #[derive(Debug)]
-pub(crate) struct HostFence {
+pub struct HostFence {
     file: File,
 }
 
-pub(crate) fn exclusive() -> Result<HostFence, String> {
+pub fn exclusive() -> Result<HostFence, String> {
     if unsafe { libc::geteuid() } != 0 {
         return Err("host admission fence requires root".into());
     }
@@ -40,13 +40,16 @@ impl HostFence {
     /// forked child has CLOEXEC cleared immediately before exec.
     ///
     /// Command owns a duplicate until it is dropped, even after spawn or failure.
+    /// The returned number is that duplicate in the child, suitable for an
+    /// explicit private argument. It is not a borrowed descriptor to close.
     /// Helpers must preserve inherited FDs. This provides no execution authority
     /// by itself; the caller still owns ledger admission and service supervision.
-    pub(crate) fn inherit(&self, command: &mut Command) -> Result<(), String> {
+    pub fn inherit(&self, command: &mut Command) -> Result<RawFd, String> {
         let file = self
             .file
             .try_clone()
             .map_err(|_| "cannot duplicate host admission fence")?;
+        let inherited_fd = file.as_raw_fd();
         // SAFETY: the owned File keeps the descriptor valid for every spawn of
         // this Command. The post-fork callback only uses async-signal-safe fcntl.
         unsafe {
@@ -60,7 +63,23 @@ impl HostFence {
                 Ok(())
             });
         }
-        Ok(())
+        Ok(inherited_fd)
+    }
+
+    /// Adopt a trusted child's inherited descriptor as synchronization only.
+    /// The guard that launched this child must authenticate installed policy and
+    /// ledger authority separately. This does not establish a dispatch grant.
+    ///
+    /// The owned descriptor becomes CLOEXEC immediately. Further trusted
+    /// mutators receive their own explicit duplicate through `inherit`.
+    pub fn adopt(file: File) -> Result<Self, String> {
+        if unsafe { libc::geteuid() } != 0 {
+            return Err("host admission fence requires root".into());
+        }
+        let path = Path::new(FENCE_PATH);
+        adopt_at(file, path, 0, || {
+            open_root(path.parent().ok_or("invalid host admission fence path")?, 0)
+        })
     }
 }
 
@@ -98,6 +117,23 @@ fn identity_matches(left: &Metadata, right: &Metadata) -> bool {
     left.dev() == right.dev() && left.ino() == right.ino()
 }
 
+fn open_existing(parent: &File, name: &CString, owner_uid: u32) -> Result<Option<File>, String> {
+    // Inspect before opening for I/O, so an unexpected device or FIFO cannot
+    // acquire side effects. Only genuine absence permits a later create.
+    let before = match open_at(parent, name, libc::O_PATH) {
+        Ok(file) => file,
+        Err(error) if error.raw_os_error() == Some(libc::ENOENT) => return Ok(None),
+        Err(_) => return Err("cannot inspect existing host admission fence".into()),
+    };
+    let before = inspect(&before, owner_uid)?;
+    let file = open_at(parent, name, libc::O_RDWR)
+        .map_err(|_| "cannot open existing host admission fence")?;
+    if !identity_matches(&before, &inspect(&file, owner_uid)?) {
+        return Err("host admission fence changed while opening".into());
+    }
+    Ok(Some(file))
+}
+
 fn verify_path(parent: &File, name: &CString, file: &File, owner_uid: u32) -> Result<(), String> {
     let current =
         open_at(parent, name, libc::O_PATH).map_err(|_| "cannot resolve host admission fence")?;
@@ -105,6 +141,67 @@ fn verify_path(parent: &File, name: &CString, file: &File, owner_uid: u32) -> Re
         return Err("host admission fence path changed".into());
     }
     Ok(())
+}
+
+fn fence_name(path: &Path) -> Result<CString, String> {
+    CString::new(
+        path.file_name()
+            .ok_or("invalid host admission fence path")?
+            .as_bytes(),
+    )
+    .map_err(|_| "invalid host admission fence name".into())
+}
+
+fn verify_after_lock(
+    parent: &File,
+    name: &CString,
+    file: &File,
+    owner_uid: u32,
+    reopen_parent: impl Fn() -> Result<File, String>,
+) -> Result<(), String> {
+    let current_parent = reopen_parent()?;
+    if !identity_matches(
+        &parent
+            .metadata()
+            .map_err(|_| "cannot inspect fence parent")?,
+        &current_parent
+            .metadata()
+            .map_err(|_| "cannot inspect fence parent")?,
+    ) {
+        return Err("host admission fence parent changed".into());
+    }
+    verify_path(&current_parent, name, file, owner_uid)
+}
+
+fn adopt_at(
+    file: File,
+    path: &Path,
+    owner_uid: u32,
+    reopen_parent: impl Fn() -> Result<File, String>,
+) -> Result<HostFence, String> {
+    let fd = file.as_raw_fd();
+    let descriptor_flags = unsafe { libc::fcntl(fd, libc::F_GETFD) };
+    if descriptor_flags < 0
+        || unsafe { libc::fcntl(fd, libc::F_SETFD, descriptor_flags | libc::FD_CLOEXEC) } < 0
+    {
+        return Err("cannot protect inherited host admission fence".into());
+    }
+    let open_flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
+    if open_flags < 0 || open_flags & libc::O_ACCMODE != libc::O_RDWR {
+        return Err("inherited host admission fence is not read-write".into());
+    }
+    inspect(&file, owner_uid)?;
+    let parent = reopen_parent()?;
+    let name = fence_name(path)?;
+    verify_path(&parent, &name, &file, owner_uid)?;
+    // flock is attached to the open file description. An inherited duplicate
+    // confirms the parent's exclusive lock; an unlocked exact descriptor can
+    // establish synchronization, but never authenticates policy or authority.
+    if unsafe { libc::flock(fd, libc::LOCK_EX | libc::LOCK_NB) } != 0 {
+        return Err("inherited host admission fence is not exclusive".into());
+    }
+    verify_after_lock(&parent, &name, &file, owner_uid, reopen_parent)?;
+    Ok(HostFence { file })
 }
 
 fn acquire(
@@ -115,40 +212,35 @@ fn acquire(
 ) -> Result<HostFence, String> {
     let deadline = Instant::now() + timeout;
     let parent = reopen_parent()?;
-    let name = CString::new(
-        path.file_name()
-            .ok_or("invalid host admission fence path")?
-            .as_bytes(),
-    )
-    .map_err(|_| "invalid host admission fence name")?;
-    let file = match open_at(&parent, &name, libc::O_RDWR | libc::O_CREAT | libc::O_EXCL) {
-        Ok(file) => {
-            // Only a newly created inode gets its mode established. Existing
-            // paths are never repaired, replaced, truncated or unlinked.
-            if unsafe { libc::fchmod(file.as_raw_fd(), 0o600) } != 0 {
-                return Err("cannot protect new host admission fence".into());
+    let name = fence_name(path)?;
+    // Sandboxed callers may write only the existing lock inode while its
+    // directory stays read-only. Do not request creation on that path.
+    let file = if let Some(file) = open_existing(&parent, &name, owner_uid)? {
+        file
+    } else {
+        match open_at(&parent, &name, libc::O_RDWR | libc::O_CREAT | libc::O_EXCL) {
+            Ok(file) => {
+                // Only a newly created inode gets its mode established. Existing
+                // paths are never repaired, replaced, truncated or unlinked.
+                if unsafe { libc::fchmod(file.as_raw_fd(), 0o600) } != 0 {
+                    return Err("cannot protect new host admission fence".into());
+                }
+                inspect(&file, owner_uid)?;
+                file.sync_all()
+                    .map_err(|_| "cannot sync host admission fence")?;
+                parent
+                    .sync_all()
+                    .map_err(|_| "cannot sync host admission fence parent")?;
+                file
             }
-            inspect(&file, owner_uid)?;
-            file.sync_all()
-                .map_err(|_| "cannot sync host admission fence")?;
-            parent
-                .sync_all()
-                .map_err(|_| "cannot sync host admission fence parent")?;
-            file
-        }
-        Err(error) if error.raw_os_error() == Some(libc::EEXIST) => {
-            // Inspect without opening devices or FIFOs for I/O first.
-            let before = open_at(&parent, &name, libc::O_PATH)
-                .map_err(|_| "cannot inspect existing host admission fence")?;
-            let before = inspect(&before, owner_uid)?;
-            let file = open_at(&parent, &name, libc::O_RDWR)
-                .map_err(|_| "cannot open existing host admission fence")?;
-            if !identity_matches(&before, &inspect(&file, owner_uid)?) {
-                return Err("host admission fence changed while opening".into());
+            Err(error) if error.raw_os_error() == Some(libc::EEXIST) => {
+                // Another owner created it after our absence observation. Retry
+                // the checked existing path once; disappearance is not a new create.
+                open_existing(&parent, &name, owner_uid)?
+                    .ok_or("host admission fence disappeared after competing creation")?
             }
-            file
+            Err(_) => return Err("cannot create host admission fence".into()),
         }
-        Err(_) => return Err("cannot create host admission fence".into()),
     };
     loop {
         if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0 {
@@ -167,25 +259,14 @@ fn acquire(
     }
     // Recheck after waiting: neither a renamed ancestor nor a replaced lock
     // inode may create a second locking domain under the fixed path.
-    let current_parent = reopen_parent()?;
-    if !identity_matches(
-        &parent
-            .metadata()
-            .map_err(|_| "cannot inspect fence parent")?,
-        &current_parent
-            .metadata()
-            .map_err(|_| "cannot inspect fence parent")?,
-    ) {
-        return Err("host admission fence parent changed".into());
-    }
-    verify_path(&current_parent, &name, &file, owner_uid)?;
+    verify_after_lock(&parent, &name, &file, owner_uid, reopen_parent)?;
     Ok(HostFence { file })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::admission_storage::open_relative;
+    use crate::protected_path::open_relative;
     use std::cell::Cell;
     use std::fs::{self, DirBuilder, OpenOptions};
     use std::io::{Read, Write};
@@ -243,6 +324,12 @@ mod tests {
                 || self.open_parent(),
             )
         }
+
+        fn adopt(&self, file: File) -> Result<HostFence, String> {
+            adopt_at(file, &self.path(), unsafe { libc::geteuid() }, || {
+                self.open_parent()
+            })
+        }
     }
 
     impl Drop for Fixture {
@@ -273,6 +360,44 @@ mod tests {
         fs::write(fixture.path(), b"preserve").unwrap();
         drop(fixture.acquire().unwrap());
         assert_eq!(fs::read(fixture.path()).unwrap(), b"preserve");
+    }
+
+    #[test]
+    fn existing_fence_needs_no_parent_write_permission() {
+        let fixture = Fixture::new();
+        drop(fixture.acquire().unwrap());
+        fs::write(fixture.path(), b"preserve").unwrap();
+        let before = fs::metadata(fixture.path()).unwrap();
+        fs::set_permissions(&fixture.root, fs::Permissions::from_mode(0o500)).unwrap();
+
+        let guard = acquire(
+            &fixture.path(),
+            unsafe { libc::geteuid() },
+            Duration::from_secs(2),
+            || fixture.open_parent(),
+        );
+        let competing = fixture.acquire();
+        let absent = acquire(
+            &fixture.root.join("absent.lock"),
+            unsafe { libc::geteuid() },
+            Duration::ZERO,
+            || fixture.open_parent(),
+        );
+        let create = fs::write(fixture.root.join("forbidden"), b"");
+        let parent_mode = fs::metadata(&fixture.root).map(|meta| meta.mode() & 0o7777);
+        // Restore only the test directory before assertions so cleanup also
+        // succeeds if an assertion fails. This fixture requires unprivileged
+        // test execution; a privileged permission bypass must fail, not skip.
+        fs::set_permissions(&fixture.root, fs::Permissions::from_mode(0o700)).unwrap();
+
+        let guard = guard.unwrap();
+        assert!(competing.unwrap_err().contains("busy"));
+        assert!(absent.is_err());
+        assert_eq!(create.unwrap_err().kind(), io::ErrorKind::PermissionDenied);
+        assert_eq!(parent_mode.unwrap(), 0o500);
+        assert!(identity_matches(&before, &guard.file.metadata().unwrap()));
+        assert_eq!(fs::read(fixture.path()).unwrap(), b"preserve");
+        assert_eq!(fs::metadata(fixture.path()).unwrap().mode() & 0o7777, 0o600);
     }
 
     #[test]
@@ -385,18 +510,144 @@ mod tests {
     }
 
     #[test]
+    fn adoption_preserves_same_description_and_sets_cloexec() {
+        let fixture = Fixture::new();
+        let original = fixture.acquire().unwrap();
+        let file = original.file.try_clone().unwrap();
+        assert_eq!(
+            unsafe { libc::fcntl(file.as_raw_fd(), libc::F_SETFD, 0) },
+            0
+        );
+        let adopted = fixture.adopt(file).unwrap();
+        assert_ne!(
+            unsafe { libc::fcntl(adopted.file.as_raw_fd(), libc::F_GETFD) } & libc::FD_CLOEXEC,
+            0
+        );
+        drop(original);
+        assert!(fixture.acquire().unwrap_err().contains("busy"));
+        drop(adopted);
+        drop(
+            acquire(
+                &fixture.path(),
+                unsafe { libc::geteuid() },
+                Duration::from_secs(2),
+                || fixture.open_parent(),
+            )
+            .unwrap(),
+        );
+    }
+
+    #[test]
+    fn adoption_requires_exclusivity_and_can_lock_an_unheld_exact_description() {
+        let fixture = Fixture::new();
+        let original = fixture.acquire().unwrap();
+        let open = || {
+            OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open(fixture.path())
+                .unwrap()
+        };
+        assert!(fixture.adopt(open()).unwrap_err().contains("not exclusive"));
+        drop(original);
+        let adopted = fixture.adopt(open()).unwrap();
+        assert!(fixture.acquire().unwrap_err().contains("busy"));
+        drop(adopted);
+    }
+
+    #[test]
+    fn adoption_refuses_foreign_modes_links_owner_and_path_without_repair() {
+        let fixture = Fixture::new();
+        let original = fixture.acquire().unwrap();
+        assert!(
+            fixture
+                .adopt(File::open(fixture.path()).unwrap())
+                .unwrap_err()
+                .contains("not read-write")
+        );
+        assert!(
+            adopt_at(
+                original.file.try_clone().unwrap(),
+                &fixture.path(),
+                unsafe { libc::geteuid() }.wrapping_add(1),
+                || fixture.open_parent()
+            )
+            .is_err()
+        );
+        fs::set_permissions(fixture.path(), fs::Permissions::from_mode(0o640)).unwrap();
+        assert!(fixture.adopt(original.file.try_clone().unwrap()).is_err());
+        assert_eq!(fs::metadata(fixture.path()).unwrap().mode() & 0o7777, 0o640);
+        fs::set_permissions(fixture.path(), fs::Permissions::from_mode(0o600)).unwrap();
+        let alias = fixture.root.join("alias");
+        fs::hard_link(fixture.path(), &alias).unwrap();
+        assert!(fixture.adopt(original.file.try_clone().unwrap()).is_err());
+        fs::remove_file(&alias).unwrap();
+        fs::rename(fixture.path(), &alias).unwrap();
+        symlink(&alias, fixture.path()).unwrap();
+        assert!(fixture.adopt(original.file.try_clone().unwrap()).is_err());
+        fs::remove_file(fixture.path()).unwrap();
+        fs::write(fixture.path(), []).unwrap();
+        fs::set_permissions(fixture.path(), fs::Permissions::from_mode(0o600)).unwrap();
+        assert!(
+            fixture
+                .adopt(original.file.try_clone().unwrap())
+                .unwrap_err()
+                .contains("path changed")
+        );
+        assert_eq!(
+            fs::metadata(&alias).unwrap().ino(),
+            original.file.metadata().unwrap().ino()
+        );
+    }
+
+    #[test]
+    fn adoption_reopens_protected_parent_after_locking() {
+        let fixture = Fixture::new();
+        let original = fixture.acquire().unwrap();
+        let opens = Cell::new(0);
+        let result = adopt_at(
+            original.file.try_clone().unwrap(),
+            &fixture.path(),
+            unsafe { libc::geteuid() },
+            || {
+                opens.set(opens.get() + 1);
+                if opens.get() == 2 {
+                    fs::rename(&fixture.root, fixture.anchor_path.join("old-fences")).unwrap();
+                    DirBuilder::new().mode(0o700).create(&fixture.root).unwrap();
+                }
+                fixture.open_parent()
+            },
+        );
+        assert_eq!(opens.get(), 2);
+        assert_eq!(result.unwrap_err(), "host admission fence parent changed");
+    }
+
+    #[test]
     fn exec_child_keeps_fence_after_parent_drops_every_copy() {
+        check_exec_child(false);
+    }
+
+    #[test]
+    fn exec_child_adopts_same_inherited_descriptor() {
+        check_exec_child(true);
+    }
+
+    fn check_exec_child(adopt: bool) {
         let fixture = Fixture::new();
         let guard = fixture.acquire().unwrap();
         let ready = fixture.root.join("ready");
         let mut command = Command::new(std::env::current_exe().unwrap());
         command
-            .args(["--exact", "admission_fence::tests::inherited_helper"])
+            .args(["--exact", "host_fence::tests::inherited_helper"])
             .env("TENTAFLAKE_FENCE_TEST_CHILD", &ready)
             .stdin(Stdio::piped())
             .stdout(Stdio::null())
             .stderr(Stdio::null());
-        guard.inherit(&mut command).unwrap();
+        let inherited_fd = guard.inherit(&mut command).unwrap();
+        command.env("TENTAFLAKE_FENCE_TEST_FD", inherited_fd.to_string());
+        if adopt {
+            command.env("TENTAFLAKE_FENCE_TEST_ADOPT", "1");
+        }
         assert_ne!(
             unsafe { libc::fcntl(guard.file.as_raw_fd(), libc::F_GETFD) } & libc::FD_CLOEXEC,
             0
@@ -427,6 +678,39 @@ mod tests {
     fn inherited_helper() {
         let Some(ready) = std::env::var_os("TENTAFLAKE_FENCE_TEST_CHILD") else {
             return;
+        };
+        let inherited_fd: RawFd = std::env::var("TENTAFLAKE_FENCE_TEST_FD")
+            .unwrap()
+            .parse()
+            .unwrap();
+        assert_eq!(
+            unsafe { libc::fcntl(inherited_fd, libc::F_GETFD) } & libc::FD_CLOEXEC,
+            0
+        );
+        let ready = PathBuf::from(ready);
+        let _adopted = if std::env::var_os("TENTAFLAKE_FENCE_TEST_ADOPT").is_some() {
+            let root = ready.parent().unwrap();
+            let anchor = OpenOptions::new()
+                .read(true)
+                .custom_flags(
+                    libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC,
+                )
+                .open(root.parent().unwrap())
+                .unwrap();
+            // The parent deliberately supplied this live owned descriptor by
+            // inherit; no unvalidated integer becomes a File in production.
+            let file = unsafe { File::from_raw_fd(inherited_fd) };
+            Some(
+                adopt_at(
+                    file,
+                    &root.join("admission.lock"),
+                    unsafe { libc::geteuid() },
+                    || open_relative(&anchor, Path::new("fences"), unsafe { libc::geteuid() }),
+                )
+                .unwrap(),
+            )
+        } else {
+            None
         };
         fs::write(ready, b"ready").unwrap();
         let mut byte = [0];

@@ -43,8 +43,12 @@ owns 47 routes, exact grants, policy-bound plans, durable receipts, workspace/fi
 and stream schemas. Its local-only validator passes 38 valid and 38 rejected
 examples. Review tightened creation authority, receipt
 recovery and native-writer file conflicts. These are contract/source checks only.
-The separately owned UI still needs generated types and transport migration;
-the host service, matching CLI and live interaction acceptance remain next.
+The separately owned UI has migrated to generated types and the real transport;
+its recorded browser checks use fixtures and a stand-in backend. The host service,
+matching CLI and live interaction acceptance remain next. Public host code stays
+independent of personal deployment policy and the separate UI repository. Keep
+the client usable through the documented API without private dependencies so a
+future open-source release remains possible; publication is a separate decision.
 
 Generic declarative model/Research/worker admission now covers exact requests,
 both storage quotas, resource ceilings and v3 diagnostics. Local `just fast`
@@ -257,9 +261,25 @@ Docker/Podman projections with IFD disabled select the tested package and
 confirm configured runtimes and private tmpfiles. The rendered 2137-line VM
 script compiles. Real VM execution remains pending. No local VM or system build ran.
 
-Optional Worker requests still fail closed in owned OCI admission. Next: bind
-the collector and worker launcher inventory to the common maintenance fence,
-add daemon-generation recovery. Replace the Worker
+Worker maintenance is being integrated on `feat/worker-maintenance`: shared
+fence ownership lives in the admission crate, CLI guards validate installed
+authority, and Nix projects owned services/watchers/loaders. The existing ledger
+retains uncertain image loads; explicit recovery requires a stopped backend.
+Maintenance observes both plans' private running/jobs state without workspace
+mounts. Owning files are the admission/CLI/Worker crates, `modules/worker.nix`,
+`modules/admission.nix`, `tests/module-eval.nix` and `tests/storage-admission.nix`.
+All fast-gate components pass, including 350 Rust tests and Clippy. The focused
+CLI Nix package passes 245 tests and the Worker package 163, including the shared
+admission library in each. No-build Docker/Podman/storage projections pass;
+the generated plan passes the real Rust loader and the 2277-line VM script
+compiles. Full module evaluation with IFD disabled remains blocked by an unbuilt
+Research closure dependency. Real VM evidence is still pending for this
+integration; no local system or VM build ran.
+
+After verifying this maintenance integration, the delivery priority is the real
+authenticated host API and dynamic CLI/UI lifecycle in #152, reusing the existing
+admission/runtime owner. Worker requests still fail closed in owned OCI admission.
+Job recovery tied to daemon generations remains required. Replace the Worker
 read-only-mount validation skip with exact results-mount validation before
 enabling grants. Private worker data/retention remain outside admitted
 workspace/state volumes; worker compute still relies on explicit host reserves.

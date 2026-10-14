@@ -1,6 +1,6 @@
-# Storage-only acceptance through the real host CLI, D-Bus and quota services.
+# Storage and Worker maintenance through the real host CLI, D-Bus and services.
 # Generic OCI controllers remain stopped: this does not prove aggregate OCI
-# startup admission, image acquisition or vendor capability acceptance.
+# startup admission, Worker capability readiness or job execution acceptance.
 { self }:
 {
   node =
@@ -57,7 +57,12 @@
         name:
         builders.mkAgent {
           adapter = "generic";
-          inherit name definition;
+          inherit name;
+          definition =
+            definition
+            // lib.optionalAttrs (name == "storage") {
+              capabilities = definition.capabilities ++ [ "worker" ];
+            };
         }
       ) names;
 
@@ -86,6 +91,15 @@
         workspaceBytes = lib.mkForce 268435456;
         stateBytes = lib.mkForce 268435456;
       };
+      # The fixture owns each activation. Publication still accepts failed
+      # activation only for the existing guarded quota services.
+      systemd = {
+        services = {
+          tentaflake-worker-generic-storage.wantedBy = lib.mkForce [ ];
+          tentaflake-worker-image.wantedBy = lib.mkForce [ ];
+        };
+        paths.tentaflake-worker-generic-storage.wantedBy = lib.mkForce [ ];
+      };
 
       tentaflake = {
         hostName = "storage-host";
@@ -94,6 +108,12 @@
         modernConsole.enable = false;
         nixSettings.enable = false;
         shell.enable = true;
+        worker.agents.generic-storage = {
+          enable = true;
+          workspace = "/var/lib/generic-storage/workspace";
+          containerUid = 65534;
+          containerGid = 65534;
+        };
         security.admission = {
           authorityEpoch = "storage-vm";
           physicalSpaceHeadroomBytes = 67108864;
@@ -138,6 +158,36 @@
     storage_state = storage_volumes["state:generic-storage"]
     storage_workspace = storage_volumes["workspace:generic-storage"]
     storage_ledger = "/var/lib/tentaflake-admission/ledger.json"
+    storage_worker = storage_manifest["workers"]["generic-storage"]
+    storage_worker_image = storage_manifest["workerImage"]
+    storage_worker_units = [storage_worker["watcher"], storage_worker["unit"], storage_worker_image["unit"]]
+    storage_worker_pending = storage_worker["stateDir"] + "/pending/maintenance_pending.json"
+
+    def worker_command(action, *arguments):
+        return shlex.join([storage_worker["executable"], "--config", storage_worker["config"], action, *arguments])
+
+    def worker_queue_snapshot():
+        # Metadata and bytes, excluding access times changed by observation.
+        script = 'find "$1" -xdev -printf "%P %y %m %U %G %s %T@\\n" | sort; find "$1" -xdev -type f -exec sha256sum -- {} + | sort'
+        return storage.succeed(shlex.join(["bash", "-euo", "pipefail", "-c", script, "--", storage_worker["stateDir"]]))
+
+    def worker_refuses_mutations():
+        before = worker_queue_snapshot()
+        containers = storage.succeed("docker ps --all --quiet")
+        for action, arguments in [("drain", []), ("approve", ["maintenance_pending"]), ("deny", ["maintenance_pending"])]:
+            error = storage.fail(worker_command(action, *arguments) + " 2>&1")
+            assert "Worker" in error and any(word in error for word in ("authority", "Pending", "unknown")), error
+            assert worker_queue_snapshot() == before
+        storage.fail(shlex.join(["tentaflake", "admission", "worker-load", storage_worker_image["config"]]))
+        assert worker_queue_snapshot() == before
+        assert storage.succeed("docker ps --all --quiet") == containers
+
+    def stop_storage_workers():
+        storage.succeed("timeout 150s systemctl stop " + shlex.join(storage_worker_units))
+        for unit in storage_worker_units:
+            assert storage.succeed("systemctl show --value --property=ActiveState " + shlex.quote(unit)).strip() == "inactive"
+        jobs = storage.succeed("systemctl list-jobs --no-legend --no-pager --full")
+        assert all(not set(storage_worker_units).intersection(line.split()) for line in jobs.splitlines()), jobs
 
     def storage_command(action, allocation=None, plan=storage_plan):
         arguments = ["tentaflake", "admission", action, plan]
@@ -173,6 +223,10 @@
 
     with subtest("storage boot and manual entrypoints cannot bypass explicit bootstrap"):
         storage.succeed("test ! -e /var/lib/tentaflake-admission")
+        stop_storage_workers()
+        request = json.dumps({"version": 1, "id": "maintenance_pending", "action_class": "communicative", "argv": ["true"], "timeout_seconds": 1})
+        storage.succeed("umask 077; printf %s " + shlex.quote(request) + " > " + shlex.quote(storage_worker_pending))
+        worker_refuses_mutations()
         for volume in storage_volumes.values():
             storage.fail("systemctl start " + shlex.quote(volume["units"]["owner"]))
             assert_storage_absent(volume)
@@ -204,6 +258,9 @@
         assert initial["published"]["manifestPath"] == storage_plan, initial
         storage.fail(storage_command("bootstrap"))
         assert storage_snapshot() == initial
+        assert json.loads(storage.succeed(worker_command("maintenance"))) == {
+            "schemaVersion": 1, "agent": "generic-storage", "runningEntries": 0, "jobsEntries": 0,
+        }
 
     with subtest("physical headroom refuses creation before any durable claim"):
         backing_root = "/var/lib/tentaflake-workspace-volumes"
@@ -311,18 +368,21 @@
         storage.succeed("ln -sfn " + shlex.join([stale_storage_plan, "/etc/tentaflake/admission.json"]))
         try:
             storage.fail("systemctl start " + shlex.quote(storage_state["units"]["owner"]))
+            worker_refuses_mutations()
         finally:
             storage.succeed("ln -sfn " + shlex.join([storage_plan, "/etc/tentaflake/admission.json"]))
         stop_storage_units()
         storage.succeed("chmod 0777 /var/lib/tentaflake-admission")
         try:
             storage.fail("systemctl start " + shlex.quote(storage_state["units"]["owner"]))
+            worker_refuses_mutations()
         finally:
             storage.succeed("chmod 0700 /var/lib/tentaflake-admission")
         stop_storage_units()
         storage.succeed("mv /var/lib/tentaflake-admission /var/lib/storage-ledger.saved")
         try:
             storage.fail("systemctl start " + shlex.quote(storage_state["units"]["owner"]))
+            worker_refuses_mutations()
             storage.succeed("test ! -e /var/lib/tentaflake-admission")
         finally:
             storage.succeed("mv /var/lib/storage-ledger.saved /var/lib/tentaflake-admission")
@@ -366,6 +426,104 @@
         for unit in storage_units:
             assert plan in storage.succeed("systemctl show --value --property=ExecStart " + shlex.quote(unit))
 
+    with subtest("Worker watchers and the real guarded image loader must stop before publication"):
+        before_load = publication("status")
+        before_storage = storage_snapshot()
+        queue_before = worker_queue_snapshot()
+        # This invokes the actual guarded archive load after authority exists.
+        # RemainAfterExit keeps the loader active even with no Docker containers.
+        storage.succeed("systemctl start " + shlex.quote(storage_worker_image["unit"]))
+        storage.wait_for_unit(storage_worker_image["unit"])
+        stable = publication("status")
+        assert stable["ledgerRevision"] == before_load["ledgerRevision"] + 2
+        assert stable["workerImageLoad"]["outcome"] == "completed"
+        hidden = storage.succeed("tentaflake admission publication status --hide")
+        assert "/nix/store/" not in hidden
+        assert json.loads(hidden)["workerImageLoad"]["configuration"] == "redacted"
+        assert stable["published"] == before_load["published"] and stable["pending"] is None
+        after_storage = storage_snapshot()
+        assert after_storage["storage"] == before_storage["storage"]
+        assert after_storage["receipts"] == before_storage["receipts"]
+        assert storage.succeed("docker ps --all --quiet").strip() == ""
+        error = publication("begin", candidate_plan, "worker-loader-active", stable["ledgerRevision"], success=False)
+        assert "Worker service, watcher and image loader must be stopped" in error, error
+        assert publication("status") == stable and worker_queue_snapshot() == queue_before
+        stop_storage_workers()
+        start_storage_workspace()
+        storage.succeed("systemctl start " + shlex.quote(storage_worker["watcher"]))
+        storage.wait_for_unit(storage_worker["watcher"])
+        error = publication("begin", candidate_plan, "worker-watcher-active", stable["ledgerRevision"], success=False)
+        assert "Worker service, watcher and image loader must be stopped" in error, error
+        assert publication("status") == stable and worker_queue_snapshot() == queue_before
+        stop_storage_workers()
+        stop_storage_units()
+
+    with subtest("retained Worker running and job entries block maintenance despite empty Docker"):
+        stable = publication("status")
+        before = storage_snapshot()
+        for directory, name in [("running", ".unfinished.json.new"), ("jobs", "orphan-dispatch")]:
+            path = storage_worker["stateDir"] + "/" + directory + "/" + name
+            if directory == "running":
+                storage.succeed("umask 077; printf incomplete > " + shlex.quote(path))
+            else:
+                storage.succeed("mkdir -m 0700 -- " + shlex.quote(path))
+            try:
+                queue_before = worker_queue_snapshot()
+                assert storage.succeed("docker ps --all --quiet").strip() == ""
+                storage.fail(worker_command("maintenance"))
+                publication("begin", candidate_plan, "worker-retained-" + directory, stable["ledgerRevision"], success=False)
+                assert worker_queue_snapshot() == queue_before
+                assert storage_snapshot() == before and publication("status") == stable
+                assert storage.succeed("docker ps --all --quiet").strip() == ""
+            finally:
+                storage.succeed(("rm -- " if directory == "running" else "rmdir -- ") + shlex.quote(path))
+        assert json.loads(storage.succeed(worker_command("maintenance")))["jobsEntries"] == 0
+
+    with subtest("legacy reserved-name Worker state is not exempt from maintenance"):
+        orphan = "/var/lib/tentaflake-worker-state-volumes"
+        storage.succeed("test ! -e " + shlex.quote(orphan))
+        storage.succeed("install -d -m 0700 " + shlex.quote(orphan + "/running"))
+        try:
+            stable = publication("status")
+            error = publication("begin", candidate_plan, "worker-legacy-state", stable["ledgerRevision"], success=False)
+            assert "undeclared Worker state" in error, error
+            assert publication("status") == stable
+        finally:
+            storage.succeed(shlex.join(["rmdir", orphan + "/running", orphan]))
+
+    with subtest("uncertain Worker image loads require exact recovery with the backend stopped"):
+        # Seed the durable post-crash state. Ledger subprocess tests separately
+        # exercise actual death/write failures before and after runtime dispatch.
+        uncertain_ledger = storage_snapshot()
+        uncertain_ledger["revision"] += 1
+        uncertain_ledger["workerImageLoad"].update({
+            "outcome": "unknown", "claimedRevision": uncertain_ledger["revision"],
+            "updatedRevision": uncertain_ledger["revision"],
+        })
+        storage.succeed(shlex.join(["bash", "-euo", "pipefail", "-c", 'printf %s "$1" > "$2"; sync "$2"', "--", json.dumps(uncertain_ledger), storage_ledger]))
+        uncertain = publication("status")
+        worker_refuses_mutations()
+        publication("begin", candidate_plan, "worker-uncertain-load", uncertain["ledgerRevision"], success=False)
+        claim = uncertain["workerImageLoad"]["claimedRevision"]
+        def load_recovery(revision, claimed):
+            return shlex.join(["tentaflake", "admission", "worker-load-recover", storage_plan, str(revision), str(claimed)])
+        storage.fail(load_recovery(uncertain["ledgerRevision"] - 1, claim))
+        storage.fail(load_recovery(uncertain["ledgerRevision"], claim - 1))
+        storage.fail(load_recovery(uncertain["ledgerRevision"], claim))
+        assert publication("status") == uncertain and storage_snapshot() == uncertain_ledger
+        storage.succeed("timeout 150s systemctl stop " + shlex.join(docker_units))
+        storage.succeed(load_recovery(uncertain["ledgerRevision"], claim))
+        recovered = publication("status")
+        assert recovered["workerImageLoad"]["outcome"] == "recovered"
+        assert recovered["ledgerRevision"] == uncertain["ledgerRevision"] + 1
+        assert recovered["published"] == uncertain["published"]
+        assert storage_snapshot()["storage"] == uncertain_ledger["storage"]
+        assert storage_snapshot()["receipts"] == uncertain_ledger["receipts"]
+        storage.fail(load_recovery(recovered["ledgerRevision"], claim))
+        assert publication("status") == recovered
+        storage.succeed("timeout 150s systemctl start docker.service")
+        storage.wait_for_unit("docker.service")
+
     with subtest("publication requires quiescence and retains Pending until exact installation"):
         stable = publication("status")
         assert stable["published"]["manifestPath"] == storage_plan and stable["pending"] is None
@@ -380,6 +538,8 @@
         pending = publication("status")
         assert pending["pending"] == begun and pending["published"] == stable["published"]
         assert pending["ledgerRevision"] == stable["ledgerRevision"] + 1
+        worker_refuses_mutations()
+        assert publication("status") == pending
         assert publication("begin", candidate_plan, "publish-capacity", stable["ledgerRevision"]) == begun
         publication("finish", "publish-capacity", stable["ledgerRevision"], success=False)
         publication("finish", "publish-capacity", pending["ledgerRevision"], success=False)

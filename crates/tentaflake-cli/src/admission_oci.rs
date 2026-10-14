@@ -1,6 +1,5 @@
 //! Owned offline Docker lifecycle. A recorded intent precedes every create; an
 //! exact CID is synced before start. Uncertain outcomes retain the entire claim.
-use crate::admission_fence::{self, HostFence};
 use crate::admission_host::{
     HostPlan, load_plan, open_store_file, read_store_document, store_path,
 };
@@ -17,6 +16,7 @@ use std::os::unix::net::UnixDatagram;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use tentaflake_admission::host_fence::{self as admission_fence, HostFence};
 use tentaflake_admission::ledger::{
     ClaimOutcome, DaemonIdentity, Ledger, Observation, Receipt, RuntimeContext, RuntimeImage,
     RuntimeIntent, SupervisorIdentity,
@@ -439,7 +439,11 @@ fn docker_json(plan: &HostPlan, args: &[&str]) -> Result<Value, String> {
 
 /// Unlike the read-only runner, a mutator inherits the outer fence. Killing its
 /// client never proves the daemon cancelled the request; callers retain Unknown.
-fn mutate(command: &mut Command, fence: &HostFence, timeout: Duration) -> Result<Vec<u8>, String> {
+pub(crate) fn mutate(
+    command: &mut Command,
+    fence: &HostFence,
+    timeout: Duration,
+) -> Result<Vec<u8>, String> {
     command.stdout(Stdio::piped()).stderr(Stdio::null());
     fence.inherit(command)?;
     let mut child = command

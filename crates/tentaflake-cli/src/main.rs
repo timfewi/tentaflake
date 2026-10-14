@@ -15,13 +15,13 @@ const RUNTIME_CATALOG: &str = include_str!("../../../adapters/catalog.json");
 mod admission;
 mod admission_bootstrap;
 mod admission_evidence;
-mod admission_fence;
 mod admission_host;
 mod admission_oci;
 mod admission_publication;
 mod admission_runtime;
 mod admission_storage;
 mod admission_systemd;
+mod admission_worker;
 mod onboarding;
 
 const DEFAULT_CONFIG: &str = "/etc/tentaflake/cli.conf";
@@ -2799,6 +2799,7 @@ fn print_help() {
            tentaflake admission bootstrap <generated-store-plan>\n\
            tentaflake admission bootstrap-fence <generated-store-plan>\n\
            tentaflake admission image-acquire <generated-store-plan> <instance-id>\n\
+           tentaflake admission worker-load-recover <generated-store-plan> <ledger-revision> <load-claimed-revision>\n\
            tentaflake admission storage-recover <generated-store-plan> <allocation-id>\n\
            tentaflake admission publication status [--hide]\n\
            tentaflake admission publication begin <candidate-store-plan> <operation-id> <expected-ledger-revision>\n\

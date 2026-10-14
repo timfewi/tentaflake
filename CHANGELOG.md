@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 ### Fixed
+- Fence Worker queue mutations and image loading with published host authority;
+  retain uncertain image loads in the admission ledger and require explicit
+  stopped-backend recovery. Include Worker watchers, loaders and retained job
+  state in bootstrap/publication maintenance observations.
 - Capture CLI refusal diagnostics from stderr in publication VM assertions.
 - Bound Worker artifact pipes, raw TAR metadata, trailer and client exit under
   one deadline without buffering the archive. Retain dispatch identity on

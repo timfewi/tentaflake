@@ -11,7 +11,9 @@
 //! vendor acceptance. The HTTP contract remains owned by `api/v1/openapi.json`.
 
 mod decision;
+pub mod host_fence;
 pub mod ledger;
+pub mod protected_path;
 mod runtime;
 mod storage_decision;
 

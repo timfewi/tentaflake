@@ -69,8 +69,49 @@ a combined 64 KiB response ceiling. Job log capture uses `maxLogBytes` directly,
 so truncation bounds memory as well as the published file. Killing a timed-out
 client does not prove cancellation by the runtime daemon. Artifact streaming
 has the same ten-second ceiling, shortened to the remaining job deadline.
-Automatic recovery tied to a daemon generation, the common host fence and
-aggregate Worker resource/storage admission still require separate implementation.
+Automatic job recovery tied to a daemon generation and aggregate Worker
+resource/storage admission still require separate implementation.
+
+## Host maintenance
+
+With host admission enabled, `drain`, `approve` and `deny` delegate to the
+installed immutable admission CLI before changing queue state. The CLI requires
+the current published host plan, no Pending publication and no uncertain image
+load. It holds the common host fence through the Worker and its runtime clients.
+The inherited descriptor provides synchronization; it is not a capability grant.
+Worker services expose only the existing fence and ledger lock files for writing,
+alongside their own queue paths.
+
+The generated image loader uses the same fence. An enforced load records Unknown
+in the existing admission ledger before submitting the archive. Confirmed success
+records Completed; client failure, timeout or supervisor death retain Unknown.
+An uncertain load prevents further Worker mutations and host publication even
+when the daemon lists no containers. The guard never retries it automatically.
+Existing v3 ledgers without the new field remain readable. Older binaries refuse
+the new image-load record; keep the updated CLI available for maintenance and
+recovery rather than removing state to make an older binary accept it.
+
+After explicitly stopping managed workloads, Worker services/watchers/the image
+loader, quota units, `docker.service` and `docker.socket`, inspect
+`tentaflake admission publication status`. An operator can then use:
+
+```sh
+tentaflake admission worker-load-recover /nix/store/<installed-host-plan>.json <ledger-revision> <load-claimed-revision>
+```
+
+Recovery verifies the current authority, exact revisions and stopped launcher
+and backend evidence under the fence. It does not restart Docker or reload the
+archive. Missing or uncertain evidence preserves the record.
+
+Bootstrap and publication account for both generations' Worker services, path
+watchers and image loader, including installed or loaded legacy units. Removed
+launchers must be absent or explicitly masked and drained. The read-only
+`tentaflake-worker --config /nix/store/<generated-worker-config>.json maintenance`
+observation requires an existing protected queue lock and empty `running` and
+`jobs` directories, without accessing quota-backed workspaces. Undeclared private
+Worker state also refuses maintenance and remains available for explicit recovery.
+Neither this empty-state proof nor the fence enables Worker grants or accounts
+for aggregate Worker compute/private storage.
 
 ## Inspect queue prerequisites
 

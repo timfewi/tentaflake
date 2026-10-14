@@ -11,6 +11,15 @@ const MAX_SNAPSHOT_BYTES: u64 = 4 * 1024 * 1024;
 
 pub(crate) fn run(args: &[String], mode: OutputMode) -> Result<u8, String> {
     match args {
+        [command, file, action, rest @ ..] if command == "worker-run" => {
+            return crate::admission_worker::run(Path::new(file), action, rest);
+        }
+        [command, file] if command == "worker-load" => {
+            return crate::admission_worker::load_image(Path::new(file));
+        }
+        [command, file, revision, claimed] if command == "worker-load-recover" => {
+            return crate::admission_worker::recover_image(Path::new(file), revision, claimed);
+        }
         [command, file, id] if command == "image-acquire" => {
             return crate::admission_oci::acquire(Path::new(file), id);
         }

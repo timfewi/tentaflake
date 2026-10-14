@@ -90,6 +90,9 @@ relevant source and guide. Avoid loading unrelated references.
   claims before OCI dispatch. Never retry abandoned claims; verify real binary
   crash/write-failure and overload cases. Sync directories through readable
   descriptors; guarded `O_PATH` handles cannot themselves be fsynced.
+  Admission-enabled launchers inherit the common host fence only after checking
+  published authority. Retain uncertain image-load receipts; empty Docker output
+  cannot prove daemon work ended. Maintenance includes watchers and private jobs.
   Migration and limits belong in the [worker guide](../../../docs/13-disposable-worker.md).
 - New installs/quota images use Btrfs; quota images require at least 128 MiB.
   Never convert ext4 automatically. Installer cleanup stays inside the selected

@@ -906,6 +906,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tar",
+ "tentaflake-admission",
 ]
 
 [[package]]

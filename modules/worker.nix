@@ -7,6 +7,8 @@
 let
   constants = import ../lib/constants.nix;
   cfg = config.tentaflake.worker;
+  admissionEnabled = config.tentaflake.security.admission != null;
+  guardCli = lib.getExe (pkgs.callPackage ../pkgs/tentaflake-cli { });
   backend = config.virtualisation.oci-containers.backend;
   runtime = lib.getExe config.virtualisation.${backend}.package;
   json = pkgs.formats.json { };
@@ -135,6 +137,7 @@ let
     name: agent:
     json.generate "tentaflake-worker-${name}.json" {
       agent = name;
+      admission_cli = if admissionEnabled then guardCli else null;
       inherit backend runtime;
       image = cfg.imageReference;
       inherit (agent) workspace;
@@ -156,6 +159,32 @@ let
       workspace_tmpfs_size = agent.workspaceTmpfsSize;
       tmp_tmpfs_size = agent.tmpTmpfsSize;
     };
+
+  imageConfig = json.generate "tentaflake-worker-image.json" {
+    schemaVersion = 1;
+    inherit backend runtime;
+    archive = toString cfg.image;
+    enforced = admissionEnabled;
+  };
+
+  maintenance = {
+    workers = lib.mapAttrs (name: agent: {
+      executable = lib.getExe cfg.package;
+      config = toString (workerConfig name agent);
+      unit = "tentaflake-worker-${name}.service";
+      watcher = "tentaflake-worker-${name}.path";
+      inbox = "${agent.workspace}/.tentaflake-worker/inbox";
+      stateDir = stateDir name;
+    }) enabledAgents;
+    image =
+      if enabledAgents == { } then
+        null
+      else
+        {
+          config = toString imageConfig;
+          unit = "tentaflake-worker-image.service";
+        };
+  };
 
   workerService =
     name: agent:
@@ -193,6 +222,10 @@ let
         ReadWritePaths = [
           (stateDir name)
           "${agent.workspace}/.tentaflake-worker/inbox"
+        ]
+        ++ lib.optionals admissionEnabled [
+          "/var/lib/tentaflake-admission.lock"
+          "/var/lib/tentaflake-admission/.lock"
         ];
         RestrictAddressFamilies = [ "AF_UNIX" ];
         RestrictNamespaces = true;
@@ -267,9 +300,16 @@ in
       default = { };
       description = "Per-controller disposable worker and approval policy.";
     };
+    maintenance = lib.mkOption {
+      type = lib.types.attrs;
+      internal = true;
+      readOnly = true;
+      description = "Owned immutable Worker inputs for the common maintenance plan.";
+    };
   };
 
   config = {
+    tentaflake.worker.maintenance = maintenance;
     assertions = [
       {
         assertion = enabledAgents == { } || config.tentaflake.security.profile != "dev";
@@ -298,8 +338,13 @@ in
             message = "tentaflake worker key ${name} must exactly match an OCI agent container name.";
           }
           {
-            assertion = lib.match "^[a-z0-9][a-z0-9-]{0,47}$" name != null;
-            message = "tentaflake worker names must be lowercase safe OCI identifiers up to 48 characters.";
+            assertion =
+              lib.match "^[a-z0-9][a-z0-9-]{0,47}$" name != null
+              && !(lib.elem name [
+                "image"
+                "state-volumes"
+              ]);
+            message = "tentaflake worker names must be lowercase safe OCI identifiers up to 48 characters; image and state-volumes are reserved.";
           }
           {
             assertion = safePath agent.workspace && !(lib.elem ".." (lib.splitString "/" agent.workspace));
@@ -385,7 +430,7 @@ in
             serviceConfig = {
               Type = "oneshot";
               RemainAfterExit = true;
-              ExecStart = "${runtime} load --input ${cfg.image}";
+              ExecStart = "${guardCli} admission worker-load ${imageConfig}";
             };
           };
         };

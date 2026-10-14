@@ -24,6 +24,12 @@ pub(crate) struct HostPlan {
     pub instances: BTreeMap<String, Instance>,
     pub volumes: Vec<Volume>,
     pub runtimes: BTreeMap<String, crate::admission_oci::RuntimeSpec>,
+    // Published schema-3 plans predate Worker fencing and remain readable for
+    // explicit publication. Their undeclared Worker launchers remain legacy.
+    #[serde(default)]
+    pub workers: BTreeMap<String, crate::admission_worker::WorkerSpec>,
+    #[serde(default)]
+    pub worker_image: Option<crate::admission_worker::ImageSpec>,
     pub tools: Tools,
 }
 
@@ -125,6 +131,7 @@ impl HostPlan {
         for (id, runtime) in &self.runtimes {
             crate::admission_oci::validate_runtime(self, id, runtime)?;
         }
+        crate::admission_worker::validate_plan(self)?;
         let specs: Vec<_> = self
             .volumes
             .iter()

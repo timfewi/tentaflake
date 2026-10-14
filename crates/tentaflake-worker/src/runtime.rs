@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(10);
 const COMMAND_BYTES: usize = 64 * 1024;
 
-pub(super) fn command(config: &Config) -> Command {
+pub(super) fn command(config: &Config) -> Result<Command> {
     let mut command = Command::new(&config.runtime);
     command.env_clear().stdin(Stdio::null());
     if config.backend == "docker" {
@@ -21,11 +21,14 @@ pub(super) fn command(config: &Config) -> Command {
             .env("HOME", "/var/empty")
             .env("XDG_CONFIG_HOME", "/var/empty");
     }
-    command
+    if let Some(fence) = &config.maintenance_fence {
+        fence.inherit(&mut command)?;
+    }
+    Ok(command)
 }
 
 pub(super) fn local_image(config: &Config) -> Result<String> {
-    let output = output(command(config).args([
+    let output = output(command(config)?.args([
         "image",
         "inspect",
         "--format={{.Id}}",
@@ -78,7 +81,7 @@ pub(super) fn output(command: &mut Command) -> Result<Output> {
 
 pub(super) fn logs(config: &Config, container: &str) -> Result<(Output, bool)> {
     capture(
-        command(config).args(["logs", container]),
+        command(config)?.args(["logs", container]),
         config.max_log_bytes,
         COMMAND_TIMEOUT,
     )

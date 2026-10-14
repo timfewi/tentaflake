@@ -1,6 +1,5 @@
 //! Host-owned storage transactions. Only the exact systemd quota invocation may
 //! mutate images; an exclusive inherited fence also covers surviving helpers.
-use crate::admission_fence::{self, HostFence};
 use crate::admission_host::{HostPlan, Volume, load_plan, store_path};
 use crate::admission_storage::{
     VolumeSpec, check_creation_space, ensure_backing_roots, scan_inventory,
@@ -13,6 +12,7 @@ use std::os::unix::fs::{FileTypeExt, MetadataExt};
 use std::path::Path;
 use std::process::{Command, Stdio};
 use std::time::Duration;
+use tentaflake_admission::host_fence::{self as admission_fence, HostFence};
 use tentaflake_admission::ledger::{Ledger, PublishedAuthority, StorageClaimOutcome};
 use tentaflake_admission::{
     AdmissionRequest, ExpectedRevisions, ReservationSnapshot, SCHEMA_VERSION,
@@ -407,6 +407,7 @@ pub(crate) fn offline_units(
     let mut inventory: BTreeSet<_> = crate::admission_bootstrap::runtime_units(plan, path, other)?
         .into_iter()
         .collect();
+    inventory.extend(crate::admission_worker::offline(plan, other)?);
     let mut names = quota_unit_names(plan, other);
     names.extend(admission_systemd::list_quota_units(&plan.tools.busctl)?);
     for name in &names {

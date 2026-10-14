@@ -5,10 +5,12 @@ use std::io::{self, Read, Write};
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
 use std::os::unix::ffi::{OsStrExt, OsStringExt};
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt, symlink};
+use std::os::unix::process::CommandExt;
 use std::path::{Component, Path, PathBuf};
 use std::process::{Command, Output};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use tentaflake_admission::host_fence::HostFence;
 
 type Result<T> = std::result::Result<T, String>;
 
@@ -49,6 +51,10 @@ struct Config {
     agent: String,
     backend: String,
     runtime: PathBuf,
+    #[serde(default)]
+    admission_cli: Option<PathBuf>,
+    #[serde(skip)]
+    maintenance_fence: Option<HostFence>,
     image: String,
     workspace: PathBuf,
     state_dir: PathBuf,
@@ -168,20 +174,40 @@ fn main() {
 #[derive(Debug, PartialEq, Eq)]
 enum WorkerCommand {
     Probe,
+    Maintenance,
     Drain,
     Approve(String),
     Deny(String),
 }
 
-fn parse_args(mut args: impl Iterator<Item = OsString>) -> Result<(PathBuf, WorkerCommand)> {
-    const USAGE: &str = "usage: tentaflake-worker --config FILE probe|drain|approve|deny [JOB]";
+fn parse_args(
+    mut args: impl Iterator<Item = OsString>,
+) -> Result<(PathBuf, WorkerCommand, Option<RawFd>)> {
+    const USAGE: &str =
+        "usage: tentaflake-worker --config FILE probe|maintenance|drain|approve|deny [JOB]";
     if args.next().as_deref() != Some(OsStr::new("--config")) {
         return Err(USAGE.into());
     }
     let path = args.next().filter(|value| !value.is_empty()).ok_or(USAGE)?;
-    let command = args.next().ok_or(USAGE)?;
+    let mut command = args.next().ok_or(USAGE)?;
+    let fence_fd = if command == "--maintenance-fence-fd" {
+        let value = args.next().ok_or("missing maintenance fence descriptor")?;
+        let value = value
+            .to_str()
+            .ok_or("invalid maintenance fence descriptor")?;
+        let fd = value
+            .parse::<RawFd>()
+            .ok()
+            .filter(|fd| *fd >= 3 && fd.to_string() == value)
+            .ok_or("invalid maintenance fence descriptor")?;
+        command = args.next().ok_or(USAGE)?;
+        Some(fd)
+    } else {
+        None
+    };
     let command = match command.to_str() {
         Some("probe") => WorkerCommand::Probe,
+        Some("maintenance") => WorkerCommand::Maintenance,
         Some("drain") => WorkerCommand::Drain,
         Some(kind @ ("approve" | "deny")) => {
             let job = args.next().ok_or("missing job id")?;
@@ -198,14 +224,17 @@ fn parse_args(mut args: impl Iterator<Item = OsString>) -> Result<(PathBuf, Work
     if args.next().is_some() {
         return Err("unexpected argument".into());
     }
-    Ok((PathBuf::from(path), command))
+    if fence_fd.is_some() && matches!(command, WorkerCommand::Probe | WorkerCommand::Maintenance) {
+        return Err("read-only worker commands do not adopt a maintenance fence".into());
+    }
+    Ok((PathBuf::from(path), command, fence_fd))
 }
 
 fn run() -> Result<()> {
     // Reject the entire invocation before even reading configuration. In
     // particular, malformed operator commands must not initialize queue state.
-    let (config_path, command) = parse_args(std::env::args_os().skip(1))?;
-    let config: Config = serde_json::from_reader(
+    let (config_path, command, fence_fd) = parse_args(std::env::args_os().skip(1))?;
+    let mut config: Config = serde_json::from_reader(
         File::open(&config_path)
             .map_err(|error| format!("open {}: {error}", config_path.display()))?,
     )
@@ -219,6 +248,32 @@ fn run() -> Result<()> {
         );
         return Ok(());
     }
+    if command == WorkerCommand::Maintenance {
+        let snapshot = probe::maintenance(&config)?;
+        println!(
+            "{}",
+            serde_json::to_string(&snapshot).map_err(|_| "encode worker maintenance proof")?
+        );
+        return Ok(());
+    }
+    if let Some(cli) = &config.admission_cli {
+        if let Some(fd) = fence_fd {
+            if unsafe { libc::geteuid() } != 0 || unsafe { libc::fcntl(fd, libc::F_GETFD) } < 0 {
+                return Err("guarded worker requires a valid root-owned maintenance fence".into());
+            }
+            // The private argument transfers this inherited descriptor. The
+            // shared owner authenticates the fixed protected path and lock.
+            config.maintenance_fence = Some(HostFence::adopt(unsafe { File::from_raw_fd(fd) })?);
+        } else {
+            let error = delegation_command(cli, &config_path, &command)?.exec();
+            return Err(format!("cannot delegate worker to host admission: {error}"));
+        }
+    } else {
+        if fence_fd.is_some() {
+            return Err("maintenance fence requires configured host admission".into());
+        }
+        require_legacy_without_ledger(Path::new("/var/lib/tentaflake-admission"))?;
+    }
     enter_worker_group(&config)?;
     ensure_state_layout(&config)?;
     let _queue_lock = queue::lock(&config)?;
@@ -227,7 +282,39 @@ fn run() -> Result<()> {
         WorkerCommand::Drain => drain(&config),
         WorkerCommand::Approve(job) => approve(&config, &job),
         WorkerCommand::Deny(job) => deny(&config, &job),
-        WorkerCommand::Probe => unreachable!("probe returns before queue mutation"),
+        WorkerCommand::Probe | WorkerCommand::Maintenance => {
+            unreachable!("read-only commands return before queue mutation")
+        }
+    }
+}
+
+fn delegation_command(cli: &Path, config: &Path, action: &WorkerCommand) -> Result<Command> {
+    let mut command = Command::new(cli);
+    command
+        .env_clear()
+        .args(["admission", "worker-run"])
+        .arg(config);
+    match action {
+        WorkerCommand::Drain => {
+            command.arg("drain");
+        }
+        WorkerCommand::Approve(job) => {
+            command.args(["approve", job]);
+        }
+        WorkerCommand::Deny(job) => {
+            command.args(["deny", job]);
+        }
+        WorkerCommand::Probe | WorkerCommand::Maintenance => {
+            return Err("read-only worker command cannot delegate".into());
+        }
+    }
+    Ok(command)
+}
+
+fn require_legacy_without_ledger(path: &Path) -> Result<()> {
+    match fs::symlink_metadata(path) {
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+        _ => Err("worker requires configured host admission while a global ledger exists or is unavailable".into()),
     }
 }
 
@@ -271,6 +358,24 @@ fn validate_config(config: &Config) -> Result<()> {
     validate_identifier("agent", &config.agent, 48)?;
     if !matches!(config.backend.as_str(), "docker" | "podman") {
         return Err("backend must be docker or podman".into());
+    }
+    if let Some(path) = &config.admission_cli {
+        let root = path
+            .to_str()
+            .and_then(|s| s.strip_prefix("/nix/store/"))
+            .and_then(|s| s.strip_suffix("/bin/tentaflake"))
+            .filter(|s| s.len() > 33 && s.len() <= 255);
+        if !root.is_some_and(|s| {
+            s.as_bytes()[32] == b'-'
+                && s.as_bytes()[..32]
+                    .iter()
+                    .all(|byte| b"0123456789abcdfghijklmnpqrsvwxyz".contains(byte))
+                && s.as_bytes()[33..]
+                    .iter()
+                    .all(|byte| byte.is_ascii_alphanumeric() || b"+-._?=".contains(byte))
+        }) {
+            return Err("admission_cli must be an immutable store bin/tentaflake path".into());
+        }
     }
     if !config.runtime.is_absolute()
         || !config.workspace.is_absolute()
@@ -664,7 +769,7 @@ fn execute(config: &Config, workspace_fd: RawFd, request: &JobRequest) -> Result
     )?;
     queue::sync_directory(&config.state_dir.join("jobs"))?;
     job_guard.preserve_on_error = true;
-    let mut create = runtime(config);
+    let mut create = runtime(config)?;
     create.arg("create");
     append_runtime_policy(&mut create, config, &container, &snapshot);
     create
@@ -689,7 +794,7 @@ fn execute(config: &Config, workspace_fd: RawFd, request: &JobRequest) -> Result
     )?;
 
     let started = command_ok(
-        runtime(config).args(["start", &container]),
+        runtime(config)?.args(["start", &container]),
         "start disposable container",
     );
     let mut timed_out = false;
@@ -724,7 +829,7 @@ fn execute(config: &Config, workspace_fd: RawFd, request: &JobRequest) -> Result
                 )?
             {
                 command_ok(
-                    runtime(config).args(["kill", "--signal=USR1", &container]),
+                    runtime(config)?.args(["kill", "--signal=USR1", &container]),
                     "release completed disposable container",
                 )?;
                 artifacts_copied = export.available;
@@ -866,7 +971,7 @@ fn export_artifacts_if_stable(
     fs::set_permissions(destination, fs::Permissions::from_mode(0o700))
         .map_err(|error| format!("chmod artifact staging: {error}"))?;
 
-    let mut archive_command = runtime(config);
+    let mut archive_command = runtime(config)?;
     archive_command.args(["exec", container, "sh", "-c"]).arg(
         "test ! -d /workspace/artifacts || ".to_owned()
             + "exec tar -C /workspace/artifacts -cf - .",
@@ -1136,12 +1241,12 @@ fn cleanup_existing_worker_container(config: &Config, container: &str) -> Result
 
 fn remove_worker_container(config: &Config, container: &str) -> Result<()> {
     command_ok(
-        runtime(config).args(["rm", "--force", container]),
+        runtime(config)?.args(["rm", "--force", container]),
         "remove disposable container",
     )
 }
 
-fn runtime(config: &Config) -> Command {
+fn runtime(config: &Config) -> Result<Command> {
     runtime::command(config)
 }
 
@@ -1150,7 +1255,7 @@ where
     I: IntoIterator<Item = S>,
     S: AsRef<OsStr>,
 {
-    runtime::output(runtime(config).args(args))
+    runtime::output(runtime(config)?.args(args))
 }
 
 fn command_ok(command: &mut Command, operation: &str) -> Result<()> {
@@ -1635,6 +1740,75 @@ mod tests {
         let _ = fs::remove_dir_all(&path);
         fs::create_dir(&path).unwrap();
         path
+    }
+
+    #[test]
+    fn private_fence_arguments_are_exact_and_readonly_commands_cannot_adopt() {
+        let parse = |args: &[&str]| parse_args(args.iter().map(|value| OsString::from(*value)));
+        assert_eq!(
+            parse(&[
+                "--config",
+                "/config",
+                "--maintenance-fence-fd",
+                "3",
+                "approve",
+                "job_1"
+            ])
+            .unwrap(),
+            (
+                PathBuf::from("/config"),
+                WorkerCommand::Approve("job_1".into()),
+                Some(3)
+            )
+        );
+        for fd in ["", "0", "2", "-1", "03", "+3", "2147483648", "env"] {
+            assert!(
+                parse(&["--config", "/config", "--maintenance-fence-fd", fd, "drain"]).is_err()
+            );
+        }
+        for kind in ["probe", "maintenance"] {
+            assert!(parse(&["--config", "/config", "--maintenance-fence-fd", "3", kind]).is_err());
+        }
+        for action in [
+            WorkerCommand::Drain,
+            WorkerCommand::Approve("job_1".into()),
+            WorkerCommand::Deny("job_1".into()),
+        ] {
+            let command = delegation_command(
+                Path::new("/immutable-cli"),
+                Path::new("/exact-config"),
+                &action,
+            )
+            .unwrap();
+            let mut expected = vec!["admission", "worker-run", "/exact-config"];
+            match action {
+                WorkerCommand::Drain => expected.push("drain"),
+                WorkerCommand::Approve(_) => expected.extend(["approve", "job_1"]),
+                WorkerCommand::Deny(_) => expected.extend(["deny", "job_1"]),
+                _ => unreachable!(),
+            }
+            assert_eq!(
+                command.get_args().collect::<Vec<_>>(),
+                expected.iter().map(OsStr::new).collect::<Vec<_>>()
+            );
+        }
+    }
+
+    #[test]
+    fn legacy_mutation_refuses_any_prior_or_uncertain_ledger_path() {
+        let root = temp_dir("legacy-ledger");
+        let path = root.join("ledger");
+        assert!(require_legacy_without_ledger(&path).is_ok());
+        fs::write(&path, b"malformed ledger").unwrap();
+        assert!(require_legacy_without_ledger(&path).is_err());
+        assert!(require_legacy_without_ledger(&path.join("not-a-directory")).is_err());
+        fs::remove_file(&path).unwrap();
+        symlink(root.join("missing"), &path).unwrap();
+        assert!(require_legacy_without_ledger(&path).is_err());
+        fs::remove_file(&path).unwrap();
+        fs::create_dir(&path).unwrap();
+        assert!(require_legacy_without_ledger(&path).is_err());
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

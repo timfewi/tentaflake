@@ -6,7 +6,6 @@
 //! not stop services, infer absence from daemon failure, or reset a ledger.
 //! Discovery covers conventional docker-/podman- service names and both plans'
 //! declared names. Operators must separately drain historical custom launchers.
-use crate::admission_fence;
 use crate::admission_host::{HostPlan, load_plan, read_store_document};
 use crate::admission_oci;
 use crate::admission_runtime::{self, LEDGER, authority, installed, require_root, stopped};
@@ -21,6 +20,7 @@ use std::io::{self, Read, Write};
 use std::os::fd::{AsRawFd, FromRawFd};
 use std::os::unix::fs::{FileTypeExt, MetadataExt};
 use std::path::{Path, PathBuf};
+use tentaflake_admission::host_fence as admission_fence;
 use tentaflake_admission::ledger::PublishedAuthority;
 
 const DIRECTORY: &CStr = c"tentaflake-admission-bootstrap";
@@ -235,11 +235,11 @@ fn no_backend_processes() -> Result<(), String> {
     Ok(())
 }
 
-fn stopped_backend(plan: &HostPlan) -> Result<PathBuf, String> {
+pub(crate) fn stopped_backend(plan: &HostPlan) -> Result<PathBuf, String> {
     let daemon = admission_systemd::load_unit(&plan.tools.busctl, "docker.service")?;
     let socket = admission_systemd::load_unit(&plan.tools.busctl, "docker.socket")?;
     if !stopped(&daemon) || !stopped(&socket) {
-        return Err("stop docker.service and docker.socket before bootstrap-fence".into());
+        return Err("stop docker.service and docker.socket before maintenance fencing".into());
     }
     let config = daemon_config(plan, &daemon)?;
     stopped_socket_node(Path::new("/run/docker.sock"), 0)?;

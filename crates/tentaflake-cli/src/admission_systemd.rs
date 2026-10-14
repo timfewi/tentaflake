@@ -316,6 +316,74 @@ pub(crate) fn list_runtime_units(busctl: &Path) -> Result<Vec<String>, String> {
     .map(|inventory| inventory.names.into_iter().collect())
 }
 
+pub(crate) fn list_worker_units(busctl: &Path) -> Result<Vec<String>, String> {
+    list_units(
+        busctl,
+        &["tentaflake-worker-*.service", "tentaflake-worker-*.path"],
+        worker_name,
+    )
+    .map(|inventory| inventory.names.into_iter().collect())
+}
+
+/// Path triggers are an independent launcher: a stopped service alone is not
+/// quiescence. Authenticate the exact target and inbox around unit metadata.
+pub(crate) fn worker_path_matches(
+    busctl: &Path,
+    before: &UnitObservation,
+    service: &str,
+    inbox: &Path,
+) -> Result<bool, String> {
+    if !valid_busctl(busctl) || !worker_name(&before.id) || !before.id.ends_with(".path") {
+        return Err("invalid Worker path observation".into());
+    }
+    let deadline = Instant::now() + OBSERVATION_TIMEOUT;
+    let object = parse_object(&read_bus(
+        busctl,
+        &[
+            "call",
+            DESTINATION,
+            "/org/freedesktop/systemd1",
+            "org.freedesktop.systemd1.Manager",
+            "GetUnit",
+            "s",
+            &before.id,
+        ],
+        deadline,
+        MAX_RESPONSE_BYTES,
+    )?)?;
+    let bytes = read_bus(
+        busctl,
+        &[
+            "get-property",
+            DESTINATION,
+            &object,
+            "org.freedesktop.systemd1.Path",
+            "Unit",
+            "Paths",
+            "MakeDirectory",
+        ],
+        deadline,
+        MAX_RESPONSE_BYTES,
+    )?;
+    let matches = worker_path_properties(&bytes, service, inbox)?;
+    if load_unit(busctl, &before.id)? != *before {
+        return Err("Worker path changed during observation".into());
+    }
+    Ok(matches)
+}
+
+fn worker_path_properties(bytes: &[u8], service: &str, inbox: &Path) -> Result<bool, String> {
+    let mut rows = records(bytes, 3, MAX_RESPONSE_BYTES)?;
+    let target: String = property(&mut rows, "s")?;
+    let paths: Vec<(String, String)> = property(&mut rows, "a(ss)")?;
+    let make_directory: bool = property(&mut rows, "b")?;
+    Ok(target == service
+        && !make_directory
+        && paths.len() == 1
+        && paths[0].0 == "DirectoryNotEmpty"
+        && Path::new(&paths[0].1) == inbox)
+}
+
 struct UnitInventory {
     names: BTreeSet<String>,
     installed: BTreeSet<String>,
@@ -774,6 +842,12 @@ fn runtime_name(name: &str) -> bool {
         && (name.starts_with("docker-") || name.starts_with("podman-"))
 }
 
+fn worker_name(name: &str) -> bool {
+    unit_name(name)
+        && name.starts_with("tentaflake-worker-")
+        && (name.ends_with(".service") || name.ends_with(".path"))
+}
+
 fn parse_listed_files(bytes: &[u8], valid_name: fn(&str) -> bool) -> Result<Vec<String>, String> {
     let [files]: [Vec<(String, String)>; 1] =
         property(&mut records(bytes, 1, MAX_LIST_BYTES)?, "a(ss)")?;
@@ -867,6 +941,33 @@ fn unit_name(value: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn worker_path_requires_exact_scalar_properties_and_one_owned_trigger() {
+        // get-property returns values directly, unlike wrapped method arguments.
+        let wire = r#"{"type":"s","data":"tentaflake-worker-fixture.service"}
+{"type":"a(ss)","data":[["DirectoryNotEmpty","/var/lib/fixture/.tentaflake-worker/inbox"]]}
+{"type":"b","data":false}"#;
+        let check = |bytes: &str| {
+            worker_path_properties(
+                bytes.as_bytes(),
+                "tentaflake-worker-fixture.service",
+                Path::new("/var/lib/fixture/.tentaflake-worker/inbox"),
+            )
+        };
+        assert_eq!(check(wire), Ok(true));
+        for changed in [
+            wire.replace("fixture.service", "other.service"),
+            wire.replace("DirectoryNotEmpty", "PathExists"),
+            wire.replace("/var/lib/fixture", "/var/lib/other"),
+            wire.replace("false", "true"),
+            wire.replace("\"]]", "\"],[\"PathExists\",\"/tmp/extra\"]]"),
+        ] {
+            assert_eq!(check(&changed), Ok(false));
+        }
+        assert!(check(&wire.replace("\"data\":false", "\"data\":[false]")).is_err());
+        assert!(check(&format!("{wire}\n{{\"type\":\"b\",\"data\":false}}")).is_err());
+    }
 
     // Wire shapes observed with systemd 261.3 busctl --json=short on the local
     // dbus.service alias. Invocation/PID values are synthetic fixture values.

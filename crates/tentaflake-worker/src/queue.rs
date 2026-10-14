@@ -373,6 +373,8 @@ mod tests {
             fs::write(&runtime, format!("#!{}\n[[ \"$1\" == --host=unix:///run/docker.sock && \"$2\" == --config=/var/empty ]] || exit 90\nshift 2\nprintf '%s\\n' \"$*\" >> '{}'/calls\ncase \"$1\" in image) printf '%s\\n' 'sha256:{}';; ps) exit 0;; *) exit 77;; esac\n", shell.display(), root.display(), "ab".repeat(32))).unwrap();
             fs::set_permissions(&runtime, fs::Permissions::from_mode(0o700)).unwrap();
             let config = Config {
+                admission_cli: None,
+                maintenance_fence: None,
                 agent: "fixture".into(),
                 backend: "docker".into(),
                 runtime,

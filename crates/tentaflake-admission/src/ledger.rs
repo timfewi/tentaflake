@@ -175,6 +175,28 @@ pub struct PublicationStatus {
     pub ledger_revision: u64,
     pub published: PublishedAuthority,
     pub pending: Option<PublicationReceipt>,
+    pub worker_image_load: Option<WorkerImageLoadReceipt>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum WorkerImageLoadOutcome {
+    Unknown,
+    Completed,
+    Recovered,
+}
+
+/// One current image-load transaction, separate from resource reservations.
+/// Configuration is a bounded source reference; the host authenticates its
+/// immutable contents and runtime endpoint before asking for a permit.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct WorkerImageLoadReceipt {
+    pub authority: PublishedAuthority,
+    pub configuration: String,
+    pub outcome: WorkerImageLoadOutcome,
+    pub claimed_revision: u64,
+    pub updated_revision: u64,
 }
 
 /// Host-owned observations, never assertions accepted from an untrusted client.
@@ -241,6 +263,15 @@ pub struct StoragePermit<'a> {
     index: usize,
 }
 
+/// Only a newly synced Unknown transaction yields a permit. Dropping it or
+/// losing the runtime client never proves that the daemon cancelled the load.
+#[must_use = "dropping the image-load permit retains durable uncertainty"]
+pub struct WorkerImageLoadPermit<'a> {
+    ledger: &'a Ledger,
+    _lock: LedgerLock,
+    state: State,
+}
+
 #[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct State {
@@ -250,6 +281,9 @@ struct State {
     receipts: Vec<Receipt>,
     storage: Vec<StorageReceipt>,
     publications: Vec<PublicationReceipt>,
+    // Existing private v3 ledgers predate guarded Worker image loading.
+    #[serde(default)]
+    worker_image_load: Option<WorkerImageLoadReceipt>,
 }
 
 impl Ledger {
@@ -287,6 +321,7 @@ impl Ledger {
             published: authority,
             receipts: Vec::new(),
             publications: Vec::new(),
+            worker_image_load: None,
             storage: inventory
                 .allocations
                 .into_iter()
@@ -360,7 +395,97 @@ impl Ledger {
             ledger_revision: state.revision,
             published: state.published.clone(),
             pending: state.pending().cloned(),
+            worker_image_load: state.worker_image_load,
         })
+    }
+
+    /// Read-only recovery diagnostics, never permission to repeat a load.
+    pub fn worker_image_load(&self) -> Result<Option<WorkerImageLoadReceipt>, LedgerError> {
+        let _lock = self.lock(false)?;
+        Ok(self.read()?.worker_image_load)
+    }
+
+    /// The host holds its outer mutation fence and authenticates the exact
+    /// published configuration before this call. Keep the returned permit
+    /// through the bounded runtime mutation; only a confirmed success completes
+    /// it. An existing Unknown never returns another dispatch permit.
+    pub fn begin_worker_image_load(
+        &self,
+        authority: &PublishedAuthority,
+        configuration: &str,
+    ) -> Result<WorkerImageLoadPermit<'_>, LedgerError> {
+        authority.validate()?;
+        if !absolute_reference(configuration) {
+            return Err(LedgerError::Invalid("image-load configuration reference"));
+        }
+        let lock = self.lock(false)?;
+        let mut state = self.read()?;
+        state.require_stable()?;
+        if *authority != state.published {
+            return Err(LedgerError::StaleAuthority);
+        }
+        state.advance()?;
+        state.worker_image_load = Some(WorkerImageLoadReceipt {
+            authority: authority.clone(),
+            configuration: configuration.into(),
+            outcome: WorkerImageLoadOutcome::Unknown,
+            claimed_revision: state.revision,
+            updated_revision: state.revision,
+        });
+        self.write(&state)?;
+        Ok(WorkerImageLoadPermit {
+            ledger: self,
+            _lock: lock,
+            state,
+        })
+    }
+
+    /// Explicit recovery only. The trusted callback must prove the runtime
+    /// backend, clients and all old/new launchers stopped under the host fence.
+    /// Empty container inventory or an exited client cannot establish this.
+    /// The callback runs under the ledger lock and must not reopen this ledger.
+    pub fn recover_worker_image_load(
+        &self,
+        expected_revision: u64,
+        expected_claimed_revision: u64,
+        observe: impl FnOnce(&WorkerImageLoadReceipt) -> Result<(), String>,
+    ) -> Result<WorkerImageLoadReceipt, LedgerError> {
+        let _lock = self.lock(false)?;
+        let mut state = self.read()?;
+        if state.revision != expected_revision {
+            return Err(LedgerError::StaleRevision);
+        }
+        let receipt = state
+            .worker_image_load
+            .as_ref()
+            .ok_or(LedgerError::Conflict)?;
+        if receipt.claimed_revision != expected_claimed_revision
+            || receipt.outcome != WorkerImageLoadOutcome::Unknown
+        {
+            return Err(LedgerError::Conflict);
+        }
+        observe(receipt).map_err(|_| LedgerError::Context)?;
+        self.record_worker_image_load(&mut state, WorkerImageLoadOutcome::Recovered)
+    }
+
+    fn record_worker_image_load(
+        &self,
+        state: &mut State,
+        outcome: WorkerImageLoadOutcome,
+    ) -> Result<WorkerImageLoadReceipt, LedgerError> {
+        state.advance()?;
+        let receipt = state
+            .worker_image_load
+            .as_mut()
+            .ok_or(LedgerError::Conflict)?;
+        if receipt.outcome != WorkerImageLoadOutcome::Unknown {
+            return Err(LedgerError::Conflict);
+        }
+        receipt.outcome = outcome;
+        receipt.updated_revision = state.revision;
+        let result = receipt.clone();
+        self.write(state)?;
+        Ok(result)
     }
 
     /// Historical receipt only; lookup never resumes installation or dispatch.
@@ -500,6 +625,7 @@ impl Ledger {
         if state.revision != expected_ledger_revision {
             return Err(LedgerError::StaleRevision);
         }
+        state.require_known_image_load()?;
         let snapshot = state.snapshot();
         if snapshot
             .entries
@@ -1000,21 +1126,39 @@ impl StoragePermit<'_> {
     }
 }
 
+impl WorkerImageLoadPermit<'_> {
+    pub fn receipt(&self) -> &WorkerImageLoadReceipt {
+        self.state
+            .worker_image_load
+            .as_ref()
+            .expect("new image-load permit has a receipt")
+    }
+
+    /// The trusted host observed successful completion of the exact submitted
+    /// load. A timeout, signal or lost reply must drop this permit instead.
+    pub fn complete(mut self) -> Result<WorkerImageLoadReceipt, LedgerError> {
+        self.ledger
+            .record_worker_image_load(&mut self.state, WorkerImageLoadOutcome::Completed)
+    }
+}
+
+fn absolute_reference(value: &str) -> bool {
+    value.len() <= 4096
+        && value.starts_with('/')
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii() && !byte.is_ascii_control())
+        && value
+            .split('/')
+            .skip(1)
+            .all(|part| !part.is_empty() && part != "." && part != "..")
+}
+
 impl PublishedAuthority {
     fn validate(&self) -> Result<(), LedgerError> {
         if !identifier(&self.generation)
             || !identifier(&self.revision)
-            || self.manifest_path.len() > 4096
-            || !self.manifest_path.starts_with('/')
-            || !self
-                .manifest_path
-                .bytes()
-                .all(|byte| byte.is_ascii() && !byte.is_ascii_control())
-            || self
-                .manifest_path
-                .split('/')
-                .skip(1)
-                .any(|part| part.is_empty() || part == "." || part == "..")
+            || !absolute_reference(&self.manifest_path)
         {
             return Err(LedgerError::Invalid("published authority"));
         }
@@ -1054,6 +1198,17 @@ impl State {
     fn require_stable(&self) -> Result<(), LedgerError> {
         if self.pending().is_some() {
             return Err(LedgerError::TransitionPending);
+        }
+        self.require_known_image_load()
+    }
+
+    fn require_known_image_load(&self) -> Result<(), LedgerError> {
+        if self
+            .worker_image_load
+            .as_ref()
+            .is_some_and(|receipt| receipt.outcome == WorkerImageLoadOutcome::Unknown)
+        {
+            return Err(LedgerError::NotQuiescent);
         }
         Ok(())
     }
@@ -1133,10 +1288,35 @@ impl State {
                     .iter()
                     .map(|receipt| receipt.updated_revision),
             )
+            .chain(
+                self.worker_image_load
+                    .iter()
+                    .map(|receipt| receipt.updated_revision),
+            )
             .max()
             .unwrap_or(1);
         if latest_update != self.revision {
             return Err(LedgerError::Invalid("unaccounted revision"));
+        }
+        if let Some(receipt) = &self.worker_image_load {
+            receipt.authority.validate()?;
+            let unknown = receipt.outcome == WorkerImageLoadOutcome::Unknown;
+            if !absolute_reference(&receipt.configuration)
+                || receipt.authority.generation != self.published.generation
+                || receipt.claimed_revision < 2
+                || receipt.claimed_revision > receipt.updated_revision
+                || receipt.updated_revision > self.revision
+                || (unknown
+                    && (receipt.updated_revision != receipt.claimed_revision
+                        || receipt.authority != self.published
+                        || self.pending().is_some()))
+                || (!unknown && receipt.updated_revision <= receipt.claimed_revision)
+                || !claims.insert(receipt.claimed_revision)
+            {
+                return Err(LedgerError::Invalid(
+                    "image-load identity, revision or outcome",
+                ));
+            }
         }
         for (index, receipt) in self.receipts.iter().enumerate() {
             let request = &receipt.request;
@@ -1280,6 +1460,15 @@ impl State {
         }
         if authority != &self.published {
             return Err(LedgerError::Invalid("published authority history"));
+        }
+        if self.worker_image_load.as_ref().is_some_and(|load| {
+            load.authority != self.published
+                && !self
+                    .publications
+                    .iter()
+                    .any(|publication| publication.request.expected_authority == load.authority)
+        }) {
+            return Err(LedgerError::Invalid("image-load authority history"));
         }
         Ok(())
     }
@@ -1697,6 +1886,13 @@ mod tests {
                 let _permit = reserve(&ledger, "a");
                 std::process::exit(0);
             }
+            "image-load-crash" => {
+                let ledger = open().unwrap();
+                let _permit = ledger
+                    .begin_worker_image_load(&authority("policy-1"), "/immutable/worker-image.json")
+                    .unwrap();
+                std::process::exit(0);
+            }
             "publication-crash" => {
                 let ledger = open().unwrap();
                 let request = publication(&ledger, "publish-2", "policy-2");
@@ -1724,9 +1920,19 @@ mod tests {
             mode @ ("write-failure"
             | "bind-write-failure"
             | "storage-write-failure"
-            | "publication-write-failure") => {
+            | "publication-write-failure"
+            | "image-load-write-failure"
+            | "image-load-complete-failure") => {
                 let ledger = open().unwrap();
                 let mut permit = (mode == "bind-write-failure").then(|| claim(&ledger, "a"));
+                let image_permit = (mode == "image-load-complete-failure").then(|| {
+                    ledger
+                        .begin_worker_image_load(
+                            &authority("policy-1"),
+                            "/immutable/worker-image.json",
+                        )
+                        .unwrap()
+                });
                 let limit = libc::rlimit {
                     rlim_cur: 64,
                     rlim_max: 64,
@@ -1735,7 +1941,17 @@ mod tests {
                     assert_ne!(libc::signal(libc::SIGXFSZ, libc::SIG_IGN), libc::SIG_ERR);
                     assert_eq!(libc::setrlimit(libc::RLIMIT_FSIZE, &limit), 0);
                 }
-                if let Some(mut permit) = permit.take() {
+                if let Some(permit) = image_permit {
+                    assert!(matches!(permit.complete(), Err(LedgerError::Io(_))));
+                } else if mode == "image-load-write-failure" {
+                    assert!(matches!(
+                        ledger.begin_worker_image_load(
+                            &authority("policy-1"),
+                            "/immutable/worker-image.json"
+                        ),
+                        Err(LedgerError::Io(_))
+                    ));
+                } else if let Some(mut permit) = permit.take() {
                     let cid = "c".repeat(64);
                     assert!(matches!(
                         permit.bind_container(&cid),
@@ -3295,6 +3511,305 @@ mod tests {
             assert_eq!(unsafe { libc::fchown(directory.as_raw_fd(), 0, !0) }, 0);
         }
         assert!(fixture.open("ledger").is_ok());
+    }
+
+    #[test]
+    fn image_load_permit_syncs_unknown_and_holds_the_same_ledger_lock() {
+        let fixture = Fixture::new();
+        let ledger = fixture.ledger();
+        let before = ledger.snapshot().unwrap();
+        let permit = ledger
+            .begin_worker_image_load(&authority("policy-1"), "/immutable/worker-image.json")
+            .unwrap();
+        let on_disk: State =
+            serde_json::from_slice(&fs::read(fixture.path().join(STATE)).unwrap()).unwrap();
+        assert_eq!(on_disk.worker_image_load.as_ref(), Some(permit.receipt()));
+        assert_eq!(permit.receipt().outcome, WorkerImageLoadOutcome::Unknown);
+        fixture.child("busy");
+        let completed = permit.complete().unwrap();
+        assert_eq!(completed.outcome, WorkerImageLoadOutcome::Completed);
+        assert_eq!(
+            (completed.claimed_revision, completed.updated_revision),
+            (2, 3)
+        );
+        let reopened = fixture.open("ledger").unwrap();
+        assert_eq!(
+            reopened.worker_image_load().unwrap(),
+            Some(completed.clone())
+        );
+        assert_eq!(
+            reopened.publication_status().unwrap().worker_image_load,
+            Some(completed)
+        );
+        assert_eq!(reopened.snapshot().unwrap().storage, before.storage);
+        assert_eq!(reopened.snapshot().unwrap().entries, before.entries);
+    }
+
+    #[test]
+    fn image_load_process_exit_blocks_new_work_and_publication_without_replay() {
+        let fixture = Fixture::new();
+        let ledger = fixture.ledger();
+        fixture.child("image-load-crash");
+        let receipt = fixture
+            .open("ledger")
+            .unwrap()
+            .worker_image_load()
+            .unwrap()
+            .unwrap();
+        assert_eq!(receipt.outcome, WorkerImageLoadOutcome::Unknown);
+        let before = fs::read(fixture.path().join(STATE)).unwrap();
+        for config in [
+            receipt.configuration.as_str(),
+            "/immutable/replacement.json",
+        ] {
+            assert!(matches!(
+                ledger.begin_worker_image_load(&receipt.authority, config),
+                Err(LedgerError::NotQuiescent)
+            ));
+        }
+        let (snapshot, request) = context("a", receipt.updated_revision);
+        assert!(matches!(
+            ledger.claim(&request, |_| Ok(runtime_context(snapshot, 110))),
+            Err(LedgerError::NotQuiescent)
+        ));
+        let (snapshot, request) = storage_context("a", receipt.updated_revision);
+        assert!(matches!(
+            ledger.reserve_storage(&request, |_| Ok(snapshot)),
+            Err(LedgerError::NotQuiescent)
+        ));
+        // Publication does not depend on the current plan declaring any Worker.
+        let request = publication(&ledger, "remove-workers", "policy-no-workers");
+        assert!(matches!(
+            ledger.begin_publication(&request),
+            Err(LedgerError::NotQuiescent)
+        ));
+        assert_eq!(fs::read(fixture.path().join(STATE)).unwrap(), before);
+    }
+
+    #[test]
+    fn image_load_recovery_requires_exact_revision_and_locked_stopped_backend_proof() {
+        let fixture = Fixture::new();
+        let ledger = fixture.ledger();
+        let permit = ledger
+            .begin_worker_image_load(&authority("policy-1"), "/immutable/worker-image.json")
+            .unwrap();
+        let receipt = permit.receipt().clone();
+        drop(permit);
+        let before = fs::read(fixture.path().join(STATE)).unwrap();
+        assert!(matches!(
+            ledger.recover_worker_image_load(1, 2, |_| panic!("stale revision must not collect")),
+            Err(LedgerError::StaleRevision)
+        ));
+        assert!(matches!(
+            ledger.recover_worker_image_load(2, 1, |_| panic!("wrong load must not collect")),
+            Err(LedgerError::Conflict)
+        ));
+        assert!(matches!(
+            ledger.recover_worker_image_load(2, 2, |_| Err("daemon still running".into())),
+            Err(LedgerError::Context)
+        ));
+        assert_eq!(fs::read(fixture.path().join(STATE)).unwrap(), before);
+        let recovered = ledger
+            .recover_worker_image_load(2, 2, |observed| {
+                assert_eq!(observed, &receipt);
+                assert!(matches!(ledger.snapshot(), Err(LedgerError::Busy)));
+                Ok(())
+            })
+            .unwrap();
+        assert_eq!(recovered.outcome, WorkerImageLoadOutcome::Recovered);
+        assert_eq!(recovered.updated_revision, 3);
+        assert!(matches!(
+            ledger
+                .recover_worker_image_load(3, 2, |_| panic!("terminal load cannot recover again")),
+            Err(LedgerError::Conflict)
+        ));
+        let next = ledger
+            .begin_worker_image_load(&authority("policy-1"), "/immutable/next.json")
+            .unwrap();
+        assert_eq!(next.receipt().claimed_revision, 4);
+        drop(next);
+        assert_eq!(
+            fixture
+                .open("ledger")
+                .unwrap()
+                .worker_image_load()
+                .unwrap()
+                .unwrap()
+                .outcome,
+            WorkerImageLoadOutcome::Unknown
+        );
+    }
+
+    #[test]
+    fn image_load_write_failures_never_grant_or_erase_uncertainty() {
+        for mode in ["image-load-write-failure", "image-load-complete-failure"] {
+            let fixture = Fixture::new();
+            let ledger = fixture.ledger();
+            fixture.child(mode);
+            assert!(fixture.path().join(STAGING).is_file());
+            let receipt = ledger.worker_image_load().unwrap();
+            if mode == "image-load-write-failure" {
+                assert!(receipt.is_none());
+                assert_eq!(ledger.snapshot().unwrap().revision, 1);
+                assert!(matches!(
+                    ledger.begin_worker_image_load(
+                        &authority("policy-1"),
+                        "/immutable/worker-image.json"
+                    ),
+                    Err(LedgerError::Io(_))
+                ));
+            } else {
+                assert_eq!(receipt.unwrap().outcome, WorkerImageLoadOutcome::Unknown);
+                assert_eq!(ledger.snapshot().unwrap().revision, 2);
+                assert!(matches!(
+                    ledger.recover_worker_image_load(2, 2, |_| Ok(())),
+                    Err(LedgerError::Io(_))
+                ));
+                assert_eq!(
+                    ledger.worker_image_load().unwrap().unwrap().outcome,
+                    WorkerImageLoadOutcome::Unknown
+                );
+            }
+            assert!(fixture.path().join(STAGING).is_file());
+        }
+    }
+
+    #[test]
+    fn image_load_terminal_revision_survives_publication_and_legacy_v3_is_readable() {
+        let fixture = Fixture::new();
+        let ledger = fixture.ledger();
+        let path = fixture.path().join(STATE);
+        let mut legacy: serde_json::Value =
+            serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        legacy.as_object_mut().unwrap().remove("workerImageLoad");
+        fs::write(&path, serde_json::to_vec(&legacy).unwrap()).unwrap();
+        assert!(
+            fixture
+                .open("ledger")
+                .unwrap()
+                .worker_image_load()
+                .unwrap()
+                .is_none()
+        );
+        let completed = ledger
+            .begin_worker_image_load(&authority("policy-1"), "/immutable/worker-image.json")
+            .unwrap()
+            .complete()
+            .unwrap();
+        let request = publication(&ledger, "publish-after-load", "policy-2");
+        ledger.begin_publication(&request).unwrap();
+        assert!(matches!(
+            ledger.begin_worker_image_load(
+                &request.expected_authority,
+                "/immutable/worker-image.json"
+            ),
+            Err(LedgerError::TransitionPending)
+        ));
+        ledger
+            .finish_publication(&request.operation_id, 4, |_, _| {
+                installed(&request.candidate)
+            })
+            .unwrap();
+        assert_eq!(
+            fixture.open("ledger").unwrap().worker_image_load().unwrap(),
+            Some(completed)
+        );
+        assert!(matches!(
+            ledger.begin_worker_image_load(
+                &request.expected_authority,
+                "/immutable/worker-image.json"
+            ),
+            Err(LedgerError::StaleAuthority)
+        ));
+        let next = ledger
+            .begin_worker_image_load(&request.candidate, "/immutable/next.json")
+            .unwrap()
+            .complete()
+            .unwrap();
+        assert_eq!((next.claimed_revision, next.updated_revision), (6, 7));
+    }
+
+    #[test]
+    fn image_load_malformed_state_and_revision_overflow_fail_closed() {
+        let fixture = Fixture::new();
+        let ledger = fixture.ledger();
+        let path = fixture.path().join(STATE);
+        let initial = fs::read(&path).unwrap();
+        for invalid in [
+            "relative.json",
+            "/../config",
+            "/a//config",
+            "/a/./config",
+            "/a/config\n",
+            &format!("/{}", "a".repeat(4096)),
+        ] {
+            assert!(matches!(
+                ledger.begin_worker_image_load(&authority("policy-1"), invalid),
+                Err(LedgerError::Invalid(_))
+            ));
+            assert_eq!(fs::read(&path).unwrap(), initial);
+        }
+        drop(
+            ledger
+                .begin_worker_image_load(&authority("policy-1"), "/immutable/worker-image.json")
+                .unwrap(),
+        );
+        let original: serde_json::Value =
+            serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        for (field, value) in [
+            ("claimedRevision", serde_json::json!(0)),
+            ("updatedRevision", serde_json::json!(1)),
+            ("outcome", serde_json::json!("completed")),
+            ("configuration", serde_json::json!("/a/../b")),
+            ("extra", serde_json::json!(true)),
+        ] {
+            let mut changed = original.clone();
+            changed["workerImageLoad"][field] = value;
+            fs::write(&path, serde_json::to_vec(&changed).unwrap()).unwrap();
+            assert!(fixture.open("ledger").is_err(), "accepted invalid {field}");
+        }
+        let mut changed = original.clone();
+        changed["workerImageLoad"]["authority"]["revision"] = serde_json::json!("stale");
+        fs::write(&path, serde_json::to_vec(&changed).unwrap()).unwrap();
+        assert!(fixture.open("ledger").is_err());
+        let mut overflow = original;
+        overflow["revision"] = serde_json::json!(u64::MAX);
+        overflow["workerImageLoad"]["claimedRevision"] = serde_json::json!(u64::MAX);
+        overflow["workerImageLoad"]["updatedRevision"] = serde_json::json!(u64::MAX);
+        let bytes = serde_json::to_vec(&overflow).unwrap();
+        fs::write(&path, &bytes).unwrap();
+        assert!(matches!(
+            ledger.recover_worker_image_load(u64::MAX, u64::MAX, |_| Ok(())),
+            Err(LedgerError::Full)
+        ));
+        assert_eq!(fs::read(&path).unwrap(), bytes);
+    }
+
+    #[test]
+    fn image_load_unknown_cannot_hide_inside_pending_publication() {
+        let fixture = Fixture::new();
+        let ledger = fixture.ledger();
+        let request = publication(&ledger, "pending", "policy-2");
+        ledger.begin_publication(&request).unwrap();
+        let path = fixture.path().join(STATE);
+        let mut state: State = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        state.revision = 3;
+        state.worker_image_load = Some(WorkerImageLoadReceipt {
+            authority: request.expected_authority,
+            configuration: "/immutable/worker-image.json".into(),
+            outcome: WorkerImageLoadOutcome::Unknown,
+            claimed_revision: 3,
+            updated_revision: 3,
+        });
+        fs::write(&path, serde_json::to_vec(&state).unwrap()).unwrap();
+        assert!(matches!(
+            ledger.finish_publication("pending", 3, |_, _| panic!("invalid state cannot publish")),
+            Err(LedgerError::Invalid(_))
+        ));
+        assert!(matches!(
+            ledger.cancel_publication("pending", 3, |_, _| panic!("invalid state cannot cancel")),
+            Err(LedgerError::Invalid(_))
+        ));
     }
 
     #[test]

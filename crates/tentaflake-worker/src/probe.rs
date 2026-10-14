@@ -114,6 +114,93 @@ pub(super) fn collect(config: &Config) -> Result<Snapshot> {
     Ok(snapshot)
 }
 
+#[derive(Debug, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(super) struct Maintenance {
+    schema_version: u8,
+    agent: String,
+    running_entries: usize,
+    jobs_entries: usize,
+}
+
+pub(super) fn maintenance(config: &Config) -> Result<Maintenance> {
+    if unsafe { libc::geteuid() } != 0 {
+        return Err("worker maintenance requires the root state owner".into());
+    }
+    let reopen = || tentaflake_admission::protected_path::open_root(&config.state_dir, 0);
+    let state = reopen()?;
+    observe_maintenance(config, &state, reopen)
+}
+
+// Empty private state is only one maintenance prerequisite, never proof that
+// the runtime daemon has no outstanding operation. The host guard owns that
+// separate evidence and holds the outer fence across this read-only command.
+fn observe_maintenance(
+    config: &Config,
+    state: &File,
+    reopen: impl Fn() -> Result<File>,
+) -> Result<Maintenance> {
+    let deadline = Instant::now() + Duration::from_secs(2);
+    let identity = Identity::read(state)?;
+    identity.directory(identity.uid, &[0o750])?;
+    if identity.gid != config.container_gid {
+        return Err("worker maintenance state group mismatch".into());
+    }
+    let (_lock, lock_identity) = queue_lock(state, identity.uid)?;
+    let mut directories = Vec::new();
+    for name in ["running", "jobs"] {
+        let directory = child(state, name)?;
+        let directory_identity = Identity::read(&directory)?;
+        directory_identity.directory(identity.uid, &[0o700])?;
+        // max_entries=0 refuses the FIRST non-dot entry, including incomplete
+        // staging files or orphan dispatch directories; it never reads jobs.
+        queue::scan(directory.as_raw_fd(), 0, 0)
+            .map_err(|_| "worker maintenance requires empty running and jobs directories")?;
+        directories.push((name, directory, directory_identity));
+        if Instant::now() >= deadline {
+            return Err("worker maintenance observation deadline".into());
+        }
+    }
+    unchanged(state, &identity)?;
+    unchanged(&reopen()?, &identity)?;
+    let current_lock = open_file_at(state.as_raw_fd(), OsStr::new(".queue.lock"))
+        .map(File::from)
+        .map_err(|_| "worker maintenance queue lock changed")?;
+    unchanged(&current_lock, &lock_identity)?;
+    for (name, directory, before) in directories {
+        unchanged(&directory, &before)?;
+        unchanged(&child(state, name)?, &before)?;
+    }
+    if Instant::now() >= deadline {
+        return Err("worker maintenance observation deadline".into());
+    }
+    Ok(Maintenance {
+        schema_version: 1,
+        agent: config.agent.clone(),
+        running_entries: 0,
+        jobs_entries: 0,
+    })
+}
+
+fn queue_lock(state: &File, owner: u32) -> Result<(File, Identity)> {
+    let lock = open_file_at(state.as_raw_fd(), OsStr::new(".queue.lock"))
+        .map(File::from)
+        .map_err(|_| "worker probe queue lock missing or unsafe")?;
+    let lock_identity = Identity::read(&lock)?;
+    if lock_identity.uid != owner
+        || lock_identity.mode != (libc::S_IFREG | 0o600)
+        || lock_identity.links != 1
+        || lock_identity.bytes != 0
+    {
+        return Err("worker probe queue lock ownership or mode mismatch".into());
+    }
+    if unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_SH | libc::LOCK_NB) } != 0 {
+        return Err("worker probe queue busy or unavailable".into());
+    }
+
+    Ok((lock, lock_identity))
+}
+
 // The public entrypoint authenticates the root-owned absolute path. Keeping
 // this observer relative to held, owned directories also lets filesystem tests
 // exercise the same modes/traversal from their explicit private fixture FDs.
@@ -134,20 +221,7 @@ fn observe(config: &Config, state: &File, workspace: &File) -> Result<(Snapshot,
     {
         return Err("worker probe workspace ownership or mode mismatch".into());
     }
-    let lock = open_file_at(state.as_raw_fd(), OsStr::new(".queue.lock"))
-        .map(File::from)
-        .map_err(|_| "worker probe queue lock missing or unsafe")?;
-    let lock_identity = Identity::read(&lock)?;
-    if lock_identity.uid != owner
-        || lock_identity.mode != (libc::S_IFREG | 0o600)
-        || lock_identity.links != 1
-        || lock_identity.bytes != 0
-    {
-        return Err("worker probe queue lock ownership or mode mismatch".into());
-    }
-    if unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_SH | libc::LOCK_NB) } != 0 {
-        return Err("worker probe queue busy or unavailable".into());
-    }
+    let (lock, lock_identity) = queue_lock(state, owner)?;
 
     let mut directories = Vec::new();
     for name in ["pending", "running", "approvals", "jobs", "results"] {
@@ -369,6 +443,8 @@ mod tests {
             fs::write(&lock, []).unwrap();
             fs::set_permissions(lock, fs::Permissions::from_mode(0o600)).unwrap();
             let config = Config {
+                admission_cli: None,
+                maintenance_fence: None,
                 agent: "fixture".into(),
                 backend: "docker".into(),
                 runtime: root.join("must-not-execute"),
@@ -420,6 +496,85 @@ mod tests {
     impl Drop for Fixture {
         fn drop(&mut self) {
             let _ = fs::remove_dir_all(&self.root);
+        }
+    }
+
+    #[test]
+    fn maintenance_proves_empty_private_work_without_workspace_or_disclosure() {
+        let f = Fixture::new();
+        f.request("pending", "private_pending_job");
+        fs::remove_dir_all(&f.config.workspace).unwrap();
+        let state = open_root(&f.config.state_dir).unwrap();
+        let before = Identity::read(&state).unwrap();
+        let snapshot =
+            observe_maintenance(&f.config, &state, || open_root(&f.config.state_dir)).unwrap();
+        assert_eq!(
+            serde_json::to_value(snapshot).unwrap(),
+            serde_json::json!({
+                "schemaVersion": 1, "agent": "fixture", "runningEntries": 0, "jobsEntries": 0,
+            })
+        );
+        unchanged(&state, &before).unwrap();
+        assert!(
+            f.config
+                .state_dir
+                .join("pending/private_pending_job.json")
+                .exists()
+        );
+    }
+
+    #[test]
+    fn maintenance_refuses_unknown_jobs_and_running_staging_without_cleanup() {
+        for (directory, name, is_dir) in
+            [("running", ".partial.new", false), ("jobs", "orphan", true)]
+        {
+            let f = Fixture::new();
+            let path = f.config.state_dir.join(directory).join(name);
+            if is_dir {
+                fs::create_dir(&path).unwrap();
+            } else {
+                fs::write(&path, b"private-job-content").unwrap();
+            }
+            let state = open_root(&f.config.state_dir).unwrap();
+            let error = observe_maintenance(&f.config, &state, || open_root(&f.config.state_dir))
+                .unwrap_err();
+            assert!(error.contains("empty running and jobs"));
+            assert!(!error.contains(name));
+            assert!(path.exists());
+        }
+    }
+
+    #[test]
+    fn maintenance_refuses_missing_unsafe_busy_and_swapped_state() {
+        for mode in ["missing", "unsafe", "symlink", "busy", "swap", "late-job"] {
+            let f = Fixture::new();
+            let state = open_root(&f.config.state_dir).unwrap();
+            let jobs = f.config.state_dir.join("jobs");
+            let lock = File::open(f.config.state_dir.join(".queue.lock")).unwrap();
+            match mode {
+                "missing" => fs::remove_dir(&jobs).unwrap(),
+                "unsafe" => fs::set_permissions(&jobs, fs::Permissions::from_mode(0o777)).unwrap(),
+                "symlink" => {
+                    fs::remove_dir(&jobs).unwrap();
+                    symlink(&f.config.workspace, &jobs).unwrap();
+                }
+                "busy" => assert_eq!(
+                    unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) },
+                    0
+                ),
+                _ => {}
+            }
+            let result = observe_maintenance(&f.config, &state, || {
+                if mode == "swap" {
+                    fs::rename(&f.config.state_dir, f.root.join("old-state")).unwrap();
+                    fs::create_dir(&f.config.state_dir).unwrap();
+                }
+                if mode == "late-job" {
+                    fs::write(jobs.join("unknown"), b"private").unwrap();
+                }
+                open_root(&f.config.state_dir)
+            });
+            assert!(result.is_err(), "{mode}");
         }
     }
 

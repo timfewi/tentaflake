@@ -126,6 +126,8 @@ let
     };
     instances = lib.genAttrs instanceNames instance;
     inherit volumes runtimes;
+    inherit (config.tentaflake.worker.maintenance) workers;
+    workerImage = config.tentaflake.worker.maintenance.image;
     tools = {
       cli = "${pkgs.callPackage ../pkgs/tentaflake-cli { }}/bin/tentaflake";
       systemctl = "${pkgs.systemd}/bin/systemctl";

@@ -65,6 +65,13 @@ This repo is a GENERIC template. NEVER commit domain-specific code (company conf
 hardware configs, API keys, secrets, agent SOUL.md/skills written for specific deployments).
 Domain-specific work belongs in FORKS, not here.
 
+Keep the public host API independent of personal infrastructure and of any
+particular UI repository. Separate clients must be buildable and usable against
+the documented API without private dependencies. Configure hostnames, identity,
+credentials and deployment policy only in consumer repositories. This also
+preserves a future open-source release of the separate UI; it grants no authority
+to publish that client.
+
 ## Keep Docs In Sync
 
 After any change that alters behavior, options, or usage, verify the docs are
@@ -213,6 +220,11 @@ are already published or require access to another repository for public checks.
   abandoned running state. Recovery requires exact container ownership and
   retains unknown outcomes. Bound aggregate inbox and pending/running capacity;
   keep approval and existing-state migration semantics in `docs/13-disposable-worker.md`.
+  With host admission, mutations also require the published immutable authority
+  and an inherited common host fence. Image loads persist Unknown before dispatch;
+  uncertain loads block maintenance until explicit stopped-backend recovery.
+  Include old/new services, path watchers, image loaders and private running/jobs
+  state in maintenance inventory. Fencing alone enables no Worker capability.
 - Restic backups retain filesystem boundaries; selected managed quota mounts
   are separate sources and required mounts. Verify workspace restore as well
   as ordinary state when changing backup or quota behavior.

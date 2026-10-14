@@ -81,6 +81,9 @@ fn actual_cli_rejects_all_malformed_commands_before_layout_mutation() {
         &["deny"],
         &["deny", "valid", "extra"],
         &["probe", "extra"],
+        &["maintenance", "extra"],
+        &["--maintenance-fence-fd", "0", "drain"],
+        &["--maintenance-fence-fd", "3", "maintenance"],
         &["unknown"],
         &[],
     ] {
@@ -125,4 +128,69 @@ fn actual_probe_refuses_incomplete_layout_without_repair_or_partial_snapshot() {
     assert_eq!(identity(&state), before);
     assert_eq!(fs::read_dir(&state).unwrap().count(), 0);
     assert_eq!(fs::read_dir(f.root.join("workspace")).unwrap().count(), 0);
+}
+
+#[test]
+fn enforced_mutations_delegate_before_any_local_layout_or_queue_work() {
+    let f = Fixture::new();
+    let mut config: serde_json::Value =
+        serde_json::from_slice(&fs::read(&f.config).unwrap()).unwrap();
+    config["admission_cli"] =
+        "/nix/store/00000000000000000000000000000000-missing-worker-guard/bin/tentaflake".into();
+    fs::write(&f.config, serde_json::to_vec(&config).unwrap()).unwrap();
+    let state = f.root.join("state");
+    let before = identity(&state);
+    for args in [&["drain"][..], &["approve", "job_1"], &["deny", "job_1"]] {
+        let output = Command::new(env!("CARGO_BIN_EXE_tentaflake-worker"))
+            .arg("--config")
+            .arg(&f.config)
+            .args(args)
+            .env("TENTAFLAKE_WORKER_GUARDED", "1")
+            .env("TENTAFLAKE_MAINTENANCE_FENCE_FD", "3")
+            .output()
+            .unwrap();
+        assert!(!output.status.success());
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains("delegate worker to host admission")
+        );
+        assert_eq!(identity(&state), before);
+        assert_eq!(fs::read_dir(&state).unwrap().count(), 0);
+    }
+    let output = f.command(
+        &f.config,
+        &["--maintenance-fence-fd", "2147483647", "drain"],
+    );
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("maintenance fence"));
+    assert_eq!(identity(&state), before);
+    assert_eq!(fs::read_dir(&state).unwrap().count(), 0);
+}
+
+#[test]
+fn maintenance_and_invalid_admission_configuration_never_repair_state() {
+    let f = Fixture::new();
+    let state = f.root.join("state");
+    let before = identity(&state);
+    assert!(!f.command(&f.config, &["maintenance"]).status.success());
+    assert!(
+        !f.command(&f.config, &["--maintenance-fence-fd", "3", "drain"])
+            .status
+            .success()
+    );
+    let mut config: serde_json::Value =
+        serde_json::from_slice(&fs::read(&f.config).unwrap()).unwrap();
+    for cli in [
+        "/tmp/cli",
+        "/nix/store/short/bin/tentaflake",
+        "/nix/store/00000000000000000000000000000000-cli/../bin/tentaflake",
+        "/nix/store/00000000000000000000000000000000-cli/bin/other",
+    ] {
+        config["admission_cli"] = cli.into();
+        fs::write(&f.config, serde_json::to_vec(&config).unwrap()).unwrap();
+        let output = f.command(&f.config, &["drain"]);
+        assert!(!output.status.success());
+        assert!(String::from_utf8_lossy(&output.stderr).contains("immutable store"));
+    }
+    assert_eq!(identity(&state), before);
+    assert_eq!(fs::read_dir(&state).unwrap().count(), 0);
 }
