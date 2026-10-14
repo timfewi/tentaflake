@@ -219,6 +219,12 @@ are already published or require access to another repository for public checks.
   creation permission. Public catalog/grant revisions bind their actual content,
   independently of login consumption and the private core CAS counter. Preserve
   bounded session refusal and scope-bound pagination without truncating grants.
+  Plan previews derive host-create authority only from installed template
+  principals. Reuse the core queue validation under an existing-only HostFence;
+  do not allocate, register GC roots or write ledger rows during preview. Cache
+  exact candidates with bounded monotonic/wall expiry, recheck authority before
+  responding, and never equate a valid plan with a reservation or runtime grant.
+  Public creation/lifecycle remain unavailable until their commit path is verified.
   The HTTPS client uses protected caller-owned bearer files and the same wire
   contract. Explicit `--ca-file` accepts bounded protected public CA material;
   preserve default trust, certificate/hostname verification and credential rules.

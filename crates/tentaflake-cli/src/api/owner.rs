@@ -19,18 +19,19 @@ pub(super) struct Api {
     configuration: PathBuf,
     plan: PathBuf,
     sessions: Mutex<Sessions>,
+    plans: Mutex<super::planning::Cache>,
     work: Arc<Semaphore>,
     #[cfg(test)]
     fixture: Option<Arc<operation_tests::Fixture>>,
 }
 
 #[derive(Clone)]
-struct Current {
-    authority: PublishedAuthority,
+pub(super) struct Current {
+    pub(super) authority: PublishedAuthority,
     policy: String,
-    binding: String,
+    pub(super) binding: String,
     epoch: String,
-    host_policy: tentaflake_admission::HostPolicy,
+    host_plan: Arc<crate::admission_host::HostPlan>,
     catalog: super::catalog::Catalog,
 }
 
@@ -60,6 +61,7 @@ pub(super) fn serve(configuration: &Path, plan: &Path) -> Result<(), String> {
         configuration: configuration.into(),
         plan: plan.into(),
         sessions: Mutex::new(sessions),
+        plans: Mutex::new(super::planning::Cache::default()),
         work: Arc::new(Semaphore::new(MAX_CONNECTIONS)),
         #[cfg(test)]
         fixture: None,
@@ -155,11 +157,15 @@ impl Api {
             authority,
             binding,
             catalog: super::catalog::Catalog::project(&plan)?,
-            host_policy: plan.policy,
+            host_plan: Arc::new(plan),
         })
     }
 
-    fn grants(&self, current: &Current, auth: &Authenticated) -> Result<Vec<Value>, AuthError> {
+    fn grants(
+        &self,
+        current: &Current,
+        auth: &Authenticated,
+    ) -> Result<(Vec<Value>, u64), AuthError> {
         let context = ApiContext {
             authority: current.authority.clone(),
             host: self.config.host.clone(),
@@ -167,21 +173,35 @@ impl Api {
             epoch: current.epoch.clone(),
             now: Clock::now()?.unix_seconds,
         };
-        super::catalog::grants(
-            self.config.catalog_read_grant.as_ref(),
-            self.durable_grants(&context)?,
+        let (revision, durable) = self.durable_grants(&context)?;
+        let create = crate::admission_template::creation_grant(
+            &current.host_plan,
+            &self.config.host,
+            &auth.principal_id,
         )
+        .map_err(|_| AuthError::Unavailable)?;
+        Ok((
+            super::catalog::grants(
+                self.config
+                    .catalog_read_grant
+                    .clone()
+                    .into_iter()
+                    .chain(create),
+                durable,
+            )?,
+            revision,
+        ))
     }
 
-    fn durable_grants(&self, context: &ApiContext) -> Result<Vec<ActionGrant>, AuthError> {
+    fn durable_grants(&self, context: &ApiContext) -> Result<(u64, Vec<ActionGrant>), AuthError> {
         #[cfg(test)]
         if let Some(fixture) = &self.fixture {
             return fixture.grants(context);
         }
-        Ok(Ledger::open(Path::new(crate::admission_runtime::LEDGER))
+        let snapshot = Ledger::open(Path::new(crate::admission_runtime::LEDGER))
             .and_then(|ledger| ledger.api_snapshot(context))
-            .map_err(|_| AuthError::Unavailable)?
-            .grants)
+            .map_err(|_| AuthError::Unavailable)?;
+        Ok((snapshot.grants_revision, snapshot.grants))
     }
 
     fn public_authority(
@@ -189,13 +209,153 @@ impl Api {
         current: &Current,
         auth: &Authenticated,
         sessions: &Sessions,
-    ) -> Result<(Vec<Value>, Value), AuthError> {
-        let grants = self.grants(current, auth)?;
+    ) -> Result<(Vec<Value>, Value, u64), AuthError> {
+        let (grants, native) = self.grants(current, auth)?;
         let fresh = self.current()?;
         sessions.check_active(auth, fresh.context(&self.config), Clock::now()?)?;
         let revision =
             super::catalog::grants_revision(&self.config.host, &auth.principal_id, &grants);
-        Ok((grants, fresh.revisions(&revision)))
+        Ok((grants, fresh.revisions(&revision), native))
+    }
+
+    fn preview(
+        &self,
+        current: &Current,
+        prepared: super::planning::Prepared,
+        started: Clock,
+        finish: impl FnOnce(super::planning::Prepared) -> Result<Reply, AuthError>,
+    ) -> Result<Reply, AuthError> {
+        #[cfg(test)]
+        if let Some(fixture) = &self.fixture {
+            fixture.preview(&prepared)?;
+            return finish(prepared);
+        }
+        crate::admission_runtime::require_root().map_err(|_| AuthError::Unavailable)?;
+        let fence = tentaflake_admission::host_fence::exclusive_existing()
+            .map_err(|_| AuthError::Unavailable)?;
+        let ledger = Ledger::open(Path::new(crate::admission_runtime::LEDGER))
+            .map_err(|_| AuthError::Unavailable)?;
+        let inventory =
+            crate::admission_creation::maintenance_inventory(&ledger, &current.authority, &fence)
+                .map_err(|_| AuthError::Unavailable)?;
+        let context = ApiContext {
+            authority: current.authority.clone(),
+            host: prepared.host.clone(),
+            principal: prepared.principal.clone(),
+            epoch: current.epoch.clone(),
+            now: Clock::now()?.unix_seconds,
+        };
+        let plan = &current.host_plan;
+        let mut specs: Vec<_> = plan
+            .volumes
+            .iter()
+            .map(|volume| volume.spec.clone())
+            .collect();
+        specs.extend(inventory.volumes);
+        specs.extend(prepared.creation.volumes.iter().cloned());
+        ledger
+            .api_preview_create(
+                &context,
+                &prepared.operation_id,
+                &prepared.creation.environment,
+                prepared.native_grants_revision,
+                |authority, snapshot, _| {
+                    if authority != &prepared.authority
+                        || authority != &current.authority
+                        || started.monotonic.elapsed() >= super::planning::DEADLINE
+                    {
+                        return Err("preview authority or deadline changed".into());
+                    }
+                    crate::admission_runtime::installed(&self.plan)?;
+                    prepared.check_source(plan)?;
+                    crate::admission_storage::check_creation_space(
+                        &specs,
+                        &snapshot.storage,
+                        crate::admission_storage::CreationTargets::New(&prepared.creation.volumes),
+                        plan.physical_space_headroom_bytes,
+                    )?;
+                    crate::admission_runtime::installed(&self.plan)?;
+                    if started.monotonic.elapsed() >= super::planning::DEADLINE {
+                        return Err("preview deadline exceeded".into());
+                    }
+                    Ok(tentaflake_admission::ledger::api::CreatePolicy {
+                        policy: plan.policy.clone(),
+                        create_grant: prepared.create_grant.clone(),
+                        issued_grants: prepared.creation.environment.grants.clone(),
+                    })
+                },
+            )
+            .map_err(super::planning::preview_error)?;
+        // The core lock is released; keep the outer fence through final public
+        // authority checks and cache admission so publication cannot interleave.
+        finish(prepared)
+    }
+
+    fn plan(
+        &self,
+        current: &Current,
+        auth: &Authenticated,
+        sessions: &Sessions,
+        request: &hyper::http::request::Parts,
+        body: &[u8],
+    ) -> Result<Reply, AuthError> {
+        if super::session::single(&request.headers, "content-type")? != Some("application/json") {
+            return Err(AuthError::Invalid);
+        }
+        let started = Clock::now()?;
+        let request = super::planning::Request::parse(body)?;
+        if crate::admission_template::creation_grant(
+            &current.host_plan,
+            &self.config.host,
+            &auth.principal_id,
+        )
+        .map_err(|_| AuthError::Unavailable)?
+        .is_none()
+        {
+            return Err(AuthError::Forbidden);
+        }
+        let (_, revisions, native) = self.public_authority(current, auth, sessions)?;
+        if !request.matches_revisions(&revisions) {
+            return Err(AuthError::PlanStale);
+        }
+        self.plans
+            .lock()
+            .map_err(|_| AuthError::Unavailable)?
+            .room(&current.binding, &revisions, native, started)?;
+        let final_clock = || {
+            let (_, fresh, native_after) = self.public_authority(current, auth, sessions)?;
+            if fresh != revisions || native_after != native {
+                return Err(AuthError::PlanStale);
+            }
+            let now = Clock::now()?;
+            super::planning::finish_clock(started, now)?;
+            Ok(now)
+        };
+        let Some(prepared) = super::planning::prepare(
+            &current.host_plan,
+            current,
+            &self.config,
+            request.clone(),
+            native,
+            started,
+        )?
+        else {
+            final_clock()?;
+            let reply = super::planning::unsupported(request, &auth.principal_id, started)?;
+            if reply.to_string().len() > super::MAX_BODY {
+                return Err(AuthError::Unavailable);
+            }
+            return Ok(json_reply(StatusCode::OK, reply));
+        };
+        self.preview(current, prepared, started, |prepared| {
+            let now = final_clock()?;
+            let reply = self
+                .plans
+                .lock()
+                .map_err(|_| AuthError::Unavailable)?
+                .insert(prepared, now)?;
+            Ok(json_reply(StatusCode::OK, reply))
+        })
     }
 
     fn operation(
@@ -311,6 +471,9 @@ impl Api {
         if request.headers.contains_key("upgrade") {
             return Err(AuthError::Unsupported);
         }
+        if path == "/api/v1/plans" && request.method == Method::POST {
+            return self.plan(&current, &auth, &sessions, &request, body);
+        }
         if let Some(operation) = operation {
             require_empty(body)?;
             // Resolve only under the authenticated installed authority. Even a
@@ -328,7 +491,7 @@ impl Api {
                 .catalog_read_grant
                 .as_ref()
                 .ok_or(AuthError::Forbidden)?;
-            let (_, revisions) = self.public_authority(&current, &auth, &sessions)?;
+            let (_, revisions, _) = self.public_authority(&current, &auth, &sessions)?;
             return page.reply(
                 &current.catalog,
                 &json!([
@@ -358,10 +521,10 @@ impl Api {
         }
         if path == "/api/v1/capabilities" && request.method == Method::GET {
             require_empty(body)?;
-            let (_, revisions) = self.public_authority(&current, &auth, &sessions)?;
+            let (_, revisions, _) = self.public_authority(&current, &auth, &sessions)?;
             return Ok(json_reply(
                 StatusCode::OK,
-                super::capabilities::project(&current.host_policy, revisions)?,
+                super::capabilities::project(&current.host_plan.policy, revisions)?,
             ));
         }
         // A valid login is not capability, resource or runtime acceptance.
@@ -375,7 +538,7 @@ impl Api {
         current: &Current,
         sessions: &Sessions,
     ) -> Result<Reply, AuthError> {
-        let (grants, revisions) = self.public_authority(current, auth, sessions)?;
+        let (grants, revisions, _) = self.public_authority(current, auth, sessions)?;
         // The wire session is bounded; do not truncate grants or prevent
         // unrelated receipt reads when this particular response cannot fit.
         if grants.len() > 256 {
@@ -462,6 +625,7 @@ pub(super) fn fixture() -> Arc<Api> {
             })
             .unwrap(),
         ),
+        plans: Mutex::new(super::planning::Cache::default()),
         work: Arc::new(Semaphore::new(1)),
         fixture: None,
     })

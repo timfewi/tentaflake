@@ -57,16 +57,18 @@ unchanged ancestry. It rejects Nix-store credential paths and equal operator/bea
 contents. Secrets do not appear in service arguments, responses or logs.
 
 The implemented routes are `GET /api/meta`, `GET/POST/DELETE /api/v1/session`,
-authenticated `GET /api/v1/capabilities`, catalog image/block lists and both operation reads described below. Discovery
+authenticated `GET /api/v1/capabilities`, catalog image/block lists,
+`POST /api/v1/plans` and both operation reads described below. Discovery
 reports an implemented backend because this service handles real requests; it
 does not assert that environment features exist. Sessions return the configured
-catalog grant, if any, and the current principal's exact durable resource grants.
+catalog grant, if any, the template-derived host creation grant, and the current
+principal's exact durable resource grants.
 Capabilities report the installed policy's ceilings after host
 and Research reserves, bounded by per-instance limits. These are declarations,
 not currently free capacity or live admission. Fractional ceilings that cannot
 fit the integer request protocol report zero. Resource actions remain disabled
 and both isolation choices explicitly lack API runtime acceptance. Other
-authenticated operations, including planning and environment lists, return
+authenticated operations, including environment lists and mutations, return
 `unsupported`; the real UI remains blocked on those
 implementations. Bearer authentication uses its independently configured file;
 cookie logout does not revoke that operator-managed credential.
@@ -87,7 +89,7 @@ tentaflake.api.catalogReadGrant = {
 
 This nonexpiring grant belongs to the immutable published API configuration, not
 to an environment or a login. It grants neither planning nor creation. Creation
-template principal lists remain the separate owner of future creation authority.
+template principal lists remain the separate owner of creation authority.
 The catalog exposes only deduplicated public image metadata from installed
 creation templates, validated against their retained original catalog. Private
 source names, commands, environment, paths and principal lists are never returned.
@@ -174,7 +176,41 @@ the generated API owner and installed CLI, using guest-only credentials and an
 explicitly trusted local TLS relay. Its queued/Unknown/success/abort, Pending and
 post-publication history assertions are written but have not run; unit fixtures
 alone do not prove that deployment.
-Public planning, creation, start and stop remain `501 unsupported`.
+Public creation, start and stop remain `501 unsupported`.
+
+## Installed-template planning
+
+`POST /api/v1/plans` and `tentaflake api … plan FILE` preview one exact installed
+creation template. The existing template `principals` list derives a single
+`environments.create` grant targeting the configured host; the session and
+preview use that same grant. Authentication or `catalog.read` alone is insufficient.
+Missing creation authority returns `403 forbidden`; mismatched request revisions
+return `409 plan_stale`. No additional principal allowlist is configured.
+
+The closed `PlanRequest` supports the template's exact offline container image
+and integer resources, a new empty workspace, null runtime and empty tool, skill
+and capability lists. A structurally valid unsupported choice returns a plan with
+`valid: false`; it is never silently downgraded, clamped or rebound. A valid plan
+returns server-generated environment/workspace IDs and proposed exact resource
+grants, without private source names, commands, environment or helper paths.
+
+Preview takes an existing host fence, reuses the ledger's atomic two-volume
+capacity decision, and reads the current physical pool without creating a lock,
+file, image, reservation, journal row or GC root. Pending or uncertain observation
+returns `503 unavailable`; proven native capacity exhaustion returns
+`409 quota_exceeded`. The fence remains held through final authority/auth checks.
+The owner caches at most 64 private plans and 2 MiB of candidate data, for at most
+300 seconds using both wall and monotonic time. Restart, expiry or changed bindings
+never reconstruct a missing plan under new authority. The cache holds exact
+candidate identities/specifications, not a second ledger or retained host plans.
+
+A valid preview reserves nothing and proves neither runtime admission nor
+successful creation. Public creation/start/stop remain unavailable and their
+feature flags stay disabled. Focused HTTP/Unix/HTTPS tests exercise planning and
+refusals with a private privileged-observer fixture; separate core tests exercise
+the real read-only ledger transition. The existing creation VM has assertions
+for the generated owner and installed CLI, including unchanged ledger/filesystem
+state, Pending and publication revocation; actual VM acceptance is still pending.
 
 ## Private ledger foundation
 
@@ -289,6 +325,8 @@ The client also provides `catalog blocks`, `environments`, `environment ID`, `pl
 `create FILE`, `start ID`, `stop ID`, `operation ID` and `recover`. These commands
 use the v1 contract; the current authentication service still refuses the
 unimplemented resource routes. JSON request files preserve their exact bytes.
+Planning needs no idempotency key and sends no mutation retry; obtain current
+`revisions` from the authenticated session for its request file.
 Creation and lifecycle mutations require an explicit `--epoch` from the session
 and a UUID `--key`; start/stop also require the unquoted `--revision` of the
 environment. The client sends a quoted `If-Match` header itself. It does not

@@ -64,10 +64,10 @@ impl Catalog {
 }
 
 pub(super) fn grants(
-    installed: Option<&ActionGrant>,
+    installed: impl IntoIterator<Item = ActionGrant>,
     mut durable: Vec<ActionGrant>,
 ) -> Result<Vec<Value>, AuthError> {
-    durable.extend(installed.cloned());
+    durable.extend(installed);
     durable.sort_by(|a, b| a.id.cmp(&b.id));
     if durable.windows(2).any(|pair| pair[0].id == pair[1].id) {
         return Err(AuthError::Unavailable);
@@ -253,7 +253,7 @@ mod tests {
             },
             expires_at: None,
         };
-        let a = grants(Some(&read), vec![resource.clone()]).unwrap();
+        let a = grants(Some(read.clone()), vec![resource.clone()]).unwrap();
         let b = grants(None, vec![resource.clone(), read.clone()]).unwrap();
         assert_eq!(a, b);
         assert_eq!(
@@ -268,7 +268,7 @@ mod tests {
             grants_revision("host", "owner", &a),
             grants_revision("host", "owner", &grants(None, vec![resource]).unwrap())
         );
-        assert!(grants(Some(&read), vec![read.clone()]).is_err());
+        assert!(grants(Some(read.clone()), vec![read.clone()]).is_err());
     }
 
     #[test]

@@ -8,6 +8,7 @@ mod control;
 mod credential;
 mod operations;
 mod owner;
+mod planning;
 mod server;
 mod session;
 

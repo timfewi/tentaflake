@@ -63,6 +63,8 @@ pub(crate) enum AuthError {
     Origin,
     Forbidden,
     CursorExpired,
+    PlanStale,
+    QuotaExceeded,
     RateLimited,
     Capacity,
     Unsupported,
@@ -80,6 +82,8 @@ impl AuthError {
             Self::Csrf => "csrf_failed",
             Self::Origin | Self::Forbidden => "forbidden",
             Self::CursorExpired => "cursor_expired",
+            Self::PlanStale => "plan_stale",
+            Self::QuotaExceeded => "quota_exceeded",
             Self::RateLimited | Self::Capacity => "rate_limited",
             Self::Unsupported => "unsupported",
             Self::NotFound => "not_found",
@@ -92,7 +96,7 @@ impl AuthError {
             Self::Invalid => 400,
             Self::Unauthenticated | Self::SessionExpired | Self::SessionRevoked => 401,
             Self::Csrf | Self::Origin | Self::Forbidden => 403,
-            Self::CursorExpired => 409,
+            Self::CursorExpired | Self::PlanStale | Self::QuotaExceeded => 409,
             Self::RateLimited | Self::Capacity => 429,
             Self::Unsupported => 501,
             Self::NotFound => 404,
@@ -531,7 +535,7 @@ fn valid_context(current: AuthContext<'_>) -> Result<(), AuthError> {
     Ok(())
 }
 
-fn single<'a>(headers: &'a HeaderMap, name: &str) -> Result<Option<&'a str>, AuthError> {
+pub(super) fn single<'a>(headers: &'a HeaderMap, name: &str) -> Result<Option<&'a str>, AuthError> {
     let mut values = headers.get_all(name).iter();
     let value = values
         .next()

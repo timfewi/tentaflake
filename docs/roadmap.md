@@ -160,7 +160,21 @@ all-target Clippy passes. The full fast gate passes 538 Rust tests, four intenti
 helpers ignored, plus static/helper checks. Security passes OSV for both lockfiles
 and scoped Semgrep with no findings. The existing creation VM now covers the
 generated owner/publication path; its evaluation and actual runtime acceptance
-remain pending. Planning and public creation remain `501`.
+remain pending. Public creation remains `501`.
+
+The planning slice adds `POST /plans` using the installed template principal
+policy as its only create-grant owner. Exact offline previews share the core
+queue validation and physical pool checks under an existing fence, without
+ledger/filesystem writes. A bounded volatile cache binds candidate IDs/specs and
+all revisions for at most 300 seconds; no preview authorizes dispatch. Focused
+checks pass 62 API and 11 template tests; Clippy passes. The full fast gate passes
+556 Rust tests, four intentional helpers ignored, plus static/helper checks. A
+new closed-request regression caught and fixed extra fields on Serde's tagged
+unit variant; the empty workspace variant now remains a closed object. Security
+currently stops on four new rustls 0.23.45 advisories (fixed in 0.23.46); dependency
+correction and a complete scan remain required. The existing creation VM covers
+unchanged state and publication/Pending refusals but has not run. Public
+create/start/stop remain `501`.
 
 The isolated operation-read slice implements both GET routes using original
 host/principal ownership and stored timestamps/revisions/results. Pending or

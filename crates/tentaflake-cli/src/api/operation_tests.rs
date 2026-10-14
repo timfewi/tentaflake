@@ -17,10 +17,20 @@ struct State {
     unavailable: bool,
     revoke_on_read: bool,
     grants: Vec<ActionGrant>,
+    grants_revision: u64,
+    grants_reads: usize,
+    revoke_after_grants: Option<usize>,
+    previews: usize,
+    change_on_preview: bool,
+    native_change_on_preview: bool,
+    preview_failure: Option<AuthError>,
 }
 
 impl Fixture {
-    pub(super) fn grants(&self, context: &ApiContext) -> Result<Vec<ActionGrant>, AuthError> {
+    pub(super) fn grants(
+        &self,
+        context: &ApiContext,
+    ) -> Result<(u64, Vec<ActionGrant>), AuthError> {
         let mut state = self.state.lock().unwrap();
         assert_eq!(context.principal, "operator");
         assert_eq!(context.host, "host-fixture");
@@ -29,10 +39,36 @@ impl Fixture {
             return Err(AuthError::Unavailable);
         }
         let grants = state.grants.clone();
-        if state.revoke_on_read {
+        state.grants_reads += 1;
+        if state.revoke_on_read || state.revoke_after_grants == Some(state.grants_reads) {
             state.current.binding.push_str("-changed");
         }
-        Ok(grants)
+        Ok((state.grants_revision, grants))
+    }
+    pub(super) fn preview(
+        &self,
+        prepared: &crate::api::planning::Prepared,
+    ) -> Result<(), AuthError> {
+        let mut state = self.state.lock().unwrap();
+        if state.pending || state.unavailable {
+            return Err(AuthError::Unavailable);
+        }
+        assert_eq!(prepared.authority, state.current.authority);
+        assert_eq!(prepared.host, "host-fixture");
+        assert_eq!(prepared.principal, "operator");
+        assert_eq!(prepared.native_grants_revision, state.grants_revision);
+        prepared.check_source(&state.current.host_plan).unwrap();
+        state.previews += 1;
+        if state.change_on_preview {
+            state.current.binding.push_str("-changed");
+        }
+        if state.native_change_on_preview {
+            state.grants_revision += 1;
+        }
+        if let Some(error) = state.preview_failure {
+            return Err(error);
+        }
+        Ok(())
     }
     pub(in crate::api) fn reads(&self) -> usize {
         self.state.lock().unwrap().reads
@@ -106,12 +142,14 @@ pub(in crate::api) fn fixture(state: ApiOperationState) -> (Arc<Api>, String, Ar
         revision: format!("sha256:{}", "1".repeat(64)),
         manifest_path: "/nix/store/00000000000000000000000000000000-private-authority".into(),
     };
+    let mut host_plan = crate::admission_oci::tests::template_plan_fixture();
+    host_plan.policy = serde_json::from_value(recorded["snapshot"]["policy"].clone()).unwrap();
     let current = Current {
         authority: authority.clone(),
         policy: "policy-fixture".into(),
         binding: "binding-fixture".into(),
         epoch: EPOCH.into(),
-        host_policy: serde_json::from_value(recorded["snapshot"]["policy"].clone()).unwrap(),
+        host_plan: Arc::new(host_plan),
         catalog: super::super::catalog::Catalog::default(),
     };
     let claimed = state != ApiOperationState::Queued;
@@ -140,6 +178,13 @@ pub(in crate::api) fn fixture(state: ApiOperationState) -> (Arc<Api>, String, Ar
             unavailable: false,
             revoke_on_read: false,
             grants: vec![],
+            grants_revision: 0,
+            grants_reads: 0,
+            revoke_after_grants: None,
+            previews: 0,
+            change_on_preview: false,
+            native_change_on_preview: false,
+            preview_failure: None,
         }),
     });
     let config: Config = serde_json::from_value(json!({
@@ -162,6 +207,7 @@ pub(in crate::api) fn fixture(state: ApiOperationState) -> (Arc<Api>, String, Ar
             configuration: "/uninstalled-api-fixture".into(),
             plan: "/uninstalled-plan-fixture".into(),
             sessions: Mutex::new(sessions),
+            plans: Mutex::new(crate::api::planning::Cache::default()),
             work: Arc::new(Semaphore::new(1)),
             fixture: Some(backend.clone()),
         }),
@@ -522,5 +568,220 @@ fn operation_queries_are_strict() {
                 );
             }
             assert_eq!(backend.state.lock().unwrap().reads, 0);
+        });
+}
+
+// These fixtures replace only the privileged preview observation. The same
+// installed-template reconstruction and HTTP/Unix/authentication path executes;
+// real lock, physical-slot and atomic no-write behavior have separate core/VM tests.
+pub(in crate::api) fn planning_fixture() -> (Arc<Api>, String, Arc<Fixture>) {
+    let (api, cookie, backend) = fixture(ApiOperationState::Succeeded);
+    let plan = crate::admission_template::tests::fixture_plan();
+    let mut state = backend.state.lock().unwrap();
+    state.current.catalog = crate::api::catalog::Catalog::project(&plan).unwrap();
+    state.current.host_plan = Arc::new(plan);
+    drop(state);
+    (api, cookie, backend)
+}
+
+pub(in crate::api) fn plan_request(backend: &Fixture, revisions: Value) -> Value {
+    let state = backend.state.lock().unwrap();
+    let plan = &state.current.host_plan;
+    let template = plan.creation_templates.values().next().unwrap();
+    let (_, settings) = template
+        .public_metadata(&plan.instances[&template.source_instance])
+        .unwrap();
+    json!({"name":"Example environment","config":settings,"workspace":{"kind":"new"},"revisions":revisions})
+}
+
+pub(in crate::api) fn prepared(clock: Clock) -> crate::api::planning::Prepared {
+    let (api, _, backend) = planning_fixture();
+    let current = backend.current().unwrap();
+    let request = plan_request(&backend, current.revisions("grants-fixture"));
+    let request =
+        crate::api::planning::Request::parse(&serde_json::to_vec(&request).unwrap()).unwrap();
+    crate::api::planning::prepare(&current.host_plan, &current, &api.config, request, 0, clock)
+        .unwrap()
+        .unwrap()
+}
+
+pub(in crate::api) async fn post_plan(
+    api: Arc<Api>,
+    cookie: &str,
+    csrf: &str,
+    payload: &[u8],
+) -> String {
+    let head = format!(
+        "POST /api/v1/plans HTTP/1.1\r\nHost: host.example.invalid\r\nOrigin: https://host.example.invalid\r\nCookie: {cookie}\r\nX-Tentaflake-CSRF: {csrf}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n",
+        payload.len()
+    );
+    server::tests::exchange(api, [head.as_bytes(), payload].concat()).await
+}
+
+#[test]
+fn planning_http_uses_exact_template_grant_and_returns_no_reservation() {
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap()
+        .block_on(async {
+            let (api, cookie, backend) = planning_fixture();
+            assert!(api.config.catalog_read_grant.is_none());
+            let session = body(&http(api.clone(), &cookie, "/api/v1/session").await, 200);
+            let grants = session["grants"].as_array().unwrap();
+            assert_eq!(grants.len(), 1);
+            assert_eq!(grants[0]["action"], "environments.create");
+            assert_eq!(
+                grants[0]["target"],
+                json!({"kind":"host","id":"host-fixture"})
+            );
+            let request = plan_request(&backend, session["revisions"].clone());
+            let before = serde_json::to_value(&backend.state.lock().unwrap().operation).unwrap();
+            let csrf = session["csrfToken"].as_str().unwrap();
+            let mut previous = None;
+            for _ in 0..2 {
+                let reply = post_plan(
+                    api.clone(),
+                    &cookie,
+                    csrf,
+                    &serde_json::to_vec(&request).unwrap(),
+                )
+                .await;
+                let plan = body(&reply, 200);
+                assert_eq!(plan["valid"], true);
+                assert_eq!(plan["ownerId"], "operator");
+                assert_eq!(plan["request"], request);
+                assert_eq!(plan["revisions"], session["revisions"]);
+                assert_eq!(plan["resolved"]["grantIds"], json!([grants[0]["id"]]));
+                assert_eq!(
+                    plan["resolved"]["resources"],
+                    request["config"]["resources"]
+                );
+                assert_eq!(plan["resolved"]["isolation"], "container");
+                assert_eq!(plan["resolved"]["agentRuntime"], Value::Null);
+                assert_eq!(plan["resolved"]["blocks"], json!([]));
+                assert_eq!(plan["resolved"]["capabilities"], json!([]));
+                assert!(
+                    plan["resolved"]["environmentId"]
+                        .as_str()
+                        .unwrap()
+                        .starts_with("env-")
+                );
+                assert!(
+                    plan["resolved"]["workspaceId"]
+                        .as_str()
+                        .unwrap()
+                        .starts_with("ws-")
+                );
+                let issued = plan["resolved"]["proposedGrants"].as_array().unwrap();
+                assert_eq!(issued.len(), 2);
+                for grant in issued {
+                    let target = if grant["target"]["kind"] == "environment" {
+                        "environmentId"
+                    } else {
+                        "workspaceId"
+                    };
+                    assert_eq!(grant["target"]["id"], plan["resolved"][target]);
+                    assert_ne!(grant["action"], "environments.create");
+                }
+                for private in [
+                    "agent-fixture",
+                    "public-base",
+                    "/nix/store/",
+                    "/var/lib/",
+                    "sourceRevision",
+                    "helpers",
+                    "principals",
+                ] {
+                    assert!(!reply.contains(private), "private projection: {private}");
+                }
+                if let Some(previous) = previous {
+                    assert_ne!(plan["id"], previous);
+                }
+                previous = Some(plan["id"].clone());
+                assert!(reply.contains("cache-control: no-store"));
+            }
+            let state = backend.state.lock().unwrap();
+            assert_eq!(state.previews, 2);
+            assert_eq!(state.grants_revision, 0);
+            assert_eq!(serde_json::to_value(&state.operation).unwrap(), before);
+            assert!(state.grants.is_empty());
+        });
+}
+
+#[test]
+fn planning_http_refuses_auth_staleness_pending_and_exactness_without_downgrades() {
+    tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap().block_on(async {
+        let (api,cookie,backend)=planning_fixture();
+        let session=body(&http(api.clone(),&cookie,"/api/v1/session").await,200);
+        let csrf=session["csrfToken"].as_str().unwrap();
+        let exact=plan_request(&backend,session["revisions"].clone());
+        let payload=serde_json::to_vec(&exact).unwrap();
+        body(&post_plan(api.clone(),&cookie,"wrong",&payload).await,403);
+        body(&post_plan(api.clone(),&format!("__Host-tentaflake-session={}","0".repeat(64)),csrf,&payload).await,401);
+        body(&post_plan(api.clone(),&cookie,csrf,b"not-json").await,400);
+        let mut stale=exact.clone(); stale["revisions"]["host"]=json!("old-epoch");
+        assert_eq!(body(&post_plan(api.clone(),&cookie,csrf,&serde_json::to_vec(&stale).unwrap()).await,409)["error"]["code"],"plan_stale");
+        for field in ["isolation","agentRuntime","tools","skills","capabilities","resources","workspace"] {
+            let mut unsupported=exact.clone();
+            match field {
+                "isolation"=>unsupported["config"][field]=json!("guest-kernel"),
+                "agentRuntime"=>unsupported["config"][field]=json!("uninstalled-runtime"),
+                "tools"|"skills"|"capabilities"=>unsupported["config"][field]=json!(["not-installed"]),
+                "resources"=>unsupported["config"][field]["cpu"]=json!(2),
+                _=>unsupported[field]=json!({"kind":"retained","workspaceId":"private-existing","revision":"old"}),
+            }
+            let plan=body(&post_plan(api.clone(),&cookie,csrf,&serde_json::to_vec(&unsupported).unwrap()).await,200);
+            assert_eq!(plan["valid"],false);
+            assert!(plan["resolved"].is_null());
+            assert_eq!(plan["request"],unsupported);
+        }
+        assert_eq!(backend.state.lock().unwrap().previews,0);
+        backend.state.lock().unwrap().pending=true;
+        body(&post_plan(api.clone(),&cookie,csrf,&payload).await,503);
+        backend.state.lock().unwrap().pending=false;
+        backend.state.lock().unwrap().preview_failure=Some(AuthError::QuotaExceeded);
+        assert_eq!(body(&post_plan(api.clone(),&cookie,csrf,&payload).await,409)["error"]["code"],"quota_exceeded");
+        backend.state.lock().unwrap().preview_failure=None;
+        backend.state.lock().unwrap().native_change_on_preview=true;
+        assert_eq!(body(&post_plan(api.clone(),&cookie,csrf,&payload).await,409)["error"]["code"],"plan_stale");
+        backend.state.lock().unwrap().native_change_on_preview=false;
+        backend.state.lock().unwrap().change_on_preview=true;
+        body(&post_plan(api.clone(),&cookie,csrf,&payload).await,401);
+
+        let (denied,cookie,backend)=catalog_fixture(true);
+        let session=body(&http(denied.clone(),&cookie,"/api/v1/session").await,200);
+        let mut request=exact.clone();request["revisions"]=session["revisions"].clone();
+        body(&post_plan(denied,&cookie,session["csrfToken"].as_str().unwrap(),&serde_json::to_vec(&request).unwrap()).await,403);
+        assert_eq!(backend.state.lock().unwrap().previews,0);
+    });
+}
+
+#[test]
+fn unsupported_plan_rechecks_auth_after_its_last_grant_read() {
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap()
+        .block_on(async {
+            let (api, cookie, backend) = planning_fixture();
+            let session = body(&http(api.clone(), &cookie, "/api/v1/session").await, 200);
+            let mut request = plan_request(&backend, session["revisions"].clone());
+            request["config"]["isolation"] = json!("guest-kernel");
+            {
+                let mut state = backend.state.lock().unwrap();
+                state.revoke_after_grants = Some(state.grants_reads + 2);
+            }
+            body(
+                &post_plan(
+                    api,
+                    &cookie,
+                    session["csrfToken"].as_str().unwrap(),
+                    &serde_json::to_vec(&request).unwrap(),
+                )
+                .await,
+                401,
+            );
+            assert_eq!(backend.state.lock().unwrap().previews, 0);
         });
 }

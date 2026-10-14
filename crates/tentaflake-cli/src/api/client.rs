@@ -1293,6 +1293,61 @@ mod tests {
     }
 
     #[test]
+    fn plan_cli_posts_exact_file_once_and_consumes_actual_owner_preview() {
+        use crate::api::owner::operation_tests;
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let (api, cookie, backend) = operation_tests::planning_fixture();
+        let session = runtime.block_on(operation_tests::http(
+            api.clone(),
+            &cookie,
+            "/api/v1/session",
+        ));
+        let session: Value =
+            serde_json::from_str(session.split_once("\r\n\r\n").unwrap().1).unwrap();
+        let request = operation_tests::plan_request(&backend, session["revisions"].clone());
+        let fixture = Fixture::new();
+        fixture.write("plan.json", &serde_json::to_vec_pretty(&request).unwrap());
+        let path = fixture.path.join("plan.json");
+        let command = parse(&["plan", path.to_str().unwrap()]).unwrap();
+        let payload = read_body(command.request.body_file.as_ref().unwrap()).unwrap();
+        assert!(command.request.recovery.is_none());
+        let actual = runtime.block_on(operation_tests::post_plan(
+            api,
+            &cookie,
+            session["csrfToken"].as_str().unwrap(),
+            &payload,
+        ));
+        assert!(actual.starts_with("HTTP/1.1 200"));
+        let (origin, handle) = tls_fixture(Some(actual.into_bytes()));
+        let result = execute(
+            &trusted_client(),
+            &origin,
+            &command.request,
+            Some(payload.clone()),
+            Some(TOKEN),
+        )
+        .unwrap();
+        assert_eq!(result.value["valid"], true);
+        assert_eq!(result.value["request"], request);
+        assert_eq!(
+            result.value["resolved"]["resources"],
+            request["config"]["resources"]
+        );
+        let requests = handle.join().unwrap();
+        assert_eq!(requests.len(), 1);
+        assert!(requests[0].starts_with(b"POST /api/v1/plans HTTP/1.1\r\n"));
+        assert!(requests[0].ends_with(&payload));
+        assert!(
+            !requests[0]
+                .windows(b"idempotency-key".len())
+                .any(|bytes| bytes == b"idempotency-key")
+        );
+    }
+
+    #[test]
     fn actual_cli_create_receives_owner_unsupported_for_a_valid_bounded_body() {
         use crate::api::{owner::operation_tests, server};
         use tentaflake_admission::ledger::api::ApiOperationState;

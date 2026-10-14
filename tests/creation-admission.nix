@@ -95,8 +95,37 @@
     def creation_api(arguments):
         before = creation_fingerprint()
         value = json.loads(creation.succeed(creation_api_command(arguments), timeout=30))
-        assert creation_fingerprint() == before, "receipt read changed the actual ledger"
+        assert creation_fingerprint() == before, "API read or preview changed the actual ledger"
         return value
+
+    def creation_files():
+        script = """
+    import json
+    from pathlib import Path
+    rows = []
+    for root in map(Path, ["/var/lib/tentaflake-workspace-volumes", "/var/lib/tentaflake-environments", "/nix/var/nix/gcroots/tentaflake"]):
+        if not root.exists():
+            rows.append([str(root), None])
+            continue
+        for path in [root, *sorted(root.rglob("*"))]:
+            info = path.lstat()
+            rows.append([str(path), info.st_dev, info.st_ino, info.st_mode, info.st_size, info.st_mtime_ns, info.st_ctime_ns])
+    print(json.dumps(rows))
+    """
+        return creation.succeed(shlex.join(["python3", "-c", script]))
+
+    def creation_plan_file(request):
+        path = api_root + "/plan-request.json"
+        script = "import pathlib,sys; pathlib.Path(sys.argv[1]).write_text(sys.argv[2])"
+        creation.succeed(shlex.join(["python3", "-c", script, path, json.dumps(request)]))
+        return path
+
+    def creation_plan_refused(request, status, code):
+        path = creation_plan_file(request)
+        before, files = creation_fingerprint(), creation_files()
+        result, output = creation.execute(creation_api_command(["plan", path]) + " 2>&1", timeout=30)
+        assert result == 2 and f"HTTP {status}, {code}" in output
+        assert creation_fingerprint() == before and creation_files() == files
 
     def creation_api_probe(phase):
         return creation.succeed(shlex.join(["timeout", "--kill-after=3s", "25s", "python3", api_probe, phase]), timeout=30)
@@ -123,6 +152,16 @@
         configured = json.loads(creation.succeed("cat " + shlex.quote(creation_manifest["apiConfig"])))
         if configured["catalogReadGrant"] is not None:
             expected.append(configured["catalogReadGrant"])
+        create_grants = [grant for grant in session["grants"] if grant["action"] == "environments.create"]
+        allowed = any("creation-operator" in template["principals"]
+                      for template in creation_manifest["creationTemplates"].values())
+        assert len(create_grants) == int(allowed)
+        if allowed:
+            grant = create_grants[0]
+            assert set(grant) == {"id", "action", "target", "expiresAt"}
+            assert grant["id"] and grant["target"] == {"kind": "host", "id": "creation-fixture"}
+            assert grant["expiresAt"] is None
+            expected.append(grant)
         assert sorted(session["grants"], key=lambda grant: grant["id"]) == sorted(expected, key=lambda grant: grant["id"])
         return session["mutationEpoch"]
 
@@ -197,6 +236,47 @@
             "--key", "12345678-1234-4234-8234-123456789abc"]) + " 2>&1", timeout=30)
         assert status == 2 and "HTTP 501, unsupported" in output
         assert creation_fingerprint() == before
+
+    with subtest("installed CLI plans exact stopped creation without reserving or creating anything"):
+        session = creation_api(["session"])
+        image = creation_manifest["creationTemplates"]["fixture"]["image"]
+        planning_request = {"name": "Preview only", "workspace": {"kind": "new"}, "revisions": session["revisions"],
+                            "config": {"image": image["id"], "isolation": "container", "agentRuntime": None,
+                                       "tools": [], "skills": [], "capabilities": [],
+                                       "resources": {"cpu": 1, "memoryMiB": 256, "storageMiB": 128}}}
+        path = creation_plan_file(planning_request)
+        before, files = creation_fingerprint(), creation_files()
+        started = int(creation.succeed("date +%s").strip())
+        preview = creation_api(["plan", path])
+        finished = int(creation.succeed("date +%s").strip())
+        assert preview["valid"] and preview["ownerId"] == "creation-operator"
+        assert preview["request"] == planning_request and preview["revisions"] == session["revisions"]
+        expiry = datetime.datetime.fromisoformat(preview["expiresAt"].replace("Z", "+00:00")).timestamp()
+        assert started < expiry <= finished + 300
+        assert all(problem["severity"] == "warning" for problem in preview["problems"])
+        resolved = preview["resolved"]
+        assert resolved["image"] == {"label": image["label"], "digest": image["digest"]}
+        assert resolved["isolation"] == "container" and resolved["agentRuntime"] is None
+        assert resolved["blocks"] == [] and resolved["capabilities"] == []
+        assert resolved["resources"] == planning_request["config"]["resources"]
+        assert resolved["grantIds"] == [grant["id"] for grant in session["grants"] if grant["action"] == "environments.create"]
+        targets = {"environments.read": {"kind": "environment", "id": resolved["environmentId"]},
+                   "workspaces.read": {"kind": "workspace", "id": resolved["workspaceId"]},
+                   "workspaces.retain": {"kind": "workspace", "id": resolved["workspaceId"]}}
+        grants = resolved["proposedGrants"]
+        assert len(grants) == len(targets) and len({grant["id"] for grant in grants}) == len(targets)
+        assert {grant["action"]: grant["target"] for grant in grants} == targets
+        assert all(grant["expiresAt"] is None for grant in grants)
+        assert not {grant["id"] for grant in grants} & {grant["id"] for grant in session["grants"]}
+        encoded = json.dumps(preview)
+        assert all(private not in encoded for private in ("generic-creation-source", "/nix/store/", "/var/lib/", "sourceInstance", "helpers", "principals"))
+        repeated = creation_api(["plan", path])
+        assert repeated["valid"] and repeated["id"] != preview["id"]
+        assert repeated["resolved"]["environmentId"] != resolved["environmentId"]
+        assert creation_fingerprint() == before and creation_files() == files
+        assert creation_snapshot()["storage"] == [] and creation_snapshot()["api"]["environments"] == []
+        assert creation.succeed("docker image ls --quiet --no-trunc").strip() == ""
+        creation_stopped()
 
     with subtest("actual creation supervisor prepares both volumes exactly once"):
         created = creation_seed("op-supervised", "01" * 16, "queue")
@@ -434,6 +514,7 @@
         assert json.loads(creation_api_probe("catalog")) == wire
         assert creation_api_read("op-supervised") == supervised_receipt
         creation_api_probe("cookie-active")
+        creation_plan_refused(planning_request, 409, "plan_stale")
 
     with subtest("publication removes templates and catalog grant without losing historical receipts"):
         candidate = creation.succeed("readlink -f " + shlex.quote(system + "/specialisation/without-template")).strip()
@@ -444,6 +525,8 @@
         creation_api_probe("cookie-active")
         revision = creation_snapshot()["revision"]
         publication = json.loads(creation.succeed(shlex.join(["tentaflake", "admission", "publication", "begin", candidate_plan, "remove-creation-template", str(revision)])))
+        planning_request["revisions"] = creation_api(["session"])["revisions"]
+        creation_plan_refused(planning_request, 503, "unavailable")
         creation_api_missing("unknown")
         assert creation_api_read("op-supervised") == supervised_receipt
         assert creation_api_read("op-queued-abort") == aborted_receipt
@@ -464,6 +547,8 @@
         final_session = creation_api(["session"])
         assert final_session["revisions"]["catalog"] != catalog_session["revisions"]["catalog"]
         assert final_session["revisions"]["grants"] != catalog_session["revisions"]["grants"]
+        planning_request["revisions"] = final_session["revisions"]
+        creation_plan_refused(planning_request, 403, "forbidden")
         creation_api_missing("absent")
         assert creation_api_read("op-supervised") == supervised_receipt
         assert creation_api_read("op-queued-abort") == aborted_receipt

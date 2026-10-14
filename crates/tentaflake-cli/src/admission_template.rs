@@ -60,6 +60,32 @@ pub(crate) struct ReconstructedCreation {
     pub volumes: [VolumeSpec; 2],
 }
 
+/// The existing template principal policy is the sole owner of this host grant.
+/// It grants preview eligibility, never authority to select another template.
+pub(crate) fn creation_grant(
+    plan: &HostPlan,
+    host: &str,
+    principal: &str,
+) -> Result<Option<ActionGrant>, String> {
+    if !id(host) || !id(principal) {
+        return Err("invalid creation grant identity".into());
+    }
+    if !plan
+        .creation_templates
+        .values()
+        .any(|template| template.principals.iter().any(|id| id == principal))
+    {
+        return Ok(None);
+    }
+    let binding = revision(("tentaflake.host-create-grant.v1", host, principal))?;
+    Ok(Some(ActionGrant {
+        id: format!("create-{}", &binding[7..]),
+        action: ApiAction::EnvironmentsCreate,
+        target: ApiTarget::Host { id: host.into() },
+        expires_at: None,
+    }))
+}
+
 fn issued_action(action: ApiAction) -> Option<&'static str> {
     match action {
         ApiAction::EnvironmentsRead => Some("environment-read"),
@@ -504,7 +530,7 @@ fn validate_catalog_plan(plan: &HostPlan, catalog: &Value) -> Result<(), String>
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     fn validate(plan: &HostPlan) -> Result<(), String> {
@@ -546,6 +572,65 @@ mod tests {
         plan.creation_templates
             .insert("public-base".into(), serde_json::from_value(value).unwrap());
         plan
+    }
+
+    pub(crate) fn fixture_plan() -> HostPlan {
+        let plan = plan(template());
+        validate(&plan).unwrap();
+        plan
+    }
+
+    #[test]
+    fn host_create_grant_has_one_existing_template_principal_owner() {
+        let mut plan = fixture_plan();
+        assert!(
+            creation_grant(&plan, "host-fixture", "other")
+                .unwrap()
+                .is_none()
+        );
+        let grant = creation_grant(&plan, "host-fixture", "operator")
+            .unwrap()
+            .unwrap();
+        assert_eq!(grant.action, ApiAction::EnvironmentsCreate);
+        assert_eq!(
+            grant.target,
+            ApiTarget::Host {
+                id: "host-fixture".into()
+            }
+        );
+        assert!(grant.expires_at.is_none());
+        assert_eq!(
+            creation_grant(&plan, "host-fixture", "operator")
+                .unwrap()
+                .unwrap(),
+            grant
+        );
+        assert_ne!(
+            creation_grant(&plan, "another-host", "operator")
+                .unwrap()
+                .unwrap()
+                .id,
+            grant.id
+        );
+        plan.creation_templates
+            .get_mut("public-base")
+            .unwrap()
+            .principals
+            .push("other".into());
+        assert_ne!(
+            creation_grant(&plan, "host-fixture", "other")
+                .unwrap()
+                .unwrap()
+                .id,
+            grant.id
+        );
+        plan.creation_templates.clear();
+        assert!(
+            creation_grant(&plan, "host-fixture", "operator")
+                .unwrap()
+                .is_none()
+        );
+        assert!(creation_grant(&plan, "*", "operator").is_err());
     }
 
     #[test]
