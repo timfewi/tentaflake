@@ -411,6 +411,54 @@ mod tests {
     use super::*;
 
     #[test]
+    fn authenticated_unsupported_json_is_not_a_bodyless_route() {
+        let (api, cookie, backend) =
+            operation_tests::fixture(tentaflake_admission::ledger::api::ApiOperationState::Queued);
+        let unknown_cookie = format!("__Host-tentaflake-session={}", "0".repeat(64));
+        let fixtures: Value =
+            serde_json::from_str(include_str!("../../../../api/v1/fixtures.json")).unwrap();
+        let create = fixtures["exchanges"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|entry| entry["name"] == "createEnvironment")
+            .unwrap();
+        let body = serde_json::to_string(&create["request"]["body"]).unwrap();
+        tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap().block_on(async {
+            let session = operation_tests::http(api.clone(), &cookie, "/api/v1/session").await;
+            assert!(session.starts_with("HTTP/1.1 200"));
+            let session: Value = serde_json::from_str(session.split_once("\r\n\r\n").unwrap().1).unwrap();
+            let csrf_token = session["csrfToken"].as_str().unwrap();
+            let cookie = cookie.as_str();
+            for (method, path, payload, csrf, credential, status) in [
+                ("POST", "/api/v1/environments", body.as_str(), csrf_token, cookie, 501),
+                // Unsupported handlers must not parse or dispatch an opaque body.
+                ("POST", "/api/v1/environments", "not JSON", csrf_token, cookie, 501),
+                ("POST", "/api/v1/environments", body.as_str(), "wrong", cookie, 403),
+                ("POST", "/api/v1/environments", body.as_str(), csrf_token, unknown_cookie.as_str(), 401),
+                ("GET", "/api/v1/session", "{}", csrf_token, cookie, 400),
+                ("DELETE", "/api/v1/session", "{}", csrf_token, cookie, 400),
+                ("GET", "/api/v1/capabilities", "{}", csrf_token, cookie, 400),
+                ("GET", "/api/meta", "{}", csrf_token, cookie, 400),
+                ("GET", "/api/v1/operations/operation-fixture", "{}", csrf_token, cookie, 400),
+                ("GET", "/api/v1/session", "", csrf_token, cookie, 200),
+            ] {
+                let request = format!("{method} {path} HTTP/1.1\r\nHost: host.example.invalid\r\nOrigin: https://host.example.invalid\r\nCookie: {credential}\r\nX-Tentaflake-CSRF: {csrf}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{payload}", payload.len());
+                let reply = crate::api::server::tests::exchange(api.clone(), request.into_bytes()).await;
+                assert!(reply.starts_with(&format!("HTTP/1.1 {status}")), "{method} {path}: expected HTTP {status}, received {}", reply.lines().next().unwrap_or("missing status"));
+                assert!(reply.contains("cache-control: no-store\r\n"));
+                assert!(!reply.contains(cookie));
+                assert!(!reply.contains(payload) || payload.is_empty() || status == 200);
+                if status == 501 {
+                    let refusal: Value = serde_json::from_str(reply.split_once("\r\n\r\n").unwrap().1).unwrap();
+                    assert_eq!(refusal["error"]["code"], "unsupported");
+                }
+            }
+            assert_eq!(backend.reads(), 0);
+        });
+    }
+
+    #[test]
     fn cancelled_unix_connection_keeps_blocking_work_charged() {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()

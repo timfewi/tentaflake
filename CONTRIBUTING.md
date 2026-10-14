@@ -124,6 +124,10 @@ cache guarantees and the Nix/Bazel assessment.
 Semgrep CLI and rule snapshot against tracked source. Semgrep does not contact
 its registry or send metrics; the OSV portion needs network access for current
 advisories, so it remains a separate pre-PR gate rather than part of `just ci`.
+The gate materializes the patched source before reading its lockfile; this does
+not build the Dev Containers CLI or its Yarn dependency cache.
+Semgrep uses two scan workers and retains strict parsing; unsupported syntax
+must be resolved without excluding the affected workflow from security rules.
 
 For end-to-end verification, `just e2e` runs that complete automated gate,
 `just e2e-devcontainer` uses the source- and dependency-hash-pinned

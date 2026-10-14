@@ -962,6 +962,80 @@ pub(crate) fn daemon(plan: &HostPlan) -> Result<(String, DaemonIdentity), String
     ))
 }
 
+fn append_readiness(
+    plan: &HostPlan,
+    id: &str,
+    result: &mut ReadinessSnapshot,
+    kind: EvidenceKind,
+    generation: String,
+    observed_at: u64,
+    expires_at: u64,
+) {
+    result.sources.push(ReadinessGeneration {
+        kind,
+        generation: generation.clone(),
+    });
+    result.evidence.push(ReadinessEvidence {
+        instance_id: id.into(),
+        kind,
+        status: EvidenceStatus::Ready,
+        source: EvidenceSource::Live,
+        policy_revision: plan.policy.revision.clone(),
+        instance_revision: plan.instances[id].revision.clone(),
+        generation,
+        observed_at,
+        expires_at,
+    });
+}
+
+fn collected_readiness(
+    plan: &HostPlan,
+    id: &str,
+    generation: &str,
+    now: u64,
+    collected: &StartEvidence,
+) -> ReadinessSnapshot {
+    let mut result = ReadinessSnapshot {
+        generation: plan.policy.generation.clone(),
+        sources: Vec::new(),
+        evidence: Vec::new(),
+    };
+    let mut add = |kind, source_generation: String, observed_at, expires_at| {
+        append_readiness(
+            plan,
+            id,
+            &mut result,
+            kind,
+            source_generation,
+            observed_at,
+            expires_at,
+        );
+    };
+    add(
+        EvidenceKind::Runtime,
+        generation.into(),
+        now,
+        now.saturating_add(5),
+    );
+    if let Some(model) = &collected.model {
+        add(
+            EvidenceKind::Model,
+            model.generation.clone(),
+            model.observed_at,
+            model.valid_until,
+        );
+    }
+    if let Some(research) = &collected.research {
+        add(
+            EvidenceKind::Research,
+            research.generation.clone(),
+            research.observed_at,
+            research.valid_until,
+        );
+    }
+    result
+}
+
 fn readiness(
     plan: &HostPlan,
     path: &Path,
@@ -970,49 +1044,8 @@ fn readiness(
     now: u64,
     collected: &StartEvidence,
 ) -> Result<ReadinessSnapshot, String> {
-    let instance = &plan.instances[id];
     crate::admission_worker::observe_results(plan, id)?;
-    let mut result = ReadinessSnapshot {
-        generation: plan.policy.generation.clone(),
-        sources: Vec::new(),
-        evidence: Vec::new(),
-    };
-    let mut add = |kind, source_generation: String, expires_at| {
-        result.sources.push(ReadinessGeneration {
-            kind,
-            generation: source_generation.clone(),
-        });
-        result.evidence.push(ReadinessEvidence {
-            instance_id: id.into(),
-            kind,
-            status: EvidenceStatus::Ready,
-            source: EvidenceSource::Live,
-            policy_revision: plan.policy.revision.clone(),
-            instance_revision: instance.revision.clone(),
-            generation: source_generation,
-            observed_at: now,
-            expires_at,
-        });
-    };
-    add(
-        EvidenceKind::Runtime,
-        generation.into(),
-        now.saturating_add(5),
-    );
-    if let Some(model) = &collected.model {
-        add(
-            EvidenceKind::Model,
-            model.generation.clone(),
-            now.saturating_add(5),
-        );
-    }
-    if let Some(research) = &collected.research {
-        add(
-            EvidenceKind::Research,
-            research.generation.clone(),
-            research.valid_until,
-        );
-    }
+    let mut result = collected_readiness(plan, id, generation, now, collected);
     for volume in plan.volumes.iter().filter(|v| v.spec.instance_id == id) {
         let unit = admission_systemd::inspect_unit(&plan.tools.busctl, &volume.units.owner)?;
         let service = unit.service.as_ref().ok_or("quota owner unavailable")?;
@@ -1072,12 +1105,16 @@ fn readiness(
             backing.dev(),
             backing.ino()
         );
-        add(
+        append_readiness(
+            plan,
+            id,
+            &mut result,
             match volume.spec.kind {
                 StorageKind::Workspace => EvidenceKind::WorkspaceQuota,
                 StorageKind::State => EvidenceKind::StateQuota,
             },
             source_generation,
+            now,
             now.saturating_add(5),
         );
     }
@@ -1956,7 +1993,7 @@ fn finish_prerequisites(
     if fresh
         .evidence
         .iter()
-        .any(|evidence| evidence.expires_at <= now)
+        .any(|evidence| evidence.observed_at > now || evidence.expires_at <= now)
     {
         return Err("readiness expired during dispatch; claim remains charged".into());
     }
@@ -2785,10 +2822,37 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn later_collectors_cannot_renew_model_readiness() {
+        let (mut plan, mut spec, _, _, _) = fixture();
+        let model = enable_model(&mut plan, &mut spec);
+        let collected = StartEvidence {
+            model: Some(model),
+            ..Default::default()
+        };
+        // Research and filesystem collection can finish long after the Model
+        // probe. Snapshot assembly must retain that probe's original window.
+        for later in [14, 20] {
+            let fresh = collected_readiness(&plan, "agent-fixture", "runtime", later, &collected);
+            let model = fresh
+                .evidence
+                .iter()
+                .find(|e| e.kind == EvidenceKind::Model)
+                .unwrap();
+            assert_eq!((model.observed_at, model.expires_at), (10, 15));
+            assert_eq!(
+                finish_prerequisites(&fresh, || Ok(()), || Ok(later)).is_ok(),
+                later == 14
+            );
+        }
+        let fresh = collected_readiness(&plan, "agent-fixture", "runtime", 14, &collected);
+        assert!(finish_prerequisites(&fresh, || Ok(()), || Ok(9)).is_err());
+    }
+
+    #[test]
     fn final_lease_sample_follows_held_source_revalidation() {
         let fixture = StoreFixture::new(false);
         let mounts = fixture.capture();
-        let fresh = ReadinessSnapshot {
+        let mut fresh = ReadinessSnapshot {
             generation: "fixture".into(),
             sources: vec![],
             evidence: vec![ReadinessEvidence {
@@ -2803,31 +2867,35 @@ pub(crate) mod tests {
                 expires_at: 11,
             }],
         };
-        let clock = Cell::new(10);
-        let rechecked = Cell::new(false);
-        let result = finish_prerequisites(
-            &fresh,
-            || {
-                recheck_store_mounts(&mounts, |path| fixture.open(path))?;
-                rechecked.set(true);
-                clock.set(11);
-                Ok(())
-            },
-            || {
-                assert!(rechecked.get());
-                Ok(clock.get())
-            },
-        );
-        assert_eq!(
-            result.unwrap_err(),
-            "readiness expired during dispatch; claim remains charged"
-        );
-        finish_prerequisites(
-            &fresh,
-            || recheck_store_mounts(&mounts, |path| fixture.open(path)),
-            || Ok(10),
-        )
-        .unwrap();
+        for kind in [EvidenceKind::Model, EvidenceKind::Research] {
+            fresh.evidence[0].kind = kind;
+            let clock = Cell::new(10);
+            let rechecked = Cell::new(false);
+            let result = finish_prerequisites(
+                &fresh,
+                || {
+                    recheck_store_mounts(&mounts, |path| fixture.open(path))?;
+                    rechecked.set(true);
+                    clock.set(11);
+                    Ok(())
+                },
+                || {
+                    assert!(rechecked.get());
+                    Ok(clock.get())
+                },
+            );
+            assert_eq!(
+                result.unwrap_err(),
+                "readiness expired during dispatch; claim remains charged"
+            );
+            finish_prerequisites(
+                &fresh,
+                || recheck_store_mounts(&mounts, |path| fixture.open(path)),
+                || Ok(10),
+            )
+            .unwrap();
+            assert!(finish_prerequisites(&fresh, || Ok(()), || Ok(9)).is_err());
+        }
         fs::rename(
             fixture.root.join("parent/source"),
             fixture.root.join("parent/previous"),

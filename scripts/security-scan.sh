@@ -15,8 +15,9 @@ rules_root=$(nix build \
   --no-link \
   --print-out-paths \
   "$flake_ref#semgrep-rules")
-devcontainer_source=$(nix eval \
-  --raw \
+devcontainer_source=$(nix build \
+  --no-link \
+  --print-out-paths \
   "$flake_ref#devcontainer-cli.src")
 
 echo "==> Scanning Rust dependencies with OSV"
@@ -54,6 +55,7 @@ done
 
 echo "==> Scanning tracked source with Semgrep"
 SEMGREP_SEND_METRICS=off "$tools_root/bin/semgrep" scan \
+  --jobs 2 \
   --disable-version-check \
   --error \
   --strict \

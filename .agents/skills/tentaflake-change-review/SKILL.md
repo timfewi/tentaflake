@@ -1,7 +1,7 @@
 ---
 name: tentaflake-change-review
 description: Review a Tentaflake change for a concrete requirement, proportionate verification, synchronized docs and a complete PR.
-version: 1.1.19
+version: 1.1.21
 ---
 
 # Tentaflake change review
@@ -23,7 +23,7 @@ Use for features, fixes and substantive reviews. Read `AGENTS.md` and
 | Ordinary source/configuration | Start with `just fast`, then focused assertions/tests |
 | Docs/skills | Inspect source claims, local links and frontmatter; run `just fast` |
 | Image validation | `nix build --no-link .#checks.x86_64-linux.image-pinning` |
-| Admission schema/projection | `just admission-plan` exercises generated offline and model plans through the actual loader |
+| Admission schema/projection | `just admission-plan` checks offline/Model plans; after closure preparation, `just research-admission-plan` checks Research/combined plans through the actual loader |
 | Runtime/security | Identify affected host/Research VMs; run when explicitly authorized |
 | Installer | Focused disk/generated-flake checks; ISO/VM builds when explicitly authorized |
 
@@ -34,6 +34,18 @@ evidence for the current revision. A skipped build is not runtime acceptance.
 See [build boundaries](../../../docs/17-builds.md) for affected workflow dispatch.
 Full `just ci`/`just e2e`, VM, ISO and system builds are larger workloads.
 Evaluation does not prove runtime behavior or authorize activation.
+Combined capability collection must retain each authenticated observation's
+original time and expiry. Model-before-Research collection previously stamped
+the older Model result with the later timestamp, hiding an expired prerequisite.
+Exercise delayed later observations and the real combined lifecycle; separate
+Model-only and Research-only cases do not establish their composition. Changes
+to shared live collectors must retain both explicit VM routes.
+When scanning a generated dependency lockfile, realize its source derivation
+first. Evaluating the Dev Containers source path alone produced an absent
+`yarn.lock` on a cold store, preventing the remaining security checks from running.
+Keep Semgrep bounded to two workers and retain strict parsing. Its default worker
+count exhausted local io_uring allocations; the pinned parser also rejected a
+valid arithmetic Bash `for` loop. An equivalent bounded `while` keeps coverage.
 
 For asynchronous HTTP work, bound queued blocking tasks as well as connections.
 A connection deadline can drop its task handle while `spawn_blocking` continues;

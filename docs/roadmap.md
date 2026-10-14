@@ -44,16 +44,33 @@ Current integration work:
   and the scoped Research collector/lifecycle work with the current API, Worker
   results and immutable-source owners. One read-only source policy applies to
   every capability combination, and final Research lease checks follow store
-  observations. Upstream Research PR #10 tests the required authenticated
-  readiness RPC; its accepted public pin and combined downstream runtime gates
-  remain pending. The integrated source passes `just fast` with **517 Rust
-  tests**, four intentional helpers ignored, and generated offline/Model plans
-  through the actual CLI loader. Independent boundary and VM-source reviews pass;
-  combined package/VM execution remains outstanding. Upstream PR #10's original
-  client, source and package gates pass, but OSV found three Hickory advisories.
-  A scoped update to the verified stable 0.26.3 is being tested before that merge
-  or downstream pin update. Exact requested capabilities and live evidence remain
-  prerequisites; a configured endpoint or declaration alone grants no access.
+  observations. Review reproduced stale Model evidence being restamped after
+  Research collection. Both collectors now preserve authenticated observation
+  times through final source checks, including clock-rollback refusal. The revised
+  source passes **519 Rust tests** in `just fast`, four intentional helpers ignored,
+  and the targeted failure-before/fix-after regression. The combined Research VM
+  driver and its same-CID authenticated probe compile; independent source review
+  passes. Its explicit loader gate covers all four capability projections and
+  shared collector edits select both VM suites. The corrected CLI package passes
+  **413 tests**, with four intentional helpers ignored. Research/combined plan
+  execution and actual VM acceptance remain pending.
+  Upstream Research PR #10 merged as `c530cf7` after full CI `38559967871`
+  passed at `6a4f9a4`, including package tests, OSV and redacted secret scanning.
+  Its exact Hickory 0.26.3 update fixes three advisories. Main run `38561534086`
+  also passes client, source/security and full package checks at `c530cf73`;
+  Tentaflake now pins precisely that public merge, preserving every other input.
+  The downstream security gate found five advisories in the existing
+  `quinn-proto 0.11.15` lock entry and one in Dev Containers' `shell-quote 1.10.0`.
+  Scoped compatible updates select 0.11.19 and 1.12.0 respectively. Both OSV
+  scans and strict Semgrep now pass; its bounded workers and equivalent workflow
+  loop preserve security coverage. The final fast gate passes **520 Rust tests**,
+  four intentional helpers ignored, including the reproduced API refusal fix:
+  authenticated unsupported mutations with bodies return `501`, while implemented
+  bodyless routes still reject bodies. The revised combined VM checks the exact
+  network ID used by dispatch; its rendered driver compiles without builds/IFD.
+  Final package and combined runtime gates remain pending. Exact
+  requested capabilities and live evidence remain prerequisites; a configured
+  endpoint or declaration alone grants no access.
 - **Reference coding agent, merged PR #168:** native Codex 0.162.1 package,
   immutable image descriptor and seven wrapper regressions pass at `51a8f49`.
   Main merge `919d270` preserves the reviewed pins and package/image artifacts.
@@ -153,8 +170,12 @@ acceptance remains pending. Public resource mutations remain `501`; no creation
 or dispatch path is enabled.
 
 Resume here: obtain actual owner and supervised creation/recovery VM evidence,
-including partial outcomes and historical retries. Only then connect HTTP
-planning/queueing and exact grants through the bounded host-namespace owner;
+including partial outcomes and historical retries. Then expose the existing
+operation-ID and idempotency recovery reads through the owner, using an explicit
+public projection that hides private plans, supervisors and native operations.
+Reads must preserve original ownership, uncertainty and historical receipts;
+only a healthy current mutation epoch can establish retry-safe absence. Follow
+with server-bound planning/queueing and exact grants through that owner;
 the isolated HTTP process cannot run the host collectors. Keep
 creation within installed policy without rebuilding the host. Follow with
 workspace/files/streams and the matching
@@ -188,8 +209,9 @@ source reviews pass; actual dispatch acceptance remains required before merging.
 When integrating Research collectors, retain their final lease-expiry check after
 store observation so additional filesystem work cannot consume an unchecked lease.
 
-Remaining Worker requirements include general read-only mount authority, exact
-grants, aggregate private storage and compute, and daemon-generation job recovery.
+Remaining Worker requirements include exact grants, aggregate private storage
+and compute, and daemon-generation job recovery. General read-only mount
+authority is now part of the capability integration and awaits its runtime gate.
 The OCI Worker-request path stays closed until those requirements are verified.
 General artifact acquisition also needs durable uncertainty handling; the guarded
 Worker loader alone does not establish that for every image creator.

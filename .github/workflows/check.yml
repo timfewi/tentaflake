@@ -217,9 +217,15 @@ jobs:
           if [[ "$CHECK_CLI" == true || "$CHECK_BROKER" == true || "$CHECK_WORKER" == true ]]; then
             selected_checks+=(.#checks.x86_64-linux.rust-package-sources)
           fi
-          for ((offset=0; offset<${#selected_checks[@]}; offset+=4)); do
+          offset=0
+          while [[ "$offset" -lt "${#selected_checks[@]}" ]]; do
             nix build --no-link "${selected_checks[@]:offset:4}"
+            offset=$((offset + 4))
           done
+
+      - name: Generated admission plans through the CLI loader
+        if: needs.changes.outputs.evaluate == 'true'
+        run: nix develop --command just admission-plan research-admission-plan
 
       - name: nix build (tentaflake toplevel)
         if: needs.changes.outputs.evaluate == 'true' && needs.changes.outputs.runtime == 'true'

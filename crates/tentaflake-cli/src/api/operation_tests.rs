@@ -346,33 +346,55 @@ fn query_decodes_only_outer_encoding_and_never_normalizes_semantic_target() {
 }
 
 #[test]
-fn operation_queries_are_strict_and_other_mutations_remain_unsupported() {
-    tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap().block_on(async {
-        let (api, cookie, backend) = fixture(ApiOperationState::Queued);
-        for target in ["/api/v1/operations", "/api/v1/operations/id?ignored=1", "/api/v1/operations/%69d",
-            "/api/v1/operations/id/child", "/api/v1/operations?unknown=1", "/api/v1/session?ignored=1"] {
-            body(&http(api.clone(), &cookie, target).await, 400);
-        }
-        for suffix in ["&ownerId=other", "&method=POST", "&%6Dethod=POST", "&", "&target=%FF", "&target=%"] {
-            body(&http(api.clone(), &cookie, &(recovery(EPOCH, KEY) + suffix)).await, 400);
-        }
-        for (field, value) in [("method=POST", "method=GET"), ("method=POST", "method=post"),
-            ("mutationEpoch=epoch-fixture", "mutationEpoch="),
-            ("idempotencyKey=12345678-1234-4234-8234-123456789abc", "idempotencyKey=invalid")] {
-            body(&http(api.clone(), &cookie, &recovery(EPOCH, KEY).replace(field, value)).await, 400);
-        }
-        assert_eq!(backend.state.lock().unwrap().reads, 0);
-        let session = body(&http(api.clone(), &cookie, "/api/v1/session").await, 200);
-        let csrf = session["csrfToken"].as_str().unwrap();
-        for (method, target) in [("GET", "/api/v1/session"), ("DELETE", "/api/v1/session"),
-            ("GET", "/api/v1/capabilities"), ("GET", "/api/v1/operations/operation-fixture")] {
-            let request = format!("{method} {target} HTTP/1.1\r\nHost: host.example.invalid\r\nOrigin: https://host.example.invalid\r\nCookie: {cookie}\r\nX-Tentaflake-CSRF: {csrf}\r\nContent-Length: 2\r\n\r\n{{}}");
-            body(&server::tests::exchange(api.clone(), request.into_bytes()).await, 400);
-        }
-        let payload = r#"{"planId":"fixture","startAfterCreate":false}"#;
-        let request = format!("POST /api/v1/environments HTTP/1.1\r\nHost: host.example.invalid\r\nOrigin: https://host.example.invalid\r\nCookie: {cookie}\r\nX-Tentaflake-CSRF: {csrf}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{payload}", payload.len());
-        let denied = body(&server::tests::exchange(api, request.into_bytes()).await, 501);
-        assert_eq!(denied["error"]["code"], "unsupported");
-        assert_eq!(backend.state.lock().unwrap().reads, 0);
-    });
+fn operation_queries_are_strict() {
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap()
+        .block_on(async {
+            let (api, cookie, backend) = fixture(ApiOperationState::Queued);
+            for target in [
+                "/api/v1/operations",
+                "/api/v1/operations/id?ignored=1",
+                "/api/v1/operations/%69d",
+                "/api/v1/operations/id/child",
+                "/api/v1/operations?unknown=1",
+                "/api/v1/session?ignored=1",
+            ] {
+                body(&http(api.clone(), &cookie, target).await, 400);
+            }
+            for suffix in [
+                "&ownerId=other",
+                "&method=POST",
+                "&%6Dethod=POST",
+                "&",
+                "&target=%FF",
+                "&target=%",
+            ] {
+                body(
+                    &http(api.clone(), &cookie, &(recovery(EPOCH, KEY) + suffix)).await,
+                    400,
+                );
+            }
+            for (field, value) in [
+                ("method=POST", "method=GET"),
+                ("method=POST", "method=post"),
+                ("mutationEpoch=epoch-fixture", "mutationEpoch="),
+                (
+                    "idempotencyKey=12345678-1234-4234-8234-123456789abc",
+                    "idempotencyKey=invalid",
+                ),
+            ] {
+                body(
+                    &http(
+                        api.clone(),
+                        &cookie,
+                        &recovery(EPOCH, KEY).replace(field, value),
+                    )
+                    .await,
+                    400,
+                );
+            }
+            assert_eq!(backend.state.lock().unwrap().reads, 0);
+        });
 }

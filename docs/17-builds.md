@@ -13,9 +13,14 @@ the formatting command; treefmt's `--ci` writes changes before reporting failure
 
 Use `just eval` explicitly for read-only flake evaluation, including focused
 adapter evaluation and the required non-VM Research closure preparation.
-`just admission-plan` separately checks an actual generated runtime plan through
-the closed Rust loader. Its read-only fixture copy drops Nix dependency context
-to avoid building the referenced tools/images; production plans retain it.
+`just admission-plan` separately checks generated offline and Model runtime plans
+through the closed Rust loader. After explicit Research closure preparation,
+`just research-admission-plan` also checks Research and combined Model/Research
+plans. That recipe permits import from derivation and may build missing inputs;
+it is not a no-build gate. Read-only fixture copies drop Nix dependency context
+to avoid building referenced tools/images; production plans retain it. Explicit
+CI evaluation runs both loader recipes after preparing the closures. Plan parsing
+does not establish live collector or container lifecycle acceptance.
 `just local-image` checks bounded archive parsing without loading Docker images.
 `just codex-reference` checks the native reference wrapper's non-secret
 configuration and private paths without executing Codex. Its package/image
@@ -107,6 +112,7 @@ comparison adds the affected expensive gates below to its fast checks.
 | Docs and listed presentation metadata | None | None | None |
 | CI routing/workflow/test definition or contributor tooling | Static | None | None |
 | One Rust crate/package | Static and affected crate | Affected package and source-boundary check; worker includes its image | Runtime |
+| Shared live admission collectors | Static and CLI crate | CLI package and source-boundary check | Runtime and Research, including combined capabilities |
 | Shared admission library | Static, admission library and CLI | CLI package with library tests and source-boundary check | Runtime |
 | Worker module | Static and worker crate | Worker package/image and source-boundary check | Runtime |
 | Shared Cargo inputs or Rust packaging helper | Static and all Rust crates | All Rust packages/image and source-boundary check | Runtime |
@@ -127,8 +133,9 @@ Documentation starts no Nix installation. Fast checks use the pinned binary
 cache for contributor tools; only explicit builds upload a GitHub Nix cache.
 Optional cache setup has a three-minute timeout; setup failure does not skip
 or fail the subsequent build and runtime checks.
-A Rust-only dispatch
-does not build the separate Research service. Worker-module dispatch uses the
+An ordinary Rust-only dispatch does not build the separate Research service.
+Shared live admission collectors select both suites because the Research VM also
+exercises combined Model/Research admission. Worker-module dispatch uses the
 same focused package/runtime gates; the Research fixture enables no workers.
 Mixing these changes with shared security paths selects their combined gates.
 Non-VM package builds run in groups of at most four. Configuration evaluation

@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 ### Fixed
+- Return documented `501` refusals for authenticated unsupported API mutations
+  with request bodies, retaining authentication and implemented bodyless-route checks.
+- Update the compatible Quinn protocol and Dev Containers shell-quote dependency
+  pins for current security advisories. Realize patched source before scanning
+  its generated lockfile so the security gate also works from a cold store.
+- Preserve authenticated Model/Research observation times through combined
+  collection; later probes or source checks cannot renew an earlier prerequisite.
 - Verify immutable store mount sources through protected descriptors across OCI
   dispatch; source changes retain uncertain claims without blocking owned cleanup.
 - Bind declared controller results mounts to the exact requested Worker and
@@ -66,7 +73,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Authenticate requested Research admission through held relay peers, exact backend
   processes and bounded controller leases, alongside local Model prerequisites.
   Read-only sources require immutable store entries or their exact capability
-  owner; Worker readiness remains unavailable.
+  owner; Worker readiness remains unavailable. Pin the accepted public Research
+  readiness implementation with the Hickory 0.26.3 security corrections.
 - Separate unprivileged HTTP framing from the root authentication/state owner
   over a bounded private Unix channel. Credentials and ledger access remain with
   the owner; stopped frontends revoke sessions and cannot trigger automatic replay.

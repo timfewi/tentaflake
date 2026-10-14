@@ -64,6 +64,7 @@ pub(crate) struct Configuration {
 
 pub(crate) struct ReadyResearch {
     pub generation: String,
+    pub observed_at: u64,
     pub valid_until: u64,
     source: Source,
 }
@@ -985,7 +986,8 @@ pub(crate) fn collect(
     }
     remaining(deadline)?;
     let valid_until = report.valid_until.min(final_lease.valid_until);
-    if valid_until <= now()? {
+    let completed_at = now()?;
+    if report.observed_at > completed_at || valid_until <= completed_at {
         return Err("Research readiness expired before collection completed".into());
     }
     let invocation = |unit: &UnitObservation| {
@@ -1002,6 +1004,7 @@ pub(crate) fn collect(
     );
     Ok(ReadyResearch {
         generation,
+        observed_at: report.observed_at,
         valid_until,
         source: after,
     })

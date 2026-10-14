@@ -20,6 +20,8 @@ current revision; skipped builds do not establish acceptance. See `docs/17-build
 `just eval` and CI share `scripts/eval_flake.py`: sequential `--no-build`
 projections preserve every output/check, with at most four checks per evaluator
 and each host paired with its corresponding check/package. Keep Git source filtering.
+Explicit CI evaluation also checks generated offline, Model, Research and combined
+plans through the closed CLI loader; Research plans require prepared closures.
 
 ```bash
 nix flake check
