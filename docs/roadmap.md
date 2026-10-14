@@ -192,11 +192,20 @@ Podman worker option projections with IFD disabled, and compilation of the
 rendered 2,293-line VM script pass. Real VM execution remains pending.
 The same Worker change is isolated in [PR #169](https://github.com/timfewi/tentaflake/pull/169)
 on the OCI parent, with its own 314-test fast gate and focused Nix projection.
-Next: bind the collector and worker launcher inventory to the common host fence,
-add daemon-generation recovery and bound the artifact stream. Replace the
-Worker read-only-mount validation skip with exact results-mount validation
-before enabling grants. Private worker data/retention remain outside admitted
-workspace/state volumes; worker compute still relies on explicit host reserves.
+Next: project immutable Worker and image-loader configuration into HostPlan,
+without a configuration reference back to that generated plan. Guard supported
+drain/approve/deny/load paths against Pending or mismatched published authority,
+using one shared inherited host fence and lock order: host fence, brief ledger
+read, then queue lock. Maintenance must observe stopped old/new Worker service,
+path and image-loader units, fence removed/legacy launchers, and require bounded
+proof that running claims and job directories are empty; unknown evidence
+refuses maintenance. Preserve standalone behavior when admission is disabled
+and no prior ledger exists; an existing ledger must not silently lose its guard.
+This step grants no Worker capability. Add daemon-generation recovery, bound
+the artifact stream and replace the Worker read-only-mount validation skip with
+exact results-mount validation before enabling grants. Private worker
+data/retention remain outside admitted workspace/state volumes; worker compute
+still relies on explicit host reserves.
 
 `feat/research-admission` now projects the final Research process/relay contract
 and connects it to Generic grants, owned service dependencies and the OCI
