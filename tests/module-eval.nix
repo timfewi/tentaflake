@@ -718,6 +718,7 @@ let
   );
   guardedWorkerSpec = guardedWorkerPlan.workers.hermes-worker;
   guardedWorkerService = guardedWorker.config.systemd.services.tentaflake-worker-hermes-worker;
+  guardedWorkerInputs = guardedWorker.config.tentaflake.worker.maintenance;
   legacyWorkerInputs = workerCapsule.config.tentaflake.worker.maintenance;
   podmanWorkerInputs = podmanCapsule.config.tentaflake.worker.maintenance;
   reservedWorkerNames =
@@ -1471,12 +1472,12 @@ assert (builtins.head tailscalePolicy.ssh).action == "check";
 pkgs.runCommand "tentaflake-module-evaluation" { } ''
   # Read the actual generated JSON artifacts without introducing IFD.
   ${lib.getExe pkgs.jq} -e --arg cli '${guardedWorkerPlan.tools.cli}' \
-    '.admission_cli == $cli and .agent == "hermes-worker"' ${guardedWorkerSpec.config} >/dev/null
+    '.admission_cli == $cli and .agent == "hermes-worker"' ${guardedWorkerInputs.workers.hermes-worker.config} >/dev/null
   ${lib.getExe pkgs.jq} -e '.admission_cli == null' ${legacyWorkerInputs.workers.hermes-worker.config} >/dev/null
   ${lib.getExe pkgs.jq} -e --arg runtime '${lib.getExe guardedWorker.config.virtualisation.docker.package}' \
     --arg archive '${guardedWorker.config.tentaflake.worker.image}' \
     '.schemaVersion == 1 and .enforced == true and .backend == "docker" and .runtime == $runtime and .archive == $archive' \
-    ${guardedWorkerPlan.workerImage.config} >/dev/null
+    ${guardedWorkerInputs.image.config} >/dev/null
   ${lib.getExe pkgs.jq} -e --arg runtime '${lib.getExe workerCapsule.config.virtualisation.docker.package}' \
     --arg archive '${workerCapsule.config.tentaflake.worker.image}' \
     '.schemaVersion == 1 and .enforced == false and .backend == "docker" and .runtime == $runtime and .archive == $archive' \
