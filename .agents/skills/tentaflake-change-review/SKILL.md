@@ -1,7 +1,7 @@
 ---
 name: tentaflake-change-review
 description: Review a Tentaflake change for a concrete requirement, proportionate verification, synchronized docs and a complete PR.
-version: 1.1.7
+version: 1.1.8
 ---
 
 # Tentaflake change review
@@ -59,7 +59,9 @@ exception needs inert properties and successful installed-file absence checks
 before and after observation; query failures never prove absence.
 Review harness-generated mounts too: the NixOS VM's writable store adds an
 overlay. Fixtures using prebuilt closures can use its read-only store bind mount
-when admission does not support observing overlay backing options.
+when admission does not support observing overlay backing options. Disable guest
+Nix for such fixtures: the harness's closure-registration service otherwise tries
+to change store ownership at boot and fails, including during later activation.
 When a VM deliberately declares missing grants, assert the doctor's exact severe
 findings and nonzero exit; healthy subsystem checks must retain that host posture.
 After extracting service scripts into immutable helpers, migrate every inline-script
