@@ -134,13 +134,31 @@ fn hidden_diagnostics_redact_names_in_both_formats() {
                 true,
                 &[("FIXTURE_STATE", "failed"), ("FIXTURE_STATE_EXIT", "3")],
             );
-            assert_eq!(output.status.code(), Some(1));
-            let stdout = String::from_utf8(output.stdout).unwrap();
-            assert!(
-                !stdout.contains("private"),
-                "{command}, json={json}: {stdout}"
+            let mut stderr = String::from_utf8_lossy(&output.stderr)
+                .replace(fixture.0.to_string_lossy().as_ref(), "<fixture>");
+            for private in [
+                "coding-private-fixture",
+                "stopped-private-fixture",
+                "fixture-private-host",
+                "fixture-private-stderr",
+                "fixture-private-invalid-state",
+            ] {
+                stderr = stderr.replace(private, "<redacted>");
+            }
+            let stderr: String = stderr
+                .chars()
+                .flat_map(char::escape_default)
+                .take(1024)
+                .collect();
+            let context = format!(
+                "{command}, json={json}, hide=true, exit={:?}, stderr_bytes={}, stderr_prefix=\"{stderr}\"",
+                output.status.code(),
+                output.stderr.len()
             );
-            assert!(output.stderr.is_empty());
+            assert_eq!(output.status.code(), Some(1), "{context}");
+            let stdout = String::from_utf8(output.stdout).unwrap();
+            assert!(!stdout.contains("private"), "{context}");
+            assert!(output.stderr.is_empty(), "{context}");
             if json {
                 let parsed: serde_json::Value = serde_json::from_str(&stdout).unwrap();
                 assert_eq!(parsed["host"], "redacted");
