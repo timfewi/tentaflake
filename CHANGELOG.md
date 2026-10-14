@@ -11,6 +11,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   retain uncertain image loads in the admission ledger and require explicit
   stopped-backend recovery. Include Worker watchers, loaders and retained job
   state in bootstrap/publication maintenance observations.
+- Give parallel CLI test fixtures distinct directory names even when clock
+  readings coincide.
+- Verify expected missing-ledger refusals before cleaning up quota owners in
+  both initial OCI admission VM fixtures.
+- Detach only the read-only shared Nix store during admission VM shutdown,
+  preserving ordinary runtime and persistent-volume cleanup.
 - Capture CLI refusal diagnostics from stderr in publication VM assertions.
 - Bound Worker artifact pipes, raw TAR metadata, trailer and client exit under
   one deadline without buffering the archive. Retain dispatch identity on

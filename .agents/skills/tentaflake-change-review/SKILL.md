@@ -45,13 +45,17 @@ host Cargo tests passed while the package tests failed. Anchor private fixtures
 at checked directory descriptors, retain descendant ownership/mode checks, and
 independently assert that the public absolute-path API still refuses foreign
 root ownership. Never relax production ownership policy to fit a sandbox.
+Use a process-wide counter for concurrent fixture names; PID plus a nanosecond
+clock reading alone collided in parallel CI diagnostics tests.
 
 VM lifecycle fixtures must inspect container readiness after a unit becomes
 active. A successful `systemctl stop` may unload the unit; assert inactive state
 and no queued job after a successful run instead of requiring a later
 `reset-failed`. After an intentional refusal, allow its known failed state to
 remain, but reject new failures during cleanup. Keep refusal and container-absence
-evidence independent of cleanup.
+evidence independent of cleanup. Initial quota owners can already have refused
+the missing ledger at boot; verify that invocation's diagnostic and absent images
+before accepting its retained failed state in each node's bootstrap setup.
 The VM driver's command result contains stdout only. Capture stderr explicitly
 when asserting a CLI refusal message, while retaining the nonzero-exit check.
 Systemd's loaded inventory can include dependency-only `not-found` mounts (the
@@ -66,6 +70,9 @@ overlay. Fixtures using prebuilt closures can use its read-only store bind mount
 when admission does not support observing overlay backing options. Disable guest
 Nix for such fixtures: the harness's closure-registration service otherwise tries
 to change store ownership at boot and fails, including during later activation.
+Keep this bind explicitly read-only and lazily detach only that shared store at
+shutdown: its busy mount otherwise exhausted the guest's 30-minute poweroff job.
+Persistent volume and runtime stop checks must remain unchanged.
 When a VM deliberately declares missing grants, assert the doctor's exact severe
 findings and nonzero exit; healthy subsystem checks must retain that host posture.
 After extracting service scripts into immutable helpers, migrate every inline-script

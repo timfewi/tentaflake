@@ -215,11 +215,21 @@ in
         # These tests execute prebuilt closures; admission does not support the
         # VM harness's writable-store overlay with unobserved backing options.
         writableStore = false;
+        fileSystems."/nix/store".options = [ "ro" ];
         oci-containers.backend = "docker";
         docker.enable = true;
         docker.daemon.settings."live-restore" = false;
         memorySize = 768;
         diskSize = 2048;
+      };
+      # Detach the busy immutable shared store after ordinary services stop;
+      # persistent volumes retain their normal unmount behavior.
+      systemd.units."nix-store.mount" = {
+        overrideStrategy = "asDropin";
+        text = ''
+          [Mount]
+          LazyUnmount=true
+        '';
       };
       environment.systemPackages = [
         pkgs.btrfs-progs

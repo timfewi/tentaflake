@@ -2,15 +2,19 @@ use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 use std::process::{Command, Output};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
+
+static NEXT_FIXTURE: AtomicU64 = AtomicU64::new(0);
 
 struct Fixture(PathBuf);
 
 impl Fixture {
     fn new() -> Self {
         let root = std::env::temp_dir().join(format!(
-            "tentaflake-diagnostics-{}-{}",
+            "tentaflake-diagnostics-{}-{}-{}",
             std::process::id(),
+            NEXT_FIXTURE.fetch_add(1, Ordering::Relaxed),
             SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .unwrap()
@@ -91,6 +95,32 @@ impl Drop for Fixture {
     fn drop(&mut self) {
         let _ = fs::remove_dir_all(&self.0);
     }
+}
+
+#[test]
+fn parallel_fixtures_use_distinct_directories() {
+    let barrier = std::sync::Barrier::new(8);
+    let fixtures = std::thread::scope(|scope| {
+        let threads: Vec<_> = (0..8)
+            .map(|_| {
+                scope.spawn(|| {
+                    barrier.wait();
+                    Fixture::new()
+                })
+            })
+            .collect();
+        threads
+            .into_iter()
+            .map(|thread| thread.join().unwrap())
+            .collect::<Vec<_>>()
+    });
+    let paths: std::collections::BTreeSet<_> = fixtures.iter().map(|fixture| &fixture.0).collect();
+    assert_eq!(paths.len(), fixtures.len());
+    assert!(
+        fixtures
+            .iter()
+            .all(|fixture| fixture.0.join("cli.conf").is_file())
+    );
 }
 
 #[test]
