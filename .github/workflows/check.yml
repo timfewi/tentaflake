@@ -8,61 +8,17 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
-    inputs:
-      base_sha:
-        description: 'Comparison commit (40-char SHA); empty or unavailable history runs full inventory'
-        type: string
-        required: false
-        default: ''
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event_name == 'workflow_dispatch' && 'explicit' || 'automatic' }}-${{ github.event.pull_request.number || github.ref }}
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
-  changes:
-    runs-on: ubuntu-latest
-    outputs:
-      builds: ${{ steps.filter.outputs.builds }}
-      runtime: ${{ steps.filter.outputs.runtime }}
-      research: ${{ steps.filter.outputs.research }}
-      nix: ${{ steps.filter.outputs.nix }}
-      evaluate: ${{ steps.filter.outputs.evaluate }}
-      generated: ${{ steps.filter.outputs.generated }}
-      rust: ${{ steps.filter.outputs.rust }}
-      cli: ${{ steps.filter.outputs.cli }}
-      broker: ${{ steps.filter.outputs.broker }}
-      worker: ${{ steps.filter.outputs.worker }}
-      devcontainer: ${{ steps.filter.outputs.devcontainer }}
-      codex: ${{ steps.filter.outputs.codex }}
-      selection: ${{ steps.filter.outputs.selection }}
-      static: ${{ steps.filter.outputs.static }}
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          fetch-depth: 0
-
-      - name: Check CI selection with real Git histories
-        run: |
-          python3 scripts/test_ci_changes.py
-          python3 scripts/test_eval_flake.py
-
-      # One path policy; only an explicit dispatch can select expensive work.
-      # Unknown history selects all fast checks or the full explicit inventory.
-      - name: Detect affected checks
-        id: filter
-        env:
-          BASE_SHA: ${{ inputs.base_sha || github.event.pull_request.base.sha || github.event.before }}
-          HEAD_SHA: ${{ github.sha }}
-          CHECK_MODE: ${{ github.event_name == 'workflow_dispatch' && 'full' || 'fast' }}
-        run: |
-          python3 scripts/ci_changes.py "$BASE_SHA" "$HEAD_SHA" \
-            --mode "$CHECK_MODE" --summary "$GITHUB_STEP_SUMMARY" >> "$GITHUB_OUTPUT"
-
+  # Fast checks only: formatting, lint, Rust, offline catalog checks and flake
+  # evaluation without building. Host builds and VM tests are manual steps.
   check:
-    needs: changes
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -71,168 +27,11 @@ jobs:
         run: git show --format= --check --first-parent HEAD
 
       - uses: DeterminateSystems/nix-installer-action@3138316df39ed29be04236d7ffc686fa525866aa # v23
-        if: needs.changes.outputs.nix == 'true'
         with:
           extra-conf: |
             accept-flake-config = true
 
-      # Contributor tools use the pinned binary cache. Uploading that store
-      # again costs more than these source checks; cache only explicit builds.
-      - name: nix fmt check
-        if: needs.changes.outputs.static == 'true'
-        run: nix develop --command just formatter-test
-
-      - name: Shallow flake source regression
-        if: needs.changes.outputs.static == 'true'
-        # Use the installed CI Nix, as the explicit evaluation job does.
-        run: python3 scripts/test_eval_flake_nix.py
-
-      - name: Nix lint
-        if: needs.changes.outputs.static == 'true'
-        run: |
-          nix develop --command deadnix --fail .
-          nix develop --command statix check .
-
-      - name: cargo fmt
-        if: needs.changes.outputs.rust == 'true'
-        run: nix develop --command cargo fmt --all -- --check
-
-      - name: Workflow lint
-        if: needs.changes.outputs.static == 'true'
-        run: nix develop --command actionlint .github/workflows/*.yml
-
-      - name: Host API contract
-        if: needs.changes.outputs.static == 'true'
-        run: nix develop --command python3 scripts/test_api_contract.py
-
-      - name: Base image metadata catalog
-        if: needs.changes.outputs.static == 'true'
-        run: nix develop --command python3 scripts/test_image_catalog.py
-
-      - name: Local image descriptor
-        if: needs.changes.outputs.static == 'true'
-        run: nix develop --command python3 scripts/test_describe_docker_archive.py
-
-      - name: Codex reference configuration
-        if: needs.changes.outputs.static == 'true'
-        run: nix develop --command python3 scripts/test_codex_reference.py
-
-      - name: Rust lint and unit tests
-        if: needs.changes.outputs.rust == 'true'
+      - name: Fast checks and flake evaluation
         env:
-          CHECK_CLI: ${{ needs.changes.outputs.cli }}
-          CHECK_BROKER: ${{ needs.changes.outputs.broker }}
-          CHECK_WORKER: ${{ needs.changes.outputs.worker }}
-        run: |
-          packages=()
-          for crate in cli broker worker; do
-            variable="CHECK_${crate^^}"
-            if [[ "${!variable}" == true ]]; then
-              packages+=(--package "tentaflake-$crate")
-            fi
-          done
-          if [[ "$CHECK_CLI" == true ]]; then
-            packages+=(--package tentaflake-admission)
-          fi
-          # Refuse an inconsistent policy instead of silently widening the suite.
-          test "${#packages[@]}" -gt 0
-          nix develop --command cargo clippy "${packages[@]}" --all-targets -- -D warnings
-          nix develop --command cargo test "${packages[@]}"
-
-      # Via the devShell, not the runner's apt shellcheck: the two versions
-      # disagree (Ubuntu's flags SC2015 where 0.11 does not), so an unpinned
-      # binary means "clean locally" and "clean in CI" are different claims.
-      # flake.lock pins this one, and it is the same one `nix develop` gives.
-      - name: shellcheck
-        if: needs.changes.outputs.static == 'true'
-        run: nix develop --command shellcheck installer/*.sh scripts/*.sh
-
-  # Share one store across explicit builds and VMs; automatic runs never enter.
-  build:
-    needs: changes
-    if: needs.changes.outputs.builds == 'true'
-    runs-on: ubuntu-latest
-    timeout-minutes: 120
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - uses: DeterminateSystems/nix-installer-action@3138316df39ed29be04236d7ffc686fa525866aa # v23
-        with:
-          extra-conf: |
-            accept-flake-config = true
-
-      - name: Optional Nix cache
-        uses: DeterminateSystems/magic-nix-cache-action@84c0677f58dcedf3b91f8223ce36a9ea5b3c84b7 # v15
-        timeout-minutes: 3
-        continue-on-error: true
-        with:
-          use-flakehub: false
-
-      # Evaluation is not runtime evidence; selected VMs run below.
-      # Read-only flake evaluation cannot instantiate an uncached closureInfo
-      # derivation. Build the non-VM policy gates first; they materialize the
-      # exact research closures without widening any sandbox mount.
-      - name: prepare research evaluation closures
-        if: needs.changes.outputs.evaluate == 'true'
-        run: |
-          for check in research-policy module-evaluation; do
-            nix build --no-link ".#checks.x86_64-linux.$check"
-          done
-
-      - name: nix flake check (eval)
-        if: needs.changes.outputs.evaluate == 'true'
-        run: python3 scripts/eval_flake.py
-
-      # Build only selected packages/checks. A Rust edit does not require the
-      # Research closures or host evaluation; worker edits include its image.
-      - name: nix build (non-VM checks)
-        if: needs.changes.outputs.nix == 'true'
-        env:
-          CHECK_EVALUATE: ${{ needs.changes.outputs.evaluate }}
-          CHECK_DEVCONTAINER: ${{ needs.changes.outputs.devcontainer }}
-          CHECK_CODEX: ${{ needs.changes.outputs.codex }}
-          CHECK_CLI: ${{ needs.changes.outputs.cli }}
-          CHECK_BROKER: ${{ needs.changes.outputs.broker }}
-          CHECK_WORKER: ${{ needs.changes.outputs.worker }}
-        run: |
-          selected_checks=()
-          if [[ "$CHECK_DEVCONTAINER" == true ]]; then
-            selected_checks+=(.#checks.x86_64-linux.devcontainer-cli)
-          fi
-          if [[ "$CHECK_CODEX" == true ]]; then
-            selected_checks+=(.#checks.x86_64-linux.codex-reference)
-          fi
-          if [[ "$CHECK_EVALUATE" == true ]]; then
-            selected_checks+=(.#checks.x86_64-linux.image-pinning .#checks.x86_64-linux.agent-adapters)
-          fi
-          if [[ "$CHECK_CLI" == true ]]; then
-            selected_checks+=(.#checks.x86_64-linux.tentaflake-cli)
-          fi
-          if [[ "$CHECK_BROKER" == true ]]; then
-            selected_checks+=(.#checks.x86_64-linux.tentaflake-broker)
-          fi
-          if [[ "$CHECK_WORKER" == true ]]; then
-            selected_checks+=(.#checks.x86_64-linux.tentaflake-worker .#checks.x86_64-linux.tentaflake-worker-image)
-          fi
-          if [[ "$CHECK_CLI" == true || "$CHECK_BROKER" == true || "$CHECK_WORKER" == true ]]; then
-            selected_checks+=(.#checks.x86_64-linux.rust-package-sources)
-          fi
-          for ((offset=0; offset<${#selected_checks[@]}; offset+=4)); do
-            nix build --no-link "${selected_checks[@]:offset:4}"
-          done
-
-      - name: nix build (tentaflake toplevel)
-        if: needs.changes.outputs.evaluate == 'true' && needs.changes.outputs.runtime == 'true'
-        run: nix build .#nixosConfigurations.tentaflake.config.system.build.toplevel --no-link
-
-      - name: generated installed flake
-        if: needs.changes.outputs.generated == 'true'
-        run: nix develop --command ./scripts/generated-flake-test.sh
-
-      - name: nix build (runtime VM integration test)
-        if: needs.changes.outputs.runtime == 'true'
-        run: nix build --no-link -L .#checks.x86_64-linux.vm-integration
-
-      - name: nix build (research VM integration test)
-        if: needs.changes.outputs.research == 'true'
-        run: nix build --no-link -L .#checks.x86_64-linux.research-integration
+          TENTAFLAKE_NO_BANNER: "1"
+        run: nix develop --command just check

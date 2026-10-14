@@ -1,5 +1,5 @@
 # tentaflake dev commands — run `just` to list them.
-# Fast source checks and explicitly selected build/runtime gates.
+# Fast checks only; building the host or a VM is an explicit, manual step.
 
 # Use the pinned contributor tools even from an ordinary shell.
 set shell := ["nix", "develop", "--no-write-lock-file", "--command", "bash", "-euo", "pipefail", "-c"]
@@ -13,84 +13,45 @@ alias list := default
 
 # ── The gates ────────────────────────────────────────────────
 
-# Full local gate: source checks, all flake checks and the installer ISO
-ci: formatter-test lint shellcheck rust ci-policy api-contract image-catalog local-image codex-reference check generated-flake iso-installer
-    @echo "==> all green"
+# Fast source checks: formatting, lint, Rust, offline catalog checks
+fast: formatter-test lint rust image-catalog
+    actionlint .github/workflows/*.yml
 
-# Fast source checks; evaluation and all Nix package/runtime builds are explicit
-fast: formatter-test lint shellcheck rust ci-policy api-contract image-catalog local-image codex-reference
+# Fast checks plus flake evaluation without building (the CI gate)
+check: fast eval
 
-# Validate the versioned host API and all offline contract exchanges
-api-contract:
-    python3 scripts/test_api_contract.py
+# Unit tests
+test:
+    cargo test --workspace
+    python3 scripts/test_image_catalog.py
+
+# Evaluate every flake output without building; force all shared constants,
+# which the lazy flake check would not touch
+eval:
+    nix flake check --no-build
+    nix eval --json --file lib/constants.nix > /dev/null
+
+# Build the host system closure (explicit; not part of CI)
+build:
+    nix build .#nixosConfigurations.tentaflake.config.system.build.toplevel --no-link
 
 # Verify base-image pins against checked-in registry metadata without acquisition
 image-catalog:
     python3 scripts/test_image_catalog.py
-
-# Validate bounded Docker archive descriptors without loading an image
-local-image:
-    python3 scripts/test_describe_docker_archive.py
-
-# Check native-reference configuration and private paths without running Codex
-codex-reference:
-    python3 scripts/test_codex_reference.py
-
-# Check the generated Nix runtime plan through the real closed Rust loader
-# This explicit evaluator gate strips dependencies only from its read-only copy.
-admission-plan:
-    TENTAFLAKE_TEST_ADMISSION_PLAN="$(nix eval --raw --no-write-lock-file --option allow-import-from-derivation false .#checks.x86_64-linux.agent-adapters.admissionPlan --apply 'plan: builtins.toFile "tentaflake-schema-fixture.json" (builtins.unsafeDiscardStringContext plan.text)')" cargo test -p tentaflake-cli --locked admission_host::tests::generated_nix_plan_matches_closed_host_schema -- --ignored --exact
-
-# Test routing with real Git histories and validate workflow syntax
-ci-policy:
-    python3 scripts/test_ci_changes.py
-    python3 scripts/test_eval_flake.py
-    python3 scripts/test_eval_flake_nix.py
-    actionlint .github/workflows/*.yml
-
-# Materialize exact research closures before read-only flake evaluation
-eval:
-    for check in research-policy module-evaluation agent-adapters; do nix build --no-link ".#checks.x86_64-linux.$check"; done
-    python3 scripts/eval_flake.py
-
-# Automated end-to-end gate (alias for the complete local CI path)
-e2e: ci
-
-# Rebuild the locked Dev Container and run its contributor-shell smoke test
-e2e-devcontainer:
-    ./scripts/e2e-devcontainer.sh
-
-# Scan tracked source and locked dependencies for security findings
-security:
-    ./scripts/security-scan.sh
-
-# Build and boot the installer ISO with one isolated QCOW2 disk
-e2e-installer:
-    ./scripts/e2e-installer-vm.sh install
-
-# Boot the disposable VM created by `just e2e-installer`
-e2e-run-vm:
-    ./scripts/e2e-installer-vm.sh boot
-
-# nix flake check (eval + host + Rust packages + VM test)
-check:
-    nix flake check
-
-# Build just the tentaflake system (the toplevel CI builds), no symlink
-build:
-    nix build .#nixosConfigurations.tentaflake.config.system.build.toplevel --no-link
 
 # ── Formatting & lint ────────────────────────────────────────
 
 # Format the tree in place (nixfmt via `nix fmt`)
 fmt:
     nix fmt -- --tree-root .
+    cargo fmt --all
 
 # Read-only check of tracked and non-ignored untracked regular Nix files
 fmt-check:
     git ls-files -z --cached --others --exclude-standard -- '*.nix' | while IFS= read -r -d '' file; do if [[ -f "$file" && ! -L "$file" ]]; then nixfmt --check "./$file"; fi; done
+    cargo fmt --all -- --check
 
-# Prove the actual formatter gate fails without rewriting its own fixture
+# Prove the formatter gate fails without rewriting its own fixture
 formatter-test: fmt-check
     python3 scripts/test_format_check.py
 
@@ -102,30 +63,12 @@ lint:
 # ── Rust workspace ───────────────────────────────────────────
 
 rust:
-    cargo fmt --all -- --check
     cargo clippy --workspace --all-targets -- -D warnings
     cargo test --workspace
 
-# ── Shell scripts ────────────────────────────────────────────
-
-# ShellCheck the installer + helper scripts (CI parity)
-shellcheck:
-    shellcheck installer/*.sh scripts/*.sh
-
-# Evaluate the flake installer.sh generates for an installed machine with a
-# declarative JSON agent fixture.
-generated-flake:
-    ./scripts/generated-flake-test.sh
-
-# ── ISOs ─────────────────────────────────────────────────────
-
-# Build the installer ISO (minimal, installs to disk)
-iso-installer:
-    ./scripts/build-iso.sh installer
-
 # ── Release ──────────────────────────────────────────────────
 
-# Cut a release tag. Update CHANGELOG.md FIRST, then: just tag v0.4.0
+# Cut a release tag. Update CHANGELOG.md FIRST, then: just tag v0.5.0
 # The git tag is the source of truth for the repo version.
 tag VERSION:
     @test -z "$(git status --porcelain)" || { echo "working tree dirty (staged, unstaged or untracked) — commit first"; exit 1; }

@@ -6,6 +6,36 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+
+### 0.5 reset
+
+0.5 restarts Tentaflake from a small core: a NixOS host where a web UI creates
+isolated agent environments (Ubuntu in a gVisor sandbox with one agent runtime,
+the user's own model API keys, MCP servers and tools). See
+[the architecture](docs/architecture.md). The pre-0.5 line is frozen at tag
+`v0.4-final` and branch `legacy/0.4` and is no longer maintained.
+
+### Removed
+- Statically declared agents and their adapters (Hermes, ZeroClaw, OpenClaw,
+  generic), `my-agents.nix`/`agents.json` loading and the agent builders.
+- The admission core, its durable ledger, the operator CLI and the disposable
+  worker (`crates/tentaflake-admission`, `crates/tentaflake-cli`,
+  `crates/tentaflake-worker`).
+- The Research service integration, workspace-quota, backup, image-provenance
+  and per-agent broker modules, and the observability and Falco profiles.
+- The pre-0.5 host API contract (`api/v1`), the installer ISO, the Codex
+  reference image, examples, bundled agent skills and the Dev Container.
+- VM tests and the CI routing that selected them, and the automatic patch-tag
+  workflow. CI now runs fast checks and flake evaluation only.
+- The pre-0.5 guides in `docs/`.
+
+### Kept
+- The host modules (boot, hardening, locale, networking, Nix settings,
+  packages, security profile and resource options, SSH, users, Tailscale and
+  private management), Docker with the gVisor `runsc` runtime, the broker
+  crate and package, and the reviewed base-image catalog.
+
+## [0.4-final] - 2026-10-14
 ### Fixed
 - Mark crashed OCI supervisors Unknown through an exact-invocation post-stop
   hook, retaining container identity and resource charges without daemon mutation.

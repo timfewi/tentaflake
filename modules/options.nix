@@ -18,10 +18,6 @@ in
       [ "tentaflake" "management" "enable" ]
     )
     (lib.mkRenamedOptionModule
-      [ "tentaflake" "shell" "hermesCli" "enable" ]
-      [ "tentaflake" "shell" "tentaflakeCli" "enable" ]
-    )
-    (lib.mkRenamedOptionModule
       [ "tentaflake" "networking" "egress" ]
       [ "tentaflake" "networking" "legacyPortEgress" ]
     )
@@ -135,7 +131,7 @@ in
         "podman"
       ];
       default = "docker";
-      description = "OCI container backend for agent containers (\"docker\" or \"podman\")";
+      description = "OCI container backend for agent environment containers (\"docker\" or \"podman\")";
     };
 
     # Module enable toggles
@@ -226,67 +222,6 @@ in
     ssh = {
       # Off by default: Tailscale SSH is the primary access path.
       enable = lib.mkEnableOption "hardened OpenSSH server (key-only, no root) with fail2ban, opens TCP 22";
-    };
-
-    # ── Interactive shell experience for SSH/console operators ──
-    shell = {
-      enable =
-        lib.mkEnableOption "improved interactive shell (prompt, completion, MOTD, tentaflake CLI, tools)"
-        // {
-          default = true;
-        };
-
-      motd = {
-        enable = lib.mkEnableOption "dynamic login banner (tentaflake-status) on SSH/console login" // {
-          default = true;
-        };
-      };
-
-      tools = {
-        enable =
-          lib.mkEnableOption "curated modern CLI tools (eza, bat, fd, ripgrep, fzf, htop, btop, …)"
-          // {
-            default = true;
-          };
-      };
-
-      starship = {
-        enable = lib.mkEnableOption "the starship prompt (falls back to a colored bash prompt if off)" // {
-          default = true;
-        };
-      };
-
-      zsh = {
-        enable =
-          lib.mkEnableOption "zsh as the interactive/login shell (Oh My Zsh, autosuggestions, syntax highlighting, fzf-tab)"
-          // {
-            default = false;
-          };
-      };
-
-      zoxide = {
-        enable = lib.mkEnableOption "zoxide smart directory jumping (cross-shell)" // {
-          default = true;
-        };
-      };
-
-      lazygit = {
-        enable = lib.mkEnableOption "lazygit terminal Git UI (adds the 'lg' alias)" // {
-          default = false;
-        };
-      };
-
-      tmux = {
-        enable = lib.mkEnableOption "tmux terminal multiplexer with a sensible system config" // {
-          default = false;
-        };
-      };
-
-      tentaflakeCli = {
-        enable = lib.mkEnableOption "the 'tentaflake' multi-runtime agent-management CLI" // {
-          default = true;
-        };
-      };
     };
   };
 }
