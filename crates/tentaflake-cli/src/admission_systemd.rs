@@ -138,7 +138,7 @@ pub(crate) fn inspect_unit_until(
     name: &str,
     deadline: Instant,
 ) -> Result<UnitObservation, String> {
-    observe_unit(busctl, name, "GetUnit", deadline)
+    observe_unit(busctl, name, "GetUnit", MetadataScope::Required, deadline)
 }
 
 /// Explicitly load a named unit's metadata, without starting it. A missing unit
@@ -148,6 +148,7 @@ pub(crate) fn load_unit(busctl: &Path, name: &str) -> Result<UnitObservation, St
         busctl,
         name,
         "LoadUnit",
+        MetadataScope::Required,
         Instant::now() + OBSERVATION_TIMEOUT,
     )
 }
@@ -187,6 +188,12 @@ pub(crate) fn inspect_socket_until(
     parse_socket(&before, &properties, &after, name)
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum MetadataScope {
+    Required,
+    IncidentalMount,
+}
+
 fn valid_busctl(busctl: &Path) -> bool {
     crate::admission_host::store_path(busctl)
         && busctl.file_name() == Some("busctl".as_ref())
@@ -197,6 +204,7 @@ fn observe_unit(
     busctl: &Path,
     name: &str,
     method: &str,
+    scope: MetadataScope,
     deadline: Instant,
 ) -> Result<UnitObservation, String> {
     if !valid_busctl(busctl) || !unit_name(name) {
@@ -206,9 +214,10 @@ fn observe_unit(
     let object = unit_object(busctl, name, method, deadline)?;
     let mut arguments = vec!["get-property", DESTINATION, &object, UNIT_INTERFACE];
     arguments.extend(UNIT_PROPERTIES);
-    let mut observed = parse_unit(
+    let mut observed = parse_metadata(
         &read_bus(busctl, &arguments, deadline, MAX_RESPONSE_BYTES)?,
         name,
+        scope,
     )?;
     let service = if name.ends_with(".service") {
         let mut service_arguments = vec![
@@ -245,9 +254,10 @@ fn observe_unit(
     } else {
         None
     };
-    let after = parse_unit(
+    let after = parse_metadata(
         &read_bus(busctl, &arguments, deadline, MAX_RESPONSE_BYTES)?,
         name,
+        scope,
     )?;
     if observed != after {
         return Err("systemd unit changed during observation".into());
@@ -290,11 +300,61 @@ pub(crate) fn list_quota_units(busctl: &Path) -> Result<Vec<String>, String> {
         ],
         quota_name,
     )
+    .map(|inventory| inventory.names.into_iter().collect())
 }
 
-/// Include native mount files that are installed but not currently loaded.
-pub(crate) fn list_mount_units(busctl: &Path) -> Result<Vec<String>, String> {
-    list_units(busctl, &["*.mount"], mount_name)
+/// Observe native mounts, including installed but currently unloaded files.
+/// Dependency-only mount objects (observed as home.mount in the NixOS VM) may
+/// explicitly report not-found. Only undeclared, inactive objects absent from
+/// successful file inventories before and after observation are inert here.
+/// Required units and all query failures remain errors. Callers hold the host
+/// maintenance fence; this read-only sweep does not fence privileged writers.
+pub(crate) fn observe_mount_units(
+    busctl: &Path,
+    required: &BTreeSet<String>,
+) -> Result<Vec<UnitObservation>, String> {
+    observe_mount_inventory(
+        required,
+        || list_units(busctl, &["*.mount"], mount_name),
+        |name, scope| {
+            observe_unit(
+                busctl,
+                name,
+                "LoadUnit",
+                scope,
+                Instant::now() + OBSERVATION_TIMEOUT,
+            )
+        },
+    )
+}
+
+fn observe_mount_inventory(
+    required: &BTreeSet<String>,
+    mut list: impl FnMut() -> Result<UnitInventory, String>,
+    mut observe: impl FnMut(&str, MetadataScope) -> Result<UnitObservation, String>,
+) -> Result<Vec<UnitObservation>, String> {
+    let inventory = list()?;
+    let mut observed = Vec::new();
+    let mut inert = BTreeSet::new();
+    for name in inventory.names {
+        let scope = if required.contains(&name) || inventory.installed.contains(&name) {
+            MetadataScope::Required
+        } else {
+            MetadataScope::IncidentalMount
+        };
+        let unit = observe(&name, scope)?;
+        if unit.load_state == "not-found" {
+            validate_inert_mount(&unit)?;
+            inert.insert(name);
+        } else {
+            observed.push(unit);
+        }
+    }
+    if !inert.is_empty() {
+        let after = list()?;
+        ensure_uninstalled(&inert, &after.installed)?;
+    }
+    Ok(observed)
 }
 
 /// Include old OCI launchers even when absent from the currently desired plan.
@@ -304,6 +364,12 @@ pub(crate) fn list_runtime_units(busctl: &Path) -> Result<Vec<String>, String> {
         &["docker-*.service", "podman-*.service"],
         runtime_name,
     )
+    .map(|inventory| inventory.names.into_iter().collect())
+}
+
+struct UnitInventory {
+    names: BTreeSet<String>,
+    installed: BTreeSet<String>,
 }
 
 /// Discover at most 16 loaded instances of one Research relay template. Include
@@ -372,7 +438,7 @@ fn list_units(
     busctl: &Path,
     patterns: &[&str],
     valid_name: fn(&str) -> bool,
-) -> Result<Vec<String>, String> {
+) -> Result<UnitInventory, String> {
     if !valid_busctl(busctl) {
         return Err("invalid systemd observation tool".into());
     }
@@ -395,14 +461,48 @@ fn list_units(
     let mut names: BTreeSet<_> = parse_listed_units(&list("ListUnitsByPatterns")?, valid_name)?
         .into_iter()
         .collect();
-    names.extend(parse_listed_files(
-        &list("ListUnitFilesByPatterns")?,
-        valid_name,
-    )?);
+    let installed: BTreeSet<_> = parse_listed_files(&list("ListUnitFilesByPatterns")?, valid_name)?
+        .into_iter()
+        .collect();
+    names.extend(installed.iter().cloned());
     if names.len() > 512 {
         return Err("systemd unit listing limit exceeded".into());
     }
-    Ok(names.into_iter().collect())
+    Ok(UnitInventory { names, installed })
+}
+
+fn inert_mount_metadata(unit: &UnitObservation) -> bool {
+    mount_name(&unit.id)
+        && unit.load_state == "not-found"
+        && unit.active_state == "inactive"
+        && unit.sub_state == "dead"
+        && unit.job.id == 0
+        && !unit.need_daemon_reload
+        && unit.fragment_path.is_empty()
+        && unit.invocation_id == [0; 16]
+}
+
+fn validate_inert_mount(unit: &UnitObservation) -> Result<(), String> {
+    if !inert_mount_metadata(unit)
+        || unit.service.is_some()
+        || unit
+            .mount
+            .as_ref()
+            .is_none_or(|mount| !mount.what.is_empty() || !mount.filesystem_type.is_empty())
+    {
+        return Err("unavailable mount has live or configured metadata".into());
+    }
+    Ok(())
+}
+
+fn ensure_uninstalled(
+    inert: &BTreeSet<String>,
+    installed: &BTreeSet<String>,
+) -> Result<(), String> {
+    if !inert.is_disjoint(installed) {
+        return Err("mount unit files changed during observation".into());
+    }
+    Ok(())
 }
 
 fn observation_deadline(deadline: Instant, now: Instant) -> Instant {
@@ -560,11 +660,6 @@ fn parse_unit_values(
     {
         return Err("invalid or mismatched systemd unit properties".into());
     }
-    if !matches!(load_state.as_str(), "loaded" | "masked") {
-        return Err(format!(
-            "systemd unit metadata is unavailable: {id} has LoadState={load_state}"
-        ));
-    }
     Ok(UnitObservation {
         id,
         load_state,
@@ -584,7 +679,10 @@ fn parse_unit_values(
 
 fn parse_socket_unit(bytes: &[u8], name: &str) -> Result<(UnitObservation, Vec<String>), String> {
     let mut values = records(bytes, UNIT_PROPERTIES.len() + 1, MAX_RESPONSE_BYTES)?;
-    let unit = parse_unit_values(&mut values, name)?;
+    let unit = checked_metadata(
+        parse_unit_values(&mut values, name)?,
+        MetadataScope::Required,
+    )?;
     let mut triggers: Vec<String> = property(&mut values, "as")?;
     if !name.ends_with(".socket")
         || triggers.len() > 16
@@ -631,6 +729,29 @@ fn parse_socket(
         triggers,
         max_connections,
     })
+}
+
+fn parse_metadata(
+    bytes: &[u8],
+    name: &str,
+    scope: MetadataScope,
+) -> Result<UnitObservation, String> {
+    checked_metadata(parse_unit(bytes, name)?, scope)
+}
+
+fn checked_metadata(
+    unit: UnitObservation,
+    scope: MetadataScope,
+) -> Result<UnitObservation, String> {
+    if !(matches!(unit.load_state.as_str(), "loaded" | "masked")
+        || scope == MetadataScope::IncidentalMount && inert_mount_metadata(&unit))
+    {
+        return Err(format!(
+            "systemd unit metadata is unavailable: {} has LoadState={}",
+            unit.id, unit.load_state
+        ));
+    }
+    Ok(unit)
 }
 
 fn parse_mount(bytes: &[u8]) -> Result<MountObservation, String> {
@@ -1165,6 +1286,25 @@ mod tests {
     }
 
     #[test]
+    fn socket_observation_keeps_unavailable_metadata_strict() {
+        let before = socket_unit();
+        for state in ["stub", "not-found", "bad-setting", "error", "merged"] {
+            let unit = before.replace("\"loaded\"", &format!("\"{state}\""));
+            let error = parse_socket(
+                unit.as_bytes(),
+                SOCKET.as_bytes(),
+                unit.as_bytes(),
+                "dbus.socket",
+            )
+            .unwrap_err();
+            assert_eq!(
+                error,
+                format!("systemd unit metadata is unavailable: dbus.socket has LoadState={state}")
+            );
+        }
+    }
+
+    #[test]
     fn parses_observed_selected_properties_without_aliasing() {
         let path = parse_object(
             br#"{"type":"o","data":["/org/freedesktop/systemd1/unit/dbus_2dbroker_2eservice"]}"#,
@@ -1239,20 +1379,35 @@ mod tests {
         for state in ["stub", "not-found", "bad-setting", "error", "merged"] {
             let response = UNIT.replace("\"loaded\"", &format!("\"{state}\""));
             assert_eq!(
-                parse_unit(response.as_bytes(), "dbus-broker.service").unwrap_err(),
+                parse_metadata(
+                    response.as_bytes(),
+                    "dbus-broker.service",
+                    MetadataScope::Required
+                )
+                .unwrap_err(),
                 format!(
                     "systemd unit metadata is unavailable: dbus-broker.service has LoadState={state}"
                 )
             );
             // Do not echo an alias or unvalidated response content in diagnostics.
             assert_eq!(
-                parse_unit(response.as_bytes(), "other.service").unwrap_err(),
+                parse_metadata(
+                    response.as_bytes(),
+                    "other.service",
+                    MetadataScope::Required
+                )
+                .unwrap_err(),
                 "invalid or mismatched systemd unit properties"
             );
         }
         let invalid = UNIT.replace("\"loaded\"", "\"PRIVATE RESPONSE DATA\"");
         assert_eq!(
-            parse_unit(invalid.as_bytes(), "dbus-broker.service").unwrap_err(),
+            parse_metadata(
+                invalid.as_bytes(),
+                "dbus-broker.service",
+                MetadataScope::Required
+            )
+            .unwrap_err(),
             "invalid or mismatched systemd unit properties"
         );
     }
@@ -1612,6 +1767,136 @@ mod tests {
             ["-.mount", "var-lib-old.mount"]
         );
         assert!(parse_listed_files(files, quota_name).is_err());
+    }
+
+    fn missing_mount_wire() -> String {
+        // The VM reported home.mount/not-found in its loaded inventory. Other
+        // properties model the inert case; they are independently required.
+        UNIT.replace("dbus-broker.service", "home.mount")
+            .replace("\"loaded\"", "\"not-found\"")
+            .replace("\"active\"", "\"inactive\"")
+            .replace("\"running\"", "\"dead\"")
+            .replace("/etc/systemd/system/home.mount", "")
+            .replace("[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16]", "[]")
+    }
+
+    fn missing_mount(name: &str, scope: MetadataScope) -> Result<UnitObservation, String> {
+        let mut unit = parse_metadata(missing_mount_wire().as_bytes(), name, scope)?;
+        unit.mount = Some(parse_mount(
+            br#"{"type":"s","data":""}
+{"type":"s","data":"/home"}
+{"type":"s","data":""}"#,
+        )?);
+        Ok(unit)
+    }
+
+    #[test]
+    fn incidental_missing_mount_requires_every_inert_property() {
+        let wire = missing_mount_wire();
+        let unit = missing_mount("home.mount", MetadataScope::IncidentalMount).unwrap();
+        validate_inert_mount(&unit).unwrap();
+        assert_eq!(unit.mount.as_ref().unwrap().where_path, "/home");
+        assert!(missing_mount("home.mount", MetadataScope::Required).is_err());
+        assert!(missing_mount("alias.mount", MetadataScope::IncidentalMount).is_err());
+        for (before, after) in [
+            ("home.mount", "docker.service"),
+            ("\"not-found\"", "\"stub\""),
+            ("\"not-found\"", "\"error\""),
+            ("\"inactive\"", "\"active\""),
+            ("\"inactive\"", "\"failed\""),
+            ("\"dead\"", "\"mounting\""),
+            ("[0,\"/\"]", "[7,\"/org/freedesktop/systemd1/job/7\"]"),
+            ("\"data\":false", "\"data\":true"),
+            (
+                "\"data\":\"\"",
+                "\"data\":\"/etc/systemd/system/home.mount\"",
+            ),
+            (
+                "\"data\":[]",
+                "\"data\":[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16]",
+            ),
+            ("\"type\":\"ay\"", "\"type\":\"s\""),
+        ] {
+            let changed = wire.replace(before, after);
+            let name = if before == "home.mount" {
+                "docker.service"
+            } else {
+                "home.mount"
+            };
+            assert!(
+                parse_metadata(changed.as_bytes(), name, MetadataScope::IncidentalMount).is_err(),
+                "{before} -> {after}"
+            );
+        }
+        for mode in 0..4 {
+            let mut changed = unit.clone();
+            match mode {
+                0 => changed.mount = None,
+                1 => changed.service = Some(parse_service(SERVICE.as_bytes()).unwrap()),
+                2 => changed.mount.as_mut().unwrap().what = "/var/lib/old.img".into(),
+                _ => changed.mount.as_mut().unwrap().filesystem_type = "btrfs".into(),
+            }
+            assert!(validate_inert_mount(&changed).is_err());
+        }
+    }
+
+    fn mount_inventory(installed: bool) -> UnitInventory {
+        UnitInventory {
+            names: BTreeSet::from(["home.mount".into()]),
+            installed: if installed {
+                BTreeSet::from(["home.mount".into()])
+            } else {
+                BTreeSet::new()
+            },
+        }
+    }
+
+    #[test]
+    fn incidental_mount_inventory_requires_bracketing_file_absence() {
+        for mode in 0..6 {
+            let mut calls = 0;
+            let required = if mode == 1 {
+                BTreeSet::from(["home.mount".into()])
+            } else {
+                BTreeSet::new()
+            };
+            let result = observe_mount_inventory(
+                &required,
+                || {
+                    calls += 1;
+                    if (mode == 4 && calls == 1) || (mode == 5 && calls == 2) {
+                        return Err("file inventory unavailable".into());
+                    }
+                    Ok(mount_inventory(mode == 2 || (mode == 3 && calls == 2)))
+                },
+                missing_mount,
+            );
+            if mode == 0 {
+                assert!(result.unwrap().is_empty());
+                assert_eq!(calls, 2);
+            } else {
+                assert!(result.is_err(), "mode {mode}");
+                assert_eq!(calls, if mode <= 2 || mode == 4 { 1 } else { 2 });
+            }
+        }
+        // Loaded or masked mounts stay visible to the caller's maintenance
+        // policy; the incidental exception must not hide normal observations.
+        for state in ["loaded", "masked"] {
+            let result = observe_mount_inventory(
+                &BTreeSet::new(),
+                || Ok(mount_inventory(false)),
+                |name, scope| {
+                    parse_metadata(
+                        missing_mount_wire().replace("not-found", state).as_bytes(),
+                        name,
+                        scope,
+                    )
+                },
+            )
+            .unwrap();
+            assert_eq!(result.len(), 1);
+            assert_eq!(result[0].load_state, state);
+        }
     }
 
     #[test]
