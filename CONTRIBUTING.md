@@ -22,11 +22,12 @@ this pinned environment automatically; `just list` lists them.
 
 | Recipe | What it does |
 |---|---|
-| `just fmt` | Format Nix, Rust and TypeScript in place |
+| `just fmt` | Format Nix, Rust and TypeScript (control service, UI) in place |
 | `just fmt-check` | Read-only formatting check |
 | `just test` | Unit tests |
-| `just fast` | Formatting, lint, Rust and control service checks, offline catalog checks |
+| `just fast` | Formatting, lint, Rust, control service and UI checks, offline catalog checks |
 | `just check` | `fast` plus `nix flake check --no-build` (the CI gate) |
+| `just ui-e2e` | Browser journeys in headless Chromium against the built UI and the control service with a fake Docker and OpenCode (not in CI) |
 | `just build` | Build the host closure (explicit, not in CI) |
 
 CI runs `just check` only, plus the path-filtered `runtime-smoke.yml` (Docker,
