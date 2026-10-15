@@ -68,7 +68,8 @@ only this API, and so can other clients. Request and response types live in
   (1-1000); anything else closes it with `1008`. Output arrives as text
   frames. A frame holds at most 64 KiB; a larger one from the browser drops
   the connection. It closes with `1000` and a reason when the shell exits or
-  the environment stops, and the shell ends when the connection closes.
+  the environment stops, with `1011` when OpenCode sends a frame over 256 KiB,
+  and the shell ends when the connection closes.
 - **Idle stop:** prompts, approvals, file reads, relayed events and terminal
   input are activity (`lastActivityAt`, to within 10 seconds). An environment
   without activity for `environmentIdleMinutes` (default 15) is stopped,

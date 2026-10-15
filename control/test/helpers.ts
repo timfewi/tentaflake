@@ -105,6 +105,8 @@ export class FakeOpenCode {
   permissions: Record<string, unknown>[] = [];
   files: Record<string, string> = {};
   failing = false;
+  /** Runs before OpenCode answers a PTY creation. */
+  beforePty: () => Promise<unknown> = async () => {};
   readonly pty = { input: [] as string[], resized: [] as unknown[], removed: [] as string[] };
   private readonly streams = new Set<ReadableStreamDefaultController<Uint8Array>>();
   private readonly sockets = new Set<ServerWebSocket<unknown>>();
@@ -233,6 +235,7 @@ export class FakeOpenCode {
       return new Response(stream, { headers: { "content-type": "text/event-stream" } });
     }
     if (route === "POST /api/pty") {
+      await this.beforePty();
       const data = {
         id: "pty_fake1",
         title: "t",
@@ -251,6 +254,14 @@ export class FakeOpenCode {
       return undefined;
     }
     return notFound();
+  }
+}
+
+/** Waits up to about two seconds for `condition`. */
+export async function until(condition: () => boolean, what: string): Promise<void> {
+  for (let attempt = 0; !condition(); attempt++) {
+    if (attempt > 200) throw new Error(`timed out waiting for ${what}`);
+    await Bun.sleep(10);
   }
 }
 

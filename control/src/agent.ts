@@ -17,6 +17,7 @@ import type {
 import { isObject } from "./config";
 import type { Environments } from "./environments";
 import { HttpError } from "./http";
+import { UpstreamSocket } from "./websocket";
 
 /** OpenCode in an environment did not answer, or not as expected. */
 export class OpenCodeError extends Error {}
@@ -27,6 +28,8 @@ export const fileLimit = 1024 * 1024;
 export const terminalFrameLimit = 64 * 1024;
 // Output frames are cut by characters; at most three UTF-8 bytes each.
 const outputFrameChars = terminalFrameLimit / 4;
+/** The largest terminal frame from OpenCode, which replays output in frames of 64Ki characters. */
+export const upstreamFrameLimit = 4 * terminalFrameLimit;
 // An upstream event larger than this is dropped.
 const eventFrameLimit = 1024 * 1024;
 const answerLimit = 4 * 1024 * 1024;
@@ -140,22 +143,15 @@ class OpenCode {
     await (await this.request(method, path, options)).body?.cancel();
   }
 
-  socket(path: string): Promise<WebSocket> {
-    return new Promise((resolve, reject) => {
-      const socket = new WebSocket(`${this.url.replace(/^http/, "ws")}${path}`, {
-        headers: this.headers,
-      });
-      socket.binaryType = "arraybuffer";
-      const timer = setTimeout(() => socket.close(), timeoutMs);
-      socket.onopen = () => {
-        clearTimeout(timer);
-        resolve(socket);
-      };
-      socket.onclose = () => {
-        clearTimeout(timer);
-        reject(new OpenCodeError(`OpenCode WebSocket ${path} did not open`));
-      };
-    });
+  async socket(path: string): Promise<UpstreamSocket> {
+    const url = `${this.url.replace(/^http/, "ws")}${path}`;
+    try {
+      return await UpstreamSocket.connect(url, this.headers, upstreamFrameLimit, timeoutMs);
+    } catch (error) {
+      throw new OpenCodeError(
+        `OpenCode WebSocket ${path} did not open: ${(error as Error).message}`,
+      );
+    }
   }
 }
 
@@ -276,42 +272,37 @@ export interface TerminalSocket {
  */
 export class Terminal {
   private socket: TerminalSocket | null = null;
-  private readonly early: string[] = [];
   private closed: [code: number, reason: string] | null = null;
-  private readonly release: () => void;
+  // Connecting closes the terminal at once if the environment stopped meanwhile.
+  private release = () => {};
 
   constructor(
     private readonly environments: Environments,
     private readonly environmentId: string,
     private readonly opencode: OpenCode,
     private readonly ptyId: string,
-    private readonly upstream: WebSocket,
+    private readonly upstream: UpstreamSocket,
   ) {
-    // Text frames are output; binary ones carry OpenCode's cursor metadata.
-    upstream.onmessage = ({ data }) => {
-      if (typeof data !== "string") return;
-      for (let start = 0; start < data.length; ) {
-        let end = Math.min(start + outputFrameChars, data.length);
-        const last = data.charCodeAt(end - 1);
-        if (end < data.length && last >= 0xd800 && last <= 0xdbff) end--;
-        const frame = data.slice(start, end);
-        if (this.socket === null) this.early.push(frame);
-        else this.socket.send(frame);
-        start = end;
-      }
-    };
-    upstream.onclose = () => this.close(1000, "the shell exited");
     this.release = environments.connect(environmentId, {
       terminal: true,
       close: () => this.close(1000, "the environment stopped"),
     });
   }
 
-  /** The browser's WebSocket is open. */
+  /** The browser's WebSocket is open; the output flows from now on. */
   open(socket: TerminalSocket): void {
     this.socket = socket;
-    for (const frame of this.early.splice(0)) socket.send(frame);
-    if (this.closed !== null) socket.close(...this.closed);
+    if (this.closed !== null) {
+      socket.close(...this.closed);
+      return;
+    }
+    this.upstream.start(
+      (output) => this.output(socket, output),
+      (failed) =>
+        failed
+          ? this.close(1011, "OpenCode sent an invalid terminal frame")
+          : this.close(1000, "the shell exited"),
+    );
   }
 
   /** A frame from the browser: a JSON TerminalMessage. */
@@ -327,6 +318,17 @@ export class Terminal {
       this.opencode
         .send("PUT", `/api/pty/${this.ptyId}`, { body: { size } })
         .catch((error) => console.error(`terminal resize failed: ${error.message}`));
+    }
+  }
+
+  // In frames within the limit, without splitting a surrogate pair.
+  private output(socket: TerminalSocket, output: string): void {
+    for (let start = 0; start < output.length; ) {
+      let end = Math.min(start + outputFrameChars, output.length);
+      const last = output.charCodeAt(end - 1);
+      if (end < output.length && last >= 0xd800 && last <= 0xdbff) end--;
+      socket.send(output.slice(start, end));
+      start = end;
     }
   }
 

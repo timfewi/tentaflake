@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { fileLimit, IdleStop, terminalFrameLimit } from "../src/agent";
+import { fileLimit, IdleStop, terminalFrameLimit, upstreamFrameLimit } from "../src/agent";
 import type { AgentEvent, AgentSession, Environment, PermissionList } from "../src/api";
 import { sessionCookie } from "../src/server";
 import {
@@ -10,6 +10,7 @@ import {
   harness,
   newUser,
   origin,
+  until,
 } from "./helpers";
 
 async function running(h: Harness, client: Client): Promise<Environment> {
@@ -23,13 +24,6 @@ async function setup(h = harness()) {
   const { user, client } = await newUser(h, "owner");
   const env = await running(h, client);
   return { h, user, client, env, path: `/api/v1/environments/${env.id}` };
-}
-
-async function until(condition: () => boolean, what: string): Promise<void> {
-  for (let attempt = 0; !condition(); attempt++) {
-    if (attempt > 200) throw new Error(`timed out waiting for ${what}`);
-    await Bun.sleep(10);
-  }
 }
 
 const activity = (h: Harness, id: string) =>
@@ -472,6 +466,21 @@ describe("terminal", () => {
     await until(() => h.opencode.pty.removed.length === 4, "every PTY removal");
   });
 
+  test("closes when OpenCode sends a frame over its limit", async () => {
+    const { h, client, path } = await setup();
+    const shell = terminal(h, client, path);
+    expect(await shell.opened).toBe(true);
+    h.opencode.output("y".repeat(upstreamFrameLimit));
+    await until(() => shell.received.join("").length === upstreamFrameLimit + 2, "the output");
+    h.opencode.output("z".repeat(upstreamFrameLimit + 1));
+    expect(await shell.closed).toEqual({
+      code: 1011,
+      reason: "OpenCode sent an invalid terminal frame",
+    });
+    expect(shell.received.join("")).not.toContain("z");
+    await until(() => h.opencode.pty.removed.length === 1, "the PTY removal");
+  });
+
   test("needs the configured origin and a running environment", async () => {
     const { h, client, path } = await setup();
     const foreign = terminal(h, client, path, { origin: "https://evil.example" });
@@ -493,6 +502,16 @@ describe("terminal", () => {
     expect((await call(h, "POST", `${path}/stop`, undefined, client)).status).toBe(200);
     expect(await shell.closed).toEqual({ code: 1000, reason: "the environment stopped" });
     await until(() => h.opencode.pty.removed.length === 1, "the PTY removal");
+  });
+
+  test("closes one that opens while the environment stops", async () => {
+    const { h, client, path } = await setup();
+    h.opencode.beforePty = () => call(h, "POST", `${path}/stop`, undefined, client);
+    const shell = terminal(h, client, path);
+    expect(await shell.opened).toBe(true);
+    expect(await shell.closed).toEqual({ code: 1000, reason: "the environment stopped" });
+    await until(() => h.opencode.pty.removed.length === 1, "the PTY removal");
+    await until(() => h.opencode.openSockets === 0, "the upstream socket to close");
   });
 });
 
