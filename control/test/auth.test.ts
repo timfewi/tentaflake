@@ -3,6 +3,7 @@ import type { SessionResponse, SetupResponse } from "../src/api";
 import {
   base32Decode,
   call,
+  createEnvironment,
   type Harness,
   harness,
   newUser,
@@ -172,8 +173,7 @@ describe("mutations", () => {
   test("need the session's CSRF token", async () => {
     const h = harness();
     const { client } = await newUser(h, "member");
-    const create = (csrf?: string) =>
-      call(h, "POST", "/api/v1/environments", { name: "dev" }, { ...client, csrf });
+    const create = (csrf?: string) => createEnvironment(h, { ...client, csrf });
 
     for (const csrf of [undefined, "", "wrong"]) {
       const response = await create(csrf);

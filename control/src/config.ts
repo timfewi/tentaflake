@@ -13,6 +13,10 @@ export interface Config {
   /** One-time token that authorises creating the first admin. */
   setupTokenFile: string;
   dockerSocket: string;
+  /** The broker's port on the gateway address of the model-only network. */
+  brokerPort: number;
+  /** Runtime directory (tmpfs) for the broker's routes and provider credential files. */
+  brokerDirectory: string;
   /** The runtime image reference, ideally by digest. */
   image: string;
   limits: Limits;
@@ -24,7 +28,9 @@ const defaults = {
   hostname: "127.0.0.1",
   port: 8080,
   dockerSocket: "/run/docker.sock",
-  limits: { memoryMiB: 2048, cpus: 2, pids: 512 },
+  brokerPort: 7810,
+  brokerDirectory: "/run/tentaflake/broker",
+  limits: { memoryMiB: 2048, cpus: 2, pids: 512, dailyTokens: 10_000_000 },
   sessionIdleMinutes: 60,
   sessionAbsoluteHours: 12,
 };
@@ -44,7 +50,7 @@ export function parseConfig(input: unknown): Config {
   const limits = { ...defaults.limits, ...(isObject(input.limits) ? input.limits : {}) };
   const config = { ...defaults, ...input, limits } as Record<keyof Config, unknown>;
 
-  for (const key of [...required, "hostname", "dockerSocket"] as const) {
+  for (const key of [...required, "hostname", "dockerSocket", "brokerDirectory"] as const) {
     if (typeof config[key] !== "string" || config[key] === "") {
       throw new Error(`configuration key ${key} must be a non-empty string`);
     }
@@ -56,6 +62,7 @@ export function parseConfig(input: unknown): Config {
     );
   }
   integer(config.port, "port", 0, 65535);
+  integer(config.brokerPort, "brokerPort", 1, 65535);
   integer(config.sessionIdleMinutes, "sessionIdleMinutes", 1);
   integer(config.sessionAbsoluteHours, "sessionAbsoluteHours", 1);
   for (const key of Object.keys(limits)) {
@@ -63,6 +70,7 @@ export function parseConfig(input: unknown): Config {
   }
   integer(limits.memoryMiB, "limits.memoryMiB", 64);
   integer(limits.pids, "limits.pids", 16);
+  integer(limits.dailyTokens, "limits.dailyTokens", 1);
   if (typeof limits.cpus !== "number" || !(limits.cpus > 0)) {
     throw new Error("configuration key limits.cpus must be a positive number");
   }

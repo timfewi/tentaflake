@@ -42,6 +42,14 @@ export async function readBody(request: Request): Promise<Record<string, unknown
   return body;
 }
 
+/** A list of strings, e.g. model names. */
+export function texts(value: unknown, field: string, maxItems = 64): string[] {
+  if (!Array.isArray(value) || value.length > maxItems) {
+    throw new HttpError(400, "invalid_request", `${field} must be a list of at most ${maxItems}`);
+  }
+  return value.map((item, index) => text(item, `${field}[${index}]`));
+}
+
 export function text(value: unknown, field: string, maxLength = 1024): string {
   if (typeof value !== "string" || value.length > maxLength) {
     throw new HttpError(
