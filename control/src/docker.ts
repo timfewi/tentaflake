@@ -1,7 +1,7 @@
 // The Docker Engine API calls the service makes, over the daemon's Unix
 // socket. Tests substitute a fake that implements the same interface.
 
-/** A Docker Engine request that failed; `status` is the HTTP status. */
+/** A Docker Engine request that failed; `status` is the HTTP status, 0 if Docker did not answer. */
 export class DockerError extends Error {
   constructor(
     readonly status: number,
@@ -54,13 +54,18 @@ const apiVersion = "v1.44";
 
 export function dockerClient(socket: string): Docker {
   async function call(method: string, path: string, body?: unknown, accept: number[] = []) {
-    const response = await fetch(`http://docker/${apiVersion}${path}`, {
-      method,
-      unix: socket,
-      ...(body === undefined
-        ? {}
-        : { headers: { "content-type": "application/json" }, body: JSON.stringify(body) }),
-    });
+    let response: Response;
+    try {
+      response = await fetch(`http://docker/${apiVersion}${path}`, {
+        method,
+        unix: socket,
+        ...(body === undefined
+          ? {}
+          : { headers: { "content-type": "application/json" }, body: JSON.stringify(body) }),
+      });
+    } catch (error) {
+      throw new DockerError(0, `Docker ${method} ${path}: ${(error as Error).message}`);
+    }
     if (!response.ok && !accept.includes(response.status)) {
       const text = await response.text();
       let detail = text;

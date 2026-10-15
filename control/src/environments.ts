@@ -166,24 +166,12 @@ export class Environments {
     return this.get(ownerId, id);
   }
 
-  async start(ownerId: string, id: string): Promise<Environment> {
-    await this.exclusive(ownerId, id, async (row) => {
-      if (row.state === "running") return;
-      if (row.state !== "stopped" || row.container_id === null) throw notNow(row.state, "start");
-      await this.docker.startContainer(row.container_id);
-      this.setState(id, "running");
-    });
-    return this.get(ownerId, id);
+  start(ownerId: string, id: string): Promise<Environment> {
+    return this.switchTo(ownerId, id, "running");
   }
 
-  async stop(ownerId: string, id: string): Promise<Environment> {
-    await this.exclusive(ownerId, id, async (row) => {
-      if (row.state === "stopped") return;
-      if (row.state !== "running" || row.container_id === null) throw notNow(row.state, "stop");
-      await this.docker.stopContainer(row.container_id);
-      this.setState(id, "stopped");
-    });
-    return this.get(ownerId, id);
+  stop(ownerId: string, id: string): Promise<Environment> {
+    return this.switchTo(ownerId, id, "stopped");
   }
 
   /** Removes the container, then the workspace volume, then the record. */
@@ -206,6 +194,27 @@ export class Environments {
       .get(id, ownerId) as EnvironmentRow | null;
     if (row === null) throw new HttpError(404, "not_found", "no such environment");
     return row;
+  }
+
+  // Docker is asked even when the record already shows the target state: the
+  // container may have exited on its own (crash, OOM kill, host restart), and
+  // Docker treats starting a running or stopping a stopped container as a no-op.
+  private async switchTo(
+    ownerId: string,
+    id: string,
+    target: "running" | "stopped",
+  ): Promise<Environment> {
+    await this.exclusive(ownerId, id, async (row) => {
+      const action = target === "running" ? "start" : "stop";
+      if ((row.state !== "running" && row.state !== "stopped") || row.container_id === null) {
+        throw notNow(row.state, action);
+      }
+      await (target === "running"
+        ? this.docker.startContainer(row.container_id)
+        : this.docker.stopContainer(row.container_id));
+      this.setState(id, target);
+    });
+    return this.get(ownerId, id);
   }
 
   /** Runs one lifecycle operation at a time per environment. */

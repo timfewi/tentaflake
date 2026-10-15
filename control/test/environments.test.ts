@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import baseConfig from "../../images/runtime/opencode.json";
 import type { Environment, EnvironmentList } from "../src/api";
+import { DockerError, dockerClient } from "../src/docker";
 import { Environments, ensureNetworks } from "../src/environments";
 import { type Client, call, FakeDocker, type Harness, harness, newUser } from "./helpers";
 
@@ -165,6 +166,25 @@ describe("environments", () => {
     expect(stop.status).toBe("fulfilled");
     expect(remove).toMatchObject({ status: "rejected", reason: { status: 409 } });
   });
+
+  test("start a container that exited on its own while recorded as running", async () => {
+    const h = harness();
+    const { client } = await newUser(h, "member");
+    const env = await created(h, client);
+    const [container] = [...h.docker.containers.values()];
+    if (container !== undefined) container.running = false;
+
+    const response = await call(
+      h,
+      "POST",
+      `/api/v1/environments/${env.id}/start`,
+      undefined,
+      client,
+    );
+    expect(response.status).toBe(200);
+    expect(((await response.json()) as Environment).state).toBe("running");
+    expect(container?.running).toBe(true);
+  });
 });
 
 describe("Docker failures", () => {
@@ -257,6 +277,13 @@ describe("Docker failures", () => {
       limits: env.limits,
     });
     expect(restarted.get(user.id, env.id).state).toBe("failed");
+  });
+});
+
+describe("Docker client", () => {
+  test("reports an unreachable socket as a Docker error", async () => {
+    const docker = dockerClient("/nonexistent/docker.sock");
+    await expect(docker.createVolume("workspace", {})).rejects.toBeInstanceOf(DockerError);
   });
 });
 

@@ -35,6 +35,6 @@ answers `502`; the environment's recorded state stays accurate.
 | `GET` | `/api/v1/environments` | The caller's environments | session |
 | `POST` | `/api/v1/environments` | Create and start one `{ name, networkMode? }` (`model-only`, the default, or `open`) | session, CSRF, Origin |
 | `GET` | `/api/v1/environments/{id}` | One environment | session |
-| `POST` | `/api/v1/environments/{id}/start` | Start a stopped environment | session, CSRF, Origin |
-| `POST` | `/api/v1/environments/{id}/stop` | Stop a running environment | session, CSRF, Origin |
+| `POST` | `/api/v1/environments/{id}/start` | Start the container, also one that exited on its own | session, CSRF, Origin |
+| `POST` | `/api/v1/environments/{id}/stop` | Stop the container | session, CSRF, Origin |
 | `DELETE` | `/api/v1/environments/{id}` | Remove container, workspace volume and record | session, CSRF, Origin |
