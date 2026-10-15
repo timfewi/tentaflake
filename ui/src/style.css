@@ -1,0 +1,376 @@
+:root {
+  color-scheme: dark;
+  --bg: #0d0f14;
+  --panel: #13161c;
+  --raised: #1d222b;
+  --line: #2c3340;
+  --text: #e4e7ee;
+  --muted: #8b94a7;
+  --accent: #8b7cf8;
+  --ok: #34d399;
+  --warn: #fbbf24;
+  --bad: #fb7185;
+  font:
+    13px / 1.45 Inter,
+    ui-sans-serif,
+    system-ui,
+    sans-serif;
+}
+* {
+  box-sizing: border-box;
+}
+body {
+  margin: 0;
+  color: var(--text);
+  background: var(--bg);
+}
+h1,
+h2,
+p,
+ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+h1 {
+  font-size: 16px;
+}
+a,
+.link {
+  color: #b5abff;
+}
+code,
+pre {
+  font:
+    12px ui-monospace,
+    Menlo,
+    Consolas,
+    monospace;
+  overflow-wrap: anywhere;
+}
+pre {
+  max-height: 60vh;
+  padding: 8px;
+  margin: 8px 0 0;
+  overflow: auto;
+  white-space: pre-wrap;
+  background: var(--bg);
+  border-radius: 6px;
+}
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+[hidden] {
+  display: none;
+}
+small,
+.muted {
+  color: var(--muted);
+}
+.pad {
+  padding: 16px;
+}
+.row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  align-items: center;
+}
+.spacer {
+  flex: 1;
+}
+
+/* Controls */
+button,
+input,
+select,
+textarea {
+  font: inherit;
+  color: inherit;
+}
+input,
+select,
+textarea {
+  width: 100%;
+  min-height: 30px;
+  padding: 4px 9px;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 7px;
+}
+textarea {
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+}
+.btn {
+  min-height: 30px;
+  padding: 0 12px;
+  font-weight: 550;
+  background: var(--raised);
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  cursor: pointer;
+}
+.btn:disabled {
+  color: var(--muted);
+  cursor: not-allowed;
+}
+.btn.primary:not(:disabled) {
+  color: #fff;
+  background: #6d5df0;
+}
+.btn.danger {
+  border-color: var(--bad);
+}
+.link {
+  padding: 0;
+  background: none;
+  border: 0;
+  cursor: pointer;
+}
+form,
+.field,
+.body {
+  display: grid;
+  gap: 10px;
+}
+.field {
+  gap: 4px;
+}
+label {
+  font-weight: 550;
+}
+.notice {
+  padding: 8px 10px;
+  background: var(--raised);
+  border-left: 3px solid var(--accent);
+  border-radius: 7px;
+}
+.notice.warn,
+.chip.running {
+  border-color: var(--warn);
+}
+.notice.bad,
+.chip.failed {
+  border-color: var(--bad);
+}
+.notice.ok,
+.chip.done {
+  border-color: var(--ok);
+}
+.chip {
+  padding: 1px 8px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+}
+.state[data-state="running"] {
+  color: var(--ok);
+}
+.state[data-state="failed"] {
+  color: var(--bad);
+}
+
+/* Shell and pages */
+.bar {
+  display: flex;
+  gap: 16px;
+  align-items: center;
+  padding: 8px 16px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--line);
+}
+.bar nav {
+  display: flex;
+  gap: 4px;
+}
+.bar nav a {
+  padding: 5px 10px;
+  color: var(--muted);
+  text-decoration: none;
+  border-radius: 6px;
+}
+.bar nav a[aria-current] {
+  color: var(--text);
+  background: var(--raised);
+}
+.page {
+  display: grid;
+  gap: 14px;
+  max-width: 1200px;
+  padding: 16px;
+  margin: 0 auto;
+}
+table {
+  border-collapse: collapse;
+}
+th,
+td {
+  padding: 8px 10px;
+  text-align: left;
+  border-bottom: 1px solid var(--line);
+}
+.actions {
+  display: flex;
+  gap: 6px;
+  justify-content: flex-end;
+}
+.auth {
+  display: grid;
+  min-height: 100vh;
+  place-items: center;
+}
+.card {
+  display: grid;
+  gap: 14px;
+  width: min(420px, 100%);
+  padding: 16px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+}
+.qr {
+  width: 200px;
+  height: 200px;
+  justify-self: center;
+}
+.secret {
+  padding: 2px 6px;
+  background: var(--bg);
+}
+
+/* Dialogs */
+dialog {
+  width: min(520px, 94vw);
+  padding: 0;
+  color: inherit;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+}
+dialog::backdrop {
+  background: rgb(4 6 9 / 0.7);
+}
+dialog header {
+  display: flex;
+  justify-content: space-between;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--line);
+}
+.body {
+  padding: 14px;
+}
+
+/* Environment view */
+.tabs {
+  display: flex;
+  gap: 2px;
+  width: fit-content;
+  padding: 2px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+.tabs button {
+  padding: 5px 14px;
+  color: var(--muted);
+  background: none;
+  border: 0;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.tabs button[aria-selected="true"] {
+  color: var(--text);
+  background: var(--raised);
+}
+.chat,
+.files {
+  display: grid;
+  grid-template-columns: 220px minmax(0, 1fr);
+  gap: 14px;
+}
+.chat aside,
+.chat section,
+.files section {
+  display: grid;
+  gap: 8px;
+  align-content: start;
+  min-width: 0;
+}
+.chat aside button,
+.files li button {
+  width: 100%;
+  padding: 5px 10px;
+  color: inherit;
+  text-align: left;
+  background: none;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  cursor: pointer;
+}
+.chat aside button[aria-current="true"],
+.files li button:hover {
+  background: var(--raised);
+}
+.transcript {
+  display: grid;
+  gap: 10px;
+  align-content: start;
+  height: 50vh;
+  padding: 12px;
+  overflow: auto;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+.msg.user {
+  justify-self: end;
+  padding: 8px 12px;
+  white-space: pre-wrap;
+  background: var(--raised);
+  border-radius: 10px;
+}
+pre.failed {
+  color: var(--bad);
+}
+details {
+  padding: 6px 10px;
+  background: var(--raised);
+  border-radius: 8px;
+}
+summary {
+  cursor: pointer;
+}
+.approval {
+  padding: 10px 12px;
+  background: var(--raised);
+  border: 1px solid var(--warn);
+  border-radius: 10px;
+}
+.composer {
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+.markdown {
+  display: grid;
+  gap: 8px;
+  font-size: 14px;
+  line-height: 1.6;
+}
+.markdown ul,
+.markdown ol {
+  padding-left: 22px;
+  list-style: revert;
+}
+.md-image {
+  color: var(--muted);
+}
+.screen {
+  height: 60vh;
+  padding: 8px 0 0 10px;
+  background: var(--bg);
+  border-radius: 8px;
+}
+@media (max-width: 720px) {
+  .chat,
+  .files {
+    grid-template-columns: 1fr;
+  }
+}

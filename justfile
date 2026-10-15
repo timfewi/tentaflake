@@ -13,8 +13,8 @@ alias list := default
 
 # ── The gates ────────────────────────────────────────────────
 
-# Fast source checks: formatting, lint, Rust, control service, offline catalog checks
-fast: formatter-test lint rust control image-catalog
+# Fast source checks: formatting, lint, Rust, control service, UI, offline catalog checks
+fast: formatter-test lint rust control ui image-catalog
     actionlint .github/workflows/*.yml
 
 # Fast checks plus flake evaluation without building (the CI gate)
@@ -24,6 +24,7 @@ check: fast eval
 test:
     cargo test --workspace
     cd control && bun install --frozen-lockfile && bun test
+    cd ui && bun install --frozen-lockfile && bun test ./src
     python3 scripts/test_image_catalog.py
 
 # Evaluate every flake output without building; force all shared constants,
@@ -40,6 +41,18 @@ build:
 image-catalog:
     python3 scripts/test_image_catalog.py
 
+# ── UI (ui/) ─────────────────────────────────────────────────
+
+# Biome lint, TypeScript type check, unit tests and a production build (ui/dist, not committed)
+ui:
+    cd ui && bun install --frozen-lockfile && biome lint . && bun run typecheck && bun test ./src && bun run build
+
+# Browser journeys in headless Chromium: the built UI on the real control service with a fake Docker and OpenCode (no containers; not part of CI).
+# playwright-core in ui/package.json must match the pinned nixpkgs' playwright-driver; set PLAYWRIGHT_BROWSERS_PATH to use browsers of that revision from elsewhere.
+ui-e2e:
+    cd ui && bun install --frozen-lockfile && bun run build
+    export PLAYWRIGHT_BROWSERS_PATH="${PLAYWRIGHT_BROWSERS_PATH:-$(nix build --inputs-from . --no-link --print-out-paths nixpkgs#playwright-driver.browsers)}" && cd ui && bun test ./e2e
+
 # ── Runtime image (needs Docker; not part of `check`) ────────
 
 # Build the runtime image
@@ -52,17 +65,19 @@ runtime-smoke:
 
 # ── Formatting & lint ────────────────────────────────────────
 
-# Format the tree in place (nixfmt via `nix fmt`, Biome for the control service)
+# Format the tree in place (nixfmt via `nix fmt`, Biome for the control service and the UI)
 fmt:
     nix fmt -- --tree-root .
     cargo fmt --all
     cd control && biome format --write .
+    cd ui && biome format --write .
 
-# Read-only formatting check: tracked and non-ignored untracked regular Nix files, Rust, control service
+# Read-only formatting check: tracked and non-ignored untracked regular Nix files, Rust, control service, UI
 fmt-check:
     git ls-files -z --cached --others --exclude-standard -- '*.nix' | while IFS= read -r -d '' file; do if [[ -f "$file" && ! -L "$file" ]]; then nixfmt --check "./$file"; fi; done
     cargo fmt --all -- --check
     cd control && biome format .
+    cd ui && biome format .
 
 # Prove the formatter gate fails without rewriting its own fixture
 formatter-test: fmt-check
