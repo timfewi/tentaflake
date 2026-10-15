@@ -8,8 +8,9 @@ tools. The UI is the control plane. The user brings the VPS and the keys;
 Tentaflake brings the environment and the simplicity.
 
 > [!NOTE]
-> 0.5 is being built. This page describes the target. The
-> [status table](#status) says what exists in the repository today.
+> 0.5 is complete in the repository and waits for tests on real VPS
+> providers. The [status table](#status) says what exists and how it is
+> checked.
 
 ## Model
 
@@ -41,7 +42,8 @@ environment container (gVisor) ── opencode serve ── model calls → brok
 ```
 
 - **Host:** NixOS modules in `modules/`, Docker with the gVisor `runsc`
-  runtime, the `balanced` security profile.
+  runtime, the `balanced` security profile; booted from a disk image (see
+  [Host](#host)).
 - **Control service:** TypeScript on Bun, sharing types with the UI and using
   OpenCode's TypeScript SDK. State lives in one SQLite file. It talks to Docker
   and is therefore privileged: it stays small, listens on loopback behind
@@ -97,7 +99,10 @@ restart that keeps the workspace and the sessions.
 <config.json>` starts it with one JSON file like `control/config.example.json`:
 listen address (loopback by default), the exact browser origin, the paths of
 the database, host key and setup token, the Docker socket, the runtime image,
-the environment limits and, optionally, the directory of the built UI. The file holds no secrets. The host key file holds
+the environment limits and, optionally, the directory of the built UI. On the
+host, `siteFile` and `domainFile` replace the fixed origin: the origin is
+`https://` and the domain an admin chose in setup (kept in the domain file),
+else the name the host derived from its address (in the site file). The file holds no secrets. The host key file holds
 32 random bytes (mode `0600`) that encrypt the TOTP secrets and OpenCode
 passwords in the database.
 
@@ -116,7 +121,8 @@ label `io.tentaflake.environment=<id>`. It gets a random
 `OPENCODE_SERVER_PASSWORD` and the generated OpenCode configuration as
 `OPENCODE_CONFIG_CONTENT`, which OpenCode ranks above an `opencode.json` in the
 workspace. The network mode picks one of two networks the service owns:
-`tentaflake-model-only` (internal, no route out) or `tentaflake-open`. A
+`tentaflake-model-only` (internal, no route out) or `tentaflake-open`, on the
+bridges `tf-model-only` and `tf-open` that the host firewall names. A
 record exists while Docker may hold resources for the environment, and a
 failed Docker call is an error, never a silent success.
 
@@ -162,7 +168,8 @@ event stream and the terminal on the same origin.
 
 It has the pages the definition of done needs: the setup wizard (setup token,
 admin account, authenticator QR code and secret shown once, confirmed by a first
-sign-in), sign-in and sign-out, model keys, environments (create with network
+sign-in, then on the host the domain, which an admin can change later on the
+Domain page), sign-in and sign-out, model keys, environments (create with network
 mode, key, models and MCP servers; start, stop and delete after confirmation)
 and, per environment, the sessions and chat with the live event stream,
 approvals for `ask` permissions, a read-only file browser for `/workspace` and
@@ -218,6 +225,55 @@ responses are relayed event by event with their deadlines, nothing is
 replayed, and the audit log records routes, models and usage but no prompt,
 response, token or key. Upstreams must be HTTPS on public addresses; that is
 checked per request, so a route that breaks it fails alone.
+
+## Host
+
+The flake builds the host as a disk image (`image-raw`, `image-qcow2`) with
+the pinned nixpkgs' `make-disk-image`: GPT with a BIOS boot partition, an ESP
+and an ext4 root that grows to the provider's disk at the first boot. GRUB
+boots it with BIOS or UEFI; the guest profile is QEMU with virtio devices,
+the network comes from DHCP, and kernel messages and a login prompt appear on
+the graphical and the serial console. The image is the built-in host
+`nixosConfigurations.tentaflake`, so updating a running host switches it to
+a newer revision of that same configuration, and every generation stays in
+the boot menu for a rollback.
+
+`modules/control.nix` (`tentaflake.control.enable`) runs the product:
+
+- `tentaflake-setup` (root, a oneshot at every boot) creates the host key and
+  the setup token once, gives the admin a first console password once
+  (expired, so the first login replaces it), and derives the site: the domain
+  in the domain file, else `<IPv4 with dashes>.sslip.io` from the address of
+  the route out. It writes the site file for the control service and the
+  Caddy site, reloads Caddy when the site changed, and shows the URL, the
+  setup token and the console password, each only while it is still useful,
+  on the login screen and in the journal. A path unit runs it again when the
+  domain file, the setup token or `/etc/shadow` changes, so a domain chosen
+  in the wizard reaches Caddy without a rebuild.
+- `tentaflake-control` runs as `tentaflake` with the Docker group, state in
+  `/var/lib/tentaflake/control` (`0700`) and the broker's routes in
+  `/run/tentaflake/broker`; it listens on `127.0.0.1:8080`.
+- `tentaflake-broker` runs as the same user, since it accepts only credential
+  files their owner alone can read, but without the Docker group, in its own
+  PID namespace (the control service's process is out of reach) and with the
+  service's state hidden; it reads the routes and writes only its audit log
+  and budgets in `/var/lib/tentaflake/broker`. It listens on the gateway
+  address of `tf-model-only`, which it reads at start; until the control
+  service created that network it fails and starts again.
+- `tentaflake-runtime-image` builds the runtime image from `images/runtime`
+  with Docker and tags it with the store hash of those inputs, so a host
+  update rebuilds it only when they changed.
+- Caddy serves the site with automatic HTTPS (HTTP/1.1 and HTTP/2; plain HTTP
+  only redirects) and proxies it to the control service. Its admin API is a
+  Unix socket only Caddy can use, so no other local process can reconfigure
+  the proxy.
+- The firewall opens TCP 80 and 443 to everyone, and the broker port only on
+  the two environment bridges; the management transport adds its own port.
+
+The `balanced` profile is unchanged: Tailscale is configured but not
+enrolled, and there is no public SSH. Until the operator enrolls Tailscale
+(`sudo tailscale up --ssh`), the provider's console with the first console
+password is the way in.
 
 ## Users and access
 
@@ -278,14 +334,14 @@ works, and the README then lists where it was verified.
 | Part | State |
 |---|---|
 | Host modules, Docker with `runsc`, security profile | In the repository |
+| Host wiring (`modules/control.nix`): control service, broker, first-boot secrets and console notice, runtime image build, Caddy with HTTPS, firewall | In the repository; evaluated by `just check`, booted by hand under QEMU before the release (not in CI) |
+| Setup wizard's domain step and Domain page, applied to Caddy without a rebuild | In the repository (unit tests; the path to Caddy checked in the boot) |
+| VPS disk image (raw, qcow2; BIOS and UEFI), updates with rollback | In the repository; built and booted locally; real VPS providers are listed in the README once tested |
 | Broker crate and package | In the repository; one process serves every environment by token (multi-route), tested with a fake provider under `runsc` in CI when it changes |
 | Base-image catalog (Ubuntu 26.04 pin) | In the repository |
 | Runtime image (Ubuntu + OpenCode) | In the repository (smoke-tested in CI when the image changes) |
 | Control service and its API: users, setup, login, environment lifecycle, model keys, MCP definitions, session proxy (sessions, events, approvals, files, terminal), idle stop | In the repository (tested under `runsc` in CI when it changes) |
-| Host wiring of the broker (service, firewall) | Planned |
 | UI in `ui/`: setup wizard, sign-in, keys, environments, chat with approvals, files, terminal; served by the control service | In the repository (browser journey with `just ui-e2e`, not in CI) |
-| Host wiring of the UI (build and `uiDirectory` in the NixOS module), HTTPS | Planned |
-| VPS image and updates | Planned |
 
 ## Out of scope for 0.5
 

@@ -7,13 +7,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### 0.5 reset
+## [0.5.0] - Unreleased
 
 0.5 restarts Tentaflake from a small core: a NixOS host where a web UI creates
 isolated agent environments (Ubuntu in a gVisor sandbox with one agent runtime,
 the user's own model API keys, MCP servers and tools). See
 [the architecture](docs/architecture.md). The pre-0.5 line is frozen at tag
 `v0.4-final` and branch `legacy/0.4` and is no longer maintained.
+
+### Added
+- The runtime image: Ubuntu 26.04 by digest, apt from a dated snapshot and
+  OpenCode 2.0.29 checked by SHA-256, smoke-tested under gVisor in CI when it
+  changes.
+- The control service (Bun, SQLite): first-run setup, password and TOTP
+  sign-in, encrypted model keys, environments with `model only` or `open
+  internet` networks under `runsc`, MCP servers per environment, the session
+  proxy (sessions, events, approvals, files, terminal) and the idle stop.
+- The broker serves every environment from one process by token, with model
+  allowlists and daily budgets; provider keys never enter a container.
+- The web UI: setup wizard, sign-in, keys, environments, chat with approvals,
+  files and terminal, served by the control service with a strict CSP.
+- Host integration (`modules/control.nix`): the control service and the
+  broker as separate least-privilege users, first-boot secrets and a console
+  notice with the setup URL, token and a first console password, the runtime
+  image built on the host, Caddy with automatic HTTPS and a firewall that
+  opens only TCP 80 and 443 to the public.
+- The domain step of the setup wizard and an admin Domain page
+  (`/api/v1/domain`): until a domain is chosen the host answers on a name
+  derived from its IPv4 address; a chosen domain must resolve to the server
+  and reaches Caddy without a rebuild.
+- A provider-agnostic VPS disk image (`image-raw`, `image-qcow2`) that boots
+  with BIOS or UEFI, and documentation for uploading it, updating the host and
+  rolling back.
+
+### Changed
+- The built-in host is the VPS guest: GRUB for BIOS and UEFI replaces
+  systemd-boot, the root file system is ext4 and grows at the first boot, and
+  the console is the plain VT so the login screen can show the setup notice.
 
 ### Removed
 - Statically declared agents and their adapters (Hermes, ZeroClaw, OpenClaw,

@@ -19,6 +19,7 @@ just fast        # formatting, lint, Rust, control service and UI checks, offlin
 just check       # fast + nix flake check --no-build (the CI gate)
 just ui-e2e      # browser journeys in headless Chromium (explicit, not in CI)
 just build       # build the host closure (explicit, not in CI)
+nix build .#image-qcow2   # the VPS disk image (explicit, a VM run; not in CI)
 ```
 
 CI runs `just check` only, plus the path-filtered `runtime-smoke.yml` (Docker,
@@ -61,9 +62,18 @@ Deployment-specific configuration belongs in forks.
 
 - `modules/` — host NixOS modules, imported by `modules/default.nix`.
   `security.nix` owns the security profile, environment resource defaults and
-  the gVisor `runsc` runtime registration.
+  the gVisor `runsc` runtime registration. `control.nix` runs the product on
+  the host: the control service and the broker as separate users, the
+  first-boot secrets and console notice, the HTTPS site (Caddy) that follows
+  the domain chosen in setup, the runtime image build and the firewall.
 - `configuration.nix` — host defaults: Docker as the container backend; the
   Docker socket is never granted to the login user in secure profiles.
+- `hardware-configuration.nix`, `modules/boot.nix` — the VPS guest (QEMU,
+  virtio, DHCP) and GRUB for BIOS and UEFI on the layout of the disk image
+  that `flake.nix` builds (`image-raw`, `image-qcow2`).
+- `pkgs/tentaflake-control`, `pkgs/tentaflake-ui` — the control service (Bun
+  runs its sources) and the built UI; the UI's dependencies are a
+  fixed-output derivation whose hash changes with `ui/bun.lock`.
 - `crates/tentaflake-broker`, `pkgs/tentaflake-broker` — the model broker:
   per-environment routes from the file the control service writes;
   `lib/mkRustPackage.nix` packages it.
