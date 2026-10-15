@@ -1,0 +1,42 @@
+name: Runtime smoke
+
+permissions:
+  contents: read
+
+# The one exception to fast-only CI: builds the runtime image and runs it under
+# gVisor, so it runs only when the image or its smoke test changes.
+on:
+  pull_request:
+    paths:
+      - images/runtime/**
+      - scripts/runtime-smoke.sh
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install gVisor
+        env:
+          GVISOR_RELEASE: release-20261005.0
+          GVISOR_SHA256: 0a8a9058b9f11791a2097f03190c2ddc5b963c3dbee5bb9fd8497f4801c42f92
+        run: |
+          curl --fail --silent --show-error --location --output gvisor.tar.zstd \
+            "https://github.com/google/gvisor/releases/download/${GVISOR_RELEASE}/gvisor-x86_64.tar.zstd"
+          echo "${GVISOR_SHA256}  gvisor.tar.zstd" | sha256sum --check --strict -
+          sudo tar --zstd --extract --file gvisor.tar.zstd --directory /usr/local/bin
+          rm gvisor.tar.zstd
+          sudo /usr/local/bin/runsc install
+          sudo systemctl restart docker
+          # Fail here rather than let the smoke test fall back to runc.
+          docker info --format '{{json .Runtimes}}' | grep '"runsc"'
+
+      - name: Smoke-test the runtime image
+        run: scripts/runtime-smoke.sh

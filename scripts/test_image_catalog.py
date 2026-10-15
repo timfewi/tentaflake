@@ -238,6 +238,11 @@ class BaseImageCatalog(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "unreviewed evidence"):
             self.check()
 
+    def test_runtime_image_builds_from_the_reviewed_ubuntu_pin(self):
+        ubuntu = self.original["images"]["ubuntu-26.04"]
+        dockerfile = (ROOT / "images/runtime/Dockerfile").read_text()
+        self.assertEqual(re.findall(r"^FROM (\S+)", dockerfile, re.M), [f"{ubuntu['repository']}@{ubuntu['indexDigest']}"])
+
     def test_catalog_refuses_extra_authority_and_mutable_digests(self):
         from jsonschema.exceptions import ValidationError
 

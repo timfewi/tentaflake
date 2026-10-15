@@ -39,6 +39,16 @@ build:
 image-catalog:
     python3 scripts/test_image_catalog.py
 
+# ── Runtime image (needs Docker; not part of `check`) ────────
+
+# Build the runtime image
+runtime-image:
+    docker build --tag tentaflake-runtime:dev images/runtime
+
+# Build it and smoke-test it, under gVisor when Docker has runsc (CI runs it when the image changes)
+runtime-smoke:
+    scripts/runtime-smoke.sh
+
 # ── Formatting & lint ────────────────────────────────────────
 
 # Format the tree in place (nixfmt via `nix fmt`)
