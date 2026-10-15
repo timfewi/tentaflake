@@ -5,8 +5,15 @@ import type { Limits } from "./api";
 export interface Config {
   hostname: string;
   port: number;
-  /** The exact browser origin, e.g. https://tentaflake.example; mutations must carry it. */
-  origin: string;
+  /**
+   * The exact browser origin, e.g. https://tentaflake.example; mutations must
+   * carry it. Null on the host, where `siteFile` and `domainFile` set it.
+   */
+  origin: string | null;
+  /** The host's site file: its public address and the domain derived from it. */
+  siteFile: string | null;
+  /** Where the domain chosen in setup is kept; the host's HTTPS proxy follows it. */
+  domainFile: string | null;
   databasePath: string;
   /** 32 random bytes that encrypt the secrets in the database. */
   keyFile: string;
@@ -29,6 +36,9 @@ export interface Config {
 }
 
 const defaults = {
+  origin: null,
+  siteFile: null,
+  domainFile: null,
   hostname: "127.0.0.1",
   port: 8080,
   dockerSocket: "/run/docker.sock",
@@ -40,7 +50,7 @@ const defaults = {
   sessionIdleMinutes: 60,
   sessionAbsoluteHours: 12,
 };
-const required = ["origin", "databasePath", "keyFile", "setupTokenFile", "image"] as const;
+const required = ["databasePath", "keyFile", "setupTokenFile", "image"] as const;
 
 export function loadConfig(path: string): Config {
   return parseConfig(JSON.parse(readFileSync(path, "utf8")));
@@ -61,14 +71,17 @@ export function parseConfig(input: unknown): Config {
       throw new Error(`configuration key ${key} must be a non-empty string`);
     }
   }
-  if (
-    config.uiDirectory !== null &&
-    (typeof config.uiDirectory !== "string" || !config.uiDirectory)
-  ) {
-    throw new Error("configuration key uiDirectory must be a non-empty string or null");
+  for (const key of ["origin", "siteFile", "domainFile", "uiDirectory"] as const) {
+    if (config[key] !== null && (typeof config[key] !== "string" || !config[key])) {
+      throw new Error(`configuration key ${key} must be a non-empty string or null`);
+    }
   }
-  const origin = config.origin as string;
-  if (!URL.canParse(origin) || new URL(origin).origin !== origin) {
+  const origin = config.origin as string | null;
+  const siteFiles = [config.siteFile, config.domainFile].filter((path) => path !== null).length;
+  if (origin === null ? siteFiles !== 2 : siteFiles !== 0) {
+    throw new Error("the configuration needs either origin or both siteFile and domainFile");
+  }
+  if (origin !== null && (!URL.canParse(origin) || new URL(origin).origin !== origin)) {
     throw new Error(
       "configuration key origin must be an origin such as https://tentaflake.example",
     );

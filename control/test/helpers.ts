@@ -14,6 +14,7 @@ import { type ContainerSpec, type Docker, DockerError } from "../src/docker";
 import { Environments } from "../src/environments";
 import { Keys } from "../src/keys";
 import { sessionCookie, startServer } from "../src/server";
+import { Site } from "../src/site";
 import { uiServer } from "../src/ui";
 
 export const origin = "https://tentaflake.example";
@@ -21,10 +22,13 @@ export const setupToken = "setup-token-for-tests-0123456789";
 export const password = "correct horse battery staple";
 export const gateway = "192.0.2.1";
 export const brokerUrl = `http://${gateway}:7810/v1`;
+/** The public address and derived domain of a harness with `hostSite`. */
+export const hostAddress = "203.0.113.7";
+export const defaultDomain = "203-0-113-7.sslip.io";
 
 /** An in-memory Docker Engine; a method named in `failing` throws like a failed API call. */
 export class FakeDocker implements Docker {
-  readonly networks = new Map<string, boolean>();
+  readonly networks = new Map<string, { internal: boolean; bridge: string }>();
   readonly volumes = new Set<string>();
   readonly containers = new Map<string, { name: string; spec: ContainerSpec; running: boolean }>();
   readonly failing = new Set<keyof Docker>();
@@ -34,12 +38,12 @@ export class FakeDocker implements Docker {
 
   async network(name: string) {
     this.check("network");
-    const internal = this.networks.get(name);
-    return internal === undefined ? null : { internal, gateway };
+    const network = this.networks.get(name);
+    return network === undefined ? null : { ...network, gateway };
   }
-  async createNetwork(name: string, internal: boolean) {
+  async createNetwork(name: string, internal: boolean, bridge: string) {
     this.check("createNetwork");
-    this.networks.set(name, internal);
+    this.networks.set(name, { internal, bridge });
   }
   async createVolume(name: string) {
     this.check("createVolume");
@@ -286,14 +290,21 @@ afterEach(() => {
 /**
  * The service on a random loopback port with an in-memory database and a fake Docker.
  * With `ui` it serves that built UI; the browser journeys also pick the port and origin.
+ * With `hostSite` the origin comes from a site file and a domain file as on the
+ * host, and `resolved` answers the DNS lookups of a chosen domain.
  */
 export function harness({
   token = setupToken as string | null,
   ui = undefined as string | undefined,
   port = 0,
   origin: listenOrigin = origin as string,
+  hostSite = false,
 } = {}) {
   const dir = mkdtempSync(join(tmpdir(), "tentaflake-control-"));
+  const siteFile = join(dir, "site.json");
+  const domainFile = join(dir, "domain");
+  writeFileSync(siteFile, JSON.stringify({ address: hostAddress, defaultDomain }));
+  const resolved = new Map<string, string[]>();
   const setupTokenFile = join(dir, "setup-token");
   if (token !== null) writeFileSync(setupTokenFile, `${token}\n`);
   const clock = { now: Date.UTC(2026, 0, 1) };
@@ -316,14 +327,21 @@ export function harness({
   const environments = new Environments(db, docker, secrets, broker, config, now);
   const keys = new Keys(db, secrets, broker, now);
   const agent = new Agent(environments);
-  const listen = { hostname: "127.0.0.1", port, origin: listenOrigin };
+  const site = new Site(
+    hostSite
+      ? { origin: null, siteFile, domainFile }
+      : { origin: listenOrigin, siteFile: null, domainFile: null },
+    async (domain) => resolved.get(domain) ?? [],
+    now,
+  );
   const server = startServer(
-    listen,
+    { hostname: "127.0.0.1", port },
+    site,
     auth,
     environments,
     keys,
     agent,
-    ui === undefined ? undefined : uiServer(ui, listenOrigin),
+    ui === undefined ? undefined : uiServer(ui, () => site.origin()),
   );
   const h = {
     url: server.url.origin,
@@ -339,6 +357,10 @@ export function harness({
     agent,
     broker,
     brokerDirectory,
+    site,
+    setupTokenFile,
+    domainFile,
+    resolved,
     close() {
       server.stop(true);
       opencode.stop();
@@ -384,9 +406,15 @@ export function nextCode(h: Harness, secret: Buffer): string {
   return totpCode(secret, Math.floor(h.clock.now / 30_000));
 }
 
-export async function signIn(h: Harness, username: string, secret: Buffer): Promise<Client> {
+export async function signIn(
+  h: Harness,
+  username: string,
+  secret: Buffer,
+  at: string = origin,
+): Promise<Client> {
   const code = nextCode(h, secret);
-  const response = await call(h, "POST", "/api/v1/session", { username, password, code });
+  const body = { username, password, code };
+  const response = await call(h, "POST", "/api/v1/session", body, {}, { origin: at });
   expect(response.status).toBe(200);
   const cookie = /__Host-tentaflake=([^;]+)/.exec(response.headers.get("set-cookie") ?? "")?.[1];
   const { csrfToken } = (await response.json()) as { csrfToken: string };
@@ -396,15 +424,20 @@ export async function signIn(h: Harness, username: string, secret: Buffer): Prom
 /** The secret of the anthropic key newUser adds for a user. */
 export const providerSecret = (username: string) => `sk-ant-fixture-${username}-0123456789`;
 
-/** Creates a user directly with one anthropic key and signs it in. */
-export async function newUser(h: Harness, username: string, role: Role = "member") {
+/** Creates a user directly with one anthropic key and signs it in from `at`. */
+export async function newUser(
+  h: Harness,
+  username: string,
+  role: Role = "member",
+  at: string = origin,
+) {
   const { user, totpSecret } = await h.auth.createUser(username, password, role);
   const key = h.keys.add(user.id, {
     provider: "anthropic",
     label: "default",
     secret: providerSecret(username),
   });
-  const client = { ...(await signIn(h, username, totpSecret)), keyId: key.id };
+  const client = { ...(await signIn(h, username, totpSecret, at)), keyId: key.id };
   return { user, totpSecret, client };
 }
 

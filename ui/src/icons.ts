@@ -27,6 +27,7 @@ export const ICONS = {
   up: "M12 19V5M6 11l6-6 6 6",
   chevron: "M9 6l6 6-6 6",
   lock: `${rect(5, 11, 14, 10, 2)} M8 11V8a4 4 0 018 0v3`,
+  globe: `${circle(12, 12, 9)} M3 12h18M12 3c2.5 2.5 3.8 5.5 3.8 9s-1.3 6.5-3.8 9c-2.5-2.5-3.8-5.5-3.8-9s1.3-6.5 3.8-9z`,
 } as const;
 
 export type IconName = keyof typeof ICONS;

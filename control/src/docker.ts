@@ -33,9 +33,11 @@ export interface ContainerSpec {
 }
 
 export interface Docker {
-  /** The network's `internal` flag and IPv4 gateway, or null if it does not exist. */
-  network(name: string): Promise<{ internal: boolean; gateway: string | null } | null>;
-  createNetwork(name: string, internal: boolean): Promise<void>;
+  /** The network's `internal` flag, IPv4 gateway and bridge name, or null if it does not exist. */
+  network(
+    name: string,
+  ): Promise<{ internal: boolean; gateway: string | null; bridge: string | null } | null>;
+  createNetwork(name: string, internal: boolean, bridge: string): Promise<void>;
   createVolume(name: string, labels: Record<string, string>): Promise<void>;
   /** Succeeds if the volume is already gone. */
   removeVolume(name: string): Promise<void>;
@@ -53,6 +55,7 @@ export interface Docker {
 
 // The oldest API version current Docker Engine releases still accept.
 const apiVersion = "v1.44";
+const bridgeOption = "com.docker.network.bridge.name";
 
 export function dockerClient(socket: string): Docker {
   async function call(method: string, path: string, body?: unknown, accept: number[] = []) {
@@ -90,12 +93,22 @@ export function dockerClient(socket: string): Docker {
       const network = (await response.json()) as {
         Internal?: boolean;
         IPAM?: { Config?: { Gateway?: string }[] | null };
+        Options?: Record<string, string> | null;
       };
       const gateway = network.IPAM?.Config?.find((config) => config.Gateway?.includes("."));
-      return { internal: network.Internal === true, gateway: gateway?.Gateway ?? null };
+      return {
+        internal: network.Internal === true,
+        gateway: gateway?.Gateway ?? null,
+        bridge: network.Options?.[bridgeOption] ?? null,
+      };
     },
-    async createNetwork(name, internal) {
-      await call("POST", "/networks/create", { Name: name, Driver: "bridge", Internal: internal });
+    async createNetwork(name, internal, bridge) {
+      await call("POST", "/networks/create", {
+        Name: name,
+        Driver: "bridge",
+        Internal: internal,
+        Options: { [bridgeOption]: bridge },
+      });
     },
     async createVolume(name, labels) {
       await call("POST", "/volumes/create", { Name: name, Labels: labels });

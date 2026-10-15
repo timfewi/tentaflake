@@ -1,6 +1,6 @@
 import type { Database } from "bun:sqlite";
 import { randomUUID } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import type { LoginRequest, Role, SessionResponse, SetupRequest, SetupResponse, User } from "./api";
 import type { Config } from "./config";
 import {
@@ -132,6 +132,12 @@ export class Auth {
     const admin = await this.createUser(request.username, request.password, "admin", {
       onlyFirst: true,
     });
+    // The token is spent: emptied, the host stops showing it and creates no new one.
+    try {
+      writeFileSync(this.config.setupTokenFile, "");
+    } catch (error) {
+      console.error(`cannot empty the setup token file: ${error}`);
+    }
     return { user: admin.user, otpauthUri: otpauthUri(admin.user.username, admin.totpSecret) };
   }
 

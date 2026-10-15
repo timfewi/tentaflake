@@ -74,6 +74,9 @@ export const api = {
   session: async () => remember(await request<Api.SessionResponse>("GET", "/session")),
   logout: () => request<void>("DELETE", "/session"),
 
+  domain: () => request<Api.DomainStatus>("GET", "/domain"),
+  setDomain: (body: Api.DomainRequest) => request<Api.DomainStatus>("PUT", "/domain", body),
+
   keys: async () => (await request<Api.KeyList>("GET", "/keys")).keys,
   addKey: (body: Api.CreateKeyRequest) => request<Api.ModelKey>("POST", "/keys", body),
   deleteKey: (id: string) => request<void>("DELETE", `/keys/${id}`),

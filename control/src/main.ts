@@ -8,6 +8,7 @@ import { dockerClient } from "./docker";
 import { Environments, ensureNetworks } from "./environments";
 import { Keys } from "./keys";
 import { startServer } from "./server";
+import { Site } from "./site";
 import { uiServer } from "./ui";
 
 const configPath = Bun.argv[2];
@@ -25,14 +26,16 @@ broker.sync();
 const brokerUrl = `http://${gateway}:${config.brokerPort}/v1`;
 const environments = new Environments(db, docker, secrets, broker, { ...config, brokerUrl });
 const agent = new Agent(environments);
+const site = new Site(config);
 const idle = new IdleStop(environments, agent, config.environmentIdleMinutes * 60_000);
 setInterval(() => idle.run().catch((error) => console.error(`idle stop: ${error}`)), 60_000);
 const server = startServer(
   config,
+  site,
   new Auth(db, secrets, config),
   environments,
   new Keys(db, secrets, broker),
   agent,
-  config.uiDirectory === null ? undefined : uiServer(config.uiDirectory, config.origin),
+  config.uiDirectory === null ? undefined : uiServer(config.uiDirectory, () => site.origin()),
 );
 console.log(`tentaflake control service listening on ${server.url}`);

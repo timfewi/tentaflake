@@ -1,6 +1,7 @@
 import { useEffect, useState, useSyncExternalStore } from "react";
 import { Login, Setup } from "./auth";
 import { ApiFailure, api, errorMessage, type User, whenSignedOut } from "./client";
+import { Domain } from "./domain";
 import { EnvironmentPage } from "./environment";
 import { Environments } from "./environments";
 import { Keys } from "./keys";
@@ -64,6 +65,7 @@ export function App() {
         <nav>
           {link("environments", "Environments", "box")}
           {link("keys", "Model keys", "key")}
+          {boot.user.role === "admin" && link("domain", "Domain", "globe")}
         </nav>
         <span className="spacer" />
         <span className="chip">
@@ -87,6 +89,8 @@ export function App() {
       <main>
         {section === "keys" ? (
           <Keys />
+        ) : section === "domain" ? (
+          <Domain />
         ) : id ? (
           <EnvironmentPage key={id} id={id} />
         ) : (
