@@ -17,12 +17,17 @@ export interface ChatState {
   permissions: Permission[];
   /** What this page saw per session: the service replays nothing. */
   items: Record<string, Item[]>;
+  /** Events that arrived while a snapshot loads; null when none is loading. */
+  held: AgentEvent[] | null;
 }
 
-export const emptyChat: ChatState = { sessions: [], permissions: [], items: {} };
+export const emptyChat: ChatState = { sessions: [], permissions: [], items: {}, held: null };
 
 export type ChatAction =
-  | { type: "sync"; sessions: AgentSession[]; permissions: Permission[] }
+  /** A snapshot of sessions and approvals is being loaded: hold the events that arrive meanwhile. */
+  | { type: "syncing" }
+  /** The snapshot arrived (or failed: none), and the held events apply on top of it. */
+  | { type: "sync"; snapshot?: { sessions: AgentSession[]; permissions: Permission[] } }
   | { type: "created"; session: AgentSession }
   | { type: "prompted"; sessionId: string; messageId: string; text: string }
   | { type: "answered"; permissionId: string }
@@ -123,8 +128,13 @@ function reduceEvent(state: ChatState, event: AgentEvent): ChatState {
 
 export function reduceChat(state: ChatState, action: ChatAction): ChatState {
   switch (action.type) {
-    case "sync":
-      return { ...state, sessions: action.sessions, permissions: action.permissions };
+    case "syncing":
+      return { ...state, held: [] };
+    case "sync": {
+      const { sessions, permissions } = action.snapshot ?? state;
+      const base = { ...state, sessions, permissions, held: null };
+      return (state.held ?? []).reduce(reduceEvent, base);
+    }
     case "created":
       return state.sessions.some((session) => session.id === action.session.id)
         ? state
@@ -141,6 +151,8 @@ export function reduceChat(state: ChatState, action: ChatAction): ChatState {
         permissions: state.permissions.filter(({ id }) => id !== action.permissionId),
       };
     case "event":
-      return reduceEvent(state, action.event);
+      return state.held === null
+        ? reduceEvent(state, action.event)
+        : { ...state, held: [...state.held, action.event] };
   }
 }

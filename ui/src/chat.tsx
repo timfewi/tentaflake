@@ -42,16 +42,20 @@ export function Chat({ env, onStopped }: { env: Environment; onStopped(): void }
   // biome-ignore lint/correctness/useExhaustiveDependencies: one stream per environment; the callbacks only dispatch
   useEffect(() => {
     const source = new EventSource(eventsUrl(env.id));
-    // Nothing is replayed, so every (re)connect starts from the current sessions and approvals.
+    // Nothing is replayed, so every (re)connect starts from the current sessions and approvals;
+    // events that arrive while they load are held and applied on top of them.
     source.onopen = () => {
       setLive(true);
-      void task.run(async () => {
-        const [sessions, permissions] = await Promise.all([
-          api.sessions(env.id),
-          api.permissions(env.id),
-        ]);
-        dispatch({ type: "sync", sessions, permissions });
-      });
+      dispatch({ type: "syncing" });
+      void task
+        .run(async () => {
+          const [sessions, permissions] = await Promise.all([
+            api.sessions(env.id),
+            api.permissions(env.id),
+          ]);
+          dispatch({ type: "sync", snapshot: { sessions, permissions } });
+        })
+        .then((ok) => ok || dispatch({ type: "sync" }));
     };
     source.onerror = () => setLive(false);
     source.onmessage = (message) => {

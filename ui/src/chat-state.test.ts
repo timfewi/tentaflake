@@ -141,8 +141,10 @@ test("a sync replaces sessions and approvals but keeps what was seen", () => {
   );
   const after = reduceChat(before, {
     type: "sync",
-    sessions: [session("old"), session("new")],
-    permissions: [{ id: "p1", sessionId: "new", action: "shell", resources: [] }],
+    snapshot: {
+      sessions: [session("old"), session("new")],
+      permissions: [{ id: "p1", sessionId: "new", action: "shell", resources: [] }],
+    },
   });
   expect(after.sessions.map((each) => each.id)).toEqual(["old", "new"]);
   expect(after.permissions).toHaveLength(1);
@@ -152,4 +154,55 @@ test("a sync replaces sessions and approvals but keeps what was seen", () => {
 test("events that carry no chat state change nothing", () => {
   const state = play({ type: "created", session: session("a") });
   expect(reduceChat(state, { type: "event", event: { type: "environment.stopped" } })).toBe(state);
+});
+
+const asked = (id: string): AgentEvent => ({
+  type: "permission.asked",
+  id,
+  sessionId: s,
+  action: "shell",
+  resources: [],
+});
+
+test("an approval that arrives while the snapshot loads is not lost to it", () => {
+  // The snapshot was taken before the approval was asked; its answer reaches the page after the event.
+  const state = play(
+    { type: "syncing" },
+    { type: "event", event: asked("p1") },
+    { type: "sync", snapshot: { sessions: [session(s)], permissions: [] } },
+  );
+  expect(state.permissions.map((permission) => permission.id)).toEqual(["p1"]);
+  expect(state.held).toBeNull();
+});
+
+test("an answer that arrives while the snapshot loads still removes what the snapshot lists", () => {
+  const listed = { id: "p1", sessionId: s, action: "shell", resources: [] };
+  const state = play(
+    { type: "syncing" },
+    {
+      type: "event",
+      event: { type: "permission.replied", sessionId: s, permissionId: "p1", reply: "once" },
+    },
+    { type: "sync", snapshot: { sessions: [], permissions: [listed] } },
+  );
+  expect(state.permissions).toEqual([]);
+});
+
+test("held events keep their order, and a failed snapshot still releases them", () => {
+  const held = play(
+    { type: "created", session: session(s) },
+    { type: "syncing" },
+    {
+      type: "event",
+      event: { type: "session.text.delta", sessionId: s, messageId: "m1", delta: "a" },
+    },
+    { type: "event", event: asked("p1") },
+  );
+  // Nothing applies while the snapshot loads.
+  expect(held.items[s]).toBeUndefined();
+  expect(held.permissions).toEqual([]);
+  const released = reduceChat(held, { type: "sync" });
+  expect(released.items[s]).toEqual([{ kind: "assistant", id: "m1", text: "a" }]);
+  expect(released.permissions.map((permission) => permission.id)).toEqual(["p1"]);
+  expect(released.sessions).toHaveLength(1);
 });
