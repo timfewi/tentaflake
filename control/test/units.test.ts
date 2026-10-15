@@ -92,7 +92,9 @@ describe("configuration", () => {
       brokerDirectory: "/run/tentaflake/broker",
       limits: { memoryMiB: 2048, cpus: 2, pids: 512, dailyTokens: 10_000_000 },
       environmentIdleMinutes: 15,
+      uiDirectory: null,
     });
+    expect(parseConfig({ ...required, uiDirectory: "/ui" }).uiDirectory).toBe("/ui");
     expect(parseConfig({ ...required, limits: { pids: 100 } }).limits).toEqual({
       memoryMiB: 2048,
       cpus: 2,
@@ -116,6 +118,7 @@ describe("configuration", () => {
       { ...required, limits: { dailyTokens: 0 } },
       { ...required, brokerPort: 0 },
       { ...required, brokerDirectory: "" },
+      { ...required, uiDirectory: "" },
       { ...required, sessionIdleMinutes: 0 },
       { ...required, environmentIdleMinutes: 0 },
     ]) {
