@@ -88,12 +88,15 @@ describe("configuration", () => {
     expect(parseConfig(required)).toMatchObject({
       hostname: "127.0.0.1",
       dockerSocket: "/run/docker.sock",
-      limits: { memoryMiB: 2048, cpus: 2, pids: 512 },
+      brokerPort: 7810,
+      brokerDirectory: "/run/tentaflake/broker",
+      limits: { memoryMiB: 2048, cpus: 2, pids: 512, dailyTokens: 10_000_000 },
     });
     expect(parseConfig({ ...required, limits: { pids: 100 } }).limits).toEqual({
       memoryMiB: 2048,
       cpus: 2,
       pids: 100,
+      dailyTokens: 10_000_000,
     });
   });
 
@@ -109,6 +112,9 @@ describe("configuration", () => {
       { ...required, limits: { memoryMiB: 1.5 } },
       { ...required, limits: { cpus: 0 } },
       { ...required, limits: { disk: 1 } },
+      { ...required, limits: { dailyTokens: 0 } },
+      { ...required, brokerPort: 0 },
+      { ...required, brokerDirectory: "" },
       { ...required, sessionIdleMinutes: 0 },
     ]) {
       expect(() => parseConfig(input)).toThrow();
@@ -122,7 +128,7 @@ describe("database", () => {
       const path = join(dir, "control.sqlite");
       openDatabase(path).close();
       const db = openDatabase(path);
-      expect(db.query("PRAGMA user_version").get()).toEqual({ user_version: 1 });
+      expect(db.query("PRAGMA user_version").get()).toEqual({ user_version: 2 });
       db.close();
 
       const newer = new Database(path);

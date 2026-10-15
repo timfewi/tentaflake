@@ -6,12 +6,19 @@ import type {
   Environment,
   EnvironmentState,
   Limits,
+  McpServer,
+  McpServerDefinition,
+  McpServerResponse,
   NetworkMode,
+  Provider,
 } from "./api";
+import { type BrokerFiles, brokerTokenContext } from "./broker";
 import type { Config } from "./config";
 import { randomToken, type Secrets } from "./crypto";
 import type { ContainerSpec, Docker } from "./docker";
 import { HttpError } from "./http";
+import { providers } from "./keys";
+import { mcpNamePattern, mcpSecretWarning, opencodeMcp, parseMcpServer } from "./mcp";
 
 /** The Docker networks the service owns; each environment joins one of them. */
 export const networks: Record<NetworkMode, { name: string; internal: boolean }> = {
@@ -20,8 +27,12 @@ export const networks: Record<NetworkMode, { name: string; internal: boolean }> 
   open: { name: "tentaflake-open", internal: false },
 };
 
-/** Creates missing networks and refuses an existing one with the wrong `internal` flag. */
-export async function ensureNetworks(docker: Docker): Promise<void> {
+/**
+ * Creates missing networks and refuses an existing one with the wrong
+ * `internal` flag. Returns the model-only network's gateway: the host address
+ * the broker listens on, which environments on either network reach.
+ */
+export async function ensureNetworks(docker: Docker): Promise<string> {
   for (const { name, internal } of Object.values(networks)) {
     const existing = await docker.network(name);
     if (existing === null) {
@@ -32,18 +43,43 @@ export async function ensureNetworks(docker: Docker): Promise<void> {
       );
     }
   }
+  const gateway = (await docker.network(networks["model-only"].name))?.gateway;
+  if (!gateway) throw new Error(`Docker network ${networks["model-only"].name} has no gateway`);
+  return gateway;
 }
 
-// The generated per-environment OpenCode configuration: the runtime image's
-// base configuration, passed as OPENCODE_CONFIG_CONTENT. OpenCode ranks that
-// layer above an opencode.json written into /workspace (observed on 2.0.29),
-// so the agent cannot switch sharing, updates or permissions back on. The
-// model provider and MCP servers of an environment join it later.
-const opencodeConfig = JSON.stringify(baseConfig);
+/**
+ * The generated per-environment OpenCode configuration, passed as
+ * OPENCODE_CONFIG_CONTENT: the runtime image's base configuration with the
+ * environment's provider package, models and MCP servers. OpenCode ranks that
+ * layer above an opencode.json written into /workspace (observed on 2.0.29),
+ * so the agent cannot switch sharing, updates or permissions back on. The
+ * base configuration reads the broker URL and token from the environment; no
+ * provider key is ever part of it.
+ */
+export function opencodeConfig(
+  provider: Provider | null,
+  models: string[],
+  mcp: Record<string, object>,
+): string {
+  const config: Record<string, unknown> = { ...baseConfig, mcp };
+  if (provider !== null) {
+    config.model = `broker/${models[0]}`;
+    config.providers = {
+      broker: {
+        ...baseConfig.providers.broker,
+        package: providers[provider].package,
+        models: Object.fromEntries(models.map((model) => [model, { name: model }])),
+      },
+    };
+  }
+  return JSON.stringify(config);
+}
 
 export const environmentLabel = "io.tentaflake.environment";
 export const containerName = (id: string) => `tentaflake-${id}`;
 const namePattern = /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/;
+const invalid = (message: string) => new HttpError(400, "invalid_request", message);
 
 interface EnvironmentRow {
   id: string;
@@ -53,8 +89,11 @@ interface EnvironmentRow {
   container_id: string | null;
   workspace_volume: string;
   network_mode: NetworkMode;
+  key_id: string | null;
+  models: string;
   limits: string;
   opencode_password: string;
+  broker_token: string | null;
   created_at: number;
   last_activity_at: number;
 }
@@ -64,12 +103,22 @@ const toEnvironment = (row: EnvironmentRow): Environment => ({
   name: row.name,
   state: row.state,
   networkMode: row.network_mode,
+  keyId: row.key_id,
+  models: JSON.parse(row.models) as string[],
   limits: JSON.parse(row.limits) as Limits,
   createdAt: new Date(row.created_at).toISOString(),
   lastActivityAt: new Date(row.last_activity_at).toISOString(),
 });
 
 const passwordContext = (id: string) => `environments.opencode_password:${id}`;
+const mcpSecretsContext = (id: string, name: string) => `mcp_servers.secrets:${id}/${name}`;
+
+interface McpServerRow {
+  environment_id: string;
+  name: string;
+  definition: string;
+  secrets: string | null;
+}
 
 /**
  * The environment lifecycle. Every method takes the calling user's id and
@@ -83,7 +132,9 @@ export class Environments {
     private readonly db: Database,
     private readonly docker: Docker,
     private readonly secrets: Secrets,
-    private readonly config: Pick<Config, "image" | "limits">,
+    private readonly broker: BrokerFiles,
+    /** `brokerUrl`: the broker's base URL as environments reach it. */
+    private readonly config: Pick<Config, "image" | "limits"> & { brokerUrl: string },
     private readonly now: () => number = Date.now,
   ) {
     // A restart during a creation leaves it unfinished; its owner can delete it.
@@ -107,16 +158,27 @@ export class Environments {
   }
 
   async create(ownerId: string, request: CreateEnvironmentRequest): Promise<Environment> {
-    const { name, networkMode = "model-only" } = request;
+    const { name, networkMode = "model-only", keyId, models } = request;
     if (!namePattern.test(name)) {
-      throw new HttpError(
-        400,
-        "invalid_request",
-        "name must be 1-63 lowercase letters, digits or inner hyphens",
-      );
+      throw invalid("name must be 1-63 lowercase letters, digits or inner hyphens");
     }
     if (!Object.hasOwn(networks, networkMode)) {
-      throw new HttpError(400, "invalid_request", "networkMode must be model-only or open");
+      throw invalid("networkMode must be model-only or open");
+    }
+    if (
+      models.length === 0 ||
+      models.length > 32 ||
+      new Set(models).size !== models.length ||
+      !models.every((model) => model !== "" && model.length <= 200 && !/\p{Cc}/u.test(model))
+    ) {
+      throw invalid("models must be 1-32 distinct model names");
+    }
+    if (
+      this.db
+        .query("SELECT 1 FROM model_keys WHERE id = ? AND owner_id = ?")
+        .get(keyId, ownerId) === null
+    ) {
+      throw invalid("keyId must name one of your keys");
     }
     if (
       this.db
@@ -126,7 +188,6 @@ export class Environments {
       throw new HttpError(409, "conflict", "an environment with this name exists");
     }
     const id = randomUUID();
-    const password = randomToken();
     const now = this.now();
     const row: EnvironmentRow = {
       id,
@@ -136,25 +197,32 @@ export class Environments {
       container_id: null,
       workspace_volume: `tentaflake-${id}-workspace`,
       network_mode: networkMode,
+      key_id: keyId,
+      models: JSON.stringify(models),
       limits: JSON.stringify(this.config.limits),
-      opencode_password: this.secrets.encrypt(password, passwordContext(id)),
+      opencode_password: this.secrets.encrypt(randomToken(), passwordContext(id)),
+      broker_token: this.secrets.encrypt(randomToken(), brokerTokenContext(id)),
       created_at: now,
       last_activity_at: now,
     };
-    this.db
-      .query(
-        `INSERT INTO environments (id, owner_id, name, state, container_id, workspace_volume,
-           network_mode, limits, opencode_password, created_at, last_activity_at)
-         VALUES ($id, $owner_id, $name, $state, $container_id, $workspace_volume,
-           $network_mode, $limits, $opencode_password, $created_at, $last_activity_at)`,
-      )
-      .run({ ...row });
+    this.broker.commit(() =>
+      this.db
+        .query(
+          `INSERT INTO environments (id, owner_id, name, state, container_id, workspace_volume,
+             network_mode, key_id, models, limits, opencode_password, broker_token, created_at,
+             last_activity_at)
+           VALUES ($id, $owner_id, $name, $state, $container_id, $workspace_volume,
+             $network_mode, $key_id, $models, $limits, $opencode_password, $broker_token,
+             $created_at, $last_activity_at)`,
+        )
+        .run({ ...row }),
+    );
 
     try {
       await this.docker.createVolume(row.workspace_volume, { [environmentLabel]: id });
       const containerId = await this.docker.createContainer(
         containerName(id),
-        this.containerSpec(row, password),
+        this.containerSpec(row),
       );
       this.db.query("UPDATE environments SET container_id = ? WHERE id = ?").run(containerId, id);
       await this.docker.startContainer(containerId);
@@ -184,7 +252,83 @@ export class Environments {
         .query("UPDATE environments SET state = 'failed', container_id = NULL WHERE id = ?")
         .run(id);
       await this.docker.removeVolume(row.workspace_volume);
-      this.db.query("DELETE FROM environments WHERE id = ?").run(id);
+      this.broker.commit(() => this.db.query("DELETE FROM environments WHERE id = ?").run(id));
+    });
+  }
+
+  mcpServers(ownerId: string, id: string): McpServer[] {
+    this.row(ownerId, id);
+    return this.mcpRows(id).map((server) => ({
+      name: server.name,
+      ...(JSON.parse(server.definition) as McpServerDefinition),
+      secrets: Object.keys(this.mcpSecrets(server)),
+    }));
+  }
+
+  /**
+   * Creates or replaces an MCP server, its secrets included: a changed URL or
+   * command never inherits the secrets assigned for the old one. The container
+   * is recreated with the new configuration.
+   */
+  async putMcpServer(
+    ownerId: string,
+    id: string,
+    name: string,
+    body: Record<string, unknown>,
+  ): Promise<McpServerResponse> {
+    if (!mcpNamePattern.test(name)) {
+      throw invalid("MCP server names are 1-63 lowercase letters, digits, '_' or '-'");
+    }
+    const { definition, secrets } = parseMcpServer(body);
+    await this.reconfigure(ownerId, id, () => {
+      const encrypted =
+        Object.keys(secrets).length === 0
+          ? null
+          : this.secrets.encrypt(JSON.stringify(secrets), mcpSecretsContext(id, name));
+      this.db
+        .query(
+          "INSERT OR REPLACE INTO mcp_servers (environment_id, name, definition, secrets) VALUES (?, ?, ?, ?)",
+        )
+        .run(id, name, JSON.stringify(definition), encrypted);
+    });
+    const server = { name, ...definition, secrets: Object.keys(secrets) };
+    return server.secrets.length === 0 ? { server } : { server, warning: mcpSecretWarning };
+  }
+
+  async deleteMcpServer(ownerId: string, id: string, name: string): Promise<void> {
+    this.row(ownerId, id);
+    const server = "FROM mcp_servers WHERE environment_id = ? AND name = ?";
+    if (this.db.query(`SELECT 1 ${server}`).get(id, name) === null) {
+      throw new HttpError(404, "not_found", "no such MCP server");
+    }
+    await this.reconfigure(ownerId, id, () => this.db.query(`DELETE ${server}`).run(id, name));
+  }
+
+  /**
+   * Replaces the container (the configuration is part of its environment)
+   * with one built after `change`, and starts it if it was running. The old
+   * container goes first: while it runs with the old configuration, the change
+   * is not applied, so a failed removal changes nothing. A failure after it is
+   * gone leaves a failed environment. The workspace volume stays.
+   */
+  private async reconfigure(ownerId: string, id: string, change: () => void): Promise<void> {
+    await this.exclusive(ownerId, id, async (row) => {
+      if (row.state !== "running" && row.state !== "stopped") throw notNow(row.state, "change");
+      await this.docker.removeContainer(containerName(id));
+      try {
+        change();
+        this.db.query("UPDATE environments SET container_id = NULL WHERE id = ?").run(id);
+        const containerId = await this.docker.createContainer(
+          containerName(id),
+          this.containerSpec(row),
+        );
+        this.db.query("UPDATE environments SET container_id = ? WHERE id = ?").run(containerId, id);
+        if (row.state === "running") await this.docker.startContainer(containerId);
+        this.setState(id, row.state);
+      } catch (error) {
+        this.setState(id, "failed");
+        throw error;
+      }
     });
   }
 
@@ -240,7 +384,7 @@ export class Environments {
     try {
       await this.docker.removeContainer(containerName(row.id));
       await this.docker.removeVolume(row.workspace_volume);
-      this.db.query("DELETE FROM environments WHERE id = ?").run(row.id);
+      this.broker.commit(() => this.db.query("DELETE FROM environments WHERE id = ?").run(row.id));
     } catch (error) {
       console.error(`environment ${row.id}: cleanup after a failed creation failed: ${error}`);
       this.setState(row.id, "failed");
@@ -253,13 +397,45 @@ export class Environments {
       .run(state, this.now(), id);
   }
 
-  private containerSpec(row: EnvironmentRow, password: string): ContainerSpec {
+  private mcpRows(id: string): McpServerRow[] {
+    return this.db
+      .query("SELECT * FROM mcp_servers WHERE environment_id = ? ORDER BY name")
+      .all(id) as McpServerRow[];
+  }
+
+  private mcpSecrets(server: McpServerRow): Record<string, string> {
+    if (server.secrets === null) return {};
+    const context = mcpSecretsContext(server.environment_id, server.name);
+    return JSON.parse(this.secrets.decrypt(server.secrets, context)) as Record<string, string>;
+  }
+
+  private containerSpec(row: EnvironmentRow): ContainerSpec {
     const { memoryMiB, cpus, pids } = this.config.limits;
     const memory = memoryMiB * 1024 * 1024;
+    const mcp = Object.fromEntries(
+      this.mcpRows(row.id).map((server) => [
+        server.name,
+        opencodeMcp(JSON.parse(server.definition), this.mcpSecrets(server)),
+      ]),
+    );
+    const key = this.db.query("SELECT provider FROM model_keys WHERE id = ?").get(row.key_id) as {
+      provider: Provider;
+    } | null;
+    const env = [
+      `OPENCODE_SERVER_PASSWORD=${this.secrets.decrypt(row.opencode_password, passwordContext(row.id))}`,
+      `OPENCODE_CONFIG_CONTENT=${opencodeConfig(key?.provider ?? null, JSON.parse(row.models), mcp)}`,
+    ];
+    if (key !== null && row.broker_token !== null) {
+      const token = this.secrets.decrypt(row.broker_token, brokerTokenContext(row.id));
+      env.push(
+        `TENTAFLAKE_MODEL_BASE_URL=${this.config.brokerUrl}`,
+        `TENTAFLAKE_MODEL_API_KEY=${token}`,
+      );
+    }
     return {
       Image: this.config.image,
       User: "1000:1000",
-      Env: [`OPENCODE_SERVER_PASSWORD=${password}`, `OPENCODE_CONFIG_CONTENT=${opencodeConfig}`],
+      Env: env,
       Labels: { [environmentLabel]: row.id },
       HostConfig: {
         Runtime: "runsc",

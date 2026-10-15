@@ -21,9 +21,10 @@ just build       # build the host closure (explicit, not in CI)
 ```
 
 CI runs `just check` only, plus the path-filtered `runtime-smoke.yml` (Docker,
-`just runtime-smoke`, then `just control-integration`) when `images/runtime/**`
-or `control/**` changes. Host builds and VM tests are manual steps before a
-release; never add them to CI or run them as a routine check.
+`just runtime-smoke`, then `just control-integration`) when `images/runtime/**`,
+`control/**` or `crates/tentaflake-broker/**` changes. Host builds and VM tests
+are manual steps before a release; never add them to CI or run them as a
+routine check.
 
 ## Working rules
 
@@ -62,13 +63,15 @@ Deployment-specific configuration belongs in forks.
   the gVisor `runsc` runtime registration.
 - `configuration.nix` — host defaults: Docker as the container backend; the
   Docker socket is never granted to the login user in secure profiles.
-- `crates/tentaflake-broker`, `pkgs/tentaflake-broker` — the model broker;
+- `crates/tentaflake-broker`, `pkgs/tentaflake-broker` — the model broker:
+  per-environment routes from the file the control service writes;
   `lib/mkRustPackage.nix` packages it.
 - `images/catalog.json` — reviewed base-image pins with offline-checked
   evidence (`just image-catalog`).
-- `control/` — the control service (Bun): users, login, environment
-  lifecycle over the Docker socket. `control/src/api.ts` holds the API types
-  the UI imports; `docs/api.md` lists the endpoints.
+- `control/` — the control service (Bun): users, login, model keys, MCP
+  definitions, environment lifecycle over the Docker socket, the broker's
+  routes. `control/src/api.ts` holds the API types the UI imports;
+  `docs/api.md` lists the endpoints.
 - `ui/` — planned; see the architecture status.
 
 ## PR Description

@@ -32,6 +32,27 @@ const migrations = [
     last_activity_at INTEGER NOT NULL,
     UNIQUE (owner_id, name)
   ) STRICT;`,
+  `CREATE TABLE model_keys (
+    id TEXT PRIMARY KEY,
+    owner_id TEXT NOT NULL REFERENCES users (id),
+    provider TEXT NOT NULL
+      CHECK (provider IN ('anthropic', 'openai', 'openrouter', 'openai-compatible')),
+    label TEXT NOT NULL,
+    base_url TEXT,
+    secret TEXT NOT NULL,
+    created_at INTEGER NOT NULL
+  ) STRICT;
+  ALTER TABLE environments ADD COLUMN key_id TEXT REFERENCES model_keys (id) ON DELETE SET NULL;
+  ALTER TABLE environments ADD COLUMN models TEXT NOT NULL DEFAULT '[]';
+  ALTER TABLE environments ADD COLUMN broker_token TEXT;
+  UPDATE environments SET limits = json_set(limits, '$.dailyTokens', 10000000);
+  CREATE TABLE mcp_servers (
+    environment_id TEXT NOT NULL REFERENCES environments (id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    definition TEXT NOT NULL,
+    secrets TEXT,
+    PRIMARY KEY (environment_id, name)
+  ) STRICT;`,
 ];
 
 /** Opens (or creates) the database and brings its schema up to date. */

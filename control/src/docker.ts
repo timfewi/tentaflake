@@ -33,8 +33,8 @@ export interface ContainerSpec {
 }
 
 export interface Docker {
-  /** The network's `internal` flag, or null if it does not exist. */
-  network(name: string): Promise<{ internal: boolean } | null>;
+  /** The network's `internal` flag and IPv4 gateway, or null if it does not exist. */
+  network(name: string): Promise<{ internal: boolean; gateway: string | null } | null>;
   createNetwork(name: string, internal: boolean): Promise<void>;
   createVolume(name: string, labels: Record<string, string>): Promise<void>;
   /** Succeeds if the volume is already gone. */
@@ -85,8 +85,12 @@ export function dockerClient(socket: string): Docker {
     async network(name) {
       const response = await call("GET", `/networks/${segment(name)}`, undefined, [404]);
       if (response.status === 404) return null;
-      const network = (await response.json()) as { Internal?: boolean };
-      return { internal: network.Internal === true };
+      const network = (await response.json()) as {
+        Internal?: boolean;
+        IPAM?: { Config?: { Gateway?: string }[] | null };
+      };
+      const gateway = network.IPAM?.Config?.find((config) => config.Gateway?.includes("."));
+      return { internal: network.Internal === true, gateway: gateway?.Gateway ?? null };
     },
     async createNetwork(name, internal) {
       await call("POST", "/networks/create", { Name: name, Driver: "bridge", Internal: internal });

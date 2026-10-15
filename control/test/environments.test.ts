@@ -1,12 +1,20 @@
 import { describe, expect, test } from "bun:test";
 import baseConfig from "../../images/runtime/opencode.json";
 import type { Environment, EnvironmentList } from "../src/api";
+import { BrokerFiles } from "../src/broker";
 import { DockerError, dockerClient } from "../src/docker";
 import { Environments, ensureNetworks } from "../src/environments";
-import { type Client, call, FakeDocker, type Harness, harness, newUser } from "./helpers";
-
-const create = (h: Harness, client: Client, body: object = { name: "dev" }) =>
-  call(h, "POST", "/api/v1/environments", body, client);
+import {
+  brokerUrl,
+  type Client,
+  call,
+  createEnvironment as create,
+  envOf,
+  FakeDocker,
+  type Harness,
+  harness,
+  newUser,
+} from "./helpers";
 
 async function created(h: Harness, client: Client, body?: object): Promise<Environment> {
   const response = await create(h, client, body);
@@ -21,11 +29,6 @@ const list = async (h: Harness, client: Client) =>
     ).json()) as EnvironmentList
   ).environments;
 
-const envOf = (env: string[]) =>
-  Object.fromEntries(
-    env.map((entry) => [entry.split("=", 1)[0], entry.slice(entry.indexOf("=") + 1)]),
-  );
-
 describe("environments", () => {
   test("run as hardened runsc containers with a workspace volume", async () => {
     const h = harness();
@@ -35,7 +38,9 @@ describe("environments", () => {
       name: "dev",
       state: "running",
       networkMode: "model-only",
-      limits: { memoryMiB: 1024, cpus: 1.5, pids: 256 },
+      keyId: client.keyId,
+      models: ["fixture-model"],
+      limits: { memoryMiB: 1024, cpus: 1.5, pids: 256, dailyTokens: 50_000 },
     });
 
     const [container] = [...h.docker.containers.values()];
@@ -60,7 +65,20 @@ describe("environments", () => {
     expect([...h.docker.volumes]).toEqual([`tentaflake-${env.id}-workspace`]);
 
     const variables = envOf(spec?.Env ?? []);
-    expect(JSON.parse(variables.OPENCODE_CONFIG_CONTENT ?? "")).toEqual(baseConfig);
+    expect(JSON.parse(variables.OPENCODE_CONFIG_CONTENT ?? "")).toEqual({
+      ...baseConfig,
+      mcp: {},
+      model: "broker/fixture-model",
+      providers: {
+        broker: {
+          ...baseConfig.providers.broker,
+          package: "aisdk:@ai-sdk/anthropic",
+          models: { "fixture-model": { name: "fixture-model" } },
+        },
+      },
+    });
+    expect(variables.TENTAFLAKE_MODEL_BASE_URL).toBe(brokerUrl);
+    expect(variables.TENTAFLAKE_MODEL_API_KEY).toMatch(/^[\w-]{43}$/);
     const password = variables.OPENCODE_SERVER_PASSWORD ?? "";
     expect(password).toMatch(/^[\w-]{43}$/);
     expect(h.environments.opencodePassword(user.id, env.id)).toBe(password);
@@ -138,15 +156,23 @@ describe("environments", () => {
     const h = harness();
     const { client } = await newUser(h, "member");
     for (const body of [
-      {},
+      { name: undefined },
       { name: "" },
       { name: "Dev" },
       { name: "-dev" },
       { name: "dev-" },
       { name: "x".repeat(64) },
-      { name: "dev", networkMode: "internet" },
-      { name: "dev", networkMode: "constructor" },
-      { name: "dev", networkMode: 1 },
+      { networkMode: "internet" },
+      { networkMode: "constructor" },
+      { networkMode: 1 },
+      { keyId: undefined },
+      { keyId: "no-such-key" },
+      { models: undefined },
+      { models: [] },
+      { models: "fixture-model" },
+      { models: ["fixture-model", "fixture-model"] },
+      { models: [""] },
+      { models: ["bad\nmodel"] },
     ]) {
       expect((await create(h, client, body)).status).toBe(400);
     }
@@ -272,9 +298,11 @@ describe("Docker failures", () => {
     const { client, user } = await newUser(h, "member");
     const env = await created(h, client);
     h.db.query("UPDATE environments SET state = 'creating'").run();
-    const restarted = new Environments(h.db, h.docker, h.secrets, {
+    const broker = new BrokerFiles(h.db, h.secrets, h.brokerDirectory);
+    const restarted = new Environments(h.db, h.docker, h.secrets, broker, {
       image: "runtime:test",
       limits: env.limits,
+      brokerUrl,
     });
     expect(restarted.get(user.id, env.id).state).toBe("failed");
   });
@@ -290,7 +318,7 @@ describe("Docker client", () => {
 describe("networks", () => {
   test("are created once, model-only without a route out", async () => {
     const docker = new FakeDocker();
-    await ensureNetworks(docker);
+    expect(await ensureNetworks(docker)).toBe("192.0.2.1");
     await ensureNetworks(docker);
     expect([...docker.networks]).toEqual([
       ["tentaflake-model-only", true],

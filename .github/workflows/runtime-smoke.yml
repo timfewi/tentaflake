@@ -4,14 +4,15 @@ permissions:
   contents: read
 
 # The one exception to fast-only CI: builds the runtime image and runs it under
-# gVisor, then runs the control service against it, so it runs only when the
-# image, its smoke test or the control service changes.
+# gVisor, then runs the control service and the broker against it, so it runs
+# only when the image, its smoke test, the control service or the broker changes.
 on:
   pull_request:
     paths:
       - images/runtime/**
       - scripts/runtime-smoke.sh
       - control/**
+      - crates/tentaflake-broker/**
   workflow_dispatch:
 
 concurrency:
@@ -48,7 +49,7 @@ jobs:
           extra-conf: |
             accept-flake-config = true
 
-      - name: Control service lifecycle test (runsc, the image built above)
+      - name: Control service and broker test (runsc, the image built above)
         env:
           TENTAFLAKE_NO_BANNER: "1"
         run: nix develop --command just control-integration tentaflake-runtime:smoke

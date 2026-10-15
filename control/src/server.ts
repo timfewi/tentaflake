@@ -1,9 +1,13 @@
 import type { BunRequest } from "bun";
 import {
   type CreateEnvironmentRequest,
+  type CreateKeyRequest,
   csrfHeader,
   type EnvironmentList,
+  type KeyList,
+  type McpServerList,
   type NetworkMode,
+  type Provider,
   type SessionResponse,
   type SetupStatus,
 } from "./api";
@@ -12,7 +16,8 @@ import type { Config } from "./config";
 import { safeEqual } from "./crypto";
 import { DockerError } from "./docker";
 import type { Environments } from "./environments";
-import { errorJson, HttpError, json, readBody, text } from "./http";
+import { errorJson, HttpError, json, readBody, text, texts } from "./http";
+import type { Keys } from "./keys";
 
 export const sessionCookie = "__Host-tentaflake";
 
@@ -28,6 +33,7 @@ export function startServer(
   config: Pick<Config, "hostname" | "port" | "origin">,
   auth: Auth,
   environments: Environments,
+  keys: Keys,
 ) {
   // Every mutation must come from the configured origin exactly.
   function open<P extends string>(handler: (request: BunRequest<P>) => Reply) {
@@ -95,7 +101,11 @@ export function startServer(
         ),
         POST: authed(async (request, { user }) => {
           const body = await readBody(request);
-          const create: CreateEnvironmentRequest = { name: text(body.name, "name") };
+          const create: CreateEnvironmentRequest = {
+            name: text(body.name, "name"),
+            keyId: text(body.keyId, "keyId"),
+            models: texts(body.models, "models"),
+          };
           if (body.networkMode !== undefined) {
             create.networkMode = text(body.networkMode, "networkMode") as NetworkMode;
           }
@@ -118,6 +128,45 @@ export function startServer(
         POST: authed(async (request, { user }) =>
           json(200, await environments.stop(user.id, request.params.id)),
         ),
+      },
+      "/api/v1/environments/:id/mcp": {
+        GET: authed((request, { user }) =>
+          json(200, {
+            servers: environments.mcpServers(user.id, request.params.id),
+          } satisfies McpServerList),
+        ),
+      },
+      "/api/v1/environments/:id/mcp/:name": {
+        PUT: authed(async (request, { user }) => {
+          const { id, name } = request.params;
+          return json(
+            200,
+            await environments.putMcpServer(user.id, id, name, await readBody(request)),
+          );
+        }),
+        DELETE: authed(async (request, { user }) => {
+          await environments.deleteMcpServer(user.id, request.params.id, request.params.name);
+          return new Response(null, { status: 204 });
+        }),
+      },
+      "/api/v1/keys": {
+        GET: authed((_, { user }) => json(200, { keys: keys.list(user.id) } satisfies KeyList)),
+        POST: authed(async (request, { user }) => {
+          const body = await readBody(request);
+          const create: CreateKeyRequest = {
+            provider: text(body.provider, "provider") as Provider,
+            label: text(body.label, "label"),
+            secret: text(body.secret, "secret", 8192),
+          };
+          if (body.baseUrl !== undefined) create.baseUrl = text(body.baseUrl, "baseUrl", 4096);
+          return json(201, keys.add(user.id, create));
+        }),
+      },
+      "/api/v1/keys/:id": {
+        DELETE: authed((request, { user }) => {
+          keys.delete(user.id, request.params.id);
+          return new Response(null, { status: 204 });
+        }),
       },
     },
     fetch: () => errorJson(404, "not_found", "no such endpoint"),

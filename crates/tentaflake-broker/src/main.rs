@@ -2,6 +2,7 @@ mod broker;
 mod config;
 mod http;
 mod policy;
+mod routes;
 mod state;
 mod streaming;
 

@@ -36,7 +36,7 @@ browser ── HTTPS (Caddy, ACME) ── control service (Bun/TypeScript, SQLit
                                    ├─ serves the UI (ui/)
                                    ├─ Docker + runsc: create/start/stop environments
                                    ├─ proxies OpenCode sessions, events, approvals, terminal, files
-                                   └─ broker: holds the users' API keys, forwards model calls, budgets
+                                   └─ keys (encrypted), routes ─→ broker: forwards model calls, budgets
 environment container (gVisor) ── opencode serve ── model calls → broker only
 ```
 
@@ -48,9 +48,10 @@ environment container (gVisor) ── opencode serve ── model calls → brok
   Caddy, and never hands the Docker socket to an environment.
 - **UI:** in `ui/` of this repository. It uses only the documented, versioned
   HTTP API of the control service, so other UIs can use the same API.
-- **Broker:** `crates/tentaflake-broker`. It stores the users' API keys
-  encrypted on the host and forwards model calls. Environments get a broker
-  URL and a per-environment token, never a provider key.
+- **Broker:** `crates/tentaflake-broker`. The control service stores the
+  users' API keys encrypted on the host; the broker forwards model calls with
+  them. Environments get a broker URL and a per-environment token, never a
+  provider key.
 - **Runtime image:** built from a Dockerfile `FROM ubuntu@sha256:…` with apt
   from a dated snapshot and the OpenCode binary pinned by checksum, referenced
   by digest from the host configuration. The reviewed Ubuntu pin lives in
@@ -78,9 +79,12 @@ with the isolation an environment gets (gVisor `runsc` when Docker has it,
 dropped capabilities, read-only root, memory and PID limits) and checks the
 HTTP API: password required, a session can be created, the effective
 configuration matches. It makes no model call. It needs Docker, so CI runs it
-only when `images/runtime/`, the script or `control/` changes
-(`runtime-smoke.yml`), followed by the control service's lifecycle test against
-the image it built (`just control-integration`).
+only when `images/runtime/`, the script, `control/` or the broker changes
+(`runtime-smoke.yml`), followed by the control service's tests against the
+image it built and the broker (`just control-integration`): the environment
+lifecycle, and model calls from `model only` and `open internet` environments
+through the broker to a fake provider, which receives the provider key while
+the containers never hold it; a `model only` environment reaches nothing else.
 
 ## Control service
 
@@ -95,7 +99,8 @@ passwords in the database.
 
 One SQLite file with numbered migrations holds users (role `admin` or
 `member`, Argon2id password hash, TOTP secret), sessions (hashed token, CSRF
-token, expiry) and environments. Every environment has an owner, and every
+token, expiry), model keys (provider, label, encrypted secret), environments
+and their MCP servers. Every environment and key has an owner, and every
 query for one is scoped to it. The API and its rules are in [api.md](api.md).
 
 An environment is a container of the runtime image, created through the Docker
@@ -106,9 +111,56 @@ on `/workspace` and the label `io.tentaflake.environment=<id>`. It gets a random
 `OPENCODE_SERVER_PASSWORD` and the generated OpenCode configuration as
 `OPENCODE_CONFIG_CONTENT`, which OpenCode ranks above an `opencode.json` in the
 workspace. The network mode picks one of two networks the service owns:
-`tentaflake-model-only` (internal, no route out; the broker will join it) or
-`tentaflake-open`. A record exists while Docker may hold resources for the
-environment, and a failed Docker call is an error, never a silent success.
+`tentaflake-model-only` (internal, no route out) or `tentaflake-open`. A
+record exists while Docker may hold resources for the environment, and a
+failed Docker call is an error, never a silent success.
+
+An environment uses one of its owner's keys and a list of allowed models. It
+gets a random broker token, and the container gets the broker URL and that
+token as `TENTAFLAKE_MODEL_BASE_URL` and `TENTAFLAKE_MODEL_API_KEY`. The
+generated configuration names the AI SDK package of the key's provider
+(`@ai-sdk/anthropic`, `@ai-sdk/openai`, or `@ai-sdk/openai-compatible` for
+OpenRouter and compatible APIs), the allowed models (the first is the
+default) and the environment's MCP servers; it never contains a provider key.
+MCP secrets reach it only when the owner assigns them. Changing the MCP
+servers replaces the container, since its configuration is part of the
+container's environment; the workspace volume stays.
+
+## Broker
+
+`tentaflake-broker --config broker.json` serves every environment from one
+process. Its configuration holds the listen address, the paths of the routes
+file, audit log and budget state, and the limits (request, header and
+response sizes, timeouts, concurrency, request rate, streaming deadlines).
+The control service owns the routes: on every change of an environment or
+key it rewrites, in its broker directory (a tmpfs runtime directory), one
+credential file per environment with the decrypted provider key (mode
+`0600`), then `routes.json`, then removes stale credential files. It does so
+in the database transaction of the change, which rolls back when the files
+cannot be written, and rebuilds them at startup. A route maps the SHA-256 of an environment token to
+its API family (`openai` or `anthropic`), upstream base URL, credential file,
+models, completion-token limit and daily budgets. Each request reads the
+routes file and reparses it when its content changed, so a new route works on
+the next request, a removed one stops working, and requests in flight finish
+with the route they started with. An unreadable or invalid file refuses every
+request.
+
+The broker listens on the gateway address of `tentaflake-model-only`: a host
+address that `model only` environments reach although their network has no
+route out, and that `open internet` environments reach through their own
+gateway. It accepts the paths and headers OpenCode 2.0.29 sends (observed
+against a recording server): `POST /v1/chat/completions` (OpenRouter and
+compatible APIs) and `POST /v1/responses` (OpenAI) with the token as a bearer
+token, and `POST /v1/messages` (Anthropic) with the token as `x-api-key`,
+forwarding `anthropic-version` and `anthropic-beta`. Each request is
+admitted only for an allowed model, without provider-side tools or
+extensions, within the route's request rate and daily request, token and cost
+budgets (input counted conservatively as request bytes, output as the
+completion-token limit). The provider key replaces the token, streaming
+responses are relayed event by event with their deadlines, nothing is
+replayed, and the audit log records routes, models and usage but no prompt,
+response, token or key. Upstreams must be HTTPS on public addresses; that is
+checked per request, so a route that breaks it fails alone.
 
 ## Users and access
 
@@ -169,10 +221,11 @@ works, and the README then lists where it was verified.
 | Part | State |
 |---|---|
 | Host modules, Docker with `runsc`, security profile | In the repository |
-| Broker crate and package | In the repository; not yet wired to environments |
+| Broker crate and package | In the repository; one process serves every environment by token (multi-route), tested with a fake provider under `runsc` in CI when it changes |
 | Base-image catalog (Ubuntu 26.04 pin) | In the repository |
 | Runtime image (Ubuntu + OpenCode) | In the repository (smoke-tested in CI when the image changes) |
-| Control service and its API: users, setup, login, environment lifecycle | In the repository; no model access or session proxy yet (lifecycle tested under `runsc` in CI when it changes) |
+| Control service and its API: users, setup, login, environment lifecycle, model keys, MCP definitions | In the repository; no session proxy yet (tested under `runsc` in CI when it changes) |
+| Host wiring of the broker (service, firewall) | Planned |
 | UI in `ui/` | Planned |
 | Setup wizard, HTTPS | Planned |
 | VPS image and updates | Planned |

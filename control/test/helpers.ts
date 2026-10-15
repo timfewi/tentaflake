@@ -5,15 +5,19 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { csrfHeader, type Role } from "../src/api";
 import { Auth } from "../src/auth";
+import { BrokerFiles } from "../src/broker";
 import { Secrets, totpCode } from "../src/crypto";
 import { openDatabase } from "../src/db";
 import { type ContainerSpec, type Docker, DockerError } from "../src/docker";
 import { Environments } from "../src/environments";
+import { Keys } from "../src/keys";
 import { sessionCookie, startServer } from "../src/server";
 
 export const origin = "https://tentaflake.example";
 export const setupToken = "setup-token-for-tests-0123456789";
 export const password = "correct horse battery staple";
+export const gateway = "192.0.2.1";
+export const brokerUrl = `http://${gateway}:7810/v1`;
 
 /** An in-memory Docker Engine; a method named in `failing` throws like a failed API call. */
 export class FakeDocker implements Docker {
@@ -26,7 +30,7 @@ export class FakeDocker implements Docker {
   async network(name: string) {
     this.check("network");
     const internal = this.networks.get(name);
-    return internal === undefined ? null : { internal };
+    return internal === undefined ? null : { internal, gateway };
   }
   async createNetwork(name: string, internal: boolean) {
     this.check("createNetwork");
@@ -89,15 +93,13 @@ export function harness({ token = setupToken as string | null } = {}) {
   const docker = new FakeDocker();
   const sessions = { setupTokenFile, sessionIdleMinutes: 60, sessionAbsoluteHours: 12 };
   const auth = new Auth(db, secrets, sessions, now);
-  const limits = { memoryMiB: 1024, cpus: 1.5, pids: 256 };
-  const environments = new Environments(
-    db,
-    docker,
-    secrets,
-    { image: "runtime:test", limits },
-    now,
-  );
-  const server = startServer({ hostname: "127.0.0.1", port: 0, origin }, auth, environments);
+  const limits = { memoryMiB: 1024, cpus: 1.5, pids: 256, dailyTokens: 50_000 };
+  const brokerDirectory = join(dir, "broker");
+  const broker = new BrokerFiles(db, secrets, brokerDirectory);
+  const config = { image: "runtime:test", limits, brokerUrl };
+  const environments = new Environments(db, docker, secrets, broker, config, now);
+  const keys = new Keys(db, secrets, broker, now);
+  const server = startServer({ hostname: "127.0.0.1", port: 0, origin }, auth, environments, keys);
   const h = {
     url: server.url.origin,
     clock,
@@ -106,6 +108,9 @@ export function harness({ token = setupToken as string | null } = {}) {
     docker,
     auth,
     environments,
+    keys,
+    broker,
+    brokerDirectory,
     close() {
       server.stop(true);
       db.close();
@@ -119,6 +124,8 @@ export function harness({ token = setupToken as string | null } = {}) {
 export interface Client {
   cookie?: string;
   csrf?: string;
+  /** The user's model key (newUser adds one). */
+  keyId?: string;
 }
 
 /** A JSON API request; mutations carry the configured Origin unless `origin` overrides it. */
@@ -157,11 +164,36 @@ export async function signIn(h: Harness, username: string, secret: Buffer): Prom
   return { cookie, csrf: csrfToken };
 }
 
-/** Creates a user directly and signs it in. */
+/** The secret of the anthropic key newUser adds for a user. */
+export const providerSecret = (username: string) => `sk-ant-fixture-${username}-0123456789`;
+
+/** Creates a user directly with one anthropic key and signs it in. */
 export async function newUser(h: Harness, username: string, role: Role = "member") {
   const { user, totpSecret } = await h.auth.createUser(username, password, role);
-  return { user, totpSecret, client: await signIn(h, username, totpSecret) };
+  const key = h.keys.add(user.id, {
+    provider: "anthropic",
+    label: "default",
+    secret: providerSecret(username),
+  });
+  const client = { ...(await signIn(h, username, totpSecret)), keyId: key.id };
+  return { user, totpSecret, client };
 }
+
+/** Creates an environment ("dev", the user's key, one model) with `body` overriding. */
+export const createEnvironment = (h: Harness, client: Client, body: object = {}) =>
+  call(
+    h,
+    "POST",
+    "/api/v1/environments",
+    { name: "dev", keyId: client.keyId, models: ["fixture-model"], ...body },
+    client,
+  );
+
+/** The environment variables of a container spec as an object. */
+export const envOf = (env: string[]) =>
+  Object.fromEntries(
+    env.map((entry) => [entry.split("=", 1)[0], entry.slice(entry.indexOf("=") + 1)]),
+  );
 
 export function base32Decode(text: string): Buffer {
   const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
