@@ -405,15 +405,20 @@ describe("events", () => {
     expect(events).toEqual([{ type: "session.deleted", sessionId: "ses_fake1" }]);
   });
 
-  test("end cleanly when the environment stops", async () => {
-    const { h, client, path } = await setup();
-    const response = await call(h, "GET", `${path}/events`, undefined, client);
-    await until(() => h.opencode.openStreams === 1, "the upstream stream");
-    expect((await call(h, "POST", `${path}/stop`, undefined, client)).status).toBe(200);
-    const { events, ended } = await readEvents(response, 2);
-    expect(events).toEqual([{ type: "environment.stopped" }]);
-    expect(ended).toBe(true);
-    await until(() => h.opencode.openStreams === 0, "the upstream stream to close");
+  test("end cleanly when the environment stops or is deleted", async () => {
+    for (const [method, route, status] of [
+      ["POST", "/stop", 200],
+      ["DELETE", "", 204],
+    ] as const) {
+      const { h, client, path } = await setup();
+      const response = await call(h, "GET", `${path}/events`, undefined, client);
+      await until(() => h.opencode.openStreams === 1, "the upstream stream");
+      expect((await call(h, method, `${path}${route}`, undefined, client)).status).toBe(status);
+      const { events, ended } = await readEvents(response, 2);
+      expect(events).toEqual([{ type: "environment.stopped" }]);
+      expect(ended).toBe(true);
+      await until(() => h.opencode.openStreams === 0, "the upstream stream to close");
+    }
   });
 });
 
@@ -512,6 +517,31 @@ describe("terminal", () => {
     expect(await shell.closed).toEqual({ code: 1000, reason: "the environment stopped" });
     await until(() => h.opencode.pty.removed.length === 1, "the PTY removal");
     await until(() => h.opencode.openSockets === 0, "the upstream socket to close");
+  });
+
+  test("ends at once, like an event stream, while the environment stops", async () => {
+    const { h, client, path } = await setup();
+    let stopping = false;
+    let stopped = () => {};
+    h.docker.onStop = () => {
+      stopping = true;
+      return new Promise((resolve) => {
+        stopped = resolve;
+      });
+    };
+    const stop = call(h, "POST", `${path}/stop`, undefined, client);
+    await until(() => stopping, "the stop");
+
+    const response = await call(h, "GET", `${path}/events`, undefined, client);
+    expect(response.status).toBe(200);
+    expect(await readEvents(response, 2)).toMatchObject({
+      events: [{ type: "environment.stopped" }],
+      ended: true,
+    });
+    const shell = terminal(h, client, path);
+    expect(await shell.closed).toEqual({ code: 1000, reason: "the environment stopped" });
+    stopped();
+    expect((await stop).status).toBe(200);
   });
 });
 

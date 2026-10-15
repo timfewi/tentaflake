@@ -52,8 +52,10 @@ only this API, and so can other clients. Request and response types live in
   `session.text.ended`), tool calls (`session.tool.*`) and approvals
   (`permission.asked`, `permission.replied`). Other or invalid OpenCode events
   are dropped, and so is one over 1 MiB. Comments keep the connection open.
-  When the environment stops, `environment.stopped` is sent and the stream
-  ends. Nothing is replayed: after a reconnect, list sessions and permissions.
+  When the environment stops, is deleted or has its container replaced (a
+  configuration change), `environment.stopped` is sent and the stream ends;
+  the same closes a terminal with `1000` and "the environment stopped".
+  Nothing is replayed: after a reconnect, list sessions and permissions.
 - **Approvals:** a tool call that OpenCode's permissions set to `ask` waits in
   `permissions` until its owner replies `once` (this call), `always` (calls
   like it from now on; OpenCode saves the rule) or `reject`.

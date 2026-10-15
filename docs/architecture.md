@@ -141,8 +141,9 @@ The event stream relays only the session, tool and approval events the UI
 uses. The terminal is a shell from OpenCode's PTY API (2.0.29 has one),
 relayed over a WebSocket with bounded frames; the service's own WebSocket
 client (`control/src/websocket.ts`) refuses an oversized frame from OpenCode
-before reading it, which Bun's client cannot. Stopping an environment closes
-its event streams and terminals. Every minute, a task stops the running
+before reading it, which Bun's client cannot. Stopping, deleting or
+reconfiguring an environment closes its event streams and terminals before
+its container goes, so they end with the environment and not with OpenCode. Every minute, a task stops the running
 environments without activity (prompts, approvals, file reads, relayed events,
 terminal input) for `environmentIdleMinutes`, unless a terminal is open or
 OpenCode reports a running prompt; a check that fails stops nothing.

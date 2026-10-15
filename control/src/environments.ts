@@ -211,14 +211,15 @@ export class Environments {
 
   /**
    * Tracks a connection into a running environment until its returned release
-   * is called. Stopping or replacing the container closes it; a connection to
-   * an environment that no longer runs is closed at once.
+   * is called. Stopping or replacing the container closes it first, so that it
+   * ends with the environment rather than with OpenCode; a connection to an
+   * environment that does not run or is being changed is closed at once.
    */
   connect(id: string, connection: Connection): () => void {
     const row = this.db.query("SELECT state FROM environments WHERE id = ?").get(id) as {
       state: EnvironmentState;
     } | null;
-    if (row?.state !== "running") {
+    if (row?.state !== "running" || this.busy.has(id)) {
       connection.close();
       return () => {};
     }
@@ -325,8 +326,8 @@ export class Environments {
   async delete(ownerId: string, id: string): Promise<void> {
     await this.exclusive(ownerId, id, async (row) => {
       if (row.state === "creating") throw notNow(row.state, "delete");
-      await this.docker.removeContainer(containerName(id));
       this.disconnect(id);
+      await this.docker.removeContainer(containerName(id));
       // The container is gone; if a volume stays, a failed record remains to retry.
       this.db
         .query("UPDATE environments SET state = 'failed', container_id = NULL WHERE id = ?")
@@ -395,8 +396,8 @@ export class Environments {
   private async reconfigure(ownerId: string, id: string, change: () => void): Promise<void> {
     await this.exclusive(ownerId, id, async (row) => {
       if (row.state !== "running" && row.state !== "stopped") throw notNow(row.state, "change");
-      await this.docker.removeContainer(containerName(id));
       this.disconnect(id);
+      await this.docker.removeContainer(containerName(id));
       try {
         change();
         this.db.query("UPDATE environments SET container_id = NULL WHERE id = ?").run(id);
@@ -435,11 +436,11 @@ export class Environments {
       if ((row.state !== "running" && row.state !== "stopped") || row.container_id === null) {
         throw notNow(row.state, action);
       }
+      if (target === "stopped") this.disconnect(id);
       await (target === "running"
         ? this.docker.startContainer(row.container_id)
         : this.docker.stopContainer(row.container_id));
       this.setState(id, target);
-      if (target === "stopped") this.disconnect(id);
     });
     return this.get(ownerId, id);
   }

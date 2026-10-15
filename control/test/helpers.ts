@@ -27,6 +27,8 @@ export class FakeDocker implements Docker {
   readonly volumes = new Set<string>();
   readonly containers = new Map<string, { name: string; spec: ContainerSpec; running: boolean }>();
   readonly failing = new Set<keyof Docker>();
+  /** Runs when a container stops or is removed; Docker answers after it. */
+  onStop: () => Promise<void> = async () => {};
   private nextId = 1;
 
   async network(name: string) {
@@ -58,6 +60,7 @@ export class FakeDocker implements Docker {
   }
   async stopContainer(id: string) {
     this.check("stopContainer");
+    await this.onStop();
     this.container(id).running = false;
   }
   async removeContainer(idOrName: string) {
@@ -65,6 +68,7 @@ export class FakeDocker implements Docker {
     for (const [id, { name }] of this.containers) {
       if (id === idOrName || name === idOrName) this.containers.delete(id);
     }
+    await this.onStop();
   }
   /** Running containers are at loopback, where the harness's FakeOpenCode listens. */
   async containerAddress(id: string) {
@@ -145,6 +149,13 @@ export class FakeOpenCode {
   /** Sends terminal output on every PTY connection. */
   output(text: string): void {
     for (const socket of this.sockets) socket.send(text);
+  }
+
+  /** Ends every event stream and PTY connection, as OpenCode does when its container stops. */
+  drop(): void {
+    for (const stream of this.streams) stream.close();
+    this.streams.clear();
+    for (const socket of this.sockets) socket.close();
   }
 
   get openStreams(): number {
@@ -287,6 +298,11 @@ export function harness({ token = setupToken as string | null } = {}) {
   const brokerDirectory = join(dir, "broker");
   const broker = new BrokerFiles(db, secrets, brokerDirectory);
   const opencode = new FakeOpenCode();
+  // Docker answers a stop only after the processes, OpenCode among them, ended.
+  docker.onStop = async () => {
+    opencode.drop();
+    await Bun.sleep(50);
+  };
   const config = { image: "runtime:test", limits, brokerUrl, opencodePort: opencode.port };
   const environments = new Environments(db, docker, secrets, broker, config, now);
   const keys = new Keys(db, secrets, broker, now);
