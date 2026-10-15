@@ -1,54 +1,91 @@
-import {
-  type InputHTMLAttributes,
-  type ReactNode,
-  useEffect,
-  useId,
-  useRef,
-  useState,
-} from "react";
+import * as Dialog from "@radix-ui/react-dialog";
+import { type InputHTMLAttributes, type ReactNode, useId, useState } from "react";
 import { errorMessage } from "./client";
+import { ICONS, type IconName } from "./icons";
 
-export const Notice = ({
+export const cx = (...parts: (string | false | null | undefined)[]) =>
+  parts.filter(Boolean).join(" ");
+
+export function Icon({ name, className }: { name: IconName; className?: string }) {
+  return (
+    <svg className={cx("icon", className)} viewBox="0 0 24 24" aria-hidden="true">
+      <path d={ICONS[name]} />
+    </svg>
+  );
+}
+
+const NOTICE_ICON = { info: "info", ok: "check", warn: "alert", bad: "alert" } as const;
+
+export function Notice({
   tone = "info",
   children,
 }: {
-  tone?: "info" | "ok" | "warn" | "bad";
+  tone?: keyof typeof NOTICE_ICON;
   children: ReactNode;
-}) => (
-  <div className={`notice ${tone}`} role={tone === "bad" ? "alert" : "status"}>
-    {children}
-  </div>
-);
+}) {
+  return (
+    <div className={cx("notice", tone)} role={tone === "bad" ? "alert" : "status"}>
+      <Icon name={NOTICE_ICON[tone]} />
+      <div className="notice-text">{children}</div>
+    </div>
+  );
+}
+
+/** What a pane shows instead of staying blank. */
+export function Empty({
+  icon,
+  title,
+  children,
+}: {
+  icon: IconName;
+  title: string;
+  children?: ReactNode;
+}) {
+  return (
+    <div className="empty">
+      <Icon name={icon} />
+      <h3>{title}</h3>
+      {children}
+    </div>
+  );
+}
 
 /** State as a word; the colour only supports it. */
 export const StateBadge = ({ state }: { state: string }) => (
   <span className="state" data-state={state}>
+    <i aria-hidden="true" />
     {state}
   </span>
 );
 
-/** A modal dialog; the browser provides the focus trap and Escape. */
 export function Modal({
   title,
   onClose,
   children,
+  wide,
 }: {
   title: string;
   onClose(): void;
   children: ReactNode;
+  wide?: boolean;
 }) {
-  const dialog = useRef<HTMLDialogElement>(null);
-  useEffect(() => dialog.current?.showModal(), []);
   return (
-    <dialog ref={dialog} onClose={onClose} aria-label={title}>
-      <header>
-        <h2>{title}</h2>
-        <button type="button" className="btn" onClick={() => dialog.current?.close()}>
-          Close
-        </button>
-      </header>
-      {children}
-    </dialog>
+    <Dialog.Root open onOpenChange={(open) => !open && onClose()}>
+      <Dialog.Portal>
+        <Dialog.Overlay className="overlay" />
+        <Dialog.Content className={cx("dialog", wide && "wide")} aria-describedby={undefined}>
+          <header className="dialog-head">
+            <Dialog.Title>{title}</Dialog.Title>
+            <Dialog.Close asChild>
+              <button type="button" className="ibtn" aria-label="Close">
+                <Icon name="close" />
+              </button>
+            </Dialog.Close>
+          </header>
+          {children}
+        </Dialog.Content>
+      </Dialog.Portal>
+    </Dialog.Root>
   );
 }
 
@@ -89,7 +126,7 @@ export function Control({
       ) : spec.multiline ? (
         <textarea
           id={id}
-          rows={4}
+          rows={3}
           value={value}
           onChange={(event) => onChange(event.target.value)}
         />
@@ -128,33 +165,36 @@ export function useTask() {
   return { ...state, run };
 }
 
-/** Fields, an error line and a submit button; the values are cleared after a successful submit. */
+/**
+ * Fields, an error line and a submit button; the values are cleared after a successful submit.
+ * Inside a dialog, the fields scroll and the buttons stay at the bottom.
+ */
 export function Form({
   fields,
   initial = {},
   action,
+  icon,
   problem,
   onSubmit,
+  onCancel,
   children,
 }: {
   fields: Spec[];
   initial?: Values;
   action: string;
+  icon?: IconName;
   /** Why the values cannot be submitted yet. */
   problem?(values: Values): string | undefined;
   onSubmit(values: Values): Promise<unknown>;
+  /** Given inside a dialog: adds a Cancel button and moves the buttons into the footer. */
+  onCancel?(): void;
   children?: ReactNode;
 }) {
   const [values, setValues] = useState(initial);
   const task = useTask();
   const invalid = problem?.(values);
-  return (
-    <form
-      onSubmit={async (event) => {
-        event.preventDefault();
-        if (await task.run(() => onSubmit(values))) setValues(initial);
-      }}
-    >
+  const body = (
+    <>
       {fields
         .filter((spec) => spec.show?.(values) ?? true)
         .map((spec) => (
@@ -167,9 +207,38 @@ export function Form({
         ))}
       {children}
       {(invalid ?? task.error) && <Notice tone="bad">{invalid ?? task.error}</Notice>}
-      <button type="submit" className="btn primary" disabled={task.busy || invalid !== undefined}>
-        {action}
-      </button>
+    </>
+  );
+  const submit = (
+    <button type="submit" className="btn primary" disabled={task.busy || invalid !== undefined}>
+      {icon && <Icon name={icon} />}
+      {action}
+    </button>
+  );
+  return (
+    <form
+      className={cx(onCancel && "dialog-form")}
+      onSubmit={async (event) => {
+        event.preventDefault();
+        if (await task.run(() => onSubmit(values))) setValues(initial);
+      }}
+    >
+      {onCancel ? (
+        <>
+          <div className="dialog-body">{body}</div>
+          <div className="dialog-foot">
+            <button type="button" className="btn" onClick={onCancel}>
+              Cancel
+            </button>
+            {submit}
+          </div>
+        </>
+      ) : (
+        <>
+          {body}
+          {submit}
+        </>
+      )}
     </form>
   );
 }
@@ -191,19 +260,23 @@ export function Confirm({
   const task = useTask();
   return (
     <Modal title={title} onClose={onClose}>
-      <div className="body">
+      <div className="dialog-body">
         {children}
         {task.error && <Notice tone="bad">{task.error}</Notice>}
-        <div className="row">
-          <button
-            type="button"
-            className="btn danger"
-            disabled={task.busy}
-            onClick={async () => (await task.run(onConfirm)) && onClose()}
-          >
-            {action}
-          </button>
-        </div>
+      </div>
+      <div className="dialog-foot">
+        <button type="button" className="btn" onClick={onClose}>
+          Cancel
+        </button>
+        <button
+          type="button"
+          className="btn danger"
+          disabled={task.busy}
+          onClick={async () => (await task.run(onConfirm)) && onClose()}
+        >
+          <Icon name="trash" />
+          {action}
+        </button>
       </div>
     </Modal>
   );

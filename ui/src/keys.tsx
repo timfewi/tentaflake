@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { api, type ModelKey, type Provider } from "./client";
-import { Confirm, Form, Notice, useTask } from "./ui";
+import { Confirm, Empty, Form, Icon, Notice, useTask } from "./ui";
 
 const providers: Provider[] = ["anthropic", "openai", "openrouter", "openai-compatible"];
 
@@ -18,38 +18,48 @@ export function Keys() {
       <h1>Model keys</h1>
       {loading.error && <Notice tone="bad">{loading.error}</Notice>}
       {keys?.length === 0 && (
-        <p className="muted">No keys yet. Add a provider key to create environments.</p>
+        <Empty icon="key" title="No keys yet">
+          <p>Add a provider key to create environments.</p>
+        </Empty>
       )}
       {keys && keys.length > 0 && (
-        <table>
-          <thead>
-            <tr>
-              <th>Label</th>
-              <th>Provider</th>
-              <th>Base URL</th>
-              <th />
-            </tr>
-          </thead>
-          <tbody>
-            {keys.map((key) => (
-              <tr key={key.id}>
-                <td>{key.label}</td>
-                <td>{key.provider}</td>
-                <td>{key.baseUrl ?? "–"}</td>
-                <td className="actions">
-                  <button type="button" className="btn danger" onClick={() => setRemoving(key)}>
-                    Delete
-                  </button>
-                </td>
+        <div className="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Label</th>
+                <th>Provider</th>
+                <th>Base URL</th>
+                <th />
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {keys.map((key) => (
+                <tr key={key.id}>
+                  <td>
+                    <strong>{key.label}</strong>
+                  </td>
+                  <td>
+                    <span className="chip">{key.provider}</span>
+                  </td>
+                  <td>{key.baseUrl ?? "–"}</td>
+                  <td className="actions">
+                    <button type="button" className="btn danger" onClick={() => setRemoving(key)}>
+                      <Icon name="trash" />
+                      Delete
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       )}
       <div className="card">
         <h2>Add a key</h2>
         <Form
           action="Add key"
+          icon="plus"
           initial={{ provider: "anthropic" }}
           fields={[
             { name: "provider", label: "Provider", options: providers.map((name) => [name, name]) },

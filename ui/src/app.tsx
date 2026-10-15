@@ -4,7 +4,8 @@ import { ApiFailure, api, errorMessage, type User, whenSignedOut } from "./clien
 import { EnvironmentPage } from "./environment";
 import { Environments } from "./environments";
 import { Keys } from "./keys";
-import { Notice } from "./ui";
+import type { IconName } from "./icons";
+import { Icon, Notice } from "./ui";
 
 type Boot = "loading" | "setup" | "login" | { user: User } | { error: string };
 
@@ -47,24 +48,31 @@ export function App() {
   }
 
   const [, section = "environments", id] = hash.split("/");
-  const link = (name: string, text: string) => (
+  const link = (name: string, text: string, icon: IconName) => (
     <a href={`#/${name}`} aria-current={section === name ? "page" : undefined}>
+      <Icon name={icon} />
       {text}
     </a>
   );
   return (
     <>
       <header className="bar">
-        <strong>Tentaflake</strong>
+        <strong className="brand">
+          <Icon name="logo" />
+          Tentaflake
+        </strong>
         <nav>
-          {link("environments", "Environments")}
-          {link("keys", "Model keys")}
+          {link("environments", "Environments", "box")}
+          {link("keys", "Model keys", "key")}
         </nav>
         <span className="spacer" />
-        <span className="muted">{boot.user.username}</span>
+        <span className="chip">
+          <Icon name="user" />
+          {boot.user.username}
+        </span>
         <button
           type="button"
-          className="btn"
+          className="btn subtle"
           onClick={async () => {
             await api.logout().catch(() => {});
             // A reload leaves no file text or terminal output of this session in the page.
@@ -72,6 +80,7 @@ export function App() {
             location.reload();
           }}
         >
+          <Icon name="logout" />
           Sign out
         </button>
       </header>

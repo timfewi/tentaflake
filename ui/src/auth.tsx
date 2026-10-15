@@ -1,12 +1,16 @@
 import qrcode from "qrcode-generator";
 import { type ReactNode, useMemo, useState } from "react";
 import { api, type User } from "./client";
-import { Form, type Spec } from "./ui";
+import { Form, Icon, Notice, type Spec } from "./ui";
 
-const Card = ({ title, children }: { title: string; children: ReactNode }) => (
+const Card = ({ title, step, children }: { title: string; step?: string; children: ReactNode }) => (
   <main className="auth">
     <div className="card">
-      <h1>{title}</h1>
+      <h1>
+        <Icon name="logo" />
+        {title}
+      </h1>
+      {step && <p className="muted">{step}</p>}
       {children}
     </div>
   </main>
@@ -58,6 +62,7 @@ export function Login({ onDone }: { onDone(user: User): void }) {
     <Card title="Sign in to Tentaflake">
       <Form
         action="Sign in"
+        icon="check"
         fields={[username, secret("password", "Password"), otp]}
         onSubmit={async (v) =>
           onDone((await api.login({ username: "", password: "", code: "", ...v })).user)
@@ -76,9 +81,10 @@ export function Setup({ onDone }: { onDone(user: User): void }) {
   } | null>(null);
   if (enrolled === null) {
     return (
-      <Card title="Set up Tentaflake">
+      <Card title="Set up Tentaflake" step="Step 1 of 2: the admin account">
         <Form
           action="Create admin"
+          icon="check"
           fields={[
             secret("token", "Setup token", "From the host's setup token file."),
             {
@@ -105,17 +111,18 @@ export function Setup({ onDone }: { onDone(user: User): void }) {
     );
   }
   return (
-    <Card title="Set up your authenticator">
-      <p className="notice warn">
+    <Card title="Set up your authenticator" step="Step 2 of 2: confirm with a code">
+      <Notice tone="warn">
         Scan the code with an authenticator app, or enter the secret. It is shown only now and
         cannot be recovered: without it you cannot sign in.
-      </p>
+      </Notice>
       <Qr text={enrolled.uri} />
-      <p>
+      <p className="secret-line">
         Secret: <code className="secret">{new URL(enrolled.uri).searchParams.get("secret")}</code>
       </p>
       <Form
         action="Confirm and sign in"
+        icon="check"
         fields={[
           { ...otp, label: "Code from the app", hint: "Signing in with it confirms the setup." },
         ]}

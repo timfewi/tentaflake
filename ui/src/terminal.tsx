@@ -2,28 +2,39 @@ import { FitAddon } from "@xterm/addon-fit";
 import { Terminal } from "@xterm/xterm";
 import { useEffect, useRef, useState } from "react";
 import { terminalUrl } from "./client";
-import { Notice } from "./ui";
+import { cx, Icon, Notice } from "./ui";
 
 // The service drops a connection that sends more than 64 KiB in one frame.
 const chunk = 16 * 1024;
+
+type Link = "connecting" | "open" | { closed: string };
 
 /**
  * A shell in the environment. The emulator draws the output into its own grid:
  * bytes from the environment are never inserted as markup.
  */
-export function TerminalView({ envId, active }: { envId: string; active: boolean }) {
+export function TerminalView({
+  envId,
+  name,
+  active,
+}: {
+  envId: string;
+  name: string;
+  active: boolean;
+}) {
   const host = useRef<HTMLDivElement>(null);
   const fit = useRef<() => void>(() => {});
-  const [closed, setClosed] = useState<string | null>(null);
+  const [link, setLink] = useState<Link>("connecting");
   const [attempt, setAttempt] = useState(0);
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: a new shell per environment and per reconnect
   useEffect(() => {
     const element = host.current;
     if (!element) return;
-    setClosed(null);
+    setLink("connecting");
     const terminal = new Terminal({
       cursorBlink: true,
+      fontFamily: 'ui-monospace, "JetBrains Mono", Menlo, Consolas, monospace',
       fontSize: 13,
       scrollback: 5000,
       theme: { background: "#0d0f14", foreground: "#e4e7ee", cursor: "#8b7cf8" },
@@ -39,10 +50,13 @@ export function TerminalView({ envId, active }: { envId: string; active: boolean
       addon.fit();
       frame({ type: "resize", rows: terminal.rows, cols: terminal.cols });
     };
-    socket.onopen = () => fit.current();
+    socket.onopen = () => {
+      setLink("open");
+      fit.current();
+    };
     socket.onmessage = (message) =>
       typeof message.data === "string" && terminal.write(message.data);
-    socket.onclose = (event) => setClosed(event.reason || "the connection closed");
+    socket.onclose = (event) => setLink({ closed: event.reason || "the connection closed" });
     const input = terminal.onData((data) => {
       for (let start = 0; start < data.length; start += chunk) {
         frame({ type: "input", data: data.slice(start, start + chunk) });
@@ -62,17 +76,27 @@ export function TerminalView({ envId, active }: { envId: string; active: boolean
     if (active) fit.current();
   }, [active]);
 
+  const closed = typeof link === "object";
   return (
-    <div>
-      {closed !== null && (
+    <div className="terminal-view">
+      <div className="row">
+        <Icon name="terminal" />
+        <strong>{name}</strong>
+        <span className="muted">/workspace</span>
+        <span className="spacer" />
+        <span className={cx("chip", link === "open" ? "done" : closed ? "failed" : "running")}>
+          {link === "open" ? "Connected" : closed ? "Closed" : "Connecting…"}
+        </span>
+      </div>
+      {closed && (
         <Notice tone="warn">
-          Terminal closed: {closed}.{" "}
+          Terminal closed: {link.closed}.{" "}
           <button type="button" className="link" onClick={() => setAttempt(attempt + 1)}>
             Open a new shell
           </button>
         </Notice>
       )}
-      <div className="screen" ref={host} />
+      <div className={cx("screen", link === "open" && "live")} ref={host} />
     </div>
   );
 }

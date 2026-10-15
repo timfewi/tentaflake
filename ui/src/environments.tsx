@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   api,
   type Environment,
@@ -7,10 +7,91 @@ import {
   type ModelKey,
   type NetworkMode,
 } from "./client";
-import { Confirm, Form, Modal, Notice, StateBadge, useTask } from "./ui";
+import { Confirm, Control, Empty, Form, Icon, Modal, Notice, StateBadge, useTask } from "./ui";
 
-const mcpExample =
-  '{"docs": {"type": "remote", "url": "https://mcp.example/sse", "secrets": {"Authorization": "Bearer …"}}}';
+interface McpDraft {
+  id: number;
+  name: string;
+  type: string;
+  /** The command (local) or the URL (remote). */
+  target: string;
+  /** NAME=value lines: environment variables (local) or headers (remote). */
+  secrets: string;
+}
+
+/** The request for a draft; throws when its secrets are malformed. */
+function mcpRequest({ name, type, target, secrets: lines }: McpDraft): McpServerRequest {
+  const secrets: Record<string, string> = {};
+  for (const line of lines.split("\n").filter((line) => line.trim() !== "")) {
+    const split = line.indexOf("=");
+    if (split < 1) throw new Error(`${name}: secrets are NAME=value, one per line`);
+    secrets[line.slice(0, split).trim()] = line.slice(split + 1);
+  }
+  const assigned = Object.keys(secrets).length > 0 ? { secrets } : {};
+  return type === "local"
+    ? { type, command: target.trim().split(/\s+/), ...assigned }
+    : { type: "remote", url: target.trim(), ...assigned };
+}
+
+/** One MCP server of the environment being created. */
+function McpRow({
+  server,
+  onChange,
+  onRemove,
+}: {
+  server: McpDraft;
+  onChange(patch: Partial<McpDraft>): void;
+  onRemove(): void;
+}) {
+  const local = server.type === "local";
+  return (
+    <fieldset className="mcp">
+      <div className="row">
+        <Control
+          spec={{ name: "name", label: "Server name", input: { pattern: "[A-Za-z0-9_\\-]{1,64}" } }}
+          value={server.name}
+          onChange={(name) => onChange({ name })}
+        />
+        <Control
+          spec={{
+            name: "type",
+            label: "Type",
+            options: [
+              ["local", "local (runs in the environment)"],
+              ["remote", "remote (reached by URL)"],
+            ],
+          }}
+          value={server.type}
+          onChange={(type) => onChange({ type })}
+        />
+      </div>
+      <Control
+        spec={{
+          name: "target",
+          label: local ? "Command" : "URL",
+          hint: local ? "The program and its arguments, separated by spaces." : undefined,
+        }}
+        value={server.target}
+        onChange={(target) => onChange({ target })}
+      />
+      <Control
+        spec={{
+          name: "secrets",
+          label: local ? "Secret environment variables" : "Secret headers",
+          hint: "NAME=value, one per line. Stored encrypted, but the agent in the environment can read them.",
+          multiline: true,
+          input: { required: false },
+        }}
+        value={server.secrets}
+        onChange={(secrets) => onChange({ secrets })}
+      />
+      <button type="button" className="btn subtle danger" onClick={onRemove}>
+        <Icon name="trash" />
+        Remove server
+      </button>
+    </fieldset>
+  );
+}
 
 function CreateEnvironment({
   keys,
@@ -21,13 +102,14 @@ function CreateEnvironment({
   onCreated(): void;
   onClose(): void;
 }) {
+  const [servers, setServers] = useState<McpDraft[]>([]);
   const [notes, setNotes] = useState<string[] | null>(null);
+  const nextId = useRef(0);
+  const change = (id: number, patch: Partial<McpDraft>) =>
+    setServers(servers.map((server) => (server.id === id ? { ...server, ...patch } : server)));
 
-  const create = async ({ name = "", networkMode = "", keyId = "", models = "", mcp = "" }) => {
-    const servers = mcp.trim() === "" ? {} : JSON.parse(mcp);
-    if (typeof servers !== "object" || servers === null || Array.isArray(servers)) {
-      throw new Error("MCP servers are a JSON object of name: definition");
-    }
+  const create = async ({ name = "", networkMode = "", keyId = "", models = "" }) => {
+    const requests = servers.map((server) => [server.name, mcpRequest(server)] as const);
     const created = await api.createEnvironment({
       name,
       networkMode: networkMode as NetworkMode,
@@ -37,7 +119,7 @@ function CreateEnvironment({
     const found: string[] = [];
     try {
       // Each change replaces the container, so the servers go in one after the other.
-      for (const [serverName, definition] of Object.entries<McpServerRequest>(servers)) {
+      for (const [serverName, definition] of requests) {
         const { warning } = await api.putMcpServer(created.id, serverName, definition);
         if (warning) found.push(`${serverName}: ${warning}`);
       }
@@ -52,61 +134,88 @@ function CreateEnvironment({
   };
 
   return (
-    <Modal title="Create an environment" onClose={onClose}>
-      <div className="body">
-        {notes ? (
-          <>
+    <Modal title="Create an environment" onClose={onClose} wide>
+      {notes ? (
+        <>
+          <div className="dialog-body">
             <Notice tone="ok">The environment was created.</Notice>
             {notes.map((note) => (
               <Notice key={note} tone="warn">
                 {note}
               </Notice>
             ))}
-          </>
-        ) : keys.length === 0 ? (
+          </div>
+          <div className="dialog-foot">
+            <button type="button" className="btn primary" onClick={onClose}>
+              Done
+            </button>
+          </div>
+        </>
+      ) : keys.length === 0 ? (
+        <div className="dialog-body">
           <Notice tone="warn">
             Add a model key first: <a href="#/keys">Model keys</a>.
           </Notice>
-        ) : (
-          <Form
-            action="Create"
-            initial={{ networkMode: "model-only", keyId: keys[0]?.id ?? "" }}
-            onSubmit={create}
-            fields={[
-              { name: "name", label: "Name", input: { maxLength: 64 } },
-              {
-                name: "networkMode",
-                label: "Network",
-                options: [
-                  ["model-only", "Model only: reaches the model broker and nothing else"],
-                  ["open", "Open internet: the agent can reach any address"],
-                ],
-              },
-              {
-                name: "keyId",
-                label: "Key",
-                options: keys.map((key) => [key.id, `${key.label} (${key.provider})`]),
-              },
-              {
-                name: "models",
-                label: "Models",
-                hint: "Model names as the provider knows them, separated by commas. The first is the default.",
-              },
-              {
-                name: "mcp",
-                label: "MCP servers (JSON, optional)",
-                multiline: true,
-                hint: (
-                  <>
-                    One definition per name, e.g. <code>{mcpExample}</code> Values under "secrets"
-                    are stored encrypted, but the agent in the environment can read them.
-                  </>
-                ),
-              },
-            ]}
-          />
-        )}
-      </div>
+        </div>
+      ) : (
+        <Form
+          onCancel={onClose}
+          action="Create environment"
+          icon="plus"
+          initial={{ networkMode: "model-only", keyId: keys[0]?.id ?? "" }}
+          onSubmit={create}
+          fields={[
+            {
+              name: "name",
+              label: "Name",
+              input: { maxLength: 64, placeholder: "e.g. research" },
+            },
+            {
+              name: "networkMode",
+              label: "Network",
+              options: [
+                ["model-only", "Model only: reaches the model broker and nothing else"],
+                ["open", "Open internet: the agent can reach any address"],
+              ],
+            },
+            {
+              name: "keyId",
+              label: "Key",
+              options: keys.map((key) => [key.id, `${key.label} (${key.provider})`]),
+            },
+            {
+              name: "models",
+              label: "Models",
+              hint: "Model names as the provider knows them, separated by commas. The first is the default.",
+            },
+          ]}
+        >
+          <section className="mcp-list">
+            <h3>MCP servers</h3>
+            {servers.map((server) => (
+              <McpRow
+                key={server.id}
+                server={server}
+                onChange={(patch) => change(server.id, patch)}
+                onRemove={() => setServers(servers.filter((other) => other.id !== server.id))}
+              />
+            ))}
+            <button
+              type="button"
+              className="btn"
+              onClick={() =>
+                setServers([
+                  ...servers,
+                  { id: nextId.current++, name: "", type: "local", target: "", secrets: "" },
+                ])
+              }
+            >
+              <Icon name="plus" />
+              Add MCP server
+            </button>
+          </section>
+        </Form>
+      )}
     </Modal>
   );
 }
@@ -144,71 +253,92 @@ export function Environments() {
         <h1>Environments</h1>
         <span className="spacer" />
         <button type="button" className="btn primary" onClick={() => setCreating(true)}>
+          <Icon name="plus" />
           Create environment
         </button>
       </div>
       {task.error && <Notice tone="bad">{task.error}</Notice>}
       {list?.length === 0 && (
-        <p className="muted">No environments yet. Add a model key, then create one.</p>
+        <Empty icon="box" title="No environments yet">
+          <p>
+            An environment is an isolated container with an agent. Add a model key, then create one.
+          </p>
+        </Empty>
       )}
       {list && list.length > 0 && (
-        <table>
-          <thead>
-            <tr>
-              <th>Name</th>
-              <th>State</th>
-              <th>Network</th>
-              <th>Key</th>
-              <th>Models</th>
-              <th />
-            </tr>
-          </thead>
-          <tbody>
-            {list.map((env) => (
-              <tr key={env.id}>
-                <td>
-                  {env.state === "running" ? (
-                    <a href={`#/environments/${env.id}`}>{env.name}</a>
-                  ) : (
-                    env.name
-                  )}
-                </td>
-                <td>
-                  <StateBadge state={env.state} />
-                </td>
-                <td>{env.networkMode === "open" ? "open internet" : "model only"}</td>
-                <td>{keys.find((key) => key.id === env.keyId)?.label ?? "deleted"}</td>
-                <td>{env.models.join(", ")}</td>
-                <td className="actions">
-                  {env.state === "running" ? (
-                    <button
-                      type="button"
-                      className="btn"
-                      disabled={task.busy}
-                      onClick={() => lifecycle(api.stopEnvironment, env)}
-                    >
-                      Stop
-                    </button>
-                  ) : (
-                    env.state === "stopped" && (
+        <div className="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Name</th>
+                <th>State</th>
+                <th>Network</th>
+                <th>Key</th>
+                <th>Models</th>
+                <th />
+              </tr>
+            </thead>
+            <tbody>
+              {list.map((env) => (
+                <tr key={env.id}>
+                  <td>
+                    {env.state === "running" ? (
+                      <a href={`#/environments/${env.id}`}>
+                        <strong>{env.name}</strong>
+                      </a>
+                    ) : (
+                      <strong>{env.name}</strong>
+                    )}
+                  </td>
+                  <td>
+                    <StateBadge state={env.state} />
+                  </td>
+                  <td>
+                    <span className={env.networkMode === "open" ? "chip warn" : "chip"}>
+                      {env.networkMode === "open" ? "open internet" : "model only"}
+                    </span>
+                  </td>
+                  <td>{keys.find((key) => key.id === env.keyId)?.label ?? "deleted"}</td>
+                  <td className="muted">{env.models.join(", ")}</td>
+                  <td className="actions">
+                    {env.state === "running" && (
+                      <>
+                        <a className="btn primary" href={`#/environments/${env.id}`}>
+                          <Icon name="chat" />
+                          Open
+                        </a>
+                        <button
+                          type="button"
+                          className="btn"
+                          disabled={task.busy}
+                          onClick={() => lifecycle(api.stopEnvironment, env)}
+                        >
+                          <Icon name="stop" />
+                          Stop
+                        </button>
+                      </>
+                    )}
+                    {env.state === "stopped" && (
                       <button
                         type="button"
                         className="btn"
                         disabled={task.busy}
                         onClick={() => lifecycle(api.startEnvironment, env)}
                       >
+                        <Icon name="play" />
                         Start
                       </button>
-                    )
-                  )}
-                  <button type="button" className="btn danger" onClick={() => setDeleting(env)}>
-                    Delete
-                  </button>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+                    )}
+                    <button type="button" className="btn danger" onClick={() => setDeleting(env)}>
+                      <Icon name="trash" />
+                      Delete
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       )}
       {creating && (
         <CreateEnvironment

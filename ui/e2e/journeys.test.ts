@@ -82,19 +82,15 @@ test("setup, login, key, environment, chat with an approval, file, terminal, sto
     await page.getByRole("button", { name: "Create environment" }).click();
     await page.getByLabel("Name").fill("demo");
     await page.getByLabel("Models").fill("fixture-model");
-    await page.getByLabel("MCP servers").fill(
-      JSON.stringify({
-        docs: {
-          type: "remote",
-          url: "https://mcp.example/sse",
-          secrets: { Authorization: "Bearer token-1" },
-        },
-      }),
-    );
-    await page.getByRole("button", { name: "Create", exact: true }).click();
+    await page.getByRole("button", { name: "Add MCP server" }).click();
+    await page.getByLabel("Server name").fill("docs");
+    await page.getByLabel("Type").selectOption("remote");
+    await page.getByLabel("URL").fill("https://mcp.example/sse");
+    await page.getByLabel("Secret headers").fill("Authorization=Bearer token-1");
+    await page.getByRole("button", { name: "Create environment", exact: true }).last().click();
     await page.getByText("The environment was created.").waitFor();
     await page.getByText(/^docs: .*can read/).waitFor();
-    await page.getByRole("button", { name: "Close" }).click();
+    await page.getByRole("button", { name: "Done" }).click();
     await page.getByRole("link", { name: "demo" }).click();
 
     // Chat: the prompt, a streamed reply, and an approval the owner answers.

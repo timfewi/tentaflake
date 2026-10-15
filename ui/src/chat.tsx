@@ -2,18 +2,21 @@ import { useEffect, useReducer, useRef, useState } from "react";
 import { emptyChat, type Item, reduceChat } from "./chat-state";
 import { type AgentEvent, api, type Environment, eventsUrl, type PermissionReply } from "./client";
 import { SafeMarkdown } from "./markdown";
-import { Notice, useTask } from "./ui";
+import { cx, Empty, Icon, Notice, useTask } from "./ui";
 
 /** Agent output is untrusted: text and Markdown only, never HTML. */
 function Entry({ item }: { item: Item }) {
   if (item.kind === "assistant") return <SafeMarkdown body={item.text} />;
-  if (item.kind !== "tool") return <p className={`msg ${item.kind}`}>{item.text}</p>;
+  if (item.kind === "user") return <p className="msg user">{item.text}</p>;
+  if (item.kind === "notice") return <p className="msg note">{item.text}</p>;
   const status =
     item.error !== undefined ? "failed" : item.output !== undefined ? "done" : "running";
   return (
-    <details open={item.error !== undefined}>
+    <details className="tool" open={item.error !== undefined}>
       <summary>
-        {item.name ?? "tool"} <span className={`chip ${status}`}>{status}</span>
+        <Icon name="terminal" />
+        <strong>{item.name ?? "tool"}</strong>
+        <span className={cx("chip", status)}>{status}</span>
       </summary>
       {item.input && <pre>{JSON.stringify(item.input, null, 2)}</pre>}
       {item.output !== undefined && <pre>{item.output.slice(0, 20_000)}</pre>}
@@ -22,10 +25,10 @@ function Entry({ item }: { item: Item }) {
   );
 }
 
-const replies: [PermissionReply, string][] = [
-  ["once", "Allow once"],
-  ["always", "Always allow"],
-  ["reject", "Reject"],
+const replies: [PermissionReply, string, string][] = [
+  ["once", "Allow once", "btn primary"],
+  ["always", "Always allow", "btn"],
+  ["reject", "Reject", "btn danger"],
 ];
 
 /** Sessions and chat of a running environment, live from its event stream. */
@@ -92,12 +95,20 @@ export function Chat({ env, onStopped }: { env: Environment; onStopped(): void }
   return (
     <div className="chat">
       <aside>
+        <div className="row">
+          <h3>Sessions</h3>
+          <span className="spacer" />
+          <span className={cx("chip", live ? "done" : "running")}>
+            {live ? "Live" : "Reconnecting…"}
+          </span>
+        </div>
         <button
           type="button"
           className="btn"
           disabled={task.busy}
           onClick={() => task.run(newSession)}
         >
+          <Icon name="plus" />
           New session
         </button>
         <ul aria-label="Sessions">
@@ -105,32 +116,36 @@ export function Chat({ env, onStopped }: { env: Environment; onStopped(): void }
             <li key={session.id}>
               <button
                 type="button"
+                className="session"
                 aria-current={session.id === current?.id}
                 onClick={() => setSelected(session.id)}
               >
-                {session.title ?? `Session ${session.id.slice(-6)}`}
+                <Icon name="chat" />
+                <span>{session.title ?? `Session ${session.id.slice(-6)}`}</span>
                 {session.running && <span className="chip running">running</span>}
               </button>
             </li>
           ))}
         </ul>
-        <span className={`chip ${live ? "done" : "running"}`}>
-          {live ? "Live" : "Reconnecting…"}
-        </span>
       </aside>
-      <section>
+      <section className="thread">
         {state.permissions.map(({ id, sessionId, action, resources }) => (
           <section className="approval" key={id} aria-label={`Approval: ${action}`}>
-            <strong>Approval needed: {action}</strong>
+            <div className="approval-head">
+              <Icon name="alert" />
+              <strong>Approval needed: {action}</strong>
+            </div>
             {resources.map((resource) => (
-              <code key={resource}>{resource}</code>
+              <code className="block" key={resource}>
+                {resource}
+              </code>
             ))}
             <div className="row">
-              {replies.map(([reply, label]) => (
+              {replies.map(([reply, label, className]) => (
                 <button
                   key={reply}
                   type="button"
-                  className={reply === "once" ? "btn primary" : "btn"}
+                  className={className}
                   onClick={() =>
                     task.run(async () => {
                       await api.reply(env.id, sessionId, id, reply);
@@ -146,9 +161,9 @@ export function Chat({ env, onStopped }: { env: Environment; onStopped(): void }
         ))}
         <div className="transcript" role="log" aria-label="Conversation">
           {items.length === 0 && (
-            <p className="muted">
-              Ask the agent for something. The service does not replay earlier messages.
-            </p>
+            <Empty icon="chat" title={current ? "Nothing yet" : "No session yet"}>
+              <p>Ask the agent for something. The service does not replay earlier messages.</p>
+            </Empty>
           )}
           {items.map((item) => (
             <Entry key={`${item.kind}-${item.id}`} item={item} />
@@ -165,7 +180,7 @@ export function Chat({ env, onStopped }: { env: Environment; onStopped(): void }
         >
           <textarea
             aria-label="Message"
-            placeholder="Message the agent"
+            placeholder="Message the agent (Enter sends, Shift+Enter adds a line)"
             value={text}
             maxLength={32768}
             rows={2}
@@ -177,18 +192,26 @@ export function Chat({ env, onStopped }: { env: Environment; onStopped(): void }
               }
             }}
           />
-          <button type="submit" className="btn primary" disabled={task.busy || text.trim() === ""}>
-            Send
-          </button>
-          {current?.running && (
+          <div className="column">
             <button
-              type="button"
-              className="btn"
-              onClick={() => task.run(() => api.abort(env.id, current.id))}
+              type="submit"
+              className="btn primary"
+              disabled={task.busy || text.trim() === ""}
             >
-              Stop
+              <Icon name="send" />
+              Send
             </button>
-          )}
+            {current?.running && (
+              <button
+                type="button"
+                className="btn"
+                onClick={() => task.run(() => api.abort(env.id, current.id))}
+              >
+                <Icon name="stop" />
+                Stop
+              </button>
+            )}
+          </div>
         </form>
       </section>
     </div>
