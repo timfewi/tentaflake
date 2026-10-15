@@ -13,8 +13,8 @@ alias list := default
 
 # ── The gates ────────────────────────────────────────────────
 
-# Fast source checks: formatting, lint, Rust, offline catalog checks
-fast: formatter-test lint rust image-catalog
+# Fast source checks: formatting, lint, Rust, control service, offline catalog checks
+fast: formatter-test lint rust control image-catalog
     actionlint .github/workflows/*.yml
 
 # Fast checks plus flake evaluation without building (the CI gate)
@@ -23,6 +23,7 @@ check: fast eval
 # Unit tests
 test:
     cargo test --workspace
+    cd control && bun install --frozen-lockfile && bun test
     python3 scripts/test_image_catalog.py
 
 # Evaluate every flake output without building; force all shared constants,
@@ -51,15 +52,17 @@ runtime-smoke:
 
 # ── Formatting & lint ────────────────────────────────────────
 
-# Format the tree in place (nixfmt via `nix fmt`)
+# Format the tree in place (nixfmt via `nix fmt`, Biome for the control service)
 fmt:
     nix fmt -- --tree-root .
     cargo fmt --all
+    cd control && biome format --write .
 
-# Read-only check of tracked and non-ignored untracked regular Nix files
+# Read-only formatting check: tracked and non-ignored untracked regular Nix files, Rust, control service
 fmt-check:
     git ls-files -z --cached --others --exclude-standard -- '*.nix' | while IFS= read -r -d '' file; do if [[ -f "$file" && ! -L "$file" ]]; then nixfmt --check "./$file"; fi; done
     cargo fmt --all -- --check
+    cd control && biome format .
 
 # Prove the formatter gate fails without rewriting its own fixture
 formatter-test: fmt-check
@@ -75,6 +78,16 @@ lint:
 rust:
     cargo clippy --workspace --all-targets -- -D warnings
     cargo test --workspace
+
+# ── Control service (control/) ───────────────────────────────
+
+# Biome lint, TypeScript type check and unit tests
+control:
+    cd control && bun install --frozen-lockfile && biome lint . && bun run typecheck && bun test
+
+# Lifecycle test against real Docker with runsc and a built runtime image (CI runs it after the smoke test)
+control-integration image="tentaflake-runtime:smoke":
+    cd control && bun install --frozen-lockfile && TENTAFLAKE_INTEGRATION_IMAGE={{ image }} bun test ./test/integration.test.ts
 
 # ── Release ──────────────────────────────────────────────────
 

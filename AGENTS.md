@@ -12,18 +12,18 @@ port code from it unless the current task needs that exact piece now.
 `just` recipes load the pinned contributor tools automatically.
 
 ```bash
-just fmt         # format Nix and Rust in place
+just fmt         # format Nix, Rust and TypeScript in place
 just fmt-check   # read-only formatting check
 just test        # unit tests
-just fast        # formatting, lint, Rust lint and tests, offline catalog checks
+just fast        # formatting, lint, Rust and control service checks, offline catalog checks
 just check       # fast + nix flake check --no-build (the CI gate)
 just build       # build the host closure (explicit, not in CI)
 ```
 
 CI runs `just check` only, plus the path-filtered `runtime-smoke.yml` (Docker,
-`just runtime-smoke`) when `images/runtime/**` changes. Host builds and VM tests
-are manual steps before a release; never add them to CI or run them as a
-routine check.
+`just runtime-smoke`, then `just control-integration`) when `images/runtime/**`
+or `control/**` changes. Host builds and VM tests are manual steps before a
+release; never add them to CI or run them as a routine check.
 
 ## Working rules
 
@@ -32,14 +32,16 @@ routine check.
   (deletions do not count). Stop after each PR for the owner's review.
 - Build only what the definition of done in `docs/architecture.md` needs.
   No speculative abstractions, no parallel tracks.
-- Keep docs small: README, `docs/architecture.md`, CHANGELOG. Update the
-  architecture status table when a part lands; update the CHANGELOG once per
-  release, not per commit.
+- Keep docs small: README, `docs/architecture.md`, `docs/api.md`, CHANGELOG.
+  Update the architecture status table when a part lands; update the CHANGELOG
+  once per release, not per commit.
 
 ## Conventions
 
 - Nix: `nix fmt` (nixfmt), 2-space indent; `statix` and `deadnix` clean.
 - Rust: `cargo fmt`, `cargo clippy --workspace --all-targets -- -D warnings`.
+- TypeScript (`control/`): Bun, strict TypeScript 7, Biome for format and
+  lint, `bun test`; exact dependency versions with `bun.lock`.
 - Commits: Conventional Commits (`feat:`, `fix:`, `docs:`).
 - DCO: every non-merge PR commit needs `Signed-off-by:`; use `git commit -s`
   with the human user's configured Git author and committer identity. Never
@@ -64,7 +66,10 @@ Deployment-specific configuration belongs in forks.
   `lib/mkRustPackage.nix` packages it.
 - `images/catalog.json` — reviewed base-image pins with offline-checked
   evidence (`just image-catalog`).
-- `ui/` and the control service — planned; see the architecture status.
+- `control/` — the control service (Bun): users, login, environment
+  lifecycle over the Docker socket. `control/src/api.ts` holds the API types
+  the UI imports; `docs/api.md` lists the endpoints.
+- `ui/` — planned; see the architecture status.
 
 ## PR Description
 

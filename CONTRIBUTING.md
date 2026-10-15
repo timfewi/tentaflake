@@ -15,23 +15,24 @@ nix develop
 ```
 
 The development shell provides Nix tooling, Rust, Cargo, Clippy, Rustfmt,
-Statix, Deadnix, actionlint and `just`. The `just` recipes enter this pinned
-environment automatically; `just list` lists them.
+Statix, Deadnix, actionlint, Bun, Biome and `just`. The `just` recipes enter
+this pinned environment automatically; `just list` lists them.
 
 ## Checks
 
 | Recipe | What it does |
 |---|---|
-| `just fmt` | Format Nix and Rust in place |
+| `just fmt` | Format Nix, Rust and TypeScript in place |
 | `just fmt-check` | Read-only formatting check |
 | `just test` | Unit tests |
-| `just fast` | Formatting, lint, Rust lint and tests, offline catalog checks |
+| `just fast` | Formatting, lint, Rust and control service checks, offline catalog checks |
 | `just check` | `fast` plus `nix flake check --no-build` (the CI gate) |
 | `just build` | Build the host closure (explicit, not in CI) |
 
 CI runs `just check` only, plus the path-filtered `runtime-smoke.yml` (Docker,
-`just runtime-smoke`) when `images/runtime/**` changes. Host builds and VM tests
-are manual steps before a release, not part of every pull request. Contributions must not activate NixOS,
+`just runtime-smoke`, then `just control-integration`) when `images/runtime/**`
+or `control/**` changes. Host builds and VM tests are manual steps before a
+release, not part of every pull request. Contributions must not activate NixOS,
 deploy, or mutate a VM as a side effect of testing.
 
 ## Conventions
@@ -41,6 +42,7 @@ deploy, or mutate a VM as a side effect of testing.
 | Commits | Conventional Commits |
 | Nix | `nix fmt` and two-space indent |
 | Rust | Rustfmt, Clippy warnings denied |
+| TypeScript | Biome, strict `tsc`, `bun test`, exact pins in `bun.lock` |
 | Sign-off | DCO on every non-merge commit |
 | Size | Pull requests stay small: about 1,500 lines of production code at most |
 
