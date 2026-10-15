@@ -2,6 +2,7 @@
   imports = [
     ./options.nix
     ./boot.nix
+    ./control.nix
     ./hardening.nix
     ./locale.nix
     ./management.nix

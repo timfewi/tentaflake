@@ -25,6 +25,21 @@
 
       system = "x86_64-linux";
       pkgs = nixpkgs.legacyPackages.${system};
+      host = self.nixosConfigurations.${hostName};
+
+      # The provider-agnostic VPS disk image of the host: GPT with a BIOS boot
+      # partition, an ESP and the root file system (hardware-configuration.nix).
+      diskImage =
+        format:
+        import "${nixpkgs}/nixos/lib/make-disk-image.nix" {
+          inherit (host) config pkgs;
+          inherit (nixpkgs) lib;
+          inherit format;
+          baseName = "tentaflake";
+          partitionTableType = "hybrid";
+          bootSize = "1024M";
+          copyChannel = false;
+        };
     in
     {
       nixosModules.default = import ./modules/default.nix;
@@ -36,8 +51,14 @@
 
       # `nix flake check --no-build` evaluates these; building them is explicit.
       checks.${system} = {
-        ${hostName} = self.nixosConfigurations.${hostName}.config.system.build.toplevel;
-        tentaflake-broker = self.packages.${system}.tentaflake-broker;
+        ${hostName} = host.config.system.build.toplevel;
+        inherit (self.packages.${system})
+          tentaflake-broker
+          tentaflake-control
+          tentaflake-ui
+          image-raw
+          image-qcow2
+          ;
       };
 
       nixosConfigurations.${hostName} = nixpkgs.lib.nixosSystem {
@@ -67,6 +88,9 @@
               packages.enable = true;
               users.enable = true;
               tailscale.enable = true;
+              control.enable = true;
+              # The login screen shows the setup notice; kmscon has no issue file.
+              modernConsole.enable = false;
             };
           }
           self.nixosModules.default
@@ -74,6 +98,13 @@
         ];
       };
 
-      packages.${system}.tentaflake-broker = pkgs.callPackage ./pkgs/tentaflake-broker { };
+      packages.${system} = {
+        tentaflake-broker = pkgs.callPackage ./pkgs/tentaflake-broker { };
+        tentaflake-control = pkgs.callPackage ./pkgs/tentaflake-control { };
+        tentaflake-ui = pkgs.callPackage ./pkgs/tentaflake-ui { };
+        # Building them is explicit (a VM run each); see the README.
+        image-raw = diskImage "raw";
+        image-qcow2 = diskImage "qcow2-compressed";
+      };
     };
 }
