@@ -47,6 +47,8 @@ export interface Docker {
   stopContainer(id: string): Promise<void>;
   /** Force-removes a container by id or name; succeeds if it is already gone. */
   removeContainer(id: string): Promise<void>;
+  /** The container's IPv4 address on the network, or null if it is not running there. */
+  containerAddress(id: string, network: string): Promise<string | null>;
 }
 
 // The oldest API version current Docker Engine releases still accept.
@@ -113,6 +115,16 @@ export function dockerClient(socket: string): Docker {
     },
     async removeContainer(id) {
       await call("DELETE", `/containers/${segment(id)}?force=true`, undefined, [404]);
+    },
+    async containerAddress(id, network) {
+      const response = await call("GET", `/containers/${segment(id)}/json`, undefined, [404]);
+      if (response.status === 404) return null;
+      const container = (await response.json()) as {
+        State?: { Running?: boolean };
+        NetworkSettings?: { Networks?: Record<string, { IPAddress?: string }> };
+      };
+      const address = container.NetworkSettings?.Networks?.[network]?.IPAddress;
+      return container.State?.Running === true && address ? address : null;
     },
   };
 }

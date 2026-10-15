@@ -9,6 +9,7 @@ cd "$(dirname "$0")/.."
 image=${RUNTIME_IMAGE:-tentaflake-runtime:smoke}
 name=tentaflake-runtime-smoke-$$
 volume=$name
+home=$name-home
 version=$(sed -n 's/^ARG OPENCODE_VERSION=//p' images/runtime/Dockerfile)
 OPENCODE_SERVER_PASSWORD=$(openssl rand -hex 16)
 export OPENCODE_SERVER_PASSWORD
@@ -25,7 +26,7 @@ fi
 hardening=(
   "${runtime[@]}"
   --user 1000:1000 --cap-drop=ALL --security-opt=no-new-privileges
-  --read-only --tmpfs "/tmp:exec,mode=1777" --tmpfs "/home/agent:exec,uid=1000,gid=1000,mode=0700"
+  --read-only --tmpfs "/tmp:exec,mode=1777"
   --memory 2g --pids-limit 512
 )
 
@@ -38,7 +39,7 @@ cleanup() {
   local status=$?
   if ((status != 0)); then docker logs --tail 50 "$name" >&2 || true; fi
   docker rm --force --volumes "$name" >/dev/null 2>&1 || true
-  docker volume rm --force "$volume" >/dev/null 2>&1 || true
+  docker volume rm --force "$volume" "$home" >/dev/null 2>&1 || true
 }
 trap cleanup EXIT
 
@@ -63,7 +64,7 @@ echo "ok: refuses to start without OPENCODE_SERVER_PASSWORD"
 
 docker volume create "$volume" >/dev/null
 docker run --detach --name "$name" "${hardening[@]}" \
-  --volume "$volume":/workspace --publish 127.0.0.1::4096 \
+  --volume "$volume":/workspace --volume "$home":/home/agent --publish 127.0.0.1::4096 \
   --env OPENCODE_SERVER_PASSWORD "$image" >/dev/null
 base=http://$(docker port "$name" 4096/tcp | sed -n '1p')
 
@@ -95,5 +96,5 @@ for entry in json.load(sys.stdin):
 assert effective == {"share": "disabled", "update": "disable"}, effective'
 echo "ok: effective configuration has sharing and auto-update off"
 
-docker exec "$name" touch /workspace/.smoke
-echo "ok: workspace volume is writable by the agent user"
+docker exec "$name" touch /workspace/.smoke /home/agent/.smoke
+echo "ok: workspace and home volumes are writable by the agent user"

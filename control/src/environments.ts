@@ -78,6 +78,10 @@ export function opencodeConfig(
 
 export const environmentLabel = "io.tentaflake.environment";
 export const containerName = (id: string) => `tentaflake-${id}`;
+/** The agent's home directory: OpenCode keeps its sessions there, so they outlive the container. */
+export const homeVolume = (id: string) => `tentaflake-${id}-home`;
+/** The port of the OpenCode server in every environment. */
+export const opencodePort = 4096;
 const namePattern = /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/;
 const invalid = (message: string) => new HttpError(400, "invalid_request", message);
 
@@ -113,6 +117,12 @@ const toEnvironment = (row: EnvironmentRow): Environment => ({
 const passwordContext = (id: string) => `environments.opencode_password:${id}`;
 const mcpSecretsContext = (id: string, name: string) => `mcp_servers.secrets:${id}/${name}`;
 
+/** A live connection into an environment: an event stream or a terminal. */
+export interface Connection {
+  terminal: boolean;
+  close(): void;
+}
+
 interface McpServerRow {
   environment_id: string;
   name: string;
@@ -127,6 +137,7 @@ interface McpServerRow {
  */
 export class Environments {
   private readonly busy = new Set<string>();
+  private readonly connections = new Map<string, Set<Connection>>();
 
   constructor(
     private readonly db: Database,
@@ -134,7 +145,10 @@ export class Environments {
     private readonly secrets: Secrets,
     private readonly broker: BrokerFiles,
     /** `brokerUrl`: the broker's base URL as environments reach it. */
-    private readonly config: Pick<Config, "image" | "limits"> & { brokerUrl: string },
+    private readonly config: Pick<Config, "image" | "limits"> & {
+      brokerUrl: string;
+      opencodePort?: number;
+    },
     private readonly now: () => number = Date.now,
   ) {
     // A restart during a creation leaves it unfinished; its owner can delete it.
@@ -155,6 +169,70 @@ export class Environments {
   /** The password of the environment's OpenCode server. */
   opencodePassword(ownerId: string, id: string): string {
     return this.secrets.decrypt(this.row(ownerId, id).opencode_password, passwordContext(id));
+  }
+
+  /**
+   * The base URL and password of the OpenCode server in a running
+   * environment, reached on the container's address; null if the container
+   * does not run.
+   */
+  async opencode(ownerId: string, id: string): Promise<{ url: string; password: string } | null> {
+    const row = this.row(ownerId, id);
+    if (row.state !== "running" || row.container_id === null) return null;
+    const address = await this.docker.containerAddress(
+      row.container_id,
+      networks[row.network_mode].name,
+    );
+    if (address === null) return null;
+    return {
+      url: `http://${address}:${this.config.opencodePort ?? opencodePort}`,
+      password: this.secrets.decrypt(row.opencode_password, passwordContext(id)),
+    };
+  }
+
+  /** Records activity in a running environment; written at most every 10 seconds. */
+  touch(id: string): void {
+    const now = this.now();
+    this.db
+      .query(
+        "UPDATE environments SET last_activity_at = ? WHERE id = ? AND state = 'running' AND last_activity_at < ?",
+      )
+      .run(now, id, now - 10_000);
+  }
+
+  /** Running environments, of every owner, without activity since `time`. */
+  idleSince(time: number): { id: string; ownerId: string }[] {
+    return this.db
+      .query(
+        "SELECT id, owner_id AS ownerId FROM environments WHERE state = 'running' AND last_activity_at < ?",
+      )
+      .all(time) as { id: string; ownerId: string }[];
+  }
+
+  /**
+   * Tracks a connection into a running environment until its returned release
+   * is called. Stopping or replacing the container closes it; a connection to
+   * an environment that no longer runs is closed at once.
+   */
+  connect(id: string, connection: Connection): () => void {
+    const row = this.db.query("SELECT state FROM environments WHERE id = ?").get(id) as {
+      state: EnvironmentState;
+    } | null;
+    if (row?.state !== "running") {
+      connection.close();
+      return () => {};
+    }
+    const open = this.connections.get(id) ?? new Set();
+    this.connections.set(id, open.add(connection));
+    return () => {
+      open.delete(connection);
+      if (open.size === 0 && this.connections.get(id) === open) this.connections.delete(id);
+    };
+  }
+
+  /** Whether a terminal into the environment is open. */
+  terminalOpen(id: string): boolean {
+    return [...(this.connections.get(id) ?? [])].some((connection) => connection.terminal);
   }
 
   async create(ownerId: string, request: CreateEnvironmentRequest): Promise<Environment> {
@@ -220,6 +298,7 @@ export class Environments {
 
     try {
       await this.docker.createVolume(row.workspace_volume, { [environmentLabel]: id });
+      await this.docker.createVolume(homeVolume(id), { [environmentLabel]: id });
       const containerId = await this.docker.createContainer(
         containerName(id),
         this.containerSpec(row),
@@ -242,16 +321,18 @@ export class Environments {
     return this.switchTo(ownerId, id, "stopped");
   }
 
-  /** Removes the container, then the workspace volume, then the record. */
+  /** Removes the container, then the workspace and home volumes, then the record. */
   async delete(ownerId: string, id: string): Promise<void> {
     await this.exclusive(ownerId, id, async (row) => {
       if (row.state === "creating") throw notNow(row.state, "delete");
       await this.docker.removeContainer(containerName(id));
-      // The container is gone; if the volume stays, a failed record remains to retry.
+      this.disconnect(id);
+      // The container is gone; if a volume stays, a failed record remains to retry.
       this.db
         .query("UPDATE environments SET state = 'failed', container_id = NULL WHERE id = ?")
         .run(id);
       await this.docker.removeVolume(row.workspace_volume);
+      await this.docker.removeVolume(homeVolume(id));
       this.broker.commit(() => this.db.query("DELETE FROM environments WHERE id = ?").run(id));
     });
   }
@@ -315,6 +396,7 @@ export class Environments {
     await this.exclusive(ownerId, id, async (row) => {
       if (row.state !== "running" && row.state !== "stopped") throw notNow(row.state, "change");
       await this.docker.removeContainer(containerName(id));
+      this.disconnect(id);
       try {
         change();
         this.db.query("UPDATE environments SET container_id = NULL WHERE id = ?").run(id);
@@ -357,6 +439,7 @@ export class Environments {
         ? this.docker.startContainer(row.container_id)
         : this.docker.stopContainer(row.container_id));
       this.setState(id, target);
+      if (target === "stopped") this.disconnect(id);
     });
     return this.get(ownerId, id);
   }
@@ -379,11 +462,19 @@ export class Environments {
     }
   }
 
+  /** Closes the environment's connections. */
+  private disconnect(id: string): void {
+    const open = this.connections.get(id);
+    this.connections.delete(id);
+    for (const connection of open ?? []) connection.close();
+  }
+
   /** After a failed creation: removes the record only once Docker holds nothing for it. */
   private async discard(row: EnvironmentRow): Promise<void> {
     try {
       await this.docker.removeContainer(containerName(row.id));
       await this.docker.removeVolume(row.workspace_volume);
+      await this.docker.removeVolume(homeVolume(row.id));
       this.broker.commit(() => this.db.query("DELETE FROM environments WHERE id = ?").run(row.id));
     } catch (error) {
       console.error(`environment ${row.id}: cleanup after a failed creation failed: ${error}`);
@@ -443,8 +534,11 @@ export class Environments {
         CapDrop: ["ALL"],
         SecurityOpt: ["no-new-privileges"],
         ReadonlyRootfs: true,
-        Tmpfs: { "/tmp": "exec,mode=1777", "/home/agent": "exec,uid=1000,gid=1000,mode=0700" },
-        Mounts: [{ Type: "volume", Source: row.workspace_volume, Target: "/workspace" }],
+        Tmpfs: { "/tmp": "exec,mode=1777" },
+        Mounts: [
+          { Type: "volume", Source: row.workspace_volume, Target: "/workspace" },
+          { Type: "volume", Source: homeVolume(row.id), Target: "/home/agent" },
+        ],
         Memory: memory,
         MemorySwap: memory,
         NanoCpus: Math.round(cpus * 1e9),

@@ -20,6 +20,8 @@ export interface Config {
   /** The runtime image reference, ideally by digest. */
   image: string;
   limits: Limits;
+  /** Minutes without activity after which a running environment is stopped. */
+  environmentIdleMinutes: number;
   sessionIdleMinutes: number;
   sessionAbsoluteHours: number;
 }
@@ -31,6 +33,7 @@ const defaults = {
   brokerPort: 7810,
   brokerDirectory: "/run/tentaflake/broker",
   limits: { memoryMiB: 2048, cpus: 2, pids: 512, dailyTokens: 10_000_000 },
+  environmentIdleMinutes: 15,
   sessionIdleMinutes: 60,
   sessionAbsoluteHours: 12,
 };
@@ -63,6 +66,7 @@ export function parseConfig(input: unknown): Config {
   }
   integer(config.port, "port", 0, 65535);
   integer(config.brokerPort, "brokerPort", 1, 65535);
+  integer(config.environmentIdleMinutes, "environmentIdleMinutes", 1);
   integer(config.sessionIdleMinutes, "sessionIdleMinutes", 1);
   integer(config.sessionAbsoluteHours, "sessionAbsoluteHours", 1);
   for (const key of Object.keys(limits)) {
