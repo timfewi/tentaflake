@@ -31,6 +31,18 @@ export class BrokerFiles {
     private readonly directory: string,
   ) {}
 
+  /**
+   * Applies a database change and publishes it to the broker in one
+   * transaction: when the files cannot be written, the change rolls back, so
+   * the database never shows a deleted key or environment the broker still serves.
+   */
+  commit(change: () => void): void {
+    this.db.transaction(() => {
+      change();
+      this.sync();
+    })();
+  }
+
   /** Rewrites every file: credentials first, then routes; stale credentials go last. */
   sync(): void {
     mkdirSync(this.directory, { recursive: true, mode: 0o700 });

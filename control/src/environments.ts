@@ -205,19 +205,20 @@ export class Environments {
       created_at: now,
       last_activity_at: now,
     };
-    this.db
-      .query(
-        `INSERT INTO environments (id, owner_id, name, state, container_id, workspace_volume,
-           network_mode, key_id, models, limits, opencode_password, broker_token, created_at,
-           last_activity_at)
-         VALUES ($id, $owner_id, $name, $state, $container_id, $workspace_volume,
-           $network_mode, $key_id, $models, $limits, $opencode_password, $broker_token,
-           $created_at, $last_activity_at)`,
-      )
-      .run({ ...row });
+    this.broker.commit(() =>
+      this.db
+        .query(
+          `INSERT INTO environments (id, owner_id, name, state, container_id, workspace_volume,
+             network_mode, key_id, models, limits, opencode_password, broker_token, created_at,
+             last_activity_at)
+           VALUES ($id, $owner_id, $name, $state, $container_id, $workspace_volume,
+             $network_mode, $key_id, $models, $limits, $opencode_password, $broker_token,
+             $created_at, $last_activity_at)`,
+        )
+        .run({ ...row }),
+    );
 
     try {
-      this.broker.sync();
       await this.docker.createVolume(row.workspace_volume, { [environmentLabel]: id });
       const containerId = await this.docker.createContainer(
         containerName(id),
@@ -251,8 +252,7 @@ export class Environments {
         .query("UPDATE environments SET state = 'failed', container_id = NULL WHERE id = ?")
         .run(id);
       await this.docker.removeVolume(row.workspace_volume);
-      this.db.query("DELETE FROM environments WHERE id = ?").run(id);
-      this.broker.sync();
+      this.broker.commit(() => this.db.query("DELETE FROM environments WHERE id = ?").run(id));
     });
   }
 
@@ -296,28 +296,27 @@ export class Environments {
   }
 
   async deleteMcpServer(ownerId: string, id: string, name: string): Promise<void> {
-    await this.reconfigure(ownerId, id, () => {
-      if (
-        this.db.query("DELETE FROM mcp_servers WHERE environment_id = ? AND name = ?").run(id, name)
-          .changes === 0
-      ) {
-        throw new HttpError(404, "not_found", "no such MCP server");
-      }
-    });
+    this.row(ownerId, id);
+    const server = "FROM mcp_servers WHERE environment_id = ? AND name = ?";
+    if (this.db.query(`SELECT 1 ${server}`).get(id, name) === null) {
+      throw new HttpError(404, "not_found", "no such MCP server");
+    }
+    await this.reconfigure(ownerId, id, () => this.db.query(`DELETE ${server}`).run(id, name));
   }
 
   /**
-   * Applies a configuration change, then replaces the container (the
-   * configuration is part of its environment) and starts it if it was running.
-   * The workspace volume stays. A failure after the old container is gone
-   * leaves a failed environment.
+   * Replaces the container (the configuration is part of its environment)
+   * with one built after `change`, and starts it if it was running. The old
+   * container goes first: while it runs with the old configuration, the change
+   * is not applied, so a failed removal changes nothing. A failure after it is
+   * gone leaves a failed environment. The workspace volume stays.
    */
   private async reconfigure(ownerId: string, id: string, change: () => void): Promise<void> {
     await this.exclusive(ownerId, id, async (row) => {
       if (row.state !== "running" && row.state !== "stopped") throw notNow(row.state, "change");
-      change();
       await this.docker.removeContainer(containerName(id));
       try {
+        change();
         this.db.query("UPDATE environments SET container_id = NULL WHERE id = ?").run(id);
         const containerId = await this.docker.createContainer(
           containerName(id),
@@ -385,8 +384,7 @@ export class Environments {
     try {
       await this.docker.removeContainer(containerName(row.id));
       await this.docker.removeVolume(row.workspace_volume);
-      this.db.query("DELETE FROM environments WHERE id = ?").run(row.id);
-      this.broker.sync();
+      this.broker.commit(() => this.db.query("DELETE FROM environments WHERE id = ?").run(row.id));
     } catch (error) {
       console.error(`environment ${row.id}: cleanup after a failed creation failed: ${error}`);
       this.setState(row.id, "failed");

@@ -135,8 +135,9 @@ response sizes, timeouts, concurrency, request rate, streaming deadlines).
 The control service owns the routes: on every change of an environment or
 key it rewrites, in its broker directory (a tmpfs runtime directory), one
 credential file per environment with the decrypted provider key (mode
-`0600`), then `routes.json`, then removes stale credential files; it also
-rebuilds them at startup. A route maps the SHA-256 of an environment token to
+`0600`), then `routes.json`, then removes stale credential files. It does so
+in the database transaction of the change, which rolls back when the files
+cannot be written, and rebuilds them at startup. A route maps the SHA-256 of an environment token to
 its API family (`openai` or `anthropic`), upstream base URL, credential file,
 models, completion-token limit and daily budgets. Each request reads the
 routes file and reparses it when its content changed, so a new route works on
@@ -158,7 +159,8 @@ budgets (input counted conservatively as request bytes, output as the
 completion-token limit). The provider key replaces the token, streaming
 responses are relayed event by event with their deadlines, nothing is
 replayed, and the audit log records routes, models and usage but no prompt,
-response, token or key. Upstreams must be HTTPS on public addresses.
+response, token or key. Upstreams must be HTTPS on public addresses; that is
+checked per request, so a route that breaks it fails alone.
 
 ## Users and access
 

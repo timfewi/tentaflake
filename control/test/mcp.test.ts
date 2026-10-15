@@ -138,6 +138,27 @@ describe("MCP servers", () => {
     expect((await call(h, "DELETE", `${path}/a`, undefined, other.client)).status).toBe(404);
   });
 
+  test("stay unchanged when the old container cannot be removed", async () => {
+    const { h, client, path } = await setup();
+    const servers = async () =>
+      ((await (await call(h, "GET", path, undefined, client)).json()) as McpServerList).servers;
+    const server = { type: "local", command: ["mcp"], secrets: { TOKEN: "mcp-secret-value" } };
+    expect((await put(h, client, `${path}/a`, server)).status).toBe(200);
+    const before = container(h);
+
+    h.docker.failing.add("removeContainer");
+    expect((await put(h, client, `${path}/b`, { type: "local", command: ["b"] })).status).toBe(502);
+    // The secret stays listed while the running container still holds it.
+    expect((await call(h, "DELETE", `${path}/a`, undefined, client)).status).toBe(502);
+    expect((await servers()).map((s) => s.name)).toEqual(["a"]);
+    expect(container(h)).toEqual(before);
+
+    h.docker.failing.clear();
+    expect((await call(h, "DELETE", `${path}/a`, undefined, client)).status).toBe(204);
+    expect(await servers()).toEqual([]);
+    expect(container(h).mcp).toEqual({});
+  });
+
   test("fail visibly when Docker fails during the restart", async () => {
     const { h, client, env, path } = await setup();
     const body = { type: "local", command: ["mcp"] };

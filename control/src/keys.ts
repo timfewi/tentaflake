@@ -107,13 +107,14 @@ export class Keys {
 
   /** Environments using the key lose model access: their routes and credential files go. */
   delete(ownerId: string, id: string): void {
-    if (
-      this.db.query("DELETE FROM model_keys WHERE id = ? AND owner_id = ?").run(id, ownerId)
-        .changes === 0
-    ) {
-      throw new HttpError(404, "not_found", "no such key");
-    }
-    this.broker.sync();
+    this.broker.commit(() => {
+      if (
+        this.db.query("DELETE FROM model_keys WHERE id = ? AND owner_id = ?").run(id, ownerId)
+          .changes === 0
+      ) {
+        throw new HttpError(404, "not_found", "no such key");
+      }
+    });
   }
 }
 

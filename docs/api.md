@@ -29,7 +29,7 @@ only this API, and so can other clients. Request and response types live in
   (`TENTAFLAKE_MODEL_BASE_URL`, `TENTAFLAKE_MODEL_API_KEY` in the container);
   the broker allows the environment's models within its daily token budget
   and adds the provider key. Deleting the key ends the environment's model
-  access.
+  access; if the broker's files cannot be updated, nothing is deleted (`500`).
 - **MCP servers:** a `local` server runs `command` with `environment`; a
   `remote` one is reached at `url` with `headers`. Both are returned as
   stored. `secrets` are environment variables (local) or headers (remote)
@@ -37,7 +37,8 @@ only this API, and so can other clients. Request and response types live in
   assigns them carries a `warning`: the agent can read them. A `PUT` replaces
   the whole server, secrets included. Every change recreates the container
   with the new configuration (workspace kept; a stopped environment stays
-  stopped).
+  stopped); when the old container cannot be removed, the change is not
+  applied (`502`).
 
 Errors answer `{ "error": "<code>", "message": "…" }`. A failed Docker call
 answers `502`; the environment's recorded state stays accurate.

@@ -213,6 +213,38 @@ describe("broker files", () => {
     expect(((await fetched.json()) as Environment).keyId).toBeNull();
   });
 
+  test("roll a deletion back when they cannot be written", async () => {
+    const h = harness();
+    const { client } = await newUser(h, "member");
+    const env = await environment(h, client);
+    const before = routes(h);
+    const failing = () =>
+      spyOn(h.broker, "sync").mockImplementationOnce(() => {
+        throw new Error("broker directory is full");
+      });
+    const errors = spyOn(console, "error").mockImplementation(() => {});
+    try {
+      failing();
+      const key = `/api/v1/keys/${client.keyId}`;
+      expect((await call(h, "DELETE", key, undefined, client)).status).toBe(500);
+      failing();
+      const path = `/api/v1/environments/${env.id}`;
+      expect((await call(h, "DELETE", path, undefined, client)).status).toBe(500);
+      // Nothing is deleted that the broker still serves; both deletions can be retried.
+      expect(await listKeys(h, client)).toHaveLength(1);
+      const fetched = (await (await call(h, "GET", path, undefined, client)).json()) as Environment;
+      expect(fetched.keyId).toBe(client.keyId ?? "");
+      expect(routes(h)).toEqual(before);
+
+      expect((await call(h, "DELETE", key, undefined, client)).status).toBe(204);
+      expect(routes(h).routes).toEqual([]);
+      expect(existsSync(join(h.brokerDirectory, `${env.id}.key`))).toBe(false);
+      expect((await call(h, "DELETE", path, undefined, client)).status).toBe(204);
+    } finally {
+      errors.mockRestore();
+    }
+  });
+
   test("are rebuilt from the database after the runtime directory is lost", async () => {
     const h = harness();
     const { client } = await newUser(h, "member");

@@ -109,6 +109,7 @@ export function harness({ token = setupToken as string | null } = {}) {
     auth,
     environments,
     keys,
+    broker,
     brokerDirectory,
     close() {
       server.stop(true);
