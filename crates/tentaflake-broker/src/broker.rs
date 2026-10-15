@@ -29,10 +29,7 @@ impl Broker {
             config.rate_window_seconds,
             config.max_requests_per_window,
         )?;
-        let routes = Routes::new(
-            config.routes_file.clone(),
-            config.allow_plain_http_for_tests,
-        );
+        let routes = Routes::new(config.routes_file.clone());
         let count = routes.table()?.len();
         let audit = Arc::new(Audit::new(
             config.audit_file.clone(),

@@ -64,17 +64,15 @@ type Table = Arc<HashMap<String, Arc<Route>>>;
 
 pub struct Routes {
     path: PathBuf,
-    allow_plain_http: bool,
     /// The file content last parsed (None: no file) and its routes by token hash.
     loaded: RwLock<(Option<String>, Table)>,
 }
 
 impl Routes {
     /// A missing file means no routes yet; an invalid one is an error.
-    pub fn new(path: PathBuf, allow_plain_http: bool) -> Self {
+    pub fn new(path: PathBuf) -> Self {
         Self {
             path,
-            allow_plain_http,
             loaded: RwLock::new((None, Arc::default())),
         }
     }
@@ -129,7 +127,7 @@ impl Routes {
         let mut ids = HashSet::new();
         let mut table = HashMap::new();
         for route in parsed.routes {
-            route.validate(self.allow_plain_http)?;
+            route.validate()?;
             if !ids.insert(route.id.clone()) {
                 return Err(format!("duplicate route id: {}", route.id));
             }
@@ -145,7 +143,10 @@ impl Routes {
 }
 
 impl Route {
-    fn validate(&self, allow_plain_http: bool) -> Result<(), String> {
+    // Checks the shape only. Whether the upstream may be reached (HTTPS on a
+    // public address) is decided per request, so such a route fails alone
+    // instead of invalidating every route in the file.
+    fn validate(&self) -> Result<(), String> {
         let invalid = |reason: &str| Err(format!("route {}: {reason}", self.id));
         if self.id.is_empty()
             || self.id.len() > 64
@@ -168,10 +169,8 @@ impl Route {
         let Ok(url) = reqwest::Url::parse(&self.upstream_base_url) else {
             return invalid("upstream_base_url is not a valid URL");
         };
-        if url.scheme() != "https" && !(allow_plain_http && url.scheme() == "http") {
-            return invalid("the upstream requires HTTPS");
-        }
-        if url.host_str().is_none()
+        if !matches!(url.scheme(), "http" | "https")
+            || url.host_str().is_none()
             || url.cannot_be_a_base()
             || !url.username().is_empty()
             || url.password().is_some()
@@ -180,7 +179,7 @@ impl Route {
             || !url.path().ends_with('/')
         {
             return invalid(
-                "the upstream URL needs a host and trailing slash, without credentials, query or fragment",
+                "the upstream URL needs http(s), a host and a trailing slash, without credentials, query or fragment",
             );
         }
         let mut names = HashSet::new();

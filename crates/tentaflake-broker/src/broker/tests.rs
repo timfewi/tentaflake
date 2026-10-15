@@ -56,13 +56,17 @@ impl Fixture {
     }
 
     fn broker(&self) -> Result<Broker, String> {
+        self.broker_with(true)
+    }
+
+    fn broker_with(&self, allow_plain_http_for_tests: bool) -> Result<Broker, String> {
         Broker::new(
             serde_json::from_value(json!({
                 "listen": "127.0.0.1:7810",
                 "routes_file": self.0.join("routes"),
                 "audit_file": self.0.join("audit"),
                 "budget_state_file": self.0.join("budget"),
-                "allow_plain_http_for_tests": true,
+                "allow_plain_http_for_tests": allow_plain_http_for_tests,
             }))
             .unwrap(),
         )
@@ -355,14 +359,39 @@ fn invalid_or_writable_routes_files_fail_closed() {
     );
     fs::set_permissions(fixture.0.join("routes"), fs::Permissions::from_mode(0o666)).unwrap();
     assert!(fixture.broker().is_err());
-    // Without the test flag, plain HTTP upstreams are invalid.
-    assert!(
-        Routes::new(fixture.0.join("routes"), false)
-            .table()
-            .is_err(),
-        "plain HTTP accepted"
-    );
     provider.join().unwrap();
+}
+
+#[test]
+fn a_route_with_a_refused_upstream_fails_alone() {
+    let fixture = Fixture::new();
+    let (upstream, provider) = provider(0);
+    // Without the test flag, plain HTTP and loopback upstreams are refused.
+    fixture.routes(json!([
+        fixture.route("a", "openai", upstream, json!({})),
+        fixture.route("b", "anthropic", upstream, json!({})),
+    ]));
+    let broker = fixture.broker_with(false).unwrap();
+    let refused = call(&broker, "/v1/chat/completions", BEARER_A, chat("model-a"));
+    assert_eq!(refused.status, 502);
+    assert_eq!(
+        serde_json::from_slice::<Value>(&refused.body).unwrap(),
+        json!({"error": "upstream address policy rejected the provider"})
+    );
+    // The other routes are still served, and the broker stays healthy.
+    assert_eq!(
+        call(&broker, "/v1/messages", API_KEY_B, messages("model-a")).status,
+        403
+    );
+    let health = broker.handle(Request {
+        method: "GET".into(),
+        path: "/healthz".into(),
+        headers: HashMap::new(),
+        body: Vec::new(),
+    });
+    assert_eq!(health.status, 200);
+    provider.join().unwrap();
+    assert_eq!(fixture.budget(), Value::Null);
 }
 
 #[test]
