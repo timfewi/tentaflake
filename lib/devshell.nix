@@ -119,6 +119,8 @@ pkgs.mkShell {
     statix
     deadnix
     nil
+    bun
+    biome
     cargo
     clippy
     rustc

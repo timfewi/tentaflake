@@ -1,0 +1,13 @@
+{
+  "name": "tentaflake-control",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "bun run src/main.ts",
+    "typecheck": "tsc"
+  },
+  "devDependencies": {
+    "@types/bun": "1.3.13",
+    "typescript": "7.0.2"
+  }
+}
