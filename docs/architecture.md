@@ -46,8 +46,9 @@ environment container (gVisor) ── opencode serve ── model calls → brok
   OpenCode's TypeScript SDK. State lives in one SQLite file. It talks to Docker
   and is therefore privileged: it stays small, listens on loopback behind
   Caddy, and never hands the Docker socket to an environment.
-- **UI:** in `ui/` of this repository. It uses only the documented, versioned
-  HTTP API of the control service, so other UIs can use the same API.
+- **UI:** in `ui/` of this repository, built with Bun and served by the control
+  service on the same origin. It uses only the documented, versioned HTTP API
+  of the control service, so other UIs can use the same API.
 - **Broker:** `crates/tentaflake-broker`. The control service stores the
   users' API keys encrypted on the host; the broker forwards model calls with
   them. Environments get a broker URL and a per-environment token, never a
@@ -95,8 +96,8 @@ restart that keeps the workspace and the sessions.
 `Bun.password`) and no runtime dependencies. `bun run control/src/main.ts
 <config.json>` starts it with one JSON file like `control/config.example.json`:
 listen address (loopback by default), the exact browser origin, the paths of
-the database, host key and setup token, the Docker socket, the runtime image
-and the environment limits. The file holds no secrets. The host key file holds
+the database, host key and setup token, the Docker socket, the runtime image,
+the environment limits and, optionally, the directory of the built UI. The file holds no secrets. The host key file holds
 32 random bytes (mode `0600`) that encrypt the TOTP secrets and OpenCode
 passwords in the database.
 
@@ -147,6 +148,40 @@ its container goes, so they end with the environment and not with OpenCode. Ever
 environments without activity (prompts, approvals, file reads, relayed events,
 terminal input) for `environmentIdleMinutes`, unless a terminal is open or
 OpenCode reports a running prompt; a check that fails stops nothing.
+
+## UI
+
+`ui/` is a React single-page app, bundled by `bun build` into `ui/dist` (not
+committed). With `uiDirectory` set, the control service serves that directory on
+the same origin (`control/src/ui.ts`): only the files present at startup, with
+a CSP that allows scripts from the page's own origin only (no inline script),
+`frame-ancestors 'none'`, `nosniff` and no referrer. The page needs no other
+origin: it calls `/api/v1` with the session cookie, sends the CSRF token on every
+mutation (`ui/src/client.ts`, typed by `control/src/api.ts`) and opens the
+event stream and the terminal on the same origin.
+
+It has the pages the definition of done needs: the setup wizard (setup token,
+admin account, authenticator QR code and secret shown once, confirmed by a first
+sign-in), sign-in and sign-out, model keys, environments (create with network
+mode, key, models and MCP servers; start, stop and delete after confirmation)
+and, per environment, the sessions and chat with the live event stream,
+approvals for `ask` permissions, a read-only file browser for `/workspace` and
+the terminal. Routing uses the URL hash, so the service needs no fallback route.
+The service replays no events, so on every (re)connect the page loads the session
+and approval lists, applies the events that arrived while they loaded and shows
+the conversation it saw since. A failed environment can only be deleted: the
+service refuses to start it, so the UI does not offer it.
+
+Agent messages, file contents and tool output come from inside an environment
+and are untrusted: they are rendered as text or through a Markdown renderer
+that drops raw HTML and loads no images, never as HTML; the terminal draws
+output into the emulator's grid. `just ui` runs Biome, the type check, unit tests
+(client, event reducer) and a production build; it is part of `just fast`.
+`just ui-e2e` (not in CI) drives the built UI in headless Chromium through one
+journey (setup, sign-in, key, environment, chat with an approval, file,
+terminal, stop, delete) against the real control service with a fake Docker and
+a fake OpenCode, so it needs no container; it also checks the security headers
+and that no script or CSP error occurs.
 
 ## Broker
 
@@ -248,8 +283,8 @@ works, and the README then lists where it was verified.
 | Runtime image (Ubuntu + OpenCode) | In the repository (smoke-tested in CI when the image changes) |
 | Control service and its API: users, setup, login, environment lifecycle, model keys, MCP definitions, session proxy (sessions, events, approvals, files, terminal), idle stop | In the repository (tested under `runsc` in CI when it changes) |
 | Host wiring of the broker (service, firewall) | Planned |
-| UI in `ui/` | Planned |
-| Setup wizard, HTTPS | Planned |
+| UI in `ui/`: setup wizard, sign-in, keys, environments, chat with approvals, files, terminal; served by the control service | In the repository (browser journey with `just ui-e2e`, not in CI) |
+| Host wiring of the UI (build and `uiDirectory` in the NixOS module), HTTPS | Planned |
 | VPS image and updates | Planned |
 
 ## Out of scope for 0.5

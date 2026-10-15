@@ -37,13 +37,14 @@ const notOrigin = () => new HttpError(403, "origin_mismatch", "the request origi
 const pathParameter = (request: Request) =>
   text(new URL(request.url).searchParams.get("path") ?? "", "path", 4096);
 
-/** Serves the /api/v1 endpoints listed in docs/api.md. */
+/** Serves the /api/v1 endpoints listed in docs/api.md and, if given, the UI on the same origin. */
 export function startServer(
   config: Pick<Config, "hostname" | "port" | "origin">,
   auth: Auth,
   environments: Environments,
   keys: Keys,
   agent: Agent,
+  ui?: (request: Request) => Response,
 ) {
   // Every mutation must come from the configured origin exactly.
   function open<P extends string>(
@@ -279,7 +280,10 @@ export function startServer(
         }),
       },
     },
-    fetch: () => errorJson(404, "not_found", "no such endpoint"),
+    fetch: (request) =>
+      ui !== undefined && !new URL(request.url).pathname.startsWith("/api/")
+        ? ui(request)
+        : errorJson(404, "not_found", "no such endpoint"),
   });
 }
 

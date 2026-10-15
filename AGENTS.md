@@ -12,11 +12,12 @@ port code from it unless the current task needs that exact piece now.
 `just` recipes load the pinned contributor tools automatically.
 
 ```bash
-just fmt         # format Nix, Rust and TypeScript in place
+just fmt         # format Nix, Rust and TypeScript (control service, UI) in place
 just fmt-check   # read-only formatting check
 just test        # unit tests
-just fast        # formatting, lint, Rust and control service checks, offline catalog checks
+just fast        # formatting, lint, Rust, control service and UI checks, offline catalog checks
 just check       # fast + nix flake check --no-build (the CI gate)
+just ui-e2e      # browser journeys in headless Chromium (explicit, not in CI)
 just build       # build the host closure (explicit, not in CI)
 ```
 
@@ -74,7 +75,13 @@ Deployment-specific configuration belongs in forks.
   approvals, files, terminal) and stops idle environments.
   `control/src/api.ts` holds the API types the UI imports; `docs/api.md`
   lists the endpoints.
-- `ui/` — planned; see the architecture status.
+- `ui/` — the web UI (React, built with Bun, served by the control service on
+  the same origin): `src/client.ts` is the only code that talks to `/api/v1`
+  and uses the types of `control/src/api.ts`; `src/chat-state.ts` turns the
+  event stream into a conversation. Agent messages, file contents and tool
+  output are untrusted: render them as text or through `SafeMarkdown`, never
+  as HTML. `just ui` checks it; `just ui-e2e` drives it in a browser against the
+  real control service with a fake Docker and OpenCode.
 
 ## PR Description
 

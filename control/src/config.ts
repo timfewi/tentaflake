@@ -19,6 +19,8 @@ export interface Config {
   brokerDirectory: string;
   /** The runtime image reference, ideally by digest. */
   image: string;
+  /** The built UI (ui/dist) to serve on the same origin; null serves the API only. */
+  uiDirectory: string | null;
   limits: Limits;
   /** Minutes without activity after which a running environment is stopped. */
   environmentIdleMinutes: number;
@@ -32,6 +34,7 @@ const defaults = {
   dockerSocket: "/run/docker.sock",
   brokerPort: 7810,
   brokerDirectory: "/run/tentaflake/broker",
+  uiDirectory: null,
   limits: { memoryMiB: 2048, cpus: 2, pids: 512, dailyTokens: 10_000_000 },
   environmentIdleMinutes: 15,
   sessionIdleMinutes: 60,
@@ -57,6 +60,12 @@ export function parseConfig(input: unknown): Config {
     if (typeof config[key] !== "string" || config[key] === "") {
       throw new Error(`configuration key ${key} must be a non-empty string`);
     }
+  }
+  if (
+    config.uiDirectory !== null &&
+    (typeof config.uiDirectory !== "string" || !config.uiDirectory)
+  ) {
+    throw new Error("configuration key uiDirectory must be a non-empty string or null");
   }
   const origin = config.origin as string;
   if (!URL.canParse(origin) || new URL(origin).origin !== origin) {

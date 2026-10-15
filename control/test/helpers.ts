@@ -14,6 +14,7 @@ import { type ContainerSpec, type Docker, DockerError } from "../src/docker";
 import { Environments } from "../src/environments";
 import { Keys } from "../src/keys";
 import { sessionCookie, startServer } from "../src/server";
+import { uiServer } from "../src/ui";
 
 export const origin = "https://tentaflake.example";
 export const setupToken = "setup-token-for-tests-0123456789";
@@ -282,8 +283,16 @@ afterEach(() => {
   for (const h of running.splice(0)) h.close();
 });
 
-/** The service on a random loopback port with an in-memory database and a fake Docker. */
-export function harness({ token = setupToken as string | null } = {}) {
+/**
+ * The service on a random loopback port with an in-memory database and a fake Docker.
+ * With `ui` it serves that built UI; the browser journeys also pick the port and origin.
+ */
+export function harness({
+  token = setupToken as string | null,
+  ui = undefined as string | undefined,
+  port = 0,
+  origin: listenOrigin = origin as string,
+} = {}) {
   const dir = mkdtempSync(join(tmpdir(), "tentaflake-control-"));
   const setupTokenFile = join(dir, "setup-token");
   if (token !== null) writeFileSync(setupTokenFile, `${token}\n`);
@@ -307,8 +316,15 @@ export function harness({ token = setupToken as string | null } = {}) {
   const environments = new Environments(db, docker, secrets, broker, config, now);
   const keys = new Keys(db, secrets, broker, now);
   const agent = new Agent(environments);
-  const listen = { hostname: "127.0.0.1", port: 0, origin };
-  const server = startServer(listen, auth, environments, keys, agent);
+  const listen = { hostname: "127.0.0.1", port, origin: listenOrigin };
+  const server = startServer(
+    listen,
+    auth,
+    environments,
+    keys,
+    agent,
+    ui === undefined ? undefined : uiServer(ui, listenOrigin),
+  );
   const h = {
     url: server.url.origin,
     clock,

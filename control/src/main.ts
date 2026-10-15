@@ -8,6 +8,7 @@ import { dockerClient } from "./docker";
 import { Environments, ensureNetworks } from "./environments";
 import { Keys } from "./keys";
 import { startServer } from "./server";
+import { uiServer } from "./ui";
 
 const configPath = Bun.argv[2];
 if (configPath === undefined) {
@@ -32,5 +33,6 @@ const server = startServer(
   environments,
   new Keys(db, secrets, broker),
   agent,
+  config.uiDirectory === null ? undefined : uiServer(config.uiDirectory, config.origin),
 );
 console.log(`tentaflake control service listening on ${server.url}`);

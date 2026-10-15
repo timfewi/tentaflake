@@ -6,6 +6,12 @@ only this API, and so can other clients. Request and response types live in
 
 ## Rules
 
+- **UI:** when the service is configured with the built UI (`uiDirectory`),
+  every `GET` and `HEAD` outside `/api/` is answered from its files (`404` for
+  any other path), with a
+  Content-Security-Policy that allows scripts from the page's own origin only
+  (`frame-ancestors 'none'`, `nosniff`, no referrer). Nothing else changes: the
+  UI is a client of the endpoints below.
 - **Session:** login sets the cookie `__Host-tentaflake` (`Secure`, `HttpOnly`,
   `SameSite=Strict`, `Path=/`). A session ends after the configured idle time
   (default 60 minutes), at its absolute lifetime (default 12 hours) or on
