@@ -190,7 +190,7 @@ export function Environments() {
                       Stop
                     </button>
                   ) : (
-                    env.state !== "creating" && (
+                    env.state === "stopped" && (
                       <button
                         type="button"
                         className="btn"

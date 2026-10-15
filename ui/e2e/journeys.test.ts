@@ -184,7 +184,7 @@ test("setup, login, key, environment, chat with an approval, file, terminal, sto
 
     // Stop: the page follows the environment.
     await page.getByRole("button", { name: "Stop", exact: true }).click();
-    await page.getByText("The environment is not running").waitFor();
+    await page.getByText("The environment is stopped").waitFor();
     await page.getByRole("button", { name: "Start", exact: true }).waitFor();
     expect([...h.docker.containers.values()].every((container) => !container.running)).toBe(true);
 
@@ -204,3 +204,37 @@ test("setup, login, key, environment, chat with an approval, file, terminal, sto
     await browser.close();
   }
 }, 120_000);
+
+test("a failed environment can only be deleted", async () => {
+  const h = harness({ ui: join(import.meta.dir, "..", "dist"), port, origin: base });
+  const { user, totpSecret } = await h.auth.createUser("owner", password, "member");
+  const key = h.keys.add(user.id, {
+    provider: "anthropic",
+    label: "main",
+    secret: "sk-ant-x-0123456789",
+  });
+  const { id } = await h.environments.create(user.id, {
+    name: "dev",
+    keyId: key.id,
+    models: ["fixture-model"],
+  });
+  h.db.query("UPDATE environments SET state = 'failed' WHERE id = ?").run(id);
+  const browser = await chromium.launch();
+  try {
+    const page = await browser.newPage();
+    await page.goto(base);
+    await page.getByLabel("Username").fill("owner");
+    await page.getByLabel("Password").fill(password);
+    await page.getByLabel("Authenticator code").fill(nextCode(h, totpSecret));
+    await page.getByRole("button", { name: "Sign in" }).click();
+    await page.getByRole("cell", { name: "failed" }).waitFor();
+    await page.getByRole("button", { name: "Delete" }).waitFor();
+    // The service answers 409 to starting a failed environment, so the list does not offer it.
+    expect(await page.getByRole("button", { name: "Start", exact: true }).count()).toBe(0);
+    await page.goto(`${base}/#/environments/${id}`);
+    await page.getByText("cannot be started").waitFor();
+    expect(await page.getByRole("button", { name: "Start", exact: true }).isDisabled()).toBe(true);
+  } finally {
+    await browser.close();
+  }
+}, 60_000);

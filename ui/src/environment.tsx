@@ -61,7 +61,7 @@ export function EnvironmentPage({ id }: { id: string }) {
         <button
           type="button"
           className="btn"
-          disabled={task.busy || env.state === "creating"}
+          disabled={task.busy || (!running && env.state !== "stopped")}
           onClick={() =>
             task.run(async () =>
               setEnv(await (running ? api.stopEnvironment(id) : api.startEnvironment(id))),
@@ -96,8 +96,9 @@ export function EnvironmentPage({ id }: { id: string }) {
         </>
       ) : (
         <p className="muted">
-          The environment is not running. Start it to chat, browse its files or open a terminal; its
-          workspace and sessions are kept.
+          {env.state === "stopped"
+            ? "The environment is stopped. Start it to chat, browse its files or open a terminal; its workspace and sessions are kept."
+            : `The environment is ${env.state} and cannot be started. If it stays that way, delete it in the environment list.`}
         </p>
       )}
     </div>

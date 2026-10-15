@@ -167,8 +167,10 @@ mode, key, models and MCP servers; start, stop and delete after confirmation)
 and, per environment, the sessions and chat with the live event stream,
 approvals for `ask` permissions, a read-only file browser for `/workspace` and
 the terminal. Routing uses the URL hash, so the service needs no fallback route.
-The service replays no events, so the page starts from the session and approval
-lists on every (re)connect and shows the conversation it saw since.
+The service replays no events, so on every (re)connect the page loads the session
+and approval lists, applies the events that arrived while they loaded and shows
+the conversation it saw since. A failed environment can only be deleted: the
+service refuses to start it, so the UI does not offer it.
 
 Agent messages, file contents and tool output come from inside an environment
 and are untrusted: they are rendered as text or through a Markdown renderer
