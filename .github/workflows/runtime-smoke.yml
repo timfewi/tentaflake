@@ -36,7 +36,7 @@ jobs:
           sudo /usr/local/bin/runsc install
           sudo systemctl restart docker
           # Fail here rather than let the smoke test fall back to runc.
-          docker info --format '{{json .Runtimes}}' | grep '"runsc"'
+          docker info --format '{{json .Runtimes}}' | grep --quiet '"runsc"'
 
       - name: Smoke-test the runtime image
         run: scripts/runtime-smoke.sh
