@@ -85,6 +85,9 @@ image it built and the broker (`just control-integration`): the environment
 lifecycle, and model calls from `model only` and `open internet` environments
 through the broker to a fake provider, which receives the provider key while
 the containers never hold it; a `model only` environment reaches nothing else.
+They also drive the session proxy without a model call: a session, an
+approval, events, a file written through the terminal, and an idle stop and
+restart that keeps the workspace and the sessions.
 
 ## Control service
 
@@ -105,9 +108,10 @@ query for one is scoped to it. The API and its rules are in [api.md](api.md).
 
 An environment is a container of the runtime image, created through the Docker
 Engine API on its Unix socket: `runsc`, user 1000, all capabilities dropped,
-`no-new-privileges`, a read-only root with tmpfs for `/tmp` and the home
-directory, the configured memory, CPU and PID limits, a named workspace volume
-on `/workspace` and the label `io.tentaflake.environment=<id>`. It gets a random
+`no-new-privileges`, a read-only root with tmpfs for `/tmp`, the configured
+memory, CPU and PID limits, named volumes for the workspace (`/workspace`) and
+the home directory (`/home/agent`, where OpenCode keeps its sessions) and the
+label `io.tentaflake.environment=<id>`. It gets a random
 `OPENCODE_SERVER_PASSWORD` and the generated OpenCode configuration as
 `OPENCODE_CONFIG_CONTENT`, which OpenCode ranks above an `opencode.json` in the
 workspace. The network mode picks one of two networks the service owns:
@@ -124,7 +128,22 @@ OpenRouter and compatible APIs), the allowed models (the first is the
 default) and the environment's MCP servers; it never contains a provider key.
 MCP secrets reach it only when the owner assigns them. Changing the MCP
 servers replaces the container, since its configuration is part of the
-container's environment; the workspace volume stays.
+container's environment; the volumes stay.
+
+The session proxy (`control/src/agent.ts`) gives the owner of a running
+environment its OpenCode sessions, prompts, an event stream, approvals, the
+files in `/workspace` and a terminal; the browser never talks to OpenCode. The
+service reaches OpenCode on the container's address with the environment's
+password and passes on nothing of the browser's request. The agent runs as
+the same user as OpenCode and can replace it, so OpenCode's answers are
+treated as input: checked, reduced to what the UI needs and bounded in size.
+The event stream relays only the session, tool and approval events the UI
+uses. The terminal is a shell from OpenCode's PTY API (2.0.29 has one),
+relayed over a WebSocket with bounded frames. Stopping an environment closes
+its event streams and terminals. Every minute, a task stops the running
+environments without activity (prompts, approvals, file reads, relayed events,
+terminal input) for `environmentIdleMinutes`, unless a terminal is open or
+OpenCode reports a running prompt; a check that fails stops nothing.
 
 ## Broker
 
@@ -192,9 +211,9 @@ checked per request, so a route that breaks it fails alone.
 
 ## Lifecycle
 
-- Create → running → idle-stopped after N minutes without an open session or
-  running prompt (default 15) → started again on demand with the workspace
-  intact → deleted by its owner.
+- Create → running → idle-stopped after N minutes without activity, never
+  with an open terminal or a running prompt (default 15) → started again on
+  demand with the workspace and sessions intact → deleted by its owner.
 - Per environment: CPU, memory and disk limits and a token budget enforced by
   the broker.
 - Ephemeral one-task environments, schedules and webhooks come later.
@@ -224,7 +243,7 @@ works, and the README then lists where it was verified.
 | Broker crate and package | In the repository; one process serves every environment by token (multi-route), tested with a fake provider under `runsc` in CI when it changes |
 | Base-image catalog (Ubuntu 26.04 pin) | In the repository |
 | Runtime image (Ubuntu + OpenCode) | In the repository (smoke-tested in CI when the image changes) |
-| Control service and its API: users, setup, login, environment lifecycle, model keys, MCP definitions | In the repository; no session proxy yet (tested under `runsc` in CI when it changes) |
+| Control service and its API: users, setup, login, environment lifecycle, model keys, MCP definitions, session proxy (sessions, events, approvals, files, terminal), idle stop | In the repository (tested under `runsc` in CI when it changes) |
 | Host wiring of the broker (service, firewall) | Planned |
 | UI in `ui/` | Planned |
 | Setup wizard, HTTPS | Planned |
