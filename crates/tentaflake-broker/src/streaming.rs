@@ -1,4 +1,5 @@
 //! Bounded, single-dispatch SSE forwarding. No provider body is written to audit.
+use crate::broker::Headers;
 use crate::config::StreamingPolicy;
 use crate::policy::ResolvedTarget;
 use crate::state::Audit;
@@ -15,17 +16,28 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::time::{Instant, timeout_at};
 
+/// The provider API whose event stream is relayed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Protocol {
+    /// OpenAI Chat Completions chunks ending in `[DONE]`.
+    Chat,
+    /// OpenAI Responses events ending in a `response.*` terminal event.
+    Responses,
+    /// Anthropic Messages events ending in `message_stop`.
+    Messages,
+}
+
 pub struct StreamingResponse {
     pub target: ResolvedTarget,
-    pub credential: String,
-    pub session_id: Option<String>,
+    pub headers: Headers,
     pub body: Vec<u8>,
     pub policy: StreamingPolicy,
     pub connect_timeout_seconds: u64,
     pub max_response_bytes: usize,
     pub audit: Arc<Audit>,
-    pub agent: String,
     pub route: String,
+    pub path: String,
+    pub protocol: Protocol,
     pub model: String,
 }
 
@@ -102,8 +114,8 @@ impl StreamingResponse {
             let total = started + Duration::from_secs(self.policy.total_timeout_seconds);
             if let Err(failure) = self.relay(&mut reader, &mut writer, &mut headers_sent, started).await {
                 // Reasons are static broker strings, never upstream error text.
-                let _ = self.audit.record(&self.agent, "llm", "stream_aborted", json!({
-                    "route": self.route, "model": self.model,
+                let _ = self.audit.record(&self.route, "llm", "stream_aborted", json!({
+                    "path": self.path, "model": self.model,
                     "provider": self.target.host, "reason": failure.reason,
                 }));
                 if !headers_sent && failure.status != 0 && Instant::now() < total {
@@ -154,12 +166,11 @@ impl StreamingResponse {
         let mut response = guarded(reader, first, async {
             let mut upstream = client
                 .post(self.target.url.clone())
-                .bearer_auth(&self.credential)
                 .header(CONTENT_TYPE, "application/json")
                 .header(ACCEPT, "text/event-stream")
                 .body(self.body.clone());
-            if let Some(session) = &self.session_id {
-                upstream = upstream.header("x-opencode-session", session);
+            for (name, value) in &self.headers {
+                upstream = upstream.header(*name, value);
             }
             upstream.send().await.map_err(|error| Failure {
                 status: if error.is_timeout() { 504 } else { 502 },
@@ -191,7 +202,7 @@ impl StreamingResponse {
             ));
         }
         let mut parser = SseParser::new(self.policy.max_event_bytes);
-        let mut protocol = Protocol::new(self.route == "/v1/responses");
+        let mut events = Events::new(self.protocol);
         let mut received = 0_usize;
         loop {
             let deadline = total.min(Instant::now() + idle);
@@ -216,7 +227,7 @@ impl StreamingResponse {
                 let Some(frame) = parser.push(byte)? else {
                     continue;
                 };
-                let event = protocol.inspect(&frame)?;
+                let event = events.inspect(&frame)?;
                 if !*headers_sent && !event.has_data {
                     continue; // Heartbeats cannot satisfy the first-event deadline.
                 }
@@ -232,11 +243,11 @@ impl StreamingResponse {
                 }
                 if let Some(outcome) = event.terminal {
                     // Persist completion admission before releasing the terminal marker.
-                    self.audit.record(&self.agent, "llm", outcome, json!({
-                        "route": self.route, "provider": self.target.host,
+                    self.audit.record(&self.route, "llm", outcome, json!({
+                        "path": self.path, "provider": self.target.host,
                         "model": self.model, "streaming": true, "status": 200,
                         "response_bytes": received, "latency_ms": started.elapsed().as_millis(),
-                        "usage": protocol.usage,
+                        "usage": events.usage,
                     })).map_err(|_| Failure { status: 503, reason: "audit log is unavailable" })?;
                 }
                 let prefix = format!("{:x}\r\n", frame.len());
@@ -306,20 +317,23 @@ struct Event {
     terminal: Option<&'static str>,
 }
 
-struct Protocol {
-    responses: bool,
+struct Events {
+    protocol: Protocol,
     chat_finished: bool,
     usage: Value,
     first_frame: bool,
+    // Anthropic reports input tokens at the start and output tokens at the end.
+    message_input_tokens: Option<u64>,
 }
 
-impl Protocol {
-    fn new(responses: bool) -> Self {
+impl Events {
+    fn new(protocol: Protocol) -> Self {
         Self {
-            responses,
+            protocol,
             chat_finished: false,
             usage: Value::Null,
             first_frame: true,
+            message_input_tokens: None,
         }
     }
 
@@ -350,7 +364,7 @@ impl Protocol {
             });
         }
         let data = data.join("\n");
-        if !self.responses && data == "[DONE]" {
+        if self.protocol == Protocol::Chat && data == "[DONE]" {
             if !self.chat_finished {
                 return Err(Failure::upstream(
                     "completion ended without a finish reason",
@@ -366,16 +380,43 @@ impl Protocol {
         if !value.is_object() {
             return Err(Failure::upstream("event data must be a JSON object"));
         }
-        let terminal = if self.responses {
+        let typed = || {
             let kind = value
                 .get("type")
                 .and_then(Value::as_str)
-                .ok_or_else(|| Failure::upstream("Responses event has no type"))?;
+                .ok_or_else(|| Failure::upstream("event has no type"))?;
             if name.is_some_and(|name| name != kind) {
-                return Err(Failure::upstream(
-                    "Responses event type does not match its SSE field",
-                ));
+                return Err(Failure::upstream("event type does not match its SSE field"));
             }
+            Ok(kind)
+        };
+        let terminal = if self.protocol == Protocol::Messages {
+            match typed()? {
+                "message_start" => {
+                    self.message_input_tokens = value
+                        .pointer("/message/usage/input_tokens")
+                        .and_then(Value::as_u64);
+                    None
+                }
+                "message_delta" => {
+                    let output = value
+                        .pointer("/usage/output_tokens")
+                        .and_then(Value::as_u64);
+                    self.usage = match (self.message_input_tokens, output) {
+                        (Some(input), Some(output)) => json!({
+                            "input_tokens": input, "output_tokens": output,
+                            "total_tokens": input.saturating_add(output),
+                        }),
+                        _ => Value::Null,
+                    };
+                    None
+                }
+                "message_stop" => Some("completed"),
+                "error" => Some("failed"),
+                _ => None,
+            }
+        } else if self.protocol == Protocol::Responses {
+            let kind = typed()?;
             let outcome = match kind {
                 "response.completed" => Some("completed"),
                 "response.failed" => Some("failed"),

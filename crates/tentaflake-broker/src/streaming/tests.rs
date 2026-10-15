@@ -23,13 +23,8 @@ impl Directory {
         ));
         fs::create_dir(&root).unwrap();
         fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).unwrap();
-        for (file, secret) in [
-            ("token", "virtual-agent-key"),
-            ("provider", "real-provider-key"),
-        ] {
-            fs::write(root.join(file), secret).unwrap();
-            fs::set_permissions(root.join(file), fs::Permissions::from_mode(0o600)).unwrap();
-        }
+        fs::write(root.join("provider"), "real-provider-key").unwrap();
+        fs::set_permissions(root.join("provider"), fs::Permissions::from_mode(0o600)).unwrap();
         Self(root)
     }
 
@@ -56,21 +51,37 @@ impl Drop for Directory {
 }
 
 fn config(directory: &Directory, upstream: std::net::SocketAddr) -> Config {
+    write_route(directory, upstream, json!({}));
     serde_json::from_value(json!({
-        "agent": "stream-fixture", "listen": "127.0.0.1:7810",
-        "token_file": directory.0.join("token"),
+        "listen": "127.0.0.1:7810",
+        "routes_file": directory.0.join("routes"),
         "audit_file": directory.0.join("audit"),
         "budget_state_file": directory.0.join("budget"),
-        "max_response_bytes": 8192,
-        "llm": {
-            "upstream_base_url": format!("http://{upstream}/v1/"),
-            "provider_credential_file": directory.0.join("provider"),
-            "allowed_models": [{"name": "fixture-model", "input_microusd_per_million": 1000, "output_microusd_per_million": 2000}],
-            "max_completion_tokens": 32, "allow_plain_http_for_tests": true,
-            "streaming": {"enable": true, "max_event_bytes": 4096,
-                "first_event_timeout_seconds": 2, "idle_timeout_seconds": 2, "total_timeout_seconds": 4}
-        }
-    })).unwrap()
+        "max_response_bytes": 8192, "allow_plain_http_for_tests": true,
+        "streaming": {"max_event_bytes": 4096,
+            "first_event_timeout_seconds": 2, "idle_timeout_seconds": 2, "total_timeout_seconds": 4}
+    }))
+    .unwrap()
+}
+
+/// Writes the routes file with one route for the token `virtual-agent-key`.
+fn write_route(directory: &Directory, upstream: std::net::SocketAddr, overrides: Value) {
+    let mut route = json!({
+        "id": "fixture", "token_sha256": crate::routes::sha256_hex("virtual-agent-key"),
+        "api": "openai", "upstream_base_url": format!("http://{upstream}/v1/"),
+        "credential_file": directory.0.join("provider"),
+        "models": [{"name": "fixture-model", "input_microusd_per_million": 1000, "output_microusd_per_million": 2000}],
+        "max_completion_tokens": 32,
+    });
+    route
+        .as_object_mut()
+        .unwrap()
+        .extend(overrides.as_object().unwrap().clone());
+    fs::write(
+        directory.0.join("routes"),
+        json!({ "routes": [route] }).to_string(),
+    )
+    .unwrap();
 }
 
 fn chat(delta: Value, finish: Value) -> Vec<u8> {
@@ -206,9 +217,9 @@ impl Exchange {
         self.broker.join().unwrap();
         self.provider.join().unwrap();
         let audit = self.directory.audit();
-        let budget =
+        let budget: Value =
             serde_json::from_slice(&fs::read(self.directory.0.join("budget")).unwrap()).unwrap();
-        (audit, budget)
+        (audit, budget["fixture"].clone())
     }
 }
 
@@ -280,7 +291,7 @@ fn rejects_invalid_session_metadata_before_budget_or_upstream_dispatch() {
                 assert!(response.streaming.is_none());
                 assert_eq!(
                     serde_json::from_slice::<Value>(&response.body).unwrap(),
-                    json!({"error":"invalid provider session header"})
+                    json!({"error":"invalid x-opencode-session header"})
                 );
                 assert!(!directory.0.join("budget").exists());
             }
@@ -457,7 +468,7 @@ fn first_event_and_idle_deadlines_close_stalled_exchanges() {
         let exchange = Exchange::start(
             false,
             |cfg| {
-                let streaming = &mut cfg.llm.as_mut().unwrap().streaming;
+                let streaming = &mut cfg.streaming;
                 streaming.first_event_timeout_seconds = 1;
                 streaming.idle_timeout_seconds = 1;
             },
@@ -558,12 +569,12 @@ fn parser_accepts_sse_line_endings_bom_and_preserves_multiline_data() {
             "\u{feff}event: response.created{newline}data: {{\"type\":{newline}data: \"response.created\"}}{newline}{newline}"
         );
         let mut parser = SseParser::new(4096);
-        let mut protocol = Protocol::new(true);
+        let mut events = Events::new(Protocol::Responses);
         let mut count = 0;
         for byte in input.bytes() {
             if let Some(frame) = parser.push(byte).unwrap_or_else(|_| panic!("parse failed")) {
                 assert!(
-                    protocol
+                    events
                         .inspect(&frame)
                         .unwrap_or_else(|_| panic!("inspect failed"))
                         .has_data
@@ -599,7 +610,7 @@ fn whole_exchange_deadline_stops_active_heartbeats() {
     let exchange = Exchange::start(
         false,
         |cfg| {
-            let policy = &mut cfg.llm.as_mut().unwrap().streaming;
+            let policy = &mut cfg.streaming;
             policy.first_event_timeout_seconds = 1;
             policy.idle_timeout_seconds = 1;
             policy.total_timeout_seconds = 1;
@@ -658,9 +669,11 @@ fn admission_rejects_invalid_stream_policy_model_tools_and_budget_before_dispatc
         assert!(response.streaming.is_none());
         assert!(!directory.0.join("budget").exists());
     }
-    let mut limited = cfg;
-    limited.daily_token_budget = 1;
-    let broker = Broker::new(limited).unwrap();
+    write_route(
+        &directory,
+        listener.local_addr().unwrap(),
+        json!({"daily_token_budget": 1}),
+    );
     let response = broker.handle(Request {
         method: "POST".into(),
         path: "/v1/chat/completions".into(),
@@ -682,17 +695,16 @@ fn validates_streaming_defaults_limits_and_unknown_fields() {
     let directory = Directory::new();
     let address = "127.0.0.1:1".parse().unwrap();
     let cfg = config(&directory, address);
-    assert!(!StreamingPolicy::default().enable);
     for bad in [
         "max_event_bytes",
         "first_event_timeout_seconds",
         "idle_timeout_seconds",
         "total_timeout_seconds",
     ] {
-        let mut policy = json!({"enable":true, "max_event_bytes":4096});
+        let mut policy = json!({"max_event_bytes":4096});
         policy[bad] = json!(0);
         let mut changed = cfg.clone();
-        changed.llm.as_mut().unwrap().streaming = serde_json::from_value(policy).unwrap();
+        changed.streaming = serde_json::from_value(policy).unwrap();
         assert!(changed.validate().is_err());
     }
     assert!(serde_json::from_value::<StreamingPolicy>(json!({"enabled":true})).is_err());
@@ -809,7 +821,7 @@ fn downstream_backpressure_has_a_bounded_write_deadline() {
         false,
         |cfg| {
             cfg.max_response_bytes = 32 * 1024 * 1024;
-            let policy = &mut cfg.llm.as_mut().unwrap().streaming;
+            let policy = &mut cfg.streaming;
             policy.max_event_bytes = 64 * 1024;
             policy.idle_timeout_seconds = 1;
         },
@@ -854,5 +866,52 @@ fn responses_terminal_must_match_event_type_and_status() {
         let (raw, audit, _) = exchange.finish(Vec::new());
         assert!(raw.starts_with(b"HTTP/1.1 502"));
         assert!(!audit.contains("\"outcome\":\"completed\""));
+    }
+}
+
+#[test]
+fn messages_events_end_at_message_stop_with_usage() {
+    let event = |name: &str, data: Value| {
+        let mut data = data;
+        data["type"] = json!(name);
+        format!("event: {name}\ndata: {data}\n\n").into_bytes()
+    };
+    let mut events = Events::new(Protocol::Messages);
+    let stream = [
+        event(
+            "message_start",
+            json!({"message": {"usage": {"input_tokens": 5}}}),
+        ),
+        event("ping", json!({})),
+        event(
+            "content_block_delta",
+            json!({"index": 0, "delta": {"type": "text_delta", "text": "hi"}}),
+        ),
+        event(
+            "message_delta",
+            json!({"delta": {"stop_reason": "end_turn"}, "usage": {"output_tokens": 2}}),
+        ),
+    ];
+    for frame in &stream {
+        let checked = events.inspect(frame).unwrap_or_else(|_| panic!("rejected"));
+        assert!(checked.has_data && checked.terminal.is_none());
+    }
+    let stop = events.inspect(&event("message_stop", json!({})));
+    assert_eq!(
+        stop.ok().and_then(|event| event.terminal),
+        Some("completed")
+    );
+    assert_eq!(
+        events.usage,
+        json!({"input_tokens": 5, "output_tokens": 2, "total_tokens": 7})
+    );
+    let failed = Events::new(Protocol::Messages).inspect(&event("error", json!({"error": {}})));
+    assert_eq!(failed.ok().and_then(|event| event.terminal), Some("failed"));
+    for invalid in [
+        b"event: message_stop\ndata: {\"type\":\"ping\"}\n\n".as_slice(),
+        b"data: {\"index\":0}\n\n".as_slice(),
+        b"data: [DONE]\n\n".as_slice(),
+    ] {
+        assert!(Events::new(Protocol::Messages).inspect(invalid).is_err());
     }
 }

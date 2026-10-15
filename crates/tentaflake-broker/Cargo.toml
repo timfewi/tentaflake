@@ -3,7 +3,7 @@ name = "tentaflake-broker"
 version.workspace = true
 edition = "2024"
 license = "MIT"
-description = "Fail-closed credential and web-fetch policy broker for tentaflake"
+description = "Fail-closed model API broker for tentaflake environments"
 
 [[bin]]
 name = "tentaflake-broker"
@@ -12,6 +12,7 @@ path = "src/main.rs"
 [dependencies]
 libc = "0.2"
 reqwest = { version = "0.12.28", default-features = false, features = ["blocking", "rustls-tls"] }
+ring = "0.17.14"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1.52.3", features = ["rt", "net", "time", "io-util"] }
