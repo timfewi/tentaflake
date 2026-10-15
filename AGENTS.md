@@ -20,8 +20,10 @@ just check       # fast + nix flake check --no-build (the CI gate)
 just build       # build the host closure (explicit, not in CI)
 ```
 
-CI runs `just check` only. Host builds and VM tests are manual steps before a
-release; never add them to CI or run them as a routine check.
+CI runs `just check` only, plus the path-filtered `runtime-smoke.yml` (Docker,
+`just runtime-smoke`) when `images/runtime/**` changes. Host builds and VM tests
+are manual steps before a release; never add them to CI or run them as a
+routine check.
 
 ## Working rules
 

@@ -56,6 +56,30 @@ environment container (gVisor) ── opencode serve ── model calls → brok
   by digest from the host configuration. The reviewed Ubuntu pin lives in
   `images/catalog.json`.
 
+## Runtime image
+
+`images/runtime/Dockerfile` builds it. Everything it depends on is pinned in
+that file: the base is the `ubuntu-26.04` digest from `images/catalog.json`
+(never a tag), apt reads a dated Ubuntu snapshot, and OpenCode 2 is downloaded
+as its npm platform package by exact version and checked against a SHA-256. A
+test in `just fast` keeps the `FROM` line equal to the catalog pin. The
+container runs as user `agent` (UID 1000) with `/workspace` as its working
+directory and refuses to start without `OPENCODE_SERVER_PASSWORD`; it then
+serves `opencode serve` on port 4096.
+
+`images/runtime/opencode.json` is the base OpenCode configuration (found
+through `OPENCODE_CONFIG`): sharing and updates off, `shell` and `webfetch` on
+`ask`, and the model base URL and key read from `TENTAFLAKE_MODEL_BASE_URL`
+and `TENTAFLAKE_MODEL_API_KEY`. The generated per-environment configuration
+layers on top of it.
+
+`scripts/runtime-smoke.sh` (`just runtime-smoke`) builds the image, runs it
+with the isolation an environment gets (gVisor `runsc` when Docker has it,
+dropped capabilities, read-only root, memory and PID limits) and checks the
+HTTP API: password required, a session can be created, the effective
+configuration matches. It makes no model call. It needs Docker, so CI runs it
+only when `images/runtime/` or the script changes (`runtime-smoke.yml`).
+
 ## Users and access
 
 - Public HTTPS on the VPS domain with password + TOTP login. Without an own
@@ -117,7 +141,7 @@ works, and the README then lists where it was verified.
 | Host modules, Docker with `runsc`, security profile | In the repository |
 | Broker crate and package | In the repository; not yet wired to environments |
 | Base-image catalog (Ubuntu 26.04 pin) | In the repository |
-| Runtime image (Ubuntu + OpenCode) | Planned |
+| Runtime image (Ubuntu + OpenCode) | In the repository (smoke-tested in CI when the image changes) |
 | Control service and its API | Planned |
 | UI in `ui/` | Planned |
 | Setup wizard, HTTPS, login | Planned |
