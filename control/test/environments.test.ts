@@ -56,13 +56,20 @@ describe("environments", () => {
       CapDrop: ["ALL"],
       SecurityOpt: ["no-new-privileges"],
       ReadonlyRootfs: true,
-      Mounts: [{ Type: "volume", Source: `tentaflake-${env.id}-workspace`, Target: "/workspace" }],
+      Tmpfs: { "/tmp": "exec,mode=1777" },
+      Mounts: [
+        { Type: "volume", Source: `tentaflake-${env.id}-workspace`, Target: "/workspace" },
+        { Type: "volume", Source: `tentaflake-${env.id}-home`, Target: "/home/agent" },
+      ],
       Memory: 1024 * 2 ** 20,
       MemorySwap: 1024 * 2 ** 20,
       NanoCpus: 1_500_000_000,
       PidsLimit: 256,
     });
-    expect([...h.docker.volumes]).toEqual([`tentaflake-${env.id}-workspace`]);
+    expect([...h.docker.volumes]).toEqual([
+      `tentaflake-${env.id}-workspace`,
+      `tentaflake-${env.id}-home`,
+    ]);
 
     const variables = envOf(spec?.Env ?? []);
     expect(JSON.parse(variables.OPENCODE_CONFIG_CONTENT ?? "")).toEqual({
@@ -285,7 +292,7 @@ describe("Docker failures", () => {
     expect((await call(h, "DELETE", path, undefined, client)).status).toBe(502);
     expect(await list(h, client)).toMatchObject([{ state: "failed" }]);
     expect(h.docker.containers.size).toBe(0);
-    expect(h.docker.volumes.size).toBe(1);
+    expect(h.docker.volumes.size).toBe(2);
 
     h.docker.failing.clear();
     expect((await call(h, "DELETE", path, undefined, client)).status).toBe(204);

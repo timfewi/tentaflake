@@ -127,6 +127,121 @@ export interface EnvironmentList {
   environments: Environment[];
 }
 
+/** An OpenCode session in an environment. */
+export interface AgentSession {
+  id: string;
+  title: string | null;
+  createdAt: string;
+  updatedAt: string;
+  /** True while a prompt runs. */
+  running: boolean;
+}
+
+export interface AgentSessionList {
+  sessions: AgentSession[];
+}
+
+export interface PromptRequest {
+  text: string;
+}
+
+export interface PromptResponse {
+  /** The id of the user message OpenCode recorded. */
+  messageId: string;
+}
+
+export interface AbortResponse {
+  /** False when no prompt was running. */
+  aborted: boolean;
+}
+
+/** A tool call that waits for the owner's approval (an OpenCode `ask` permission). */
+export interface Permission {
+  id: string;
+  sessionId: string;
+  /** The permission, e.g. "shell" or "webfetch". */
+  action: string;
+  /** What the tool wants to act on, e.g. the shell commands. */
+  resources: string[];
+}
+
+export interface PermissionList {
+  permissions: Permission[];
+}
+
+/** Allow this call, allow calls like it from now on, or refuse it. */
+export type PermissionReply = "once" | "always" | "reject";
+
+export interface PermissionReplyRequest {
+  reply: PermissionReply;
+}
+
+export interface FileEntry {
+  /** Relative to /workspace. */
+  path: string;
+  type: "file" | "directory";
+}
+
+export interface FileEntryList {
+  entries: FileEntry[];
+}
+
+/** One event of GET /api/v1/environments/{id}/events, sent as the `data` of a server-sent event. */
+export type AgentEvent =
+  | {
+      type:
+        | "session.created"
+        | "session.deleted"
+        | "session.execution.started"
+        | "session.execution.succeeded"
+        | "session.execution.interrupted";
+      sessionId: string;
+    }
+  | { type: "session.renamed"; sessionId: string; title: string }
+  | { type: "session.execution.failed"; sessionId: string; error: string }
+  | { type: "session.text.delta"; sessionId: string; messageId: string; delta: string }
+  | { type: "session.text.ended"; sessionId: string; messageId: string; text: string }
+  | {
+      type: "session.tool.input.started";
+      sessionId: string;
+      messageId: string;
+      callId: string;
+      name: string;
+    }
+  | {
+      type: "session.tool.called";
+      sessionId: string;
+      messageId: string;
+      callId: string;
+      input: Record<string, unknown>;
+    }
+  | {
+      type: "session.tool.success";
+      sessionId: string;
+      messageId: string;
+      callId: string;
+      output: string;
+    }
+  | {
+      type: "session.tool.failed";
+      sessionId: string;
+      messageId: string;
+      callId: string;
+      error: string;
+    }
+  | ({ type: "permission.asked" } & Permission)
+  | { type: "permission.replied"; sessionId: string; permissionId: string; reply: PermissionReply }
+  /** The last event: the environment stopped and the stream ends. */
+  | { type: "environment.stopped" };
+
+/**
+ * A text frame from the browser on the terminal WebSocket. The service sends
+ * the terminal's output back as text frames.
+ */
+export type TerminalMessage =
+  | { type: "input"; data: string }
+  | { type: "resize"; rows: number; cols: number };
+
 export type ErrorCode =
   | "invalid_request"
   | "unsupported_media_type"
@@ -139,8 +254,10 @@ export type ErrorCode =
   | "setup_complete"
   | "not_found"
   | "conflict"
+  | "too_large"
   | "rate_limited"
   | "docker"
+  | "opencode"
   | "internal";
 
 export interface ApiError {

@@ -70,8 +70,10 @@ Deployment-specific configuration belongs in forks.
   evidence (`just image-catalog`).
 - `control/` — the control service (Bun): users, login, model keys, MCP
   definitions, environment lifecycle over the Docker socket, the broker's
-  routes. `control/src/api.ts` holds the API types the UI imports;
-  `docs/api.md` lists the endpoints.
+  routes; `control/src/agent.ts` proxies OpenCode (sessions, events,
+  approvals, files, terminal) and stops idle environments.
+  `control/src/api.ts` holds the API types the UI imports; `docs/api.md`
+  lists the endpoints.
 - `ui/` — planned; see the architecture status.
 
 ## PR Description

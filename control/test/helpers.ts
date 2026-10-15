@@ -1,8 +1,10 @@
 import { afterEach, expect } from "bun:test";
+import type { Server, ServerWebSocket } from "bun";
 import { randomBytes } from "node:crypto";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { Agent } from "../src/agent";
 import { csrfHeader, type Role } from "../src/api";
 import { Auth } from "../src/auth";
 import { BrokerFiles } from "../src/broker";
@@ -25,6 +27,8 @@ export class FakeDocker implements Docker {
   readonly volumes = new Set<string>();
   readonly containers = new Map<string, { name: string; spec: ContainerSpec; running: boolean }>();
   readonly failing = new Set<keyof Docker>();
+  /** Runs when a container stops or is removed; Docker answers after it. */
+  onStop: () => Promise<void> = async () => {};
   private nextId = 1;
 
   async network(name: string) {
@@ -56,6 +60,7 @@ export class FakeDocker implements Docker {
   }
   async stopContainer(id: string) {
     this.check("stopContainer");
+    await this.onStop();
     this.container(id).running = false;
   }
   async removeContainer(idOrName: string) {
@@ -63,6 +68,12 @@ export class FakeDocker implements Docker {
     for (const [id, { name }] of this.containers) {
       if (id === idOrName || name === idOrName) this.containers.delete(id);
     }
+    await this.onStop();
+  }
+  /** Running containers are at loopback, where the harness's FakeOpenCode listens. */
+  async containerAddress(id: string) {
+    this.check("containerAddress");
+    return this.containers.get(id)?.running ? "127.0.0.1" : null;
   }
 
   private container(id: string) {
@@ -72,6 +83,196 @@ export class FakeDocker implements Docker {
   }
   private check(method: keyof Docker) {
     if (this.failing.has(method)) throw new DockerError(500, `fake ${method} failure`);
+  }
+}
+
+export interface OpenCodeRequest {
+  method: string;
+  path: string;
+  headers: Record<string, string>;
+  body: unknown;
+}
+
+const encoder = new TextEncoder();
+
+/**
+ * A fake OpenCode server with the API the session proxy uses (observed on
+ * OpenCode 2.0.29): it records every request, keeps sessions, permission
+ * requests and files, relays `emit`ted text as its event stream and echoes
+ * PTY input as output. With `failing`, every request answers 500.
+ */
+export class FakeOpenCode {
+  readonly requests: OpenCodeRequest[] = [];
+  sessions: Record<string, unknown>[] = [];
+  /** Session id → { type: "running" } while a prompt runs. */
+  active: Record<string, unknown> = {};
+  permissions: Record<string, unknown>[] = [];
+  files: Record<string, string> = {};
+  failing = false;
+  /** Runs before OpenCode answers a PTY creation. */
+  beforePty: () => Promise<unknown> = async () => {};
+  readonly pty = { input: [] as string[], resized: [] as unknown[], removed: [] as string[] };
+  private readonly streams = new Set<ReadableStreamDefaultController<Uint8Array>>();
+  private readonly sockets = new Set<ServerWebSocket<unknown>>();
+  private readonly server: Server<unknown>;
+
+  constructor() {
+    this.server = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      fetch: (request, server) => this.handle(request, server),
+      websocket: {
+        open: (socket) => {
+          this.sockets.add(socket);
+          socket.send(new Uint8Array([0, ...encoder.encode('{"cursor":0}')]));
+          socket.send("$ ");
+        },
+        message: (_, data) => {
+          this.pty.input.push(String(data));
+        },
+        close: (socket) => {
+          this.sockets.delete(socket);
+        },
+      },
+    });
+  }
+
+  get port(): number {
+    return this.server.port ?? 0;
+  }
+
+  /** Sends raw server-sent-event text on every open event stream. */
+  emit(text: string): void {
+    for (const stream of this.streams) stream.enqueue(encoder.encode(text));
+  }
+
+  /** Sends terminal output on every PTY connection. */
+  output(text: string): void {
+    for (const socket of this.sockets) socket.send(text);
+  }
+
+  /** Ends every event stream and PTY connection, as OpenCode does when its container stops. */
+  drop(): void {
+    for (const stream of this.streams) stream.close();
+    this.streams.clear();
+    for (const socket of this.sockets) socket.close();
+  }
+
+  get openStreams(): number {
+    return this.streams.size;
+  }
+
+  get openSockets(): number {
+    return this.sockets.size;
+  }
+
+  stop(): void {
+    this.server.stop(true);
+  }
+
+  private async handle(request: Request, server: Server<unknown>) {
+    const url = new URL(request.url);
+    const body = request.headers.has("content-type") ? await request.json() : undefined;
+    const headers = Object.fromEntries(request.headers);
+    this.requests.push({ method: request.method, path: url.pathname + url.search, headers, body });
+    if (this.failing) return new Response("failure", { status: 500 });
+    const route = `${request.method} ${url.pathname}`;
+    const location = { directory: "/workspace" };
+    const notFound = () => Response.json({ _tag: "NotFoundError" }, { status: 404 });
+    const session = route.match(/^POST \/api\/session\/([^/]+)\/(prompt|interrupt)$/);
+    const reply = route.match(/^POST \/api\/session\/([^/]+)\/permission\/([^/]+)\/reply$/);
+    const read = route.match(/^GET \/api\/fs\/read\/(.+)$/);
+    const pty = route.match(/^(PUT|DELETE) \/api\/pty\/([^/]+)$/);
+
+    if (route === "GET /api/session") return Response.json({ data: this.sessions, cursor: {} });
+    if (route === "POST /api/session") {
+      const id = `ses_fake${this.sessions.length + 1}`;
+      const session = { id, projectID: "p", time: { created: 1, updated: 2 }, location };
+      this.sessions.push(session);
+      return Response.json({ data: session });
+    }
+    if (route === "GET /api/session/active") return Response.json({ data: this.active });
+    if (session) {
+      const [, id = "", action] = session;
+      if (!this.sessions.some((session) => session.id === id)) return notFound();
+      if (action === "interrupt")
+        return Response.json({ interrupted: Object.hasOwn(this.active, id) });
+      return Response.json({ data: { id: "msg_fake1", sessionID: id, type: "user" } });
+    }
+    if (route === "GET /api/permission/request") {
+      return Response.json({ location, data: this.permissions });
+    }
+    if (reply) {
+      const index = this.permissions.findIndex(
+        (permission) => permission.sessionID === reply[1] && permission.id === reply[2],
+      );
+      if (index === -1) return notFound();
+      this.permissions.splice(index, 1);
+      return new Response(null, { status: 204 });
+    }
+    if (route === "GET /api/fs/list") {
+      const directory = url.searchParams.get("path") ?? "";
+      const prefix = directory === "" ? "" : `${directory}/`;
+      const entries = new Map<string, string>();
+      for (const file of Object.keys(this.files)) {
+        if (!file.startsWith(prefix)) continue;
+        const [name = "", ...rest] = file.slice(prefix.length).split("/");
+        entries.set(
+          `${prefix}${name}${rest.length > 0 ? "/" : ""}`,
+          rest.length > 0 ? "directory" : "file",
+        );
+      }
+      if (entries.size === 0 && directory !== "") return notFound();
+      const data = [...entries].map(([path, type]) => ({ path, type }));
+      return Response.json({ location, data });
+    }
+    if (read) {
+      const content = this.files[decodeURIComponent(read[1] ?? "")];
+      return content === undefined ? notFound() : new Response(content);
+    }
+    if (route === "GET /api/event") {
+      let self: ReadableStreamDefaultController<Uint8Array>;
+      const stream = new ReadableStream<Uint8Array>({
+        start: (controller) => {
+          self = controller;
+          this.streams.add(controller);
+          controller.enqueue(encoder.encode('data: {"type":"server.connected","data":{}}\n\n'));
+        },
+        cancel: () => {
+          this.streams.delete(self);
+        },
+      });
+      server.timeout(request, 0);
+      return new Response(stream, { headers: { "content-type": "text/event-stream" } });
+    }
+    if (route === "POST /api/pty") {
+      await this.beforePty();
+      const data = {
+        id: "pty_fake1",
+        title: "t",
+        command: "/bin/bash",
+        args: [],
+        cwd: "/workspace",
+      };
+      return Response.json({ location, data: { ...data, status: "running", pid: 2 } });
+    }
+    if (pty) {
+      if (pty[1] === "PUT") this.pty.resized.push(body);
+      else this.pty.removed.push(pty[2] ?? "");
+      return new Response(null, { status: 204 });
+    }
+    if (route === "GET /api/pty/pty_fake1/connect" && server.upgrade(request, { data: {} })) {
+      return undefined;
+    }
+    return notFound();
+  }
+}
+
+/** Waits up to about two seconds for `condition`. */
+export async function until(condition: () => boolean, what: string): Promise<void> {
+  for (let attempt = 0; !condition(); attempt++) {
+    if (attempt > 200) throw new Error(`timed out waiting for ${what}`);
+    await Bun.sleep(10);
   }
 }
 
@@ -96,23 +297,35 @@ export function harness({ token = setupToken as string | null } = {}) {
   const limits = { memoryMiB: 1024, cpus: 1.5, pids: 256, dailyTokens: 50_000 };
   const brokerDirectory = join(dir, "broker");
   const broker = new BrokerFiles(db, secrets, brokerDirectory);
-  const config = { image: "runtime:test", limits, brokerUrl };
+  const opencode = new FakeOpenCode();
+  // Docker answers a stop only after the processes, OpenCode among them, ended.
+  docker.onStop = async () => {
+    opencode.drop();
+    await Bun.sleep(50);
+  };
+  const config = { image: "runtime:test", limits, brokerUrl, opencodePort: opencode.port };
   const environments = new Environments(db, docker, secrets, broker, config, now);
   const keys = new Keys(db, secrets, broker, now);
-  const server = startServer({ hostname: "127.0.0.1", port: 0, origin }, auth, environments, keys);
+  const agent = new Agent(environments);
+  const listen = { hostname: "127.0.0.1", port: 0, origin };
+  const server = startServer(listen, auth, environments, keys, agent);
   const h = {
     url: server.url.origin,
     clock,
+    now,
     db,
     secrets,
     docker,
+    opencode,
     auth,
     environments,
     keys,
+    agent,
     broker,
     brokerDirectory,
     close() {
       server.stop(true);
+      opencode.stop();
       db.close();
       rmSync(dir, { recursive: true, force: true });
     },
