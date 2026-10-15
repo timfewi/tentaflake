@@ -85,9 +85,10 @@ rust:
 control:
     cd control && bun install --frozen-lockfile && biome lint . && bun run typecheck && bun test
 
-# Lifecycle test against real Docker with runsc and a built runtime image (CI runs it after the smoke test)
+# Lifecycle and model-access tests against real Docker with runsc, a built runtime image and the broker (CI runs it after the smoke test)
 control-integration image="tentaflake-runtime:smoke":
-    cd control && bun install --frozen-lockfile && TENTAFLAKE_INTEGRATION_IMAGE={{ image }} bun test ./test/integration.test.ts
+    cargo build -p tentaflake-broker
+    cd control && bun install --frozen-lockfile && TENTAFLAKE_INTEGRATION_IMAGE={{ image }} TENTAFLAKE_INTEGRATION_BROKER={{ justfile_directory() }}/target/debug/tentaflake-broker bun test ./test/integration.test.ts
 
 # ── Release ──────────────────────────────────────────────────
 
