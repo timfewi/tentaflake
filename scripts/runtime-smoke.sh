@@ -68,28 +68,31 @@ docker run --detach --name "$name" "${hardening[@]}" \
 base=http://$(docker port "$name" 4096/tcp | sed -n '1p')
 
 for _ in $(seq 60); do
-  api "$base/global/health" >/dev/null 2>&1 && break
+  api "$base/api/info" >/dev/null 2>&1 && break
   [[ $(docker inspect --format '{{.State.Running}}' "$name") == true ]] || fail "container exited"
   sleep 1
 done
-health=$(api "$base/global/health")
-grep -q "\"version\":\"$version\"" <<<"$health" || fail "unexpected health response: $health"
+info=$(api "$base/api/info")
+grep -q "\"version\":\"$version\"" <<<"$info" || fail "unexpected server info: $info"
 echo "ok: server ready, OpenCode $version (${runtime[0]:-default runtime})"
 
-[[ $(status "$base/global/health") == 401 ]] || fail "unauthenticated health request was not refused"
-[[ $(status --request POST --header 'content-type: application/json' --data '{}' "$base/session") == 401 ]] ||
+[[ $(status "$base/api/info") == 401 ]] || fail "unauthenticated info request was not refused"
+[[ $(status --request POST --header 'content-type: application/json' --data '{}' "$base/api/session") == 401 ]] ||
   fail "unauthenticated session request was not refused"
 echo "ok: requests without the password are refused"
 
-api --request POST --header 'content-type: application/json' --data '{}' "$base/session" |
-  python3 -I -c 'import json, sys; assert json.load(sys.stdin)["id"].startswith("ses_")'
+api --request POST --header 'content-type: application/json' --data '{}' "$base/api/session" |
+  python3 -I -c 'import json, sys; assert json.load(sys.stdin)["data"]["id"].startswith("ses_")'
 echo "ok: authenticated request created a session"
 
-api "$base/config" | python3 -I -c '
+# /api/config lists the configuration documents from lowest to highest priority.
+api "$base/api/config" | python3 -I -c '
 import json, sys
-config = json.load(sys.stdin)
-assert config["share"] == "disabled" and config["autoupdate"] is False, config
-assert config["permission"]["bash"] == "ask" and config["permission"]["webfetch"] == "ask", config'
+effective = {}
+for entry in json.load(sys.stdin):
+    if entry["type"] == "document":
+        effective.update({k: v for k, v in entry["info"].items() if k in ("share", "update")})
+assert effective == {"share": "disabled", "update": "disable"}, effective'
 echo "ok: effective configuration has sharing and auto-update off"
 
 docker exec "$name" touch /workspace/.smoke

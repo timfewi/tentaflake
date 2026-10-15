@@ -60,16 +60,16 @@ environment container (gVisor) ── opencode serve ── model calls → brok
 
 `images/runtime/Dockerfile` builds it. Everything it depends on is pinned in
 that file: the base is the `ubuntu-26.04` digest from `images/catalog.json`
-(never a tag), apt reads a dated Ubuntu snapshot, and the OpenCode release is
-downloaded by exact version and checked against a SHA-256. A test in
-`just fast` keeps the `FROM` line equal to the catalog pin. The container runs
-as user `agent` (UID 1000) with `/workspace` as its working directory and
-refuses to start without `OPENCODE_SERVER_PASSWORD`; it then serves
-`opencode serve` on port 4096.
+(never a tag), apt reads a dated Ubuntu snapshot, and OpenCode 2 is downloaded
+as its npm platform package by exact version and checked against a SHA-256. A
+test in `just fast` keeps the `FROM` line equal to the catalog pin. The
+container runs as user `agent` (UID 1000) with `/workspace` as its working
+directory and refuses to start without `OPENCODE_SERVER_PASSWORD`; it then
+serves `opencode serve` on port 4096.
 
 `images/runtime/opencode.json` is the base OpenCode configuration (found
-through `OPENCODE_CONFIG`): sharing and auto-update off, `bash` and `webfetch`
-on `ask`, and the model base URL and key read from `TENTAFLAKE_MODEL_BASE_URL`
+through `OPENCODE_CONFIG`): sharing and updates off, `shell` and `webfetch` on
+`ask`, and the model base URL and key read from `TENTAFLAKE_MODEL_BASE_URL`
 and `TENTAFLAKE_MODEL_API_KEY`. The generated per-environment configuration
 layers on top of it.
 

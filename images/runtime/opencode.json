@@ -1,17 +1,17 @@
 {
   "$schema": "https://opencode.ai/config.json",
   "share": "disabled",
-  "autoupdate": false,
-  "permission": {
-    "bash": "ask",
-    "webfetch": "ask",
-    "edit": "allow"
-  },
-  "provider": {
+  "update": "disable",
+  "permissions": [
+    { "action": "shell", "resource": "*", "effect": "ask" },
+    { "action": "webfetch", "resource": "*", "effect": "ask" },
+    { "action": "edit", "resource": "*", "effect": "allow" }
+  ],
+  "providers": {
     "broker": {
       "name": "Tentaflake broker",
-      "npm": "@ai-sdk/openai-compatible",
-      "options": {
+      "package": "aisdk:@ai-sdk/openai-compatible",
+      "settings": {
         "baseURL": "{env:TENTAFLAKE_MODEL_BASE_URL}",
         "apiKey": "{env:TENTAFLAKE_MODEL_API_KEY}"
       }

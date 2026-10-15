@@ -4,13 +4,13 @@
 # Base: the ubuntu-26.04 entry of images/catalog.json (repository@indexDigest).
 FROM docker.io/library/ubuntu@sha256:f144425ff09be612d6d9ad965196e9cdc23dae1f42110a8a11a3e9a8198759f7
 
-# Every pin of this image lives here: the apt snapshot date and the OpenCode
-# release with its SHA-256 per architecture (the x86-64 build is the baseline
-# one, which runs on every VPS CPU).
+# Every pin of this image lives here: the apt snapshot date and the OpenCode 2
+# release with the SHA-256 of its npm platform package per architecture (the
+# x86-64 build is the baseline one, which runs on every VPS CPU).
 ARG UBUNTU_SNAPSHOT=20261001T000000Z
-ARG OPENCODE_VERSION=1.19.0
-ARG OPENCODE_SHA256_AMD64=6334d70db3990721ea454357e9cf2573c8685524ad7769af9d52cbffb7008438
-ARG OPENCODE_SHA256_ARM64=e9841d43d3e1a8f36ed2691592d3b8b4fb097e606c8b559a277a1b845840e26b
+ARG OPENCODE_VERSION=2.0.29
+ARG OPENCODE_SHA256_AMD64=152c42ff57b15728f39e1d7b68a9c13b0635fe1c5e6dcccdc8b710955e4cef0b
+ARG OPENCODE_SHA256_ARM64=0af39e75dbdfacc20f8f531ef35fb4dcc0b44c08084203518614272f232283ae
 ARG TARGETARCH
 ARG DEBIAN_FRONTEND=noninteractive
 
@@ -38,15 +38,15 @@ EOF
 RUN <<EOF
 set -eu
 case "${TARGETARCH}" in
-  amd64) asset=linux-x64-baseline; sha256=${OPENCODE_SHA256_AMD64} ;;
-  arm64) asset=linux-arm64; sha256=${OPENCODE_SHA256_ARM64} ;;
+  amd64) package=cli-linux-x64-baseline; sha256=${OPENCODE_SHA256_AMD64} ;;
+  arm64) package=cli-linux-arm64; sha256=${OPENCODE_SHA256_ARM64} ;;
   *) echo "unsupported architecture: ${TARGETARCH}" >&2; exit 1 ;;
 esac
-curl --fail --silent --show-error --location --output /tmp/opencode.tar.gz \
-  "https://github.com/anomalyco/opencode/releases/download/v${OPENCODE_VERSION}/opencode-${asset}.tar.gz"
-echo "${sha256}  /tmp/opencode.tar.gz" | sha256sum --check --strict -
-tar --extract --gzip --file /tmp/opencode.tar.gz --directory /usr/local/bin opencode
-rm /tmp/opencode.tar.gz
+curl --fail --silent --show-error --location --output /tmp/opencode.tgz \
+  "https://registry.npmjs.org/@opencode/${package}/-/${package}-${OPENCODE_VERSION}.tgz"
+echo "${sha256}  /tmp/opencode.tgz" | sha256sum --check --strict -
+tar --extract --gzip --file /tmp/opencode.tgz --directory /usr/local/bin --strip-components=2 package/bin/opencode
+rm /tmp/opencode.tgz
 EOF
 
 # The base image ships an `ubuntu` user on UID/GID 1000; the agent takes it over.
