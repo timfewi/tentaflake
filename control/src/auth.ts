@@ -83,6 +83,13 @@ export interface Session {
   user: User;
 }
 
+/** A control-local capability; no cookie, CSRF token or session identity goes upstream. */
+export interface SessionAccess {
+  readonly signal: AbortSignal;
+  check(activity?: boolean): boolean;
+  release(): void;
+}
+
 const toUser = (row: Pick<UserRow, "id" | "username" | "role" | "created_at">): User => ({
   id: row.id,
   username: row.username,
@@ -96,6 +103,7 @@ export class Auth {
   private readonly idleMs: number;
   private readonly limiter: RateLimiter;
   private dummyHash: Promise<string> | undefined;
+  private readonly connections = new Map<string, Set<AbortController>>();
 
   constructor(
     private readonly db: Database,
@@ -249,6 +257,48 @@ export class Auth {
 
   logout(tokenHash: string): void {
     this.db.query("DELETE FROM sessions WHERE token_hash = ?").run(tokenHash);
+    const connections = this.connections.get(tokenHash);
+    this.connections.delete(tokenHash);
+    for (const connection of connections ?? []) connection.abort();
+  }
+
+  /** Registers before asynchronous connection setup; silent streams expire within one second. */
+  connect(tokenHash: string): SessionAccess {
+    const abort = new AbortController();
+    const connections = this.connections.get(tokenHash) ?? new Set<AbortController>();
+    this.connections.set(tokenHash, connections);
+    connections.add(abort);
+    let released = false;
+    const release = () => {
+      if (released) return;
+      released = true;
+      clearInterval(timer);
+      abort.signal.removeEventListener("abort", release);
+      connections.delete(abort);
+      if (connections.size === 0) this.connections.delete(tokenHash);
+    };
+    const check = (activity = false) => {
+      if (released || abort.signal.aborted) return false;
+      const row = this.db
+        .query("SELECT expires_at, last_seen_at FROM sessions WHERE token_hash = ?")
+        .get(tokenHash) as Pick<SessionRow, "expires_at" | "last_seen_at"> | null;
+      const now = this.now();
+      if (row === null || row.expires_at <= now || row.last_seen_at + this.idleMs <= now) {
+        this.logout(tokenHash);
+        return false;
+      }
+      if (activity) {
+        this.db
+          .query("UPDATE sessions SET last_seen_at = ? WHERE token_hash = ?")
+          .run(now, tokenHash);
+      }
+      return true;
+    };
+    const timer = setInterval(check, 1000);
+    timer.unref();
+    abort.signal.addEventListener("abort", release, { once: true });
+    check();
+    return { signal: abort.signal, check, release };
   }
 
   private setupToken(): string {

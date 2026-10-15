@@ -10,6 +10,7 @@ import {
   harness,
   newUser,
   origin,
+  signIn,
   until,
 } from "./helpers";
 
@@ -21,9 +22,9 @@ async function running(h: Harness, client: Client): Promise<Environment> {
 
 /** A signed-in owner with a running environment, and its API path prefix. */
 async function setup(h = harness()) {
-  const { user, client } = await newUser(h, "owner");
+  const { user, client, totpSecret } = await newUser(h, "owner");
   const env = await running(h, client);
-  return { h, user, client, env, path: `/api/v1/environments/${env.id}` };
+  return { h, user, client, totpSecret, env, path: `/api/v1/environments/${env.id}` };
 }
 
 const activity = (h: Harness, id: string) =>
@@ -419,6 +420,243 @@ describe("events", () => {
       expect(ended).toBe(true);
       await until(() => h.opencode.openStreams === 0, "the upstream stream to close");
     }
+  });
+});
+
+describe("login session streams", () => {
+  const minute = 60_000;
+  const event = 'data: {"type":"session.deleted","data":{"sessionID":"ses_fake1"}}\n\n';
+
+  for (const reason of ["logout", "absolute", "idle"] as const) {
+    for (const active of [false, true]) {
+      test(`${reason} revokes ${active ? "active" : "silent"} streams only for their login`, async () => {
+        const { h, client, totpSecret, env, path } = await setup(
+          harness({
+            sessionIdleMinutes: reason === "absolute" ? 120 : 60,
+            sessionAbsoluteHours: reason === "idle" ? 12 : 1,
+          }),
+        );
+        const openedAt = h.clock.now;
+        const shell = terminal(h, client, path);
+        expect(await shell.opened).toBe(true);
+        const response = await call(h, "GET", `${path}/events`, undefined, client);
+        const events = readEvents(response, 100);
+        if (active) {
+          shell.socket.send(JSON.stringify({ type: "input", data: "before\r" }));
+          await until(() => h.opencode.pty.input.length === 1, "initial input");
+          h.opencode.emit(event);
+        }
+        h.clock.now += 30 * minute;
+        const other = await signIn(h, "owner", totpSecret);
+        const otherShell = terminal(h, other, path);
+        expect(await otherShell.opened).toBe(true);
+        const otherResponse = await call(h, "GET", `${path}/events`, undefined, other);
+        const otherEvents = readEvents(otherResponse, 1);
+        if (reason === "logout") {
+          expect((await call(h, "DELETE", "/api/v1/session", undefined, client)).status).toBe(204);
+        } else {
+          h.clock.now = openedAt + 60 * minute;
+        }
+        if (active) {
+          // Even before the expiry timer fires, late input and output are refused.
+          shell.socket.send(JSON.stringify({ type: "input", data: "after\r" }));
+          h.opencode.output("late output");
+          h.opencode.emit(event);
+        }
+        await until(
+          () => h.opencode.openSockets === 1 && h.opencode.openStreams === 1,
+          "only the revoked login's upstream connections to close",
+        );
+        expect(await shell.closed).toEqual({ code: 1008, reason: "the login session ended" });
+        expect(await events).toMatchObject({
+          ended: true,
+          events: active ? [{ type: "session.deleted", sessionId: "ses_fake1" }] : [],
+        });
+        expect(shell.received.join("")).not.toContain("late output");
+        expect(h.opencode.pty.input).not.toContain("after\r");
+        await until(() => h.opencode.pty.removed.length === 1, "revoked PTY removal");
+        expect(h.environments.terminalOpen(env.id)).toBe(true);
+        expect(otherShell.socket.readyState).toBe(WebSocket.OPEN);
+        otherShell.socket.send(JSON.stringify({ type: "input", data: "still valid\r" }));
+        await until(() => h.opencode.pty.input.includes("still valid\r"), "other login input");
+        h.opencode.emit(event);
+        const received = await otherEvents;
+        expect(received.events).toEqual([{ type: "session.deleted", sessionId: "ses_fake1" }]);
+        await received.reader.cancel();
+        otherShell.socket.close();
+        expect((await call(h, "GET", "/api/v1/session", undefined, client)).status).toBe(401);
+        expect((await call(h, "GET", "/api/v1/session", undefined, other)).status).toBe(200);
+        for (const request of h.opencode.requests) {
+          const headers = JSON.stringify(request.headers);
+          for (const secret of [client.cookie, client.csrf, other.cookie, other.csrf]) {
+            expect(headers).not.toContain(secret as string);
+          }
+        }
+      });
+    }
+  }
+
+  for (const reason of ["logout", "absolute", "idle"] as const) {
+    for (const kind of ["events", "terminal"] as const) {
+      test(`a lone silent ${kind} connection ends on ${reason}`, async () => {
+        const { h, client, path } = await setup(
+          harness({
+            sessionIdleMinutes: reason === "absolute" ? 120 : 60,
+            sessionAbsoluteHours: reason === "idle" ? 12 : 1,
+          }),
+        );
+        const shell = kind === "terminal" ? terminal(h, client, path) : null;
+        if (shell !== null) expect(await shell.opened).toBe(true);
+        const response =
+          kind === "events" ? await call(h, "GET", `${path}/events`, undefined, client) : null;
+        const events = response === null ? null : readEvents(response, 1);
+        if (reason === "logout") {
+          expect((await call(h, "DELETE", "/api/v1/session", undefined, client)).status).toBe(204);
+        } else {
+          h.clock.now += 60 * minute;
+        }
+        await until(
+          () => h.opencode.openSockets === 0 && h.opencode.openStreams === 0,
+          "silent expiry without another connection",
+        );
+        if (shell !== null) expect((await shell.closed).code).toBe(1008);
+        if (events !== null) expect(await events).toMatchObject({ events: [], ended: true });
+      });
+    }
+  }
+
+  test("terminal input and resize refresh idle time for both streams, never absolute lifetime", async () => {
+    const { h, client, path } = await setup();
+    const started = h.clock.now;
+    const shell = terminal(h, client, path);
+    expect(await shell.opened).toBe(true);
+    const response = await call(h, "GET", `${path}/events`, undefined, client);
+    const events = readEvents(response, 1);
+    for (let step = 1; step <= 12; step++) {
+      h.clock.now = started + step * 59 * minute;
+      if (step % 2 === 1) {
+        shell.socket.send(JSON.stringify({ type: "input", data: `input ${step}\r` }));
+        await until(
+          () => h.opencode.pty.input.length === Math.ceil(step / 2),
+          "input to refresh idle time",
+        );
+      } else {
+        shell.socket.send(JSON.stringify({ type: "resize", rows: 30, cols: 90 }));
+        await until(
+          () => h.opencode.pty.resized.length === step / 2,
+          "resize to refresh idle time",
+        );
+      }
+    }
+    // Beyond the original idle deadline, both connections still work without HTTP polling.
+    h.opencode.emit(event);
+    const delivered = await events;
+    expect(delivered.events).toEqual([{ type: "session.deleted", sessionId: "ses_fake1" }]);
+    h.clock.now = started + 12 * 60 * minute;
+    shell.socket.send(JSON.stringify({ type: "input", data: "too late\r" }));
+    await until(
+      () => h.opencode.openSockets === 0 && h.opencode.openStreams === 0,
+      "absolute expiry",
+    );
+    expect(h.opencode.pty.input).not.toContain("too late\r");
+    expect((await delivered.reader.read()).done).toBe(true);
+  });
+
+  test("upstream output and heartbeats do not refresh login idle time", async () => {
+    const { h, client, path } = await setup();
+    const started = h.clock.now;
+    const shell = terminal(h, client, path);
+    expect(await shell.opened).toBe(true);
+    const response = await call(h, "GET", `${path}/events`, undefined, client);
+    const events = readEvents(response, 1);
+    h.clock.now += 59 * minute;
+    h.opencode.output("output without input");
+    h.opencode.emit(`: heartbeat\n\n${event}`);
+    await until(() => shell.received.includes("output without input"), "terminal output");
+    const delivered = await events;
+    expect(delivered.events).toEqual([{ type: "session.deleted", sessionId: "ses_fake1" }]);
+    h.clock.now = started + 60 * minute;
+    await until(() => h.opencode.openSockets === 0 && h.opencode.openStreams === 0, "idle expiry");
+    expect((await delivered.reader.read()).done).toBe(true);
+  });
+
+  for (const stage of ["beforePty", "beforeConnect", "beforeEvents"] as const) {
+    for (const reason of ["logout", "absolute", "idle"] as const) {
+      test(`${reason} during ${stage} cannot leave an authorized connection or PTY`, async () => {
+        const { h, client, env, path } = await setup(
+          harness({
+            sessionIdleMinutes: reason === "absolute" ? 120 : 60,
+            sessionAbsoluteHours: reason === "idle" ? 12 : 1,
+          }),
+        );
+        let entered = false;
+        let resumed = false;
+        const resume = Promise.withResolvers<void>();
+        h.opencode[stage] = async () => {
+          entered = true;
+          await resume.promise;
+          resumed = true;
+        };
+        const pending =
+          stage === "beforeEvents"
+            ? call(h, "GET", `${path}/events`, undefined, client)
+            : terminal(h, client, path).opened;
+        try {
+          await until(() => entered, "upstream connection establishment");
+          if (reason === "logout") {
+            expect((await call(h, "DELETE", "/api/v1/session", undefined, client)).status).toBe(
+              204,
+            );
+          } else {
+            h.clock.now += 60 * minute;
+          }
+          // Creation must return its PTY ID for cleanup; other pending transports can abort immediately.
+          if (stage !== "beforePty") {
+            const result = await pending;
+            if (result instanceof Response) expect(result.status).toBe(401);
+            else expect(result).toBe(false);
+            if (stage === "beforeEvents") {
+              await until(
+                () => h.opencode.abortedEvents === 1,
+                "the pending upstream request to disconnect",
+              );
+            }
+          }
+        } finally {
+          resume.resolve();
+        }
+        await until(() => resumed, "upstream establishment to finish");
+        const result = await pending;
+        if (result instanceof Response) expect(result.status).toBe(401);
+        else expect(result).toBe(false);
+        if (stage !== "beforeEvents") {
+          await until(() => h.opencode.pty.removed.length === 1, "pending PTY removal");
+        }
+        await until(
+          () => h.opencode.openSockets === 0 && h.opencode.openStreams === 0,
+          "pending upstream cleanup",
+        );
+        expect(h.environments.terminalOpen(env.id)).toBe(false);
+      });
+    }
+  }
+
+  test("logout closes a silent terminal and event stream and releases upstream resources", async () => {
+    const { h, client, env, path } = await setup();
+    const shell = terminal(h, client, path);
+    expect(await shell.opened).toBe(true);
+    const response = await call(h, "GET", `${path}/events`, undefined, client);
+    expect(response.status).toBe(200);
+    const events = readEvents(response, 1);
+    expect((await call(h, "DELETE", "/api/v1/session", undefined, client)).status).toBe(204);
+    await until(
+      () => h.opencode.openSockets === 0 && h.opencode.openStreams === 0,
+      "revoked upstream connections to close",
+    );
+    expect(await shell.closed).toEqual({ code: 1008, reason: "the login session ended" });
+    expect(await events).toMatchObject({ events: [], ended: true });
+    await until(() => h.opencode.pty.removed.length === 1, "revoked PTY removal");
+    expect(h.environments.terminalOpen(env.id)).toBe(false);
   });
 });
 

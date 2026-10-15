@@ -217,8 +217,16 @@ export function startServer(
         ),
       },
       "/api/v1/environments/:id/events": {
-        GET: authed(async (request, { user }, server) => {
-          const events = await agent.events(user.id, request.params.id);
+        GET: authed(async (request, { user, tokenHash }, server) => {
+          const access = auth.connect(tokenHash);
+          let events: ReadableStream<Uint8Array>;
+          try {
+            events = await agent.events(user.id, request.params.id, access);
+          } catch (error) {
+            access.release();
+            if (access.signal.aborted) throw new HttpError(401, "unauthenticated", "sign in first");
+            throw error;
+          }
           server.timeout(request, 0);
           return new Response(events, {
             headers: { "content-type": "text/event-stream", "cache-control": "no-store" },
@@ -248,13 +256,21 @@ export function startServer(
         }),
       },
       "/api/v1/environments/:id/terminal": {
-        GET: authed(async (request, { user }, server) => {
+        GET: authed(async (request, { user, tokenHash }, server) => {
           // The WebSocket handshake is a GET, but it opens a shell: Origin is checked.
           if (request.headers.get("origin") !== config.origin) throw notOrigin();
           if (request.headers.get("upgrade")?.toLowerCase() !== "websocket") {
             throw new HttpError(400, "invalid_request", "expected a WebSocket upgrade");
           }
-          const terminal = await agent.terminal(user.id, request.params.id);
+          const access = auth.connect(tokenHash);
+          let terminal: Terminal;
+          try {
+            terminal = await agent.terminal(user.id, request.params.id, access);
+          } catch (error) {
+            access.release();
+            if (access.signal.aborted) throw new HttpError(401, "unauthenticated", "sign in first");
+            throw error;
+          }
           if (server.upgrade(request, { data: terminal })) return undefined;
           terminal.close();
           throw new HttpError(400, "invalid_request", "the WebSocket upgrade failed");

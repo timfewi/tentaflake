@@ -14,6 +14,7 @@ import type {
   PromptResponse,
   TerminalMessage,
 } from "./api";
+import type { SessionAccess } from "./auth";
 import { isObject } from "./config";
 import type { Environments } from "./environments";
 import { HttpError } from "./http";
@@ -44,6 +45,9 @@ const ids = {
 const replies: readonly PermissionReply[] = ["once", "always", "reject"];
 
 const unexpected = () => new OpenCodeError("OpenCode sent an unexpected answer");
+const requireAccess = (access: SessionAccess) => {
+  if (!access.check()) throw new HttpError(401, "unauthenticated", "sign in first");
+};
 const object = (value: unknown): Record<string, unknown> => {
   if (!isObject(value)) throw unexpected();
   return value;
@@ -143,10 +147,10 @@ class OpenCode {
     await (await this.request(method, path, options)).body?.cancel();
   }
 
-  async socket(path: string): Promise<UpstreamSocket> {
+  async socket(path: string, signal: AbortSignal): Promise<UpstreamSocket> {
     const url = `${this.url.replace(/^http/, "ws")}${path}`;
     try {
-      return await UpstreamSocket.connect(url, this.headers, upstreamFrameLimit, timeoutMs);
+      return await UpstreamSocket.connect(url, this.headers, upstreamFrameLimit, timeoutMs, signal);
     } catch (error) {
       throw new OpenCodeError(
         `OpenCode WebSocket ${path} did not open: ${(error as Error).message}`,
@@ -275,6 +279,7 @@ export class Terminal {
   private closed: [code: number, reason: string] | null = null;
   // Connecting closes the terminal at once if the environment stopped meanwhile.
   private release = () => {};
+  private readonly revoked = () => this.close(1008, "the login session ended");
 
   constructor(
     private readonly environments: Environments,
@@ -282,16 +287,22 @@ export class Terminal {
     private readonly opencode: OpenCode,
     private readonly ptyId: string,
     private readonly upstream: UpstreamSocket,
+    private readonly access: SessionAccess,
   ) {
     this.release = environments.connect(environmentId, {
       terminal: true,
       close: () => this.close(1000, "the environment stopped"),
     });
+    if (this.closed === null) {
+      access.signal.addEventListener("abort", this.revoked, { once: true });
+      if (!access.check()) this.revoked();
+    }
   }
 
   /** The browser's WebSocket is open; the output flows from now on. */
   open(socket: TerminalSocket): void {
     this.socket = socket;
+    if (!this.access.check() && this.closed === null) this.revoked();
     if (this.closed !== null) {
       socket.close(...this.closed);
       return;
@@ -307,13 +318,16 @@ export class Terminal {
 
   /** A frame from the browser: a JSON TerminalMessage. */
   message(frame: string | Buffer): void {
+    if (this.closed !== null || !this.access.check()) return;
     const message = terminalMessage(frame);
     if (message === null) {
       this.close(1008, "expected a JSON input or resize message");
     } else if (message.type === "input") {
+      if (message.data !== "" && !this.access.check(true)) return;
       this.upstream.send(message.data);
       this.environments.touch(this.environmentId);
     } else {
+      if (!this.access.check(true)) return;
       const size = { rows: message.rows, cols: message.cols };
       this.opencode
         .send("PUT", `/api/pty/${this.ptyId}`, { body: { size } })
@@ -323,6 +337,7 @@ export class Terminal {
 
   // In frames within the limit, without splitting a surrogate pair.
   private output(socket: TerminalSocket, output: string): void {
+    if (this.closed !== null || !this.access.check()) return;
     for (let start = 0; start < output.length; ) {
       let end = Math.min(start + outputFrameChars, output.length);
       const last = output.charCodeAt(end - 1);
@@ -335,6 +350,8 @@ export class Terminal {
   close(code = 1000, reason = ""): void {
     if (this.closed !== null) return;
     this.closed = [code, reason];
+    this.access.signal.removeEventListener("abort", this.revoked);
+    this.access.release();
     this.release();
     this.upstream.close();
     if (this.socket?.readyState === WebSocket.OPEN) this.socket.close(code, reason);
@@ -466,12 +483,17 @@ export class Agent {
    * validated and reduced to their fields. It ends with an
    * `environment.stopped` event when the environment stops.
    */
-  async events(ownerId: string, id: string): Promise<ReadableStream<Uint8Array>> {
+  async events(
+    ownerId: string,
+    id: string,
+    access: SessionAccess,
+  ): Promise<ReadableStream<Uint8Array>> {
     const opencode = await this.opencode(ownerId, id);
+    requireAccess(access);
     const abort = new AbortController();
     const timer = setTimeout(() => abort.abort(), timeoutMs);
     const upstream = await opencode
-      .request("GET", "/api/event", { signal: abort.signal })
+      .request("GET", "/api/event", { signal: AbortSignal.any([abort.signal, access.signal]) })
       .finally(() => clearTimeout(timer));
     if (upstream.body === null) throw unexpected();
     const reader = upstream.body.getReader();
@@ -481,12 +503,19 @@ export class Agent {
     let skipping = false;
     let ended = false;
     let release = () => {};
+    let revoked = () => {};
+    const cleanup = () => {
+      access.signal.removeEventListener("abort", revoked);
+      access.release();
+      release();
+      abort.abort();
+      void reader.cancel().catch(() => {});
+    };
 
     const end = (controller: ReadableStreamDefaultController<Uint8Array>, last?: AgentEvent) => {
       if (ended) return;
       ended = true;
-      release();
-      abort.abort();
+      cleanup();
       if (last !== undefined) controller.enqueue(encoder.encode(sse(last)));
       controller.close();
     };
@@ -499,10 +528,17 @@ export class Agent {
           terminal: false,
           close: () => end(controller, { type: "environment.stopped" }),
         });
+        if (!ended) {
+          revoked = () => end(controller);
+          access.signal.addEventListener("abort", revoked, { once: true });
+          if (!access.check()) end(controller);
+        }
       },
       pull: async (controller) => {
         while (!ended) {
           const chunk = await reader.read().catch(() => ({ done: true, value: undefined }));
+          if (ended) return;
+          if (!access.check()) return end(controller);
           if (chunk.done) return end(controller);
           buffer += decoder.decode(chunk.value, { stream: true }).replaceAll("\r", "");
           let output = "";
@@ -521,20 +557,22 @@ export class Agent {
       },
       cancel: () => {
         ended = true;
-        release();
-        abort.abort();
+        cleanup();
       },
     });
   }
 
   /** Opens a shell in the environment as its user (1000), in /workspace. */
-  async terminal(ownerId: string, id: string): Promise<Terminal> {
+  async terminal(ownerId: string, id: string, access: SessionAccess): Promise<Terminal> {
     const opencode = await this.opencode(ownerId, id);
+    requireAccess(access);
+    // Let a pending creation return its ID even after revocation so it can be removed.
     const pty = await opencode.json("POST", "/api/pty", { body: { title: "tentaflake" } });
     const ptyId = string(object(pty.data).id, ids.pty);
     try {
-      const upstream = await opencode.socket(`/api/pty/${ptyId}/connect`);
-      return new Terminal(this.environments, id, opencode, ptyId, upstream);
+      requireAccess(access);
+      const upstream = await opencode.socket(`/api/pty/${ptyId}/connect`, access.signal);
+      return new Terminal(this.environments, id, opencode, ptyId, upstream, access);
     } catch (error) {
       opencode.send("DELETE", `/api/pty/${ptyId}`).catch(() => {});
       throw error;

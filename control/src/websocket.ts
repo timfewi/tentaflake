@@ -35,6 +35,7 @@ export class UpstreamSocket {
     headers: Record<string, string>,
     limit: number,
     timeoutMs: number,
+    signal?: AbortSignal,
   ): Promise<UpstreamSocket> {
     const { host, hostname, port, pathname, search } = new URL(url);
     const key = randomBytes(16).toString("base64");
@@ -49,14 +50,18 @@ export class UpstreamSocket {
       ...Object.entries(headers).map(([name, value]) => `${name}: ${value}`),
     ];
     return new Promise((resolve, reject) => {
+      signal?.throwIfAborted();
       const socket = connect({ host: hostname, port: Number(port || 80) });
       let head = Buffer.alloc(0);
       const fail = (reason: string) => {
         clearTimeout(timer);
+        signal?.removeEventListener("abort", onAbort);
         socket.destroy();
         reject(new Error(reason));
       };
       const timer = setTimeout(() => fail("no answer"), timeoutMs);
+      const onAbort = () => fail("the connection was revoked");
+      signal?.addEventListener("abort", onAbort, { once: true });
       const onError = (error: Error) => fail(error.message);
       const onClose = () => fail("the connection closed");
       const onData = (chunk: Buffer) => {
@@ -72,6 +77,7 @@ export class UpstreamSocket {
         );
         if (!/^HTTP\/1\.1 101 /.test(status) || !accepted) return fail("the upgrade was refused");
         clearTimeout(timer);
+        signal?.removeEventListener("abort", onAbort);
         socket.off("data", onData).off("error", onError).off("close", onClose);
         resolve(new UpstreamSocket(socket, head.subarray(end + 4), limit));
       };
