@@ -78,7 +78,37 @@ with the isolation an environment gets (gVisor `runsc` when Docker has it,
 dropped capabilities, read-only root, memory and PID limits) and checks the
 HTTP API: password required, a session can be created, the effective
 configuration matches. It makes no model call. It needs Docker, so CI runs it
-only when `images/runtime/` or the script changes (`runtime-smoke.yml`).
+only when `images/runtime/`, the script or `control/` changes
+(`runtime-smoke.yml`), followed by the control service's lifecycle test against
+the image it built (`just control-integration`).
+
+## Control service
+
+`control/` is TypeScript on Bun using its built-ins (`Bun.serve`, `bun:sqlite`,
+`Bun.password`) and no runtime dependencies. `bun run control/src/main.ts
+<config.json>` starts it with one JSON file like `control/config.example.json`:
+listen address (loopback by default), the exact browser origin, the paths of
+the database, host key and setup token, the Docker socket, the runtime image
+and the environment limits. The file holds no secrets. The host key file holds
+32 random bytes (mode `0600`) that encrypt the TOTP secrets and OpenCode
+passwords in the database.
+
+One SQLite file with numbered migrations holds users (role `admin` or
+`member`, Argon2id password hash, TOTP secret), sessions (hashed token, CSRF
+token, expiry) and environments. Every environment has an owner, and every
+query for one is scoped to it. The API and its rules are in [api.md](api.md).
+
+An environment is a container of the runtime image, created through the Docker
+Engine API on its Unix socket: `runsc`, user 1000, all capabilities dropped,
+`no-new-privileges`, a read-only root with tmpfs for `/tmp` and the home
+directory, the configured memory, CPU and PID limits, a named workspace volume
+on `/workspace` and the label `io.tentaflake.environment=<id>`. It gets a random
+`OPENCODE_SERVER_PASSWORD` and the generated OpenCode configuration as
+`OPENCODE_CONFIG_CONTENT`, which OpenCode ranks above an `opencode.json` in the
+workspace. The network mode picks one of two networks the service owns:
+`tentaflake-model-only` (internal, no route out; the broker will join it) or
+`tentaflake-open`. A record exists while Docker may hold resources for the
+environment, and a failed Docker call is an error, never a silent success.
 
 ## Users and access
 
@@ -142,9 +172,9 @@ works, and the README then lists where it was verified.
 | Broker crate and package | In the repository; not yet wired to environments |
 | Base-image catalog (Ubuntu 26.04 pin) | In the repository |
 | Runtime image (Ubuntu + OpenCode) | In the repository (smoke-tested in CI when the image changes) |
-| Control service and its API | Planned |
+| Control service and its API: users, setup, login, environment lifecycle | In the repository; no model access or session proxy yet (lifecycle tested under `runsc` in CI when it changes) |
 | UI in `ui/` | Planned |
-| Setup wizard, HTTPS, login | Planned |
+| Setup wizard, HTTPS | Planned |
 | VPS image and updates | Planned |
 
 ## Out of scope for 0.5
