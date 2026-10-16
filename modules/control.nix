@@ -61,6 +61,7 @@ let
     name = "tentaflake-setup";
     runtimeInputs = with pkgs; [
       coreutils
+      diffutils
       gawk
       iproute2
       jq
