@@ -238,6 +238,20 @@ describe("Docker failures", () => {
     });
   }
 
+  test("a missing runtime image refuses creation until it is built", async () => {
+    const h = harness();
+    const { client } = await newUser(h, "member");
+    h.docker.images.clear();
+    const response = await create(h, client);
+    expect(response.status).toBe(503);
+    expect(await response.json()).toMatchObject({ error: "unavailable" });
+    expect(await list(h, client)).toEqual([]);
+    expect(h.docker.volumes.size).toBe(0);
+
+    h.docker.images.add("runtime:test");
+    await created(h, client);
+  });
+
   test("in the cleanup leave a failed record that its owner can delete", async () => {
     const h = harness();
     const { client } = await newUser(h, "member");

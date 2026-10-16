@@ -273,6 +273,7 @@ export type ErrorCode =
   | "conflict"
   | "too_large"
   | "rate_limited"
+  | "unavailable"
   | "docker"
   | "opencode"
   | "internal";

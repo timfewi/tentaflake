@@ -96,7 +96,9 @@ only this API, and so can other clients. Request and response types live in
   workspace and its sessions.
 
 Errors answer `{ "error": "<code>", "message": "…" }`. A failed Docker call
-answers `502`; the environment's recorded state stays accurate.
+answers `502`; the environment's recorded state stays accurate. Creating an
+environment answers `503` (`unavailable`) while the runtime image is missing,
+which on the host means it is still being built.
 
 ## Endpoints
 

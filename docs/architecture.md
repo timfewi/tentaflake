@@ -266,7 +266,8 @@ the boot menu for a rollback.
   service created that network it fails and starts again.
 - `tentaflake-runtime-image` builds the runtime image from `images/runtime`
   with Docker and tags it with the store hash of those inputs, so a host
-  update rebuilds it only when they changed.
+  update rebuilds it only when they changed. The UI works during the build;
+  creating an environment answers that the image is still being built.
 - Caddy serves the site with automatic HTTPS (HTTP/1.1 and HTTP/2; plain HTTP
   only redirects) and proxies it to the control service. Its admin API is a
   Unix socket only Caddy can use, so no other local process can reconfigure

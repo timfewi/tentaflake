@@ -269,6 +269,14 @@ export class Environments {
     ) {
       throw new HttpError(409, "conflict", "an environment with this name exists");
     }
+    // The host builds the image after the first boot and after updates that change it.
+    if (!(await this.docker.imageExists(this.config.image))) {
+      throw new HttpError(
+        503,
+        "unavailable",
+        "the runtime image is still being built: try again in a few minutes",
+      );
+    }
     const id = randomUUID();
     const now = this.now();
     const row: EnvironmentRow = {

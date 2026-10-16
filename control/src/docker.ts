@@ -38,6 +38,8 @@ export interface Docker {
     name: string,
   ): Promise<{ internal: boolean; gateway: string | null; bridge: string | null } | null>;
   createNetwork(name: string, internal: boolean, bridge: string): Promise<void>;
+  /** Whether the image is present locally (Docker does not pull on create). */
+  imageExists(name: string): Promise<boolean>;
   createVolume(name: string, labels: Record<string, string>): Promise<void>;
   /** Succeeds if the volume is already gone. */
   removeVolume(name: string): Promise<void>;
@@ -109,6 +111,9 @@ export function dockerClient(socket: string): Docker {
         Internal: internal,
         Options: { [bridgeOption]: bridge },
       });
+    },
+    async imageExists(name) {
+      return (await call("GET", `/images/${segment(name)}/json`, undefined, [404])).ok;
     },
     async createVolume(name, labels) {
       await call("POST", "/volumes/create", { Name: name, Labels: labels });

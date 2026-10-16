@@ -30,6 +30,7 @@ export const defaultDomain = "203-0-113-7.sslip.io";
 export class FakeDocker implements Docker {
   readonly networks = new Map<string, { internal: boolean; bridge: string }>();
   readonly volumes = new Set<string>();
+  readonly images = new Set(["runtime:test"]);
   readonly containers = new Map<string, { name: string; spec: ContainerSpec; running: boolean }>();
   readonly failing = new Set<keyof Docker>();
   /** Runs when a container stops or is removed; Docker answers after it. */
@@ -44,6 +45,10 @@ export class FakeDocker implements Docker {
   async createNetwork(name: string, internal: boolean, bridge: string) {
     this.check("createNetwork");
     this.networks.set(name, { internal, bridge });
+  }
+  async imageExists(name: string) {
+    this.check("imageExists");
+    return this.images.has(name);
   }
   async createVolume(name: string) {
     this.check("createVolume");
