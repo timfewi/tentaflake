@@ -29,6 +29,7 @@ this pinned environment automatically; `just list` lists them.
 | `just check` | `fast` plus `nix flake check --no-build` (the CI gate) |
 | `just ui-e2e` | Browser journeys in headless Chromium against the built UI and the control service with a fake Docker and OpenCode (not in CI) |
 | `just build` | Build the host closure (explicit, not in CI) |
+| `nix build .#image-qcow2` | Build the VPS disk image, a VM run (explicit, not in CI; see the README) |
 
 CI runs `just check` only, plus the path-filtered `runtime-smoke.yml` (Docker,
 `just runtime-smoke`, then `just control-integration`) when `images/runtime/**`

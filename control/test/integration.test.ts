@@ -19,6 +19,7 @@ import { dockerClient } from "../src/docker";
 import { containerName, Environments, ensureNetworks, homeVolume } from "../src/environments";
 import { Keys } from "../src/keys";
 import { sessionCookie, startServer } from "../src/server";
+import { Site } from "../src/site";
 
 // Real Docker with runsc, the runtime image named by TENTAFLAKE_INTEGRATION_IMAGE
 // and the broker binary named by TENTAFLAKE_INTEGRATION_BROKER;
@@ -162,7 +163,8 @@ describe.skipIf(image === "" || brokerBinary === "")("with Docker, runsc and the
     environments = new Environments(db, docker, secrets, files, { image, limits, brokerUrl });
     agent = new Agent(environments);
     server = startServer(
-      { hostname: "127.0.0.1", port: 0, origin },
+      { hostname: "127.0.0.1", port: 0 },
+      new Site({ origin, siteFile: null, domainFile: null }),
       auth,
       environments,
       keys,

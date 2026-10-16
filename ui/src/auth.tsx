@@ -1,6 +1,7 @@
 import qrcode from "qrcode-generator";
 import { type ReactNode, useMemo, useState } from "react";
-import { api, type User } from "./client";
+import { api, type DomainStatus, type User } from "./client";
+import { DomainForm } from "./domain";
 import { Form, Icon, Notice, type Spec } from "./ui";
 
 const Card = ({ title, step, children }: { title: string; step?: string; children: ReactNode }) => (
@@ -72,16 +73,31 @@ export function Login({ onDone }: { onDone(user: User): void }) {
   );
 }
 
-/** First-run wizard: the admin account, then the authenticator, confirmed by a first sign-in. */
+/**
+ * First-run wizard: the admin account, then the authenticator, confirmed by a
+ * first sign-in, then on the host the domain.
+ */
 export function Setup({ onDone }: { onDone(user: User): void }) {
   const [enrolled, setEnrolled] = useState<{
     uri: string;
     username: string;
     password: string;
   } | null>(null);
+  const [signedIn, setSignedIn] = useState<{ user: User; domain: DomainStatus } | null>(null);
+  if (signedIn !== null) {
+    return (
+      <Card title="Choose the domain" step="Step 3: your own domain, if you have one">
+        <DomainForm status={signedIn.domain} action="Use this domain">
+          <button type="button" className="btn" onClick={() => onDone(signedIn.user)}>
+            Keep https://{signedIn.domain.domain}
+          </button>
+        </DomainForm>
+      </Card>
+    );
+  }
   if (enrolled === null) {
     return (
-      <Card title="Set up Tentaflake" step="Step 1 of 2: the admin account">
+      <Card title="Set up Tentaflake" step="Step 1: the admin account">
         <Form
           action="Create admin"
           icon="check"
@@ -111,7 +127,7 @@ export function Setup({ onDone }: { onDone(user: User): void }) {
     );
   }
   return (
-    <Card title="Set up your authenticator" step="Step 2 of 2: confirm with a code">
+    <Card title="Set up your authenticator" step="Step 2: confirm with a code">
       <Notice tone="warn">
         Scan the code with an authenticator app, or enter the secret. It is shown only now and
         cannot be recovered: without it you cannot sign in.
@@ -128,7 +144,10 @@ export function Setup({ onDone }: { onDone(user: User): void }) {
         ]}
         onSubmit={async ({ code = "" }) => {
           const { username, password } = enrolled;
-          onDone((await api.login({ username, password, code })).user);
+          const { user } = await api.login({ username, password, code });
+          const domain = await api.domain();
+          if (domain.configurable) setSignedIn({ user, domain });
+          else onDone(user);
         }}
       />
     </Card>

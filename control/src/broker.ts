@@ -1,5 +1,13 @@
 import type { Database } from "bun:sqlite";
-import { mkdirSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chownSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 import type { Provider } from "./api";
 import { randomToken, type Secrets, sha256 } from "./crypto";
@@ -29,6 +37,8 @@ export class BrokerFiles {
     private readonly db: Database,
     private readonly secrets: Secrets,
     private readonly directory: string,
+    /** The broker's user and group when it runs as another user: each file is handed to it. */
+    private readonly owner: Owner | null = null,
   ) {}
 
   /**
@@ -79,6 +89,23 @@ export class BrokerFiles {
   private write(path: string, content: string): void {
     const temporary = `${path}.${randomToken(9)}.tmp`;
     writeFileSync(temporary, content, { mode: 0o600, flag: "wx" });
+    if (this.owner !== null) chownSync(temporary, this.owner.uid, this.owner.gid);
     renameSync(temporary, path);
   }
+}
+
+export interface Owner {
+  uid: number;
+  gid: number;
+}
+
+/** A local user's uid and primary gid, from the passwd file. */
+export function owner(name: string, passwd = "/etc/passwd"): Owner {
+  const fields = readFileSync(passwd, "utf8")
+    .split("\n")
+    .map((line) => line.split(":"))
+    .find(([user]) => user === name);
+  const [uid, gid] = [fields?.[2] ?? "", fields?.[3] ?? ""];
+  if (!/^\d+$/.test(uid) || !/^\d+$/.test(gid)) throw new Error(`no such user: ${name}`);
+  return { uid: Number(uid), gid: Number(gid) };
 }

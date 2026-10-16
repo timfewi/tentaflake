@@ -1,8 +1,8 @@
 import { describe, expect, spyOn, test } from "bun:test";
-import { existsSync, readFileSync, rmSync, statSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import type { Environment, KeyList, ModelKey } from "../src/api";
-import { BrokerFiles } from "../src/broker";
+import { BrokerFiles, owner } from "../src/broker";
 import { sha256 } from "../src/crypto";
 import {
   type Client,
@@ -242,6 +242,28 @@ describe("broker files", () => {
       expect((await call(h, "DELETE", path, undefined, client)).status).toBe(204);
     } finally {
       errors.mockRestore();
+    }
+  });
+
+  test("go to the broker's user, found in the passwd file", async () => {
+    const h = harness();
+    const { client } = await newUser(h, "member");
+    const env = await environment(h, client);
+    const [uid, gid] = [process.getuid?.() ?? 0, process.getgid?.() ?? 0];
+    const passwd = join(dirname(h.brokerDirectory), "passwd");
+    writeFileSync(
+      passwd,
+      `root:x:0:0::/:/bin/sh\nbroker:x:${uid}:${gid}::/:/bin/false\nempty:x::1::/:\n`,
+    );
+    expect(owner("broker", passwd)).toEqual({ uid, gid });
+    expect(() => owner("empty", passwd)).toThrow("no such user: empty");
+    expect(() => owner("nobody", passwd)).toThrow("no such user: nobody");
+
+    rmSync(h.brokerDirectory, { recursive: true });
+    new BrokerFiles(h.db, h.secrets, h.brokerDirectory, { uid, gid }).sync();
+    for (const file of ["routes.json", `${env.id}.key`]) {
+      expect(statSync(join(h.brokerDirectory, file))).toMatchObject({ uid, gid });
+      expect(mode(join(h.brokerDirectory, file))).toBe(0o600);
     }
   });
 

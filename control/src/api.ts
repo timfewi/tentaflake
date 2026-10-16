@@ -33,6 +33,22 @@ export interface SetupResponse {
   otpauthUri: string;
 }
 
+/** The domain the service answers on; GET and PUT /api/v1/domain. */
+export interface DomainStatus {
+  domain: string;
+  /** True when it was chosen in setup, false for the name derived from the server's address. */
+  custom: boolean;
+  /** The server's public IPv4 address, which a chosen domain must resolve to; null if unknown. */
+  address: string | null;
+  /** False when the service configuration fixes the origin. */
+  configurable: boolean;
+}
+
+export interface DomainRequest {
+  /** A host name such as agents.example.com; null or empty returns to the derived name. */
+  domain: string | null;
+}
+
 export interface LoginRequest {
   username: string;
   password: string;
@@ -249,6 +265,7 @@ export type ErrorCode =
   | "invalid_credentials"
   | "origin_mismatch"
   | "csrf_mismatch"
+  | "forbidden"
   | "setup_unavailable"
   | "invalid_setup_token"
   | "setup_complete"
@@ -256,6 +273,7 @@ export type ErrorCode =
   | "conflict"
   | "too_large"
   | "rate_limited"
+  | "unavailable"
   | "docker"
   | "opencode"
   | "internal";

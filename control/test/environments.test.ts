@@ -238,6 +238,20 @@ describe("Docker failures", () => {
     });
   }
 
+  test("a missing runtime image refuses creation until it is built", async () => {
+    const h = harness();
+    const { client } = await newUser(h, "member");
+    h.docker.images.clear();
+    const response = await create(h, client);
+    expect(response.status).toBe(503);
+    expect(await response.json()).toMatchObject({ error: "unavailable" });
+    expect(await list(h, client)).toEqual([]);
+    expect(h.docker.volumes.size).toBe(0);
+
+    h.docker.images.add("runtime:test");
+    await created(h, client);
+  });
+
   test("in the cleanup leave a failed record that its owner can delete", async () => {
     const h = harness();
     const { client } = await newUser(h, "member");
@@ -323,19 +337,21 @@ describe("Docker client", () => {
 });
 
 describe("networks", () => {
-  test("are created once, model-only without a route out", async () => {
+  test("are created once, model-only without a route out, on the bridges the host firewall names", async () => {
     const docker = new FakeDocker();
     expect(await ensureNetworks(docker)).toBe("192.0.2.1");
     await ensureNetworks(docker);
     expect([...docker.networks]).toEqual([
-      ["tentaflake-model-only", true],
-      ["tentaflake-open", false],
+      ["tentaflake-model-only", { internal: true, bridge: "tf-model-only" }],
+      ["tentaflake-open", { internal: false, bridge: "tf-open" }],
     ]);
   });
 
-  test("an existing model-only network with a route out is refused", async () => {
+  test("an existing network with a route out or another bridge is refused", async () => {
     const docker = new FakeDocker();
-    docker.networks.set("tentaflake-model-only", false);
+    docker.networks.set("tentaflake-model-only", { internal: false, bridge: "tf-model-only" });
     await expect(ensureNetworks(docker)).rejects.toThrow("tentaflake-model-only");
+    docker.networks.set("tentaflake-model-only", { internal: true, bridge: "br-0123456789ab" });
+    await expect(ensureNetworks(docker)).rejects.toThrow("br-0123456789ab");
   });
 });

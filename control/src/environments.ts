@@ -20,26 +20,29 @@ import { HttpError } from "./http";
 import { providers } from "./keys";
 import { mcpNamePattern, mcpSecretWarning, opencodeMcp, parseMcpServer } from "./mcp";
 
-/** The Docker networks the service owns; each environment joins one of them. */
-export const networks: Record<NetworkMode, { name: string; internal: boolean }> = {
-  // No route out of the host; the broker joins this network.
-  "model-only": { name: "tentaflake-model-only", internal: true },
-  open: { name: "tentaflake-open", internal: false },
+/**
+ * The Docker networks the service owns; each environment joins one of them.
+ * The host firewall names their bridges: it opens the broker port on them only.
+ */
+export const networks: Record<NetworkMode, { name: string; internal: boolean; bridge: string }> = {
+  // No route out of the host; the broker listens on its gateway address.
+  "model-only": { name: "tentaflake-model-only", internal: true, bridge: "tf-model-only" },
+  open: { name: "tentaflake-open", internal: false, bridge: "tf-open" },
 };
 
 /**
  * Creates missing networks and refuses an existing one with the wrong
- * `internal` flag. Returns the model-only network's gateway: the host address
- * the broker listens on, which environments on either network reach.
+ * `internal` flag or bridge. Returns the model-only network's gateway: the
+ * host address the broker listens on, which environments on either network reach.
  */
 export async function ensureNetworks(docker: Docker): Promise<string> {
-  for (const { name, internal } of Object.values(networks)) {
+  for (const { name, internal, bridge } of Object.values(networks)) {
     const existing = await docker.network(name);
     if (existing === null) {
-      await docker.createNetwork(name, internal);
-    } else if (existing.internal !== internal) {
+      await docker.createNetwork(name, internal, bridge);
+    } else if (existing.internal !== internal || existing.bridge !== bridge) {
       throw new Error(
-        `Docker network ${name} exists with internal=${existing.internal}, not ${internal}`,
+        `Docker network ${name} exists with internal=${existing.internal} on bridge ${existing.bridge}, not internal=${internal} on ${bridge}; remove it`,
       );
     }
   }
@@ -265,6 +268,14 @@ export class Environments {
         .get(ownerId, name) !== null
     ) {
       throw new HttpError(409, "conflict", "an environment with this name exists");
+    }
+    // The host builds the image after the first boot and after updates that change it.
+    if (!(await this.docker.imageExists(this.config.image))) {
+      throw new HttpError(
+        503,
+        "unavailable",
+        "the runtime image is still being built: try again in a few minutes",
+      );
     }
     const id = randomUUID();
     const now = this.now();

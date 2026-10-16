@@ -10,7 +10,7 @@ const textResponse = (status: number, text: string, headers: Record<string, stri
  * origin and never inline; styles may be inline because the terminal emulator
  * sets them.
  */
-export function uiServer(directory: string, origin: string): (request: Request) => Response {
+export function uiServer(directory: string, origin: () => string): (request: Request) => Response {
   const root = resolve(directory);
   const files = new Map<string, string>();
   for (const entry of readdirSync(root, { recursive: true, withFileTypes: true })) {
@@ -21,17 +21,18 @@ export function uiServer(directory: string, origin: string): (request: Request) 
   }
   if (!files.has("/index.html")) throw new Error(`${root} has no index.html; build the UI first`);
 
-  const headers = {
-    "content-security-policy": [
+  const policy = () =>
+    [
       "default-src 'none'",
       "script-src 'self'",
       "style-src 'self' 'unsafe-inline'",
       "img-src 'self'",
-      `connect-src 'self' ${origin.replace(/^http/, "ws")}`,
+      `connect-src 'self' ${origin().replace(/^http/, "ws")}`,
       "base-uri 'none'",
       "form-action 'none'",
       "frame-ancestors 'none'",
-    ].join("; "),
+    ].join("; ");
+  const security = {
     "x-content-type-options": "nosniff",
     "x-frame-options": "DENY",
     "referrer-policy": "no-referrer",
@@ -41,6 +42,7 @@ export function uiServer(directory: string, origin: string): (request: Request) 
   };
 
   return (request) => {
+    const headers = { "content-security-policy": policy(), ...security };
     if (request.method !== "GET" && request.method !== "HEAD") {
       return textResponse(405, "method not allowed", { ...headers, allow: "GET, HEAD" });
     }

@@ -17,12 +17,23 @@ only this API, and so can other clients. Request and response types live in
   (default 60 minutes), at its absolute lifetime (default 12 hours) or on
   logout.
 - **Mutations** (every method except `GET`) need an `Origin` header equal to the
-  configured origin. With a session they also need the session's CSRF token in
+  service's origin. With a session they also need the session's CSRF token in
   `X-CSRF-Token`. Request bodies are `application/json`.
+- **Origin:** either fixed by the configuration (`origin`), or on the host
+  `https://` and the domain the site serves: the one an admin chose with
+  `PUT /api/v1/domain`, else the name the host derives from its public IPv4
+  address (`203-0-113-7.sslip.io`). A changed domain applies at once, so the
+  previous origin is refused from then on.
 - **Login** takes username, password and the current TOTP code; each code works
   once. Five failures for a username block it for 15 minutes (`429`).
 - **Setup** works only while no user exists, with the token from the configured
-  setup token file.
+  setup token file. A successful setup empties that file, so the host stops
+  showing the token.
+- **Domain:** only an admin changes it. A domain is a host name whose last
+  label starts with a letter; it must already resolve to the server's address
+  (`400` otherwise), so the switch does not lock users out. `null` or an empty
+  string returns to the derived name. With a fixed origin it cannot change
+  (`409`).
 - **Ownership:** environment and key endpoints see only the caller's
   environments and keys; another user's answers `404`. An environment can use
   only one of its owner's keys.
@@ -85,7 +96,9 @@ only this API, and so can other clients. Request and response types live in
   workspace and its sessions.
 
 Errors answer `{ "error": "<code>", "message": "…" }`. A failed Docker call
-answers `502`; the environment's recorded state stays accurate.
+answers `502`; the environment's recorded state stays accurate. Creating an
+environment answers `503` (`unavailable`) while the runtime image is missing,
+which on the host means it is still being built.
 
 ## Endpoints
 
@@ -96,6 +109,8 @@ answers `502`; the environment's recorded state stays accurate.
 | `POST` | `/api/v1/session` | Log in `{ username, password, code }`; sets the cookie, returns the user and CSRF token | Origin |
 | `GET` | `/api/v1/session` | The current user and CSRF token | session |
 | `DELETE` | `/api/v1/session` | Log out | session, CSRF, Origin |
+| `GET` | `/api/v1/domain` | `{ domain, custom, address, configurable }`: the domain the service answers on, whether an admin chose it, the server's IPv4 address and whether it can change | session |
+| `PUT` | `/api/v1/domain` | Choose `{ domain }`, or `null` for the derived name; returns the new status | admin, CSRF, Origin |
 | `GET` | `/api/v1/environments` | The caller's environments | session |
 | `POST` | `/api/v1/environments` | Create and start one `{ name, networkMode?, keyId, models }`; `networkMode` is `model-only` (default) or `open`, the first model is OpenCode's default | session, CSRF, Origin |
 | `GET` | `/api/v1/environments/{id}` | One environment | session |

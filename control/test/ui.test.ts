@@ -23,7 +23,7 @@ describe("UI server", () => {
   test("serves the bundle with security headers and nothing else", async () => {
     const { dist, remove } = build();
     try {
-      const serve = uiServer(dist, origin);
+      const serve = uiServer(dist, () => origin);
       const page = get(serve, "/");
       expect(page.status).toBe(200);
       expect(page.headers.get("content-type")).toContain("text/html");
@@ -55,7 +55,7 @@ describe("UI server", () => {
   test("refuses a directory without a build", () => {
     const parent = mkdtempSync(join(tmpdir(), "tentaflake-ui-"));
     try {
-      expect(() => uiServer(parent, origin)).toThrow("build the UI first");
+      expect(() => uiServer(parent, () => origin)).toThrow("build the UI first");
     } finally {
       rmSync(parent, { recursive: true, force: true });
     }

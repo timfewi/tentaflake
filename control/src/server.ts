@@ -5,6 +5,7 @@ import {
   type CreateEnvironmentRequest,
   type CreateKeyRequest,
   csrfHeader,
+  type DomainStatus,
   type EnvironmentList,
   type FileEntryList,
   type KeyList,
@@ -23,6 +24,7 @@ import { DockerError } from "./docker";
 import type { Environments } from "./environments";
 import { errorJson, HttpError, json, readBody, text, texts } from "./http";
 import type { Keys } from "./keys";
+import type { Site } from "./site";
 
 export const sessionCookie = "__Host-tentaflake";
 
@@ -39,7 +41,8 @@ const pathParameter = (request: Request) =>
 
 /** Serves the /api/v1 endpoints listed in docs/api.md and, if given, the UI on the same origin. */
 export function startServer(
-  config: Pick<Config, "hostname" | "port" | "origin">,
+  config: Pick<Config, "hostname" | "port">,
+  site: Site,
   auth: Auth,
   environments: Environments,
   keys: Keys,
@@ -52,7 +55,7 @@ export function startServer(
   ) {
     return async (request: BunRequest<P>, server: Server<Terminal>) => {
       try {
-        if (request.method !== "GET" && request.headers.get("origin") !== config.origin) {
+        if (request.method !== "GET" && request.headers.get("origin") !== site.origin()) {
           throw notOrigin();
         }
         return await handler(request, server);
@@ -117,6 +120,16 @@ export function startServer(
         DELETE: authed((_, session) => {
           auth.logout(session.tokenHash);
           return new Response(null, { status: 204, headers: { "set-cookie": cookie("", 0) } });
+        }),
+      },
+      "/api/v1/domain": {
+        GET: authed(() => json(200, site.status() satisfies DomainStatus)),
+        PUT: authed(async (request, { user }) => {
+          if (user.role !== "admin") {
+            throw new HttpError(403, "forbidden", "only an admin can change the domain");
+          }
+          const { domain } = await readBody(request);
+          return json(200, await site.setDomain(domain === null ? null : text(domain, "domain")));
         }),
       },
       "/api/v1/environments": {
@@ -250,7 +263,7 @@ export function startServer(
       "/api/v1/environments/:id/terminal": {
         GET: authed(async (request, { user }, server) => {
           // The WebSocket handshake is a GET, but it opens a shell: Origin is checked.
-          if (request.headers.get("origin") !== config.origin) throw notOrigin();
+          if (request.headers.get("origin") !== site.origin()) throw notOrigin();
           if (request.headers.get("upgrade")?.toLowerCase() !== "websocket") {
             throw new HttpError(400, "invalid_request", "expected a WebSocket upgrade");
           }

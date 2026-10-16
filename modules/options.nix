@@ -136,7 +136,7 @@ in
 
     # Module enable toggles
     boot = {
-      enable = lib.mkEnableOption "systemd-boot EFI bootloader config" // {
+      enable = lib.mkEnableOption "the GRUB boot loader for BIOS and UEFI on the disk image" // {
         default = true;
       };
     };

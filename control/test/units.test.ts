@@ -90,11 +90,15 @@ describe("configuration", () => {
       dockerSocket: "/run/docker.sock",
       brokerPort: 7810,
       brokerDirectory: "/run/tentaflake/broker",
+      brokerUser: null,
       limits: { memoryMiB: 2048, cpus: 2, pids: 512, dailyTokens: 10_000_000 },
       environmentIdleMinutes: 15,
       uiDirectory: null,
     });
     expect(parseConfig({ ...required, uiDirectory: "/ui" }).uiDirectory).toBe("/ui");
+    const { origin: _, ...host } = required;
+    const site = { siteFile: "/run/tentaflake/site/site.json", domainFile: "/var/lib/domain" };
+    expect(parseConfig({ ...host, ...site })).toMatchObject({ origin: null, ...site });
     expect(parseConfig({ ...required, limits: { pids: 100 } }).limits).toEqual({
       memoryMiB: 2048,
       cpus: 2,
@@ -105,9 +109,13 @@ describe("configuration", () => {
 
   test("refuses unknown keys, missing keys and invalid values", () => {
     const { image: _, ...withoutImage } = required;
+    const { origin: __, ...withoutOrigin } = required;
     for (const input of [
       [],
       withoutImage,
+      withoutOrigin,
+      { ...withoutOrigin, siteFile: "/run/site.json" },
+      { ...required, siteFile: "/run/site.json", domainFile: "/var/lib/domain" },
       { ...required, typo: true },
       { ...required, origin: "https://tentaflake.example/" },
       { ...required, origin: "tentaflake.example" },
@@ -118,6 +126,7 @@ describe("configuration", () => {
       { ...required, limits: { dailyTokens: 0 } },
       { ...required, brokerPort: 0 },
       { ...required, brokerDirectory: "" },
+      { ...required, brokerUser: "" },
       { ...required, uiDirectory: "" },
       { ...required, sessionIdleMinutes: 0 },
       { ...required, environmentIdleMinutes: 0 },

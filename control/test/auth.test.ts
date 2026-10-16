@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
 import type { SessionResponse, SetupResponse } from "../src/api";
 import {
   base32Decode,
@@ -41,6 +42,8 @@ describe("setup", () => {
     const secret = await setUp(h);
     expect(secret.length).toBe(20);
     expect(await (await call(h, "GET", "/api/v1/setup")).json()).toEqual({ needed: false });
+    // Spent: the host shows an empty token no more and creates no new one.
+    expect(readFileSync(h.setupTokenFile, "utf8")).toBe("");
 
     const again = await call(h, "POST", "/api/v1/setup", { token: setupToken, ...admin });
     expect(again.status).toBe(409);
