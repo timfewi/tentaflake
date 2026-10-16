@@ -56,7 +56,7 @@ let
 
   # Runs at every boot and whenever the domain, the setup token or a password
   # changes: creates the control service's secrets once, derives the HTTPS
-  # site and shows how to reach it on the console and in the journal.
+  # site and shows how to reach it on the console; the journal gets the URL.
   setup = pkgs.writeShellApplication {
     name = "tentaflake-setup";
     runtimeInputs = with pkgs; [
@@ -148,11 +148,16 @@ let
             ;;
         esac
       fi
-      [[ -n $token ]] && lines+=("  Setup token: $token")
-      # The journal outlives the console password, so only the console shows it.
+      # The journal outlives the setup token and the console password, so
+      # only the console's notice, a file for root alone, shows them.
       printf '%s\n' "''${lines[@]}"
+      if [[ -n $token ]]; then
+        echo "  Setup token: on the console, or sudo cat $control/setup-token"
+        lines+=("  Setup token: $token")
+      fi
       [[ -n $password ]] && lines+=("  Console login: $admin, password $password (replaced at the first login)")
-      printf '%s\n' "''${lines[@]}" "" > /run/issue.d/tentaflake.issue
+      (umask 077 && printf '%s\n' "''${lines[@]}" "" > /run/issue.d/tentaflake.issue.tmp)
+      mv /run/issue.d/tentaflake.issue.tmp /run/issue.d/tentaflake.issue
       agetty --reload || true
       [[ -n $address ]]
     '';

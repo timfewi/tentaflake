@@ -51,9 +51,10 @@ boot.
    a copy with `xz -k` or `gzip -k` and upload it as the provider documents
    for custom images.
 2. Create a server from the image and open the provider's console. After the
-   first boot the login screen (and the journal) shows the address, for
-   example `https://203-0-113-7.sslip.io`, the one-time setup token and a
-   first password for the console login `user`.
+   first boot the login screen shows the address, for example
+   `https://203-0-113-7.sslip.io`, the one-time setup token and a first
+   password for the console login `user`. The journal
+   (`journalctl -u tentaflake-setup`) shows only the address.
 3. Open the address, enter the setup token, create the admin with a password
    and an authenticator app, and sign in. The certificate can take a minute.
 4. Choose your own domain in the last step, or later on the Domain page:

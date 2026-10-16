@@ -248,7 +248,8 @@ the boot menu for a rollback.
   the route out. It writes the site file for the control service and the
   Caddy site, reloads Caddy when the site changed, and shows the URL, the
   setup token and the console password, each only while it is still useful,
-  on the login screen and in the journal. A path unit runs it again when the
+  on the login screen (a notice only root can read). The journal, which
+  outlives them, gets the URL only. A path unit runs it again when the
   domain file, the setup token or `/etc/shadow` changes, so a domain chosen
   in the wizard reaches Caddy without a rebuild.
 - `tentaflake-control` runs as `tentaflake` with the Docker group, state in
