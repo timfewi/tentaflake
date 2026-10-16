@@ -1,6 +1,6 @@
 import { Agent, IdleStop } from "./agent";
 import { Auth } from "./auth";
-import { BrokerFiles } from "./broker";
+import { BrokerFiles, owner } from "./broker";
 import { loadConfig } from "./config";
 import { Secrets } from "./crypto";
 import { openDatabase } from "./db";
@@ -21,7 +21,8 @@ const secrets = Secrets.fromFile(config.keyFile);
 const db = openDatabase(config.databasePath);
 const docker = dockerClient(config.dockerSocket);
 const gateway = await ensureNetworks(docker);
-const broker = new BrokerFiles(db, secrets, config.brokerDirectory);
+const brokerOwner = config.brokerUser === null ? null : owner(config.brokerUser);
+const broker = new BrokerFiles(db, secrets, config.brokerDirectory, brokerOwner);
 broker.sync();
 const brokerUrl = `http://${gateway}:${config.brokerPort}/v1`;
 const environments = new Environments(db, docker, secrets, broker, { ...config, brokerUrl });

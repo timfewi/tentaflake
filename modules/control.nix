@@ -45,6 +45,7 @@ let
     dockerSocket = "/run/docker.sock";
     inherit brokerPort image;
     brokerDirectory = routes;
+    brokerUser = "tentaflake-broker";
     uiDirectory = "${ui}";
     limits = {
       memoryMiB = sizeBytes maxMemoryBytes resources.memory / (1024 * 1024);
@@ -202,7 +203,12 @@ in
         isSystemUser = true;
         group = "tentaflake";
       };
+      users.tentaflake-broker = {
+        isSystemUser = true;
+        group = "tentaflake-broker";
+      };
       groups.tentaflake = { };
+      groups.tentaflake-broker = { };
     };
 
     systemd = {
@@ -272,9 +278,14 @@ in
             SupplementaryGroups = [ "docker" ];
             StateDirectory = "tentaflake/control";
             StateDirectoryMode = "0700";
-            # The broker's routes and credentials.
+            # The broker's routes and credentials. The service hands each file
+            # to the broker's user (CAP_CHOWN, which reaches only the paths it
+            # can write); the broker opens them by name but cannot list or
+            # change the directory.
             RuntimeDirectory = "tentaflake/broker";
-            RuntimeDirectoryMode = "0700";
+            RuntimeDirectoryMode = "0711";
+            CapabilityBoundingSet = "CAP_CHOWN";
+            AmbientCapabilities = "CAP_CHOWN";
             UMask = "0077";
             RestrictAddressFamilies = [
               "AF_UNIX"
@@ -286,11 +297,9 @@ in
           };
         };
 
-        # The same user as the control service, since the broker accepts only
-        # credential files their owner alone can read, but no Docker group, its
-        # own PID namespace (the service's process and open files are out of
-        # reach) and the service's state hidden: it reads the routes, keeps its
-        # audit log and budgets, and forwards model calls.
+        # Its own user, without the Docker group: it reads the routes and
+        # credentials the control service hands to it, keeps its audit log and
+        # budgets, and forwards model calls.
         tentaflake-broker = {
           description = "Tentaflake model broker";
           wantedBy = [ "multi-user.target" ];
@@ -313,15 +322,8 @@ in
             exec ${lib.getExe broker} --config "$RUNTIME_DIRECTORY/broker.json"
           '';
           serviceConfig = hardening // {
-            User = "tentaflake";
-            Group = "tentaflake";
-            PrivatePIDs = true;
-            # As PID 1 of its namespace it would ignore SIGTERM, having no handler.
-            KillSignal = "SIGKILL";
-            InaccessiblePaths = [
-              controlState
-              "/run/docker.sock"
-            ];
+            User = "tentaflake-broker";
+            Group = "tentaflake-broker";
             StateDirectory = "tentaflake/broker";
             StateDirectoryMode = "0700";
             RuntimeDirectory = "tentaflake/broker-config";

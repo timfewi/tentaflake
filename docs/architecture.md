@@ -99,7 +99,8 @@ restart that keeps the workspace and the sessions.
 <config.json>` starts it with one JSON file like `control/config.example.json`:
 listen address (loopback by default), the exact browser origin, the paths of
 the database, host key and setup token, the Docker socket, the runtime image,
-the environment limits and, optionally, the directory of the built UI. On the
+the environment limits and, optionally, the directory of the built UI and the
+broker's user, to whom it hands the broker's files. On the
 host, `siteFile` and `domainFile` replace the fixed origin: the origin is
 `https://` and the domain an admin chose in setup (kept in the domain file),
 else the name the host derived from its address (in the site file). The file holds no secrets. The host key file holds
@@ -251,13 +252,15 @@ the boot menu for a rollback.
   domain file, the setup token or `/etc/shadow` changes, so a domain chosen
   in the wizard reaches Caddy without a rebuild.
 - `tentaflake-control` runs as `tentaflake` with the Docker group, state in
-  `/var/lib/tentaflake/control` (`0700`) and the broker's routes in
-  `/run/tentaflake/broker`; it listens on `127.0.0.1:8080`.
-- `tentaflake-broker` runs as the same user, since it accepts only credential
-  files their owner alone can read, but without the Docker group, in its own
-  PID namespace (the control service's process is out of reach) and with the
-  service's state hidden; it reads the routes and writes only its audit log
-  and budgets in `/var/lib/tentaflake/broker`. It listens on the gateway
+  `/var/lib/tentaflake/control` (`0700`) and the broker's routes and
+  credentials in `/run/tentaflake/broker` (`0711`); it listens on
+  `127.0.0.1:8080`. It hands each of those files to the broker's user
+  (`0600`, with `CAP_CHOWN`, which reaches only the paths it can write), as
+  the broker accepts only credential files their owner alone can read.
+- `tentaflake-broker` runs as its own user `tentaflake-broker`, without the
+  Docker group: it opens its files by name but cannot list or change their
+  directory, and writes only its audit log and budgets in
+  `/var/lib/tentaflake/broker`. It listens on the gateway
   address of `tf-model-only`, which it reads at start; until the control
   service created that network it fails and starts again.
 - `tentaflake-runtime-image` builds the runtime image from `images/runtime`

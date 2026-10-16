@@ -24,6 +24,8 @@ export interface Config {
   brokerPort: number;
   /** Runtime directory (tmpfs) for the broker's routes and provider credential files. */
   brokerDirectory: string;
+  /** The broker's user, who gets its files; null when the broker runs as this service's user. */
+  brokerUser: string | null;
   /** The runtime image reference, ideally by digest. */
   image: string;
   /** The built UI (ui/dist) to serve on the same origin; null serves the API only. */
@@ -44,6 +46,7 @@ const defaults = {
   dockerSocket: "/run/docker.sock",
   brokerPort: 7810,
   brokerDirectory: "/run/tentaflake/broker",
+  brokerUser: null,
   uiDirectory: null,
   limits: { memoryMiB: 2048, cpus: 2, pids: 512, dailyTokens: 10_000_000 },
   environmentIdleMinutes: 15,
@@ -71,7 +74,7 @@ export function parseConfig(input: unknown): Config {
       throw new Error(`configuration key ${key} must be a non-empty string`);
     }
   }
-  for (const key of ["origin", "siteFile", "domainFile", "uiDirectory"] as const) {
+  for (const key of ["origin", "siteFile", "domainFile", "brokerUser", "uiDirectory"] as const) {
     if (config[key] !== null && (typeof config[key] !== "string" || !config[key])) {
       throw new Error(`configuration key ${key} must be a non-empty string or null`);
     }
