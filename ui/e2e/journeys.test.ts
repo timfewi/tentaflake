@@ -35,6 +35,14 @@ test("setup, login, key, environment, chat with an approval, file, terminal, sto
   const h = harness({ ui: join(import.meta.dir, "..", "dist"), port, origin: base });
   const browser = await chromium.launch();
   const page = await browser.newPage();
+  // Newer browsers return a Promise from scrolling. It must never become a React cleanup.
+  await page.addInitScript(`
+    const scroll = Element.prototype.scrollIntoView;
+    Element.prototype.scrollIntoView = function (options) {
+      scroll.call(this, options);
+      return Promise.resolve();
+    };
+  `);
   // A CSP violation or any script error shows up here. The sign-in probe of a signed-out page is a 401.
   const problems: string[] = [];
   page.on("pageerror", (error) => problems.push(error.message));

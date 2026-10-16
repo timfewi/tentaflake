@@ -73,7 +73,9 @@ export function Chat({ env, onStopped }: { env: Environment; onStopped(): void }
   }, [env.id]);
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: scroll when the transcript changes
-  useEffect(() => end.current?.scrollIntoView({ block: "end" }), [items]);
+  useEffect(() => {
+    end.current?.scrollIntoView({ block: "end" });
+  }, [items]);
 
   const newSession = async () => {
     const created = await api.createSession(env.id);

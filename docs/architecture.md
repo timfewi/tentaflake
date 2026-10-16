@@ -149,7 +149,14 @@ The event stream relays only the session, tool and approval events the UI
 uses. The terminal is a shell from OpenCode's PTY API (2.0.29 has one),
 relayed over a WebSocket with bounded frames; the service's own WebSocket
 client (`control/src/websocket.ts`) refuses an oversized frame from OpenCode
-before reading it, which Bun's client cannot. Stopping, deleting or
+before reading it, which Bun's client cannot. Terminals and event streams are
+also bound to the login session that opened them: logout revokes them
+immediately, expiry is checked every second even when silent and before
+forwarding data. Valid nonempty terminal input and resizes refresh login idle
+time; upstream output and events do not, and absolute lifetime never moves.
+Revocation closes both sides and requests PTY removal, including when it
+races with connection setup. Other logins for the same user stay valid.
+Stopping, deleting or
 reconfiguring an environment closes its event streams and terminals before
 its container goes, so they end with the environment and not with OpenCode. Every minute, a task stops the running
 environments without activity (prompts, approvals, file reads, relayed events,
@@ -345,7 +352,7 @@ works, and the README then lists where it was verified.
 | Broker crate and package | In the repository; one process serves every environment by token (multi-route), tested with a fake provider under `runsc` in CI when it changes |
 | Base-image catalog (Ubuntu 26.04 pin) | In the repository |
 | Runtime image (Ubuntu + OpenCode) | In the repository (smoke-tested in CI when the image changes) |
-| Control service and its API: users, setup, login, environment lifecycle, model keys, MCP definitions, session proxy (sessions, events, approvals, files, terminal), idle stop | In the repository (tested under `runsc` in CI when it changes) |
+| Control service and its API: users, setup, login, environment lifecycle, model keys, MCP definitions, session proxy (sessions, events, approvals, files, terminal) with login-session revocation, idle stop | In the repository; login-session revocation checked against fake OpenCode, including silent expiry and connection races; real runtime and HTTPS-proxy verification of revocation pending |
 | UI in `ui/`: setup wizard, sign-in, keys, environments, chat with approvals, files, terminal; served by the control service | In the repository (browser journey with `just ui-e2e`, not in CI) |
 
 ## Out of scope for 0.5
