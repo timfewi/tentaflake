@@ -15,7 +15,17 @@ only this API, and so can other clients. Request and response types live in
 - **Session:** login sets the cookie `__Host-tentaflake` (`Secure`, `HttpOnly`,
   `SameSite=Strict`, `Path=/`). A session ends after the configured idle time
   (default 60 minutes), at its absolute lifetime (default 12 hours) or on
-  logout.
+  logout. Open terminals and event streams belong to that specific login, not
+  all logins of the user: logout closes them immediately, and a server-side
+  timer checks even silent connections every second. Terminal frames and event
+  delivery also check expiry before forwarding. Authenticated HTTP requests,
+  nonempty valid terminal input and valid terminal resizes refresh idle time;
+  terminal output, SSE events and heartbeats do not. No activity extends the
+  absolute lifetime. Revocation ends SSE without an `environment.stopped`
+  event and closes terminals with `1008` and "the login session ended", closes
+  the upstream connections and requests PTY removal. A PTY creation already
+  in flight is allowed to return its ID (within the existing request timeout)
+  so it can be removed without attaching a terminal.
 - **Mutations** (every method except `GET`) need an `Origin` header equal to the
   service's origin. With a session they also need the session's CSRF token in
   `X-CSRF-Token`. Request bodies are `application/json`.
