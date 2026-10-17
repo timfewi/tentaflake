@@ -121,10 +121,14 @@ export class FakeOpenCode {
   failing = false;
   /** Runs before OpenCode answers a PTY creation. */
   beforePty: () => Promise<unknown> = async () => {};
+  beforeEvents: () => Promise<unknown> = async () => {};
+  abortedEvents = 0;
+  beforeConnect: () => Promise<unknown> = async () => {};
   readonly pty = { input: [] as string[], resized: [] as unknown[], removed: [] as string[] };
   private readonly streams = new Set<ReadableStreamDefaultController<Uint8Array>>();
-  private readonly sockets = new Set<ServerWebSocket<unknown>>();
-  private readonly server: Server<unknown>;
+  private readonly sockets = new Set<ServerWebSocket<{ ptyId: string }>>();
+  private readonly server: Server<{ ptyId: string }>;
+  private nextPty = 1;
 
   constructor() {
     this.server = Bun.serve({
@@ -180,7 +184,7 @@ export class FakeOpenCode {
     this.server.stop(true);
   }
 
-  private async handle(request: Request, server: Server<unknown>) {
+  private async handle(request: Request, server: Server<{ ptyId: string }>) {
     const url = new URL(request.url);
     const body = request.headers.has("content-type") ? await request.json() : undefined;
     const headers = Object.fromEntries(request.headers);
@@ -241,6 +245,15 @@ export class FakeOpenCode {
       return content === undefined ? notFound() : new Response(content);
     }
     if (route === "GET /api/event") {
+      request.signal.addEventListener(
+        "abort",
+        () => {
+          this.abortedEvents++;
+        },
+        { once: true },
+      );
+      await this.beforeEvents();
+      if (request.signal.aborted) return new Response(null, { status: 204 });
       let self: ReadableStreamDefaultController<Uint8Array>;
       const stream = new ReadableStream<Uint8Array>({
         start: (controller) => {
@@ -258,7 +271,7 @@ export class FakeOpenCode {
     if (route === "POST /api/pty") {
       await this.beforePty();
       const data = {
-        id: "pty_fake1",
+        id: `pty_fake${this.nextPty++}`,
         title: "t",
         command: "/bin/bash",
         args: [],
@@ -268,11 +281,18 @@ export class FakeOpenCode {
     }
     if (pty) {
       if (pty[1] === "PUT") this.pty.resized.push(body);
-      else this.pty.removed.push(pty[2] ?? "");
+      else {
+        this.pty.removed.push(pty[2] ?? "");
+        for (const socket of this.sockets) {
+          if (socket.data.ptyId === pty[2]) socket.close();
+        }
+      }
       return new Response(null, { status: 204 });
     }
-    if (route === "GET /api/pty/pty_fake1/connect" && server.upgrade(request, { data: {} })) {
-      return undefined;
+    const connectPty = route.match(/^GET \/api\/pty\/(pty_fake[0-9]+)\/connect$/);
+    if (connectPty) {
+      await this.beforeConnect();
+      if (server.upgrade(request, { data: { ptyId: connectPty[1] ?? "" } })) return undefined;
     }
     return notFound();
   }
@@ -304,6 +324,8 @@ export function harness({
   port = 0,
   origin: listenOrigin = origin as string,
   hostSite = false,
+  sessionIdleMinutes = 60,
+  sessionAbsoluteHours = 12,
 } = {}) {
   const dir = mkdtempSync(join(tmpdir(), "tentaflake-control-"));
   const siteFile = join(dir, "site.json");
@@ -317,7 +339,7 @@ export function harness({
   const db = openDatabase(":memory:");
   const secrets = new Secrets(randomBytes(32));
   const docker = new FakeDocker();
-  const sessions = { setupTokenFile, sessionIdleMinutes: 60, sessionAbsoluteHours: 12 };
+  const sessions = { setupTokenFile, sessionIdleMinutes, sessionAbsoluteHours };
   const auth = new Auth(db, secrets, sessions, now);
   const limits = { memoryMiB: 1024, cpus: 1.5, pids: 256, dailyTokens: 50_000 };
   const brokerDirectory = join(dir, "broker");
@@ -367,6 +389,11 @@ export function harness({
     domainFile,
     resolved,
     close() {
+      for (const row of db.query("SELECT token_hash FROM sessions").all() as {
+        token_hash: string;
+      }[]) {
+        auth.logout(row.token_hash);
+      }
       server.stop(true);
       opencode.stop();
       db.close();
