@@ -1,0 +1,40 @@
+{
+  "groups": {
+    "group:tentaflake-operators": [
+      "operator@example.invalid"
+    ]
+  },
+  "tagOwners": {
+    "tag:agent-host": [
+      "group:tentaflake-operators"
+    ]
+  },
+  "grants": [
+    {
+      "src": [
+        "group:tentaflake-operators"
+      ],
+      "dst": [
+        "tag:agent-host"
+      ],
+      "ip": [
+        "tcp:22"
+      ]
+    }
+  ],
+  "ssh": [
+    {
+      "action": "check",
+      "src": [
+        "group:tentaflake-operators"
+      ],
+      "dst": [
+        "tag:agent-host"
+      ],
+      "users": [
+        "autogroup:nonroot",
+        "root"
+      ]
+    }
+  ]
+}

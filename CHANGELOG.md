@@ -6,14 +6,30 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+### Direction
+- Resume the declarative v0.4.37 architecture: Hermes and ZeroClaw builders,
+  Nix/JSON agent definitions, CLI onboarding, installer, broker, Research,
+  workers, quotas and backups. The later admission/host-API expansion and 0.5
+  control-service runtime remain historical development, not this line's base.
+- Preserve that development in Git history; this is not a new published tag.
+- Keep release tagging explicit, as on the preceding main branch; restoring
+  the declarative product does not resume automatic patch releases.
+### Maintenance
+- Retain bounded sequential flake evaluation, explicit build/VM gates and
+  read-only formatting checks from the later 0.4 development.
+- Update libc, Tokio, Quinn and Rustls and retain the Dev Containers
+  shell-quote correction and matching cache pin. Keep security scans bounded.
+- Prevent CLI fixture collisions and avoid rereading deliberately disconnected
+  broker test clients.
 
-## [0.5.0] - Unreleased
+## [0.5.0] - Archived unreleased development
 
-0.5 restarts Tentaflake from a small core: a NixOS host where a web UI creates
+This historical 0.5 experiment restarted Tentaflake from a small core: a NixOS host where a web UI creates
 isolated agent environments (Ubuntu in a gVisor sandbox with one agent runtime,
 the user's own model API keys, MCP servers and tools). See
-[the architecture](docs/architecture.md). The pre-0.5 line is frozen at tag
-`v0.4-final` and branch `legacy/0.4` and is no longer maintained.
+[the archived architecture](https://github.com/timfewi/tentaflake/blob/03c50e3/docs/architecture.md).
+The pre-0.5 line was frozen at `v0.4-final` during this experiment; the
+declarative line is now resumed as described above.
 
 ### Added
 - The runtime image: Ubuntu 26.04 by digest, apt from a dated snapshot and

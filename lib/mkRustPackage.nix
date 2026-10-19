@@ -16,13 +16,16 @@ rustPlatform.buildRustPackage {
   inherit (workspace.package) version;
   src = lib.fileset.toSource {
     root = ../.;
-    fileset = lib.fileset.unions [
-      ../Cargo.toml
-      ../Cargo.lock
-      # Cargo resolves the whole workspace, but only builds this member.
-      (lib.fileset.fileFilter (file: file.name == "Cargo.toml") ../crates)
-      crate
-    ];
+    fileset = lib.fileset.unions (
+      [
+        ../Cargo.toml
+        ../Cargo.lock
+        # Cargo resolves the whole workspace, but only builds this member.
+        (lib.fileset.fileFilter (file: file.name == "Cargo.toml") ../crates)
+        crate
+      ]
+      ++ lib.optional (pname == "tentaflake-cli") ../adapters/catalog.json
+    );
   };
 
   cargoLock.lockFile = ../Cargo.lock;

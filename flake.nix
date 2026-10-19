@@ -1,10 +1,37 @@
 {
-  description = "Tentaflake: a NixOS host for isolated, UI-built agent environments";
+  description = "Generic NixOS flake template for running isolated Hermes and ZeroClaw agents on one headless machine";
 
   inputs = {
+    tentaflake-research.url = "github:timfewi/tentaflake-research";
     # Tracks nixos-unstable, pinned to an exact revision by the committed flake.lock
-    # (run `nix flake update` to bump deliberately).
+    # (so builds are reproducible — run `nix flake update` to bump deliberately).
+    # The pinned revision provides the container and Rust toolchains used by the
+    # host and the workspace CLI.
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+
+    # Optional: use hermes-agent NixOS module for single-agent setups or container images
+    hermes-agent = {
+      url = "github:NousResearch/hermes-agent";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
+
+    # Optional: uncomment for home-manager support
+    # home-manager = {
+    #   url = "github:nix-community/home-manager";
+    #   inputs.nixpkgs.follows = "nixpkgs";
+    # };
+
+    # Optional: uncomment for agenix encrypted secrets
+    # agenix = {
+    #   url = "github:ryantm/agenix";
+    #   inputs.nixpkgs.follows = "nixpkgs";
+    # };
+
+    # Optional: uncomment for treefmt-nix (format checking in CI)
+    # treefmt-nix = {
+    #   url = "github:numtide/treefmt-nix";
+    #   inputs.nixpkgs.follows = "nixpkgs";
+    # };
   };
 
   outputs =
@@ -25,46 +52,151 @@
 
       system = "x86_64-linux";
       pkgs = nixpkgs.legacyPackages.${system};
-      host = self.nixosConfigurations.${hostName};
+      inherit (nixpkgs) lib;
 
-      # The provider-agnostic VPS disk image of the host: GPT with a BIOS boot
-      # partition, an ESP and the root file system (hardware-configuration.nix).
-      diskImage =
-        format:
-        import "${nixpkgs}/nixos/lib/make-disk-image.nix" {
-          inherit (host) config pkgs;
-          inherit (nixpkgs) lib;
-          inherit format;
-          baseName = "tentaflake";
-          partitionTableType = "hybrid";
-          bootSize = "1024M";
-          copyChannel = false;
-        };
+      # Root of the repo — used by installer ISO to embed source
+      repoRoot = ./.;
+
+      # ── Template constants ──
+      constants = import ./lib/constants.nix;
+
+      # ── Shared agent builders ──
+      inherit ((import ./lib { inherit pkgs lib; })) mkAgent adapters runtimeCatalog;
+      inherit ((import ./lib { inherit pkgs lib; })) mkHermesAgent;
+      inherit ((import ./lib { inherit pkgs lib; })) mkZeroClawAgent;
+      inherit ((import ./lib { inherit pkgs lib; })) agentsFromData;
+
+      # Module set imported by external consumers and built-in hosts
+      tentaflakeModules = import ./modules/default.nix { researchFlake = inputs.tentaflake-research; };
+
+      # Contributor E2E tooling can move ahead of the nixpkgs package while
+      # remaining source- and dependency-hash pinned.
+      devcontainerCli = import ./lib/devcontainer-cli.nix { inherit pkgs; };
+
+      # Security tools use the locked nixpkgs revisions; rule updates are
+      # separate, reviewable hash bumps instead of live registry downloads.
+      securityTools = pkgs.symlinkJoin {
+        name = "tentaflake-security-tools";
+        paths = [
+          pkgs.osv-scanner
+          pkgs.semgrep
+        ];
+      };
+      semgrepRules = pkgs.fetchFromGitHub {
+        owner = "semgrep";
+        repo = "semgrep-rules";
+        rev = "40b8c63f75dc7c22c8a77482d73bfb864b146f7e";
+        hash = "sha256-VtPavzFGDmRzdG9wTFc+yp7TbI1gT1/IaF//K1m3OT0=";
+      };
+
+      # Shared specialArgs — no host-specific params here
+      baseSpecialArgs = {
+        inherit
+          inputs
+          self
+          mkHermesAgent
+          mkZeroClawAgent
+          agentsFromData
+          mkAgent
+          repoRoot
+          constants
+          ;
+      };
     in
     {
-      nixosModules.default = import ./modules/default.nix;
+      # ── Exported module set ──
+      nixosModules = {
+        default = tentaflakeModules;
 
-      formatter.${system} = pkgs.nixfmt-tree;
+        # Installer and optional profiles are exported explicitly;
+        # none of them enlarge nixosModules.default.
+        installer = import ./installer/iso.nix;
+        observability = import ./modules/profiles/observability.nix;
+        falco = import ./modules/profiles/falco.nix;
+      };
 
-      # Toolchain plus the entry banner; see lib/devshell.nix.
-      devShells.${system}.default = import ./lib/devshell.nix { inherit pkgs; };
-
-      # `nix flake check --no-build` evaluates these; building them is explicit.
-      checks.${system} = {
-        ${hostName} = host.config.system.build.toplevel;
-        inherit (self.packages.${system})
-          tentaflake-broker
-          tentaflake-control
-          tentaflake-ui
-          image-raw
-          image-qcow2
+      # ── Exported helpers ──
+      lib.${system} = {
+        inherit
+          mkHermesAgent
+          mkZeroClawAgent
+          agentsFromData
+          mkAgent
+          adapters
+          runtimeCatalog
+          constants
           ;
       };
 
+      # ── Formatting ──
+      formatter.${system} = nixpkgs.legacyPackages.${system}.nixfmt-tree;
+
+      # ── Dev shell for contributors ──
+      # Toolchain plus the entry banner; see lib/devshell.nix.
+      devShells.${system}.default = import ./lib/devshell.nix { inherit pkgs; };
+
+      # ── Checks (validates nixosConfigurations build) ──
+      checks.${system} = {
+        ${hostName} = self.nixosConfigurations.${hostName}.config.system.build.toplevel;
+        tentaflake-cli = self.packages.${system}.tentaflake-cli;
+        tentaflake-broker = self.packages.${system}.tentaflake-broker;
+        tentaflake-worker = self.packages.${system}.tentaflake-worker;
+        tentaflake-worker-image = self.packages.${system}.tentaflake-worker-image;
+        devcontainer-cli = self.packages.${system}.devcontainer-cli;
+        ci-vm-selection = import ./tests/ci-vm-selection.nix { inherit pkgs; };
+        rust-package-sources = import ./tests/rust-package-sources.nix { inherit self pkgs; };
+        image-pinning = import ./lib/pinnedImage-test.nix { inherit pkgs; };
+        agent-adapters =
+          let
+            tests = import ./tests/agent-adapters.nix { inherit pkgs; };
+          in
+          pkgs.runCommand "tentaflake-agent-adapters"
+            {
+              nativeBuildInputs = [
+                pkgs.python3
+                pkgs.bash
+                pkgs.coreutils
+                pkgs.findutils
+                pkgs.gnugrep
+                pkgs.util-linux
+              ];
+              quotaPrepare = pkgs.writeText "state-quota-prepare" tests.prepareScript;
+              quotaOwner = pkgs.writeText "state-quota-owner" tests.ownerScript;
+              src = lib.fileset.toSource {
+                root = ./.;
+                fileset = lib.fileset.unions [
+                  ./adapters/catalog.json
+                  ./docs/agent-adapters.md
+                  ./scripts/runtime-catalog-docs.py
+                  ./scripts/state-quota-test.py
+                ];
+              };
+            }
+            ''
+              python3 "$src/scripts/runtime-catalog-docs.py" --check --root "$src"
+              python3 "$src/scripts/state-quota-test.py" "$quotaPrepare" "$quotaOwner"
+              touch "$out"
+            '';
+        module-evaluation = import ./tests/module-eval.nix {
+          nixpkgsPath = nixpkgs.outPath;
+          researchFlake = inputs.tentaflake-research;
+        };
+
+        # VM integration test: boots the host and asserts the runtime path
+        # (Rust CLI, status, and agent unit/user/state dir).
+        vm-integration = pkgs.testers.runNixOSTest (
+          import ./tests/integration.nix { inherit self mkHermesAgent mkZeroClawAgent; }
+        );
+        research-integration = import ./tests/research-integration.nix { inherit self pkgs; };
+        research-policy = import ./tests/research-policy.nix { inherit self pkgs; };
+      };
+
+      # ── tentaflake: Installed system, consumes my-agents.nix ──
+      # Attr name is `hostName` so it always matches what `tentaflake rebuild`
+      # passes to `nixos-rebuild --flake .#<host>`.
       nixosConfigurations.${hostName} = nixpkgs.lib.nixosSystem {
         inherit system;
-        specialArgs = {
-          inherit inputs self;
+        specialArgs = baseSpecialArgs // {
           profile = "installed";
         };
         modules = [
@@ -78,6 +210,7 @@
                 consoleKeyMap
                 stateVersion
                 ;
+              adminShell = "${pkgs.zsh}/bin/zsh";
               timeZone = "UTC";
               allowUnfree = false;
               boot.enable = true;
@@ -88,9 +221,14 @@
               packages.enable = true;
               users.enable = true;
               tailscale.enable = true;
-              control.enable = true;
-              # The login screen shows the setup notice; kmscon has no issue file.
-              modernConsole.enable = false;
+              shell = {
+                enable = true;
+                # Interactive extras (all opt-in; on here for the built-in host).
+                zsh.enable = true;
+                zoxide.enable = true;
+                lazygit.enable = true;
+                tmux.enable = true;
+              };
             };
           }
           self.nixosModules.default
@@ -98,13 +236,34 @@
         ];
       };
 
-      packages.${system} = {
+      # ── installer-iso: Bare installer, embeds repo, runs installer.sh ──
+      nixosConfigurations.installer-iso = nixpkgs.lib.nixosSystem {
+        inherit system;
+        specialArgs = baseSpecialArgs // {
+          profile = "installer";
+        };
+        modules = [
+          {
+            # The ISO installs an agent host but does not run untrusted agents
+            # itself, so it does not need the balanced gVisor capsule closure.
+            tentaflake.security.profile = "dev";
+          }
+          self.nixosModules.default
+          ./configuration.nix
+          ./installer/iso.nix
+        ];
+      };
+
+      # ── Convenience packages ──
+      packages.${system} = rec {
+        devcontainer-cli = devcontainerCli;
+        security-tools = securityTools;
+        semgrep-rules = semgrepRules;
+        tentaflake-cli = pkgs.callPackage ./pkgs/tentaflake-cli { };
         tentaflake-broker = pkgs.callPackage ./pkgs/tentaflake-broker { };
-        tentaflake-control = pkgs.callPackage ./pkgs/tentaflake-control { };
-        tentaflake-ui = pkgs.callPackage ./pkgs/tentaflake-ui { };
-        # Building them is explicit (a VM run each); see the README.
-        image-raw = diskImage "raw";
-        image-qcow2 = diskImage "qcow2-compressed";
+        tentaflake-worker = pkgs.callPackage ./pkgs/tentaflake-worker { };
+        tentaflake-worker-image = pkgs.callPackage ./pkgs/tentaflake-worker/image.nix { };
+        installer-iso = self.nixosConfigurations.installer-iso.config.system.build.isoImage;
       };
     };
 }

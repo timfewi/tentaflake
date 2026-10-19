@@ -11,7 +11,10 @@
 /crates/ @timfewi
 /Cargo.toml @timfewi
 /Cargo.lock @timfewi
-/pkgs/ @timfewi
+/pkgs/tentaflake-cli/ @timfewi
+
+# Installer
+/installer/ @timfewi
 
 # Docs
 /docs/ @timfewi

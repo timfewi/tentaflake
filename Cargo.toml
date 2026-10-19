@@ -1,8 +1,10 @@
 [workspace]
 members = [
   "crates/tentaflake-broker",
+  "crates/tentaflake-cli",
+  "crates/tentaflake-worker",
 ]
 resolver = "2"
 
 [workspace.package]
-version = "0.5.0"
+version = "0.4.0"

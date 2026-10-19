@@ -1,7 +1,5 @@
-use crate::routes::Route;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use std::collections::HashMap;
 use std::env;
 use std::fs::{self, OpenOptions};
 use std::io::{Read, Write};
@@ -24,12 +22,14 @@ struct RateState {
     requests: u64,
 }
 
-/// Daily budgets and the request rate per route, persisted as one map keyed by route id.
 pub struct Limits {
     path: PathBuf,
     window_seconds: u64,
     max_requests_per_window: u64,
-    inner: Mutex<(HashMap<String, BudgetState>, HashMap<String, RateState>)>,
+    daily_request_budget: u64,
+    daily_token_budget: u64,
+    daily_cost_microusd: u64,
+    inner: Mutex<(BudgetState, RateState)>,
 }
 
 impl Limits {
@@ -37,11 +37,14 @@ impl Limits {
         path: PathBuf,
         window_seconds: u64,
         max_requests_per_window: u64,
+        daily_request_budget: u64,
+        daily_token_budget: u64,
+        daily_cost_microusd: u64,
     ) -> Result<Self, String> {
-        let budgets = match fs::read(&path) {
+        let budget = match fs::read(&path) {
             Ok(bytes) => serde_json::from_slice(&bytes)
                 .map_err(|error| format!("invalid budget state {}: {error}", path.display()))?,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => HashMap::new(),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => BudgetState::default(),
             Err(error) => {
                 return Err(format!(
                     "cannot read budget state {}: {error}",
@@ -53,41 +56,50 @@ impl Limits {
             path,
             window_seconds,
             max_requests_per_window,
-            inner: Mutex::new((budgets, HashMap::new())),
+            daily_request_budget,
+            daily_token_budget,
+            daily_cost_microusd,
+            inner: Mutex::new((
+                budget,
+                RateState {
+                    window: 0,
+                    requests: 0,
+                },
+            )),
         })
     }
 
-    pub fn reserve(&self, route: &Route, tokens: u64, cost_microusd: u64) -> Result<(), String> {
+    pub fn reserve(&self, tokens: u64, cost_microusd: u64) -> Result<(), String> {
         let now = unix_seconds();
         let day = now / 86_400;
         let window = now / self.window_seconds;
-        let mut guard = self.inner.lock().map_err(|_| "budget state lock failed")?;
-        let (budgets, rates) = &mut *guard;
-        // Entries of earlier days and windows, including removed routes, expire here.
-        budgets.retain(|_, budget| budget.day == day);
-        rates.retain(|_, rate| rate.window == window);
-        let rate = rates.entry(route.id.clone()).or_insert(RateState {
-            window,
-            requests: 0,
-        });
-        if rate.requests >= self.max_requests_per_window {
+        let mut state = self.inner.lock().map_err(|_| "budget state lock failed")?;
+        if state.0.day != day {
+            state.0 = BudgetState {
+                day,
+                ..BudgetState::default()
+            };
+        }
+        if state.1.window != window {
+            state.1 = RateState {
+                window,
+                requests: 0,
+            };
+        }
+        if state.1.requests >= self.max_requests_per_window {
             return Err("rate limit exceeded".into());
         }
-        let budget = budgets.entry(route.id.clone()).or_insert(BudgetState {
-            day,
-            ..BudgetState::default()
-        });
-        if budget.requests.saturating_add(1) > route.daily_request_budget
-            || budget.tokens.saturating_add(tokens) > route.daily_token_budget
-            || budget.cost_microusd.saturating_add(cost_microusd) > route.daily_cost_microusd
+        if state.0.requests.saturating_add(1) > self.daily_request_budget
+            || state.0.tokens.saturating_add(tokens) > self.daily_token_budget
+            || state.0.cost_microusd.saturating_add(cost_microusd) > self.daily_cost_microusd
         {
             return Err("daily budget exceeded".into());
         }
-        budget.requests += 1;
-        budget.tokens = budget.tokens.saturating_add(tokens);
-        budget.cost_microusd = budget.cost_microusd.saturating_add(cost_microusd);
-        rate.requests += 1;
-        atomic_json(&self.path, budgets)
+        state.0.requests += 1;
+        state.0.tokens = state.0.tokens.saturating_add(tokens);
+        state.0.cost_microusd = state.0.cost_microusd.saturating_add(cost_microusd);
+        state.1.requests += 1;
+        atomic_json(&self.path, &state.0)
     }
 }
 
@@ -108,7 +120,7 @@ impl Audit {
 
     pub fn record(
         &self,
-        route: &str,
+        agent: &str,
         kind: &str,
         outcome: &str,
         detail: serde_json::Value,
@@ -126,7 +138,7 @@ impl Audit {
         }
         let event = json!({
             "ts": unix_seconds(),
-            "route": route,
+            "agent": agent,
             "kind": kind,
             "outcome": outcome,
             "detail": detail,
@@ -210,6 +222,15 @@ fn read_secret_from(path: &Path, credentials_directory: Option<&Path>) -> Result
     Ok(value.to_string())
 }
 
+pub fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
+    let mut difference = left.len() ^ right.len();
+    let length = left.len().max(right.len());
+    for index in 0..length {
+        difference |= usize::from(*left.get(index).unwrap_or(&0) ^ *right.get(index).unwrap_or(&0));
+    }
+    difference == 0
+}
+
 pub fn unix_seconds() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -264,6 +285,13 @@ mod tests {
             std::process::id(),
             unix_seconds()
         ))
+    }
+
+    #[test]
+    fn constant_time_comparison_handles_lengths() {
+        assert!(constant_time_eq(b"secret", b"secret"));
+        assert!(!constant_time_eq(b"secret", b"secreu"));
+        assert!(!constant_time_eq(b"secret", b"secret-long"));
     }
 
     #[test]

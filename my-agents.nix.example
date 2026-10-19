@@ -1,0 +1,80 @@
+{ mkAgent, mkHermesAgent, mkZeroClawAgent }:
+
+# Installed systems use the balanced security profile by default. These
+# examples create fail-closed capsules and do not inject provider credentials
+# or publish services. They stay stopped until an exact broker policy is
+# declared and the operator explicitly starts them.
+[
+  # OpenClaw is a stopped scaffold only; it creates no runtime container.
+  (mkAgent {
+    adapter = "openclaw";
+    name = "preview";
+    autoStart = false;
+  })
+  (mkHermesAgent {
+    name = "coding";
+    autoStart = false;
+    gitIdentity = {
+      name = "coding-bot";
+      email = "coding@example.invalid";
+    };
+
+    # Host-side push is optional. The token never enters the agent, and both
+    # remote and branch must match exactly after canonicalization.
+    # gitAutoPush = {
+    #   tokenEnvFile = "/run/agenix/github-coding";
+    #   allowedRemotes = [
+    #     "https://github.com/example/coding.git"
+    #   ];
+    #   allowedBranches = [ "main" ];
+    # };
+  })
+
+  (mkZeroClawAgent {
+    name = "assistant";
+    autoStart = false;
+    settings.schema_version = 3;
+  })
+
+  # Disposable no-egress execution queues. The exact key, workspace, and
+  # numeric user are checked against each builder during evaluation.
+  {
+    tentaflake.worker.agents = {
+      hermes-coding = {
+        enable = true;
+        workspace = "/var/lib/hermes-coding/workspace";
+      };
+      zeroclaw-assistant = {
+        enable = true;
+        workspace = "/var/lib/zeroclaw-assistant/data";
+        containerUid = 65534;
+        containerGid = 65534;
+      };
+    };
+
+    # Fixed-size persistent Btrfs workspaces. Enabling these on a non-empty
+    # existing workspace fails closed; follow the migration guide first.
+    tentaflake.workspaceQuota.agents = {
+      hermes-coding = {
+        enable = true;
+        workspace = "/var/lib/hermes-coding/workspace";
+        sizeMiB = 8192;
+      };
+      zeroclaw-assistant = {
+        enable = true;
+        workspace = "/var/lib/zeroclaw-assistant/data";
+        sizeMiB = 8192;
+        ownerUid = 65534;
+        ownerGid = 65534;
+      };
+    };
+  }
+]
+
+# Compatibility migration for a trusted development host:
+#
+#   tentaflake.security.profile = "dev";
+#
+# Only under that explicit host profile may builders accept envFile,
+# agenixFile, host networking, published loopback ports, dashboards, or
+# mutable local image tags. Do not use dev for untrusted 24/7 agents.

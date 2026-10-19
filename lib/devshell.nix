@@ -16,7 +16,7 @@ let
     lib.splitString "\n" (lib.removeSuffix "\n" (builtins.readFile ../public/tentaflake-shell-logo.txt))
   );
 
-  # The cheat sheet mirrors the justfile — the recipes worth knowing on
+  # The cheat sheet mirrors the justfile — the five recipes worth knowing on
   # entry. `just` itself lists the rest, so this never has to grow.
   commands = [
     {
@@ -24,12 +24,20 @@ let
       what = "list every recipe";
     }
     {
-      cmd = "just check";
-      what = "fast checks plus flake evaluation";
+      cmd = "just ci";
+      what = "full local gate (CI + installer ISO)";
     }
     {
-      cmd = "just fmt";
-      what = "format the tree";
+      cmd = "just e2e-devcontainer";
+      what = "verify the locked contributor container";
+    }
+    {
+      cmd = "just security";
+      what = "scan source and locked dependencies";
+    }
+    {
+      cmd = "just e2e-installer";
+      what = "install into a disposable UEFI VM";
     }
   ];
   commandColumnWidth =
@@ -42,7 +50,7 @@ let
   );
 
   # writeShellApplication shellchecks at build time, so building the dev shell
-  # lints this script.
+  # lints this script — same guarantee `just shellcheck` gives scripts/*.sh.
   banner = pkgs.writeShellApplication {
     name = "tentaflake-devshell-banner";
     runtimeInputs = [ pkgs.coreutils ];
@@ -119,18 +127,13 @@ pkgs.mkShell {
     statix
     deadnix
     nil
-    bun
-    biome
     cargo
     clippy
     rustc
     rustfmt
     shellcheck
     actionlint
-    (python3.withPackages (pythonPackages: [
-      pythonPackages.jsonschema
-      pythonPackages.rfc3339-validator
-    ]))
+    python3
   ];
 
   shellHook = ''
