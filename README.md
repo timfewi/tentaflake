@@ -104,6 +104,11 @@ nix develop
 just check   # fast checks plus flake evaluation, the CI gate
 ```
 
+Keep `ui/package.json` and `ui/bun.lock`'s `playwright-core` version aligned with
+`playwright-driver` in the locked nixpkgs when refreshing the browser toolchain.
+This development-only dependency is excluded from the packaged UI's production
+dependency closure.
+
 See [CONTRIBUTING.md](CONTRIBUTING.md) for the recipes and conventions.
 
 ## License
