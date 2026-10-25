@@ -21,6 +21,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   shell-quote correction and matching cache pin. Keep security scans bounded.
 - Prevent CLI fixture collisions and avoid rereading deliberately disconnected
   broker test clients.
+- Refresh the locked nixos-unstable and optional Hermes flake inputs while
+  retaining Research's independent package set and digest-pinned runtime images.
+- Synchronize Research with published canonical `main` revision `babdca5`,
+  including its project-check pin; no feature-branch input or runtime acceptance
+  is implied by the dependency refresh.
 
 ## [0.5.0] - Archived unreleased development
 

@@ -112,7 +112,7 @@ independent kernel firewall remains responsible for direct IPv4, IPv6 and DNS
 denial if the observer, controller or both fail.
 
 See the pinned upstream
-[VPN evidence contract](https://github.com/timfewi/tentaflake-research/blob/91ce54005c3c69a3eab9d8e2730ca9d2802d2c96/docs/vpn-adapters.md)
+[VPN evidence contract](https://github.com/timfewi/tentaflake-research/blob/babdca58ddada874aae22a5042cf90675a0d72eb/docs/vpn-adapters.md)
 for route evaluation and its limits. Agents cannot select exits, write
 observations or control leases, execute readiness hooks, or access VPN credentials.
 
