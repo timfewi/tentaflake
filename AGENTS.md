@@ -110,12 +110,15 @@ are already published or require access to another repository for public checks.
   builder; no model/Research acceptance or startup-gate relaxation is implied.
 - `adapters/` — lazy runtime registry and schema-v1 contracts; `lib/mkAgent.nix`
   selects one adapter. Legacy wrappers preserve their APIs and state. OpenClaw
-  is a stopped scaffold without an OCI artifact; never advertise operational
+  and Pi are stopped scaffolds built by `lib/stoppedScaffold.nix`: a refusal
+  unit only, no OCI artifact, state directory, credential or socket. Each
+  runtime preset reserves a distinct UID/GID. Never advertise operational
   support before real model/Research/execution/lifecycle acceptance.
 - Instance inventory uses explicit `tentaflake.agentInstances` metadata for
-  adapters, retaining unmanaged OCI fallback. Generic JSON requires
-  `schemaVersion = 1`; generic and legacy arrays are additive with collisions
-  rejected. See `docs/agent-adapters.md` and `checks.*.agent-adapters`.
+  adapters, retaining unmanaged OCI fallback. `agents.tsv` carries each
+  instance's `runnable` flag; CLI container commands use it, not runtime names.
+  Generic JSON requires `schemaVersion = 1`; generic and legacy arrays are
+  additive with collisions rejected. See `docs/agent-adapters.md` and `checks.*.agent-adapters`.
 - `crates/` and `pkgs/` — Rust CLI/broker/worker workspace and Nix packages
 - CLI help is configuration-free; management commands require generated
   host configuration and inventory.
@@ -169,6 +172,13 @@ are already published or require access to another repository for public checks.
   arbitrary client headers. The client owns session propagation.
   Clear systemd capability sets with an empty string; an empty list omits the
   directive. Verify credential write boundaries inside the unit namespace.
+- `llm.strictCostEnvelope` is opt-in: exclusive checksum-protected budget state,
+  durable reservations, no refunds. Only explicit operator one-shot units
+  (`tentaflake-broker-llm-{initialize,reconcile}-NAME`) provision or reconcile
+  it; never start them automatically. Complete provider responses, including
+  errors and dated model snapshots, settle; uncertain outcomes stay held. Settled
+  spend stays on its admission day. The dynamic broker identity must not collide
+  with configured users or groups. See `docs/12-brokered-egress.md`.
 - Secure controllers and brokers share `lib/serviceRecovery.nix`: bounded
   restart backoff without permanent start-limit exhaustion. Explicit stops
   must still prevent automatic retries.

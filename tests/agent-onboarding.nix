@@ -23,6 +23,15 @@ let
       }
     ];
   };
+  piScaffold = scaffold // {
+    agents = [
+      {
+        adapter = "pi";
+        name = "research";
+        autoStart = false;
+      }
+    ];
+  };
   result = plan generic;
   rejects = value: !(builtins.tryEval (builtins.deepSeq value true)).success;
 in
@@ -31,6 +40,7 @@ assert (lib.head result.instances).container == "generic-from-json";
 assert (lib.head result.instances).requiresHostUpdate;
 assert (plan hermes).valid;
 assert !(lib.head (plan scaffold).instances).runnable;
+assert !(lib.head (plan piScaffold).instances).runnable;
 assert rejects (plan (generic // { schemaVersion = 2; }));
 assert rejects (
   plan (

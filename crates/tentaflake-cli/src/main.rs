@@ -40,6 +40,8 @@ struct Agent {
     container: String,
     unit: String,
     state_dir: PathBuf,
+    // Instance metadata; stopped scaffolds have no accepted container.
+    runnable: bool,
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -2154,9 +2156,20 @@ fn parse_agents(text: &str) -> Result<Vec<Agent>, String> {
         .enumerate()
         .map(|(index, line)| {
             let fields: Vec<&str> = line.split('\t').collect();
-            if fields.len() != 5 || fields.iter().any(|field| field.is_empty()) {
+            let runnable = match fields.get(5) {
+                Some(&"true") => Some(true),
+                Some(&"false") => Some(false),
+                _ => None,
+            };
+            let (6, Some(runnable)) = (fields.len(), runnable) else {
                 return Err(format!(
-                    "invalid agent record on line {}: expected five non-empty tab-separated fields",
+                    "invalid agent record on line {}: expected six tab-separated fields ending in runnable true/false",
+                    index + 1
+                ));
+            };
+            if fields.iter().any(|field| field.is_empty()) {
+                return Err(format!(
+                    "invalid agent record on line {}: fields must be non-empty",
                     index + 1
                 ));
             }
@@ -2166,6 +2179,7 @@ fn parse_agents(text: &str) -> Result<Vec<Agent>, String> {
                 container: fields[2].into(),
                 unit: fields[3].into(),
                 state_dir: PathBuf::from(fields[4]),
+                runnable,
             })
         })
         .collect()
@@ -2311,14 +2325,27 @@ fn finding(ok: bool, message: &str) {
     println!("  {} {message}", if ok { "✓" } else { "✗" });
 }
 
+fn require_container(agent: &Agent) -> Result<(), String> {
+    if agent.runnable {
+        Ok(())
+    } else {
+        Err("stopped scaffold has no accepted container".into())
+    }
+}
+
 fn stats(config: &Config, agents: &[Agent]) -> Result<u8, String> {
     if agents.is_empty() {
         println!("no agents defined");
         return Ok(0);
     }
+    let runnable: Vec<_> = agents.iter().filter(|agent| agent.runnable).collect();
+    if runnable.is_empty() {
+        println!("no runnable agents defined");
+        return Ok(0);
+    }
     let mut command = backend_command(config);
     command.arg("stats").arg("--no-stream");
-    for agent in agents {
+    for agent in runnable {
         command.arg(&agent.container);
     }
     exec(command)
@@ -2356,6 +2383,7 @@ fn systemd_unit_exists(unit: &str) -> bool {
 
 fn container_shell(config: &Config, agents: &[Agent], args: &[String]) -> Result<u8, String> {
     let agent = find_agent(agents, args.first())?;
+    require_container(agent)?;
     let mut command = backend_command(config);
     command.args(["exec", "-it", &agent.container, "sh"]);
     exec(command)
@@ -2363,6 +2391,7 @@ fn container_shell(config: &Config, agents: &[Agent], args: &[String]) -> Result
 
 fn container_exec(config: &Config, agents: &[Agent], args: &[String]) -> Result<u8, String> {
     let agent = find_agent(agents, args.first())?;
+    require_container(agent)?;
     let command_args = args[1..].strip_prefix(&["--".into()]).unwrap_or(&args[1..]);
     if command_args.is_empty() {
         return Err("missing command after agent name".into());
@@ -2695,7 +2724,7 @@ mod tests {
     #[test]
     fn parses_agent_records() {
         let agents = parse_agents(
-            "hermes\tcoding\thermes-coding\tdocker-hermes-coding.service\t/var/lib/hermes-coding\n",
+            "hermes\tcoding\thermes-coding\tdocker-hermes-coding.service\t/var/lib/hermes-coding\ttrue\n",
         )
         .unwrap();
         assert_eq!(agents.len(), 1);
@@ -2706,8 +2735,8 @@ mod tests {
     #[test]
     fn adapter_inventory_preserves_explicit_identity_and_unit() {
         let agents = parse_agents(
-            "openclaw\thermes-assistant\topenclaw-hermes-assistant\tpodman-openclaw-hermes-assistant.service\t/var/lib/custom-state\n\
-             hermes\tzeroclaw-coding\thermes-zeroclaw-coding\tdocker-hermes-zeroclaw-coding.service\t/var/lib/existing-state\n",
+            "openclaw\thermes-assistant\topenclaw-hermes-assistant\tpodman-openclaw-hermes-assistant.service\t/var/lib/custom-state\tfalse\n\
+             hermes\tzeroclaw-coding\thermes-zeroclaw-coding\tdocker-hermes-zeroclaw-coding.service\t/var/lib/existing-state\ttrue\n",
         )
         .unwrap();
         let openclaw = find_agent(&agents, Some(&"hermes-assistant".into())).unwrap();
@@ -2726,12 +2755,17 @@ mod tests {
     #[test]
     fn rejects_malformed_agent_records() {
         assert!(parse_agents("hermes\tmissing\tfields\n").is_err());
+        let legacy =
+            "hermes\tcoding\thermes-coding\tdocker-hermes-coding.service\t/var/lib/hermes-coding";
+        assert!(parse_agents(legacy).is_err());
+        assert!(parse_agents(&format!("{legacy}\tmaybe")).is_err());
+        assert!(!parse_agents(&format!("{legacy}\tfalse")).unwrap()[0].runnable);
     }
 
     #[test]
     fn finds_agent_by_name_or_container() {
         let agents = parse_agents(
-            "zeroclaw\tassistant\tzeroclaw-assistant\tdocker-zeroclaw-assistant.service\t/var/lib/zeroclaw-assistant\n",
+            "zeroclaw\tassistant\tzeroclaw-assistant\tdocker-zeroclaw-assistant.service\t/var/lib/zeroclaw-assistant\ttrue\n",
         )
         .unwrap();
         assert_eq!(

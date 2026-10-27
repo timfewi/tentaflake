@@ -52,8 +52,8 @@ exit "$FIXTURE_DISK_EXIT""#,
         }
         fs::write(
             root.join("agents.tsv"),
-            "hermes\tcoding-private-fixture\tcoding-fixture\tcoding-fixture.service\t/tmp/coding-fixture\n\
-             hermes\tstopped-private-fixture\tstopped-fixture\tstopped-fixture.service\t/tmp/stopped-fixture\n",
+            "hermes\tcoding-private-fixture\tcoding-fixture\tcoding-fixture.service\t/tmp/coding-fixture\ttrue\n\
+             hermes\tstopped-private-fixture\tstopped-fixture\tstopped-fixture.service\t/tmp/stopped-fixture\ttrue\n",
         )
         .unwrap();
         fs::write(
@@ -240,5 +240,80 @@ fn diagnoses_host_failures_and_disk_pressure() {
                 assert_eq!(output.status.code(), Some(1), "{command}, json={json}");
             }
         }
+    }
+}
+
+fn fake_backend(fixture: &Fixture) {
+    let systemctl = fs::read_to_string(fixture.0.join("systemctl")).unwrap();
+    let interpreter = systemctl.lines().next().unwrap();
+    let path = fixture.0.join("docker");
+    fs::write(
+        &path,
+        format!("{interpreter}\nprintf '%s\\n' backend-invoked \"$@\"\n"),
+    )
+    .unwrap();
+    fs::set_permissions(path, fs::Permissions::from_mode(0o700)).unwrap();
+}
+
+#[test]
+fn stats_omit_stopped_scaffolds_but_keep_real_and_unmanaged_agents() {
+    let fixture = Fixture::new();
+    fake_backend(&fixture);
+    fs::write(
+        fixture.0.join("agents.tsv"),
+        "pi\tpilot\tpi-pilot\tdocker-pi-pilot.service\t/var/lib/pi-pilot\tfalse\n\
+         openclaw\tchat\topenclaw-chat\tdocker-openclaw-chat.service\t/var/lib/openclaw-chat\tfalse\n\
+         hermes\tworker\thermes-worker\tdocker-hermes-worker.service\t/var/lib/hermes-worker\ttrue\n\
+         hermes\tparked\thermes-parked\tdocker-hermes-parked.service\t/var/lib/hermes-parked\tfalse\n\
+         agent\tlegacy\tunmanaged\tdocker-unmanaged.service\t/var/lib/unmanaged\ttrue\n",
+    )
+    .unwrap();
+    let output = fixture.run("stats", false, false, &[]);
+    assert!(output.status.success());
+    assert_eq!(
+        String::from_utf8(output.stdout)
+            .unwrap()
+            .lines()
+            .collect::<Vec<_>>(),
+        [
+            "backend-invoked",
+            "stats",
+            "--no-stream",
+            "hermes-worker",
+            "unmanaged"
+        ]
+    );
+}
+
+#[test]
+fn scaffold_only_stats_and_container_commands_never_invoke_backend() {
+    let fixture = Fixture::new();
+    fake_backend(&fixture);
+    fs::write(
+        fixture.0.join("agents.tsv"),
+        "pi\tpilot\tpi-pilot\tdocker-pi-pilot.service\t/var/lib/pi-pilot\tfalse\n\
+         openclaw\tchat\topenclaw-chat\tdocker-openclaw-chat.service\t/var/lib/openclaw-chat\tfalse\n",
+    )
+    .unwrap();
+    let stats = fixture.run("stats", false, false, &[]);
+    assert!(stats.status.success());
+    let text = String::from_utf8(stats.stdout).unwrap();
+    assert!(text.contains("no runnable agents"));
+    assert!(!text.contains("backend-invoked"));
+    for args in [
+        vec!["shell", "pilot"],
+        vec!["exec", "pilot", "--", "true"],
+        vec!["shell", "chat"],
+    ] {
+        let result = Command::new(env!("CARGO_BIN_EXE_tentaflake"))
+            .env_clear()
+            .env("PATH", &fixture.0)
+            .env("TENTAFLAKE_CONFIG", fixture.0.join("cli.conf"))
+            .args(&args)
+            .output()
+            .unwrap();
+        assert_eq!(result.status.code(), Some(2), "{args:?}");
+        assert!(String::from_utf8_lossy(&result.stderr).contains("scaffold"));
+        assert!(!String::from_utf8_lossy(&result.stdout).contains("backend-invoked"));
     }
 }

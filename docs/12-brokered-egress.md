@@ -159,9 +159,9 @@ The broker writes one startup-readiness event after it has proved that its
 private audit file can be opened and synced. `/healthz` rechecks credential and
 audit readiness without appending an event, so health polling cannot rotate
 useful audit history merely by probing. Audit files also reject symlink
-targets. LLM input-token reservation uses request bytes as a conservative
-upper bound rather than an optimistic characters-per-token estimate;
-provider-reported usage remains separately recorded.
+targets. LLM input-token reservation uses request bytes rather than an
+optimistic characters-per-token estimate; provider usage is recorded separately.
+That estimate is not proof of the provider's actual tokenization or invoice.
 
 Host-side `tentaflake doctor` and VM probes reach `/healthz` through the exact
 agent gateway address. VM readiness probes stop after 30 seconds and print the
@@ -187,6 +187,165 @@ header from the host credential.
 Audit events contain agent, route, model, outcome, status, reserved token/cost
 figures, and timestamps. They never contain request bodies, prompts, virtual
 keys, provider keys, or provider response bodies.
+
+### Strict cost envelope
+
+`llm.strictCostEnvelope = true` is an opt-in, default-off profile for clients
+whose complete provider request shape and pricing have been reviewed. It accepts
+only `/v1/chat/completions`, with one choice, local text messages and local
+function definitions/calls/results. Text content may be a string or an array of
+`{"type":"text","text":"..."}` parts. Function schemas are local JSON objects;
+unknown message, tool, call and choice fields are rejected. Multimodal or file
+references, provider-hosted tools, remote/conversation state, background work,
+provider extensions and the `x-opencode-session` affinity header are not allowed.
+Do not add an SDK-specific field until its billing and state semantics are reviewed.
+
+The only top-level fields are `model`, `messages`, `tools`, `tool_choice`,
+`stream`, `stream_options`, `max_tokens`, `max_completion_tokens`, `n`,
+`temperature`, `top_p`, `stop` and `parallel_tool_calls`. The latter must be
+false; `n` must be absent or one; the two completion limits are mutually
+exclusive. `stream_options` is an object containing at most the boolean
+`include_usage`. Streaming still requires `llm.streaming.enable = true` and uses
+the same bounded SSE implementation; invalid requests fail before reservation
+or dispatch. The ordinary profile retains both routes and its existing session
+contract.
+
+Strict mode requires exact allowed model names and positive input and output
+prices. It holds an OS lock for the protected budget state and persists and syncs
+the reservation and parent directory before dispatch. Uncertain reservations
+are never refunded on a failure or restart. It refuses a missing, malformed or
+symlinked budget, a budget changed while running, a missing/invalid initialization
+marker, a replaced lock, and observed clock rollback, including within the same
+UTC day. Its durable clock checkpoint advances on startup and on both accepted
+and budget/rate-denied requests. Other brokers sharing the state use a shared
+lock and cannot enter strict state or race strict initialization. The budget
+directory and its lock must be protected from external replacement; filesystem
+snapshot rollback and clock rollback between observations cannot always be
+detected. A clock jump forward can also cross a UTC-day boundary early; use a
+trustworthy host clock and provider-side limits. The existing per-minute rate
+window is in memory and starts fresh after a restart; it is not a durable
+account-wide provider rate limit.
+Strict updates require Linux `renameat2` exchange support from the budget
+filesystem; an unsupported filesystem fails closed instead of recreating a
+missing state file.
+
+Each strict reservation remains counted for its admission day even when local
+preflight proves no upstream send was attempted. Resolution/address rejection,
+unavailable credentials and audit failures before dispatch can clear only the
+uncertainty, not that day's charge. Once a send may have begun, only a verified
+complete provider response, a durable terminal audit, and successful
+downstream writes settle its uncertainty. A completely read non-2xx provider
+response (for example 400, 401, 429 or 500) ends the provider request and
+settles without a refund; a truncated, slow or oversized error body does not.
+Malformed or partial responses, cancellation, timeouts, post-dispatch audit
+failures and observed delivery failures leave it unsettled. Non-streaming
+success must identify the allowed model and one finished choice whose output
+is well formed: text (possibly empty or withheld by a content filter), a
+refusal, or valid local function calls. Every successful SSE completion chunk
+must carry that model and the same nonempty completion ID, and each choice must
+have a valid delta object before the real terminal event. The allowed model
+also matches its dated provider snapshot, such as `gpt-4o-2024-08-06` or
+`model-20241022`; any other suffix, such as `-mini`, stays unconfirmed. Ordinary
+(non-strict) streams do not require deltas, so choice-level metadata chunks such
+as content filter results are forwarded unchanged.
+
+Strict mode persists a usage-accounting hold with each reservation before
+dispatch. If provider-reported numeric usage exceeds the reserved token total
+or its configured-price calculation exceeds the reserved cost, it durably
+exhausts both daily counters before forwarding the usage-bearing response.
+Unrepresentable token sums or prices exhaust the counters too. Partial or
+inconsistent usage remains incomplete for audit, but numeric components can
+still establish an overage. This intentionally blocks all further admission for
+the affected day rather than attempting an exact refund or reconciliation.
+Requests already admitted or concurrently being admitted may still incur
+additional provider charges.
+
+The hold is cleared after normal processing, without refunding the reservation.
+If the process dies while it is held, or an overage update cannot be persisted,
+future admission is blocked even within the same day, including after restart,
+until separately authorized operator reconciliation (see below). A crash before
+dispatch can therefore also require reconciliation. Live requests can run concurrently, but
+unresolved usage holds prevent a day reset.
+
+An unsettled prior-day reservation prevents a UTC-day reset. If one request
+completes after midnight while another prior-day request remains unresolved,
+admission remains blocked. Every reservation stays charged to its admission day:
+once all prior holds settle after midnight, the next admission starts a fresh
+UTC day, so a request running across midnight does not charge the previous
+day's spend, or a previous-day overage exhaustion, against the new day.
+Completion capabilities are not recreated after a restart, so a lost upstream
+response blocks later-day admission until operator reconciliation.
+Do not remove the marker or initialize an empty replacement.
+
+### Reconciling held strict budgets
+
+Reconciliation is an explicit operator decision, never part of startup or
+restart. First stop the agent and its broker, then verify the provider-side
+outcome and usage of the held requests, for example in the provider's usage
+console. Then run the generated one-shot unit:
+
+```sh
+systemctl start tentaflake-broker-llm-reconcile-hermes-coding.service
+```
+
+The underlying command is `tentaflake-broker --reconcile-strict-budget
+/absolute/path/budget.json`. It takes the exclusive budget lock, so it fails
+while a broker owns the state, and requires a valid marker, checksum and
+non-rolled-back clock. It clears held reservations and orphaned usage holds and
+reports how many it resolved. Counters are never refunded: the held requests stay
+charged to their admission day. If the provider reports usage above those
+reservations, keep admission disabled for that day and adjust provider-side
+limits; reconciliation does not record that overage. A missing or corrupt state
+is not reconcilable and still needs separate investigation.
+
+Successful downstream `write_all` confirms only that the local kernel accepted
+the bytes; it does not acknowledge that the runner received them. Consequently
+this broker cannot guarantee retention for every undetected downstream response
+loss, or guarantee provider invoices. If that receipt guarantee is required,
+keep the integration blocked pending a separately reviewed application-level
+acknowledgement protocol; it is not part of these broker routes.
+
+The strict state includes a SHA-256 digest of its canonical counters, unsettled
+count and clock checkpoint, and is checked before admission and on restart. It
+detects accidental valid-JSON corruption; it is not a MAC, a defense against a
+writer who can recompute it, or a witness against storage rollback. Protect the
+directory and retain the provider-side spending prerequisite.
+
+Initialization is deliberately **not** part of service startup or restart.
+For a new, unused budget only, an operator may separately authorize and run the
+generated one-shot unit, for example:
+
+```sh
+systemctl start tentaflake-broker-llm-initialize-hermes-coding.service
+```
+
+Stop the broker and its agent first and ensure no other broker uses that state.
+The unit and broker use the same dynamic service identity and state directory;
+the unit creates a private lock, initialization marker and empty budget exactly
+once, syncing them before it exits. It has no automatic start dependency. The
+dynamic user and group name must not collide with configured host identities;
+operators must also avoid collisions with external user/group databases. The
+underlying explicit command is `tentaflake-broker --initialize-strict-budget
+/absolute/path/budget.json`; direct users must arrange the same protected
+directory and ownership. An existing ordinary budget is not an empty new
+budget and is never converted automatically. An interrupted initialization or
+missing/corrupt state must remain stopped for operator reconciliation, not be
+"fixed" by deleting the marker or reinitializing. Never initialize an empty
+budget over spending already incurred on the provider account.
+
+Local token and cost reservations are not an account-wide invoice cap. Before
+paid dispatch, independently verify current provider pricing and all applicable
+billable features, or establish a provider-enforced hard spending cap sufficient
+for the account. The operator must also account for other processes/accounts
+and storage rollback. If those bounds or the client's exact supported envelope
+cannot be established, keep paid admission disabled; fixture tests and positive
+configured prices alone do not establish live provider behavior or costs.
+
+The ordinary (non-strict) profile retains its legacy shared-state behavior and
+does not reconcile provider-reported overages. Concurrent ordinary brokers can
+overwrite stale budget counters; neither their token nor price counters provide
+the strict mode's durable overage guarantee. Use the strict envelope and an
+independent provider-side cap when these bounds are required.
 
 ## Streaming model responses
 
@@ -239,12 +398,13 @@ without releasing that event. Later client delivery failure
 is recorded as an abort when the audit remains writable. Audit completion
 admission is not proof that the client received every byte.
 
-Budget reservation remains conservative for every request, including successful
-streams and missing usage: reported usage does not refund tokens or cost.
+Reservations are never refunded for reported usage, including successful
+streams and missing usage. Strict-mode overage handling is described above.
 Chat usage is optional; Responses usage comes from the terminal response. Only
-consistent numeric input/output/total token counts enter audit. Malformed or
-missing usage is `null`; prompts, tool arguments, output and provider error text
-never enter audit. A stream ending without its genuine terminal event fails.
+consistent numeric input/output/total token counts enter streaming audit.
+Malformed or missing streaming usage is `null`; prompts, tool arguments,
+output and provider error text never enter audit. A stream ending without its
+genuine terminal event fails.
 
 The implementation uses the pinned `reqwest 0.12.28` and `tokio 1.52.3`, with
 explicitly disabled HTTP retry policy. Protocol references are the official

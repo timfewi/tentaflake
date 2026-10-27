@@ -195,7 +195,7 @@ gain general egress by changing a tool setting.
 Adapter hooks generate upstream-specific settings after shared socket/closure
 projection. An arbitrary OCI container with a runtime-like prefix cannot opt
 into Research; validation checks explicit registered instance metadata and the
-adapter's accepted capability. OpenClaw's stopped scaffold has no accepted
+adapter's accepted capability. The OpenClaw and Pi scaffolds have no accepted
 Research discovery integration. See [agent adapters](agent-adapters.md).
 
 Hermes settings disable the `web` and `browser` toolsets and register

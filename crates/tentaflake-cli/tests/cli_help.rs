@@ -51,6 +51,16 @@ fn runtime_discovery_is_configuration_free_and_reports_scaffolds() {
         catalog["presets"]["openclaw"]["artifact"]["reference"],
         serde_json::Value::Null
     );
+    assert_eq!(catalog["presets"]["pi"]["identity"]["status"], "scaffold");
+    assert_eq!(
+        catalog["presets"]["pi"]["artifact"]["reference"],
+        serde_json::Value::Null
+    );
+    assert_eq!(catalog["presets"]["pi"]["research"]["supported"], false);
+    assert_eq!(
+        catalog["presets"]["pi"]["capabilities"],
+        serde_json::json!([])
+    );
     assert_eq!(
         catalog["presets"]["hermes"]["evidence"]["vendorAcceptance"],
         "pending"
@@ -89,4 +99,14 @@ fn templates_are_configuration_free_and_preserve_vendor_arguments_after_separato
         definition["agents"][0]["definition"]["lifecycle"],
         "stopped"
     );
+    let pi = Command::new(env!("CARGO_BIN_EXE_tentaflake"))
+        .args(["agent", "template", "pi", "research"])
+        .env("TENTAFLAKE_CONFIG", "/dev/null")
+        .output()
+        .unwrap();
+    assert!(pi.status.success());
+    let template: serde_json::Value = serde_json::from_slice(&pi.stdout).unwrap();
+    assert_eq!(template["agents"][0]["adapter"], "pi");
+    assert_eq!(template["agents"][0]["name"], "research");
+    assert_eq!(template["agents"][0]["autoStart"], false);
 }

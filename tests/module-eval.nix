@@ -473,6 +473,22 @@ let
       }
     ];
   };
+
+  strictBrokerCapsule = streamingCapsule.extendModules {
+    modules = [
+      { tentaflake.broker.agents.hermes-brokered.llm.strictCostEnvelope = true; }
+    ];
+  };
+  strictBrokerIdentityCollision = strictBrokerCapsule.extendModules {
+    modules = [
+      {
+        users.users.${brokerBridge} = {
+          isSystemUser = true;
+          group = "nogroup";
+        };
+      }
+    ];
+  };
   streamingAssertions =
     limits:
     let
@@ -978,6 +994,43 @@ assert lib.elem "--env-file=/run/tentaflake/dev.env" devContainer.extraOptions;
 assert !(lib.elem "--runtime=runsc" devContainer.extraOptions);
 assert brokerAttempt.success;
 assert !brokerCapsule.config.tentaflake.broker.agents.hermes-brokered.llm.streaming.enable;
+assert !brokerCapsule.config.tentaflake.broker.agents.hermes-brokered.llm.strictCostEnvelope;
+assert
+  !(builtins.hasAttr "tentaflake-broker-llm-initialize-hermes-brokered" brokerCapsule.config.systemd.services);
+assert lib.all (item: item.assertion) strictBrokerCapsule.config.assertions;
+assert strictBrokerCapsule.config.tentaflake.broker.agents.hermes-brokered.llm.strictCostEnvelope;
+assert
+  strictBrokerCapsule.config.systemd.services."tentaflake-broker-llm-hermes-brokered".serviceConfig.User
+  == brokerBridge;
+assert
+  strictBrokerCapsule.config.systemd.services."tentaflake-broker-llm-initialize-hermes-brokered".serviceConfig.User
+  == brokerBridge;
+assert
+  strictBrokerCapsule.config.systemd.services."tentaflake-broker-llm-initialize-hermes-brokered".serviceConfig.StateDirectory
+  == "tentaflake-broker-llm-hermes-brokered";
+assert lib.hasInfix "--initialize-strict-budget"
+  strictBrokerCapsule.config.systemd.services."tentaflake-broker-llm-initialize-hermes-brokered".serviceConfig.ExecStart;
+assert
+  strictBrokerCapsule.config.systemd.services."tentaflake-broker-llm-initialize-hermes-brokered".wantedBy
+  == [ ];
+assert
+  !(builtins.hasAttr "tentaflake-broker-llm-reconcile-hermes-brokered" brokerCapsule.config.systemd.services);
+assert
+  strictBrokerCapsule.config.systemd.services."tentaflake-broker-llm-reconcile-hermes-brokered".serviceConfig.User
+  == brokerBridge;
+assert lib.hasInfix
+  "--reconcile-strict-budget /var/lib/tentaflake-broker-llm-hermes-brokered/budget.json"
+  strictBrokerCapsule.config.systemd.services."tentaflake-broker-llm-reconcile-hermes-brokered".serviceConfig.ExecStart;
+assert
+  strictBrokerCapsule.config.systemd.services."tentaflake-broker-llm-reconcile-hermes-brokered".wantedBy
+  == [ ];
+assert !(lib.all (item: item.assertion) strictBrokerIdentityCollision.config.assertions);
+assert lib.hasInfix "OPENAI_API_KEY=%s"
+  strictBrokerCapsule.config.systemd.services."tentaflake-broker-credentials-hermes-brokered".script;
+assert
+  !(lib.hasInfix "/run/agenix/example-provider"
+    strictBrokerCapsule.config.systemd.services."tentaflake-broker-credentials-hermes-brokered".script
+  );
 assert lib.all (item: item.assertion) streamingCapsule.config.assertions;
 assert streamingAssertions {
   enable = true;

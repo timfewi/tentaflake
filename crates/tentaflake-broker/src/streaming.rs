@@ -1,7 +1,8 @@
 //! Bounded, single-dispatch SSE forwarding. No provider body is written to audit.
-use crate::config::StreamingPolicy;
+use crate::broker::{observe_usage, parse_usage, provider_model_matches};
+use crate::config::{ModelPolicy, StreamingPolicy};
 use crate::policy::ResolvedTarget;
-use crate::state::Audit;
+use crate::state::{Audit, UsageGuard};
 use reqwest::header::{ACCEPT, CONTENT_TYPE};
 use serde_json::{Value, json};
 use std::future::{Future, poll_fn};
@@ -24,15 +25,21 @@ pub struct StreamingResponse {
     pub connect_timeout_seconds: u64,
     pub max_response_bytes: usize,
     pub audit: Arc<Audit>,
+    pub settlement: Option<crate::state::Reservation>,
+    pub usage_guard: Option<UsageGuard>,
+    pub model_policy: ModelPolicy,
     pub agent: String,
     pub route: String,
-    pub model: String,
 }
 
 struct Failure {
     status: u16,
     reason: &'static str,
 }
+
+// With a strict reservation this is produced only after the complete bounded
+// error body was read, so the provider request has ended and may settle.
+const PROVIDER_REJECTED: &str = "provider rejected streaming request";
 
 impl Failure {
     fn upstream(reason: &'static str) -> Self {
@@ -100,12 +107,15 @@ impl StreamingResponse {
             let mut headers_sent = false;
             let started = Instant::now();
             let total = started + Duration::from_secs(self.policy.total_timeout_seconds);
-            if let Err(failure) = self.relay(&mut reader, &mut writer, &mut headers_sent, started).await {
+            let completed = match self.relay(&mut reader, &mut writer, &mut headers_sent, started).await {
+                Ok(completed) => completed,
+                Err(failure) => {
                 // Reasons are static broker strings, never upstream error text.
-                let _ = self.audit.record(&self.agent, "llm", "stream_aborted", json!({
-                    "route": self.route, "model": self.model,
+                let audited = self.audit.record(&self.agent, "llm", "stream_aborted", json!({
+                    "route": self.route, "model": self.model_policy.name,
                     "provider": self.target.host, "reason": failure.reason,
-                }));
+                })).is_ok();
+                let mut delivered = false;
                 if !headers_sent && failure.status != 0 && Instant::now() < total {
                     let body = serde_json::to_vec(&json!({"error": failure.reason})).unwrap();
                     let header = format!(
@@ -113,17 +123,24 @@ impl StreamingResponse {
                         failure.status, body.len()
                     );
                     let deadline = total.min(Instant::now() + Duration::from_secs(self.policy.idle_timeout_seconds));
-                    let _ = write_bytes(&mut reader, &mut writer, deadline, header.as_bytes()).await;
-                    let _ = write_bytes(&mut reader, &mut writer, deadline, &body).await;
+                    delivered = write_bytes(&mut reader, &mut writer, deadline, header.as_bytes()).await.is_ok()
+                        && write_bytes(&mut reader, &mut writer, deadline, &body).await.is_ok();
+                }
+                if failure.reason == PROVIDER_REJECTED && audited && delivered {
+                    return Ok(true);
                 }
                 // After headers, close a truncated chunked body. Never fabricate
                 // [DONE], a Responses terminal event, or a successful HTTP end.
-                return Err(io::Error::other(failure.reason));
-            }
-            Ok(())
+                    return Err(io::Error::other(failure.reason));
+                }
+            };
+            Ok(completed)
         });
         let _ = socket.shutdown(Shutdown::Both);
-        result
+        if result? && let Some(reservation) = self.settlement {
+            reservation.settle().map_err(io::Error::other)?;
+        }
+        Ok(())
     }
 
     async fn relay(
@@ -132,7 +149,7 @@ impl StreamingResponse {
         writer: &mut OwnedWriteHalf,
         headers_sent: &mut bool,
         started: Instant,
-    ) -> Result<(), Failure> {
+    ) -> Result<bool, Failure> {
         let total = started + Duration::from_secs(self.policy.total_timeout_seconds);
         let first =
             total.min(started + Duration::from_secs(self.policy.first_event_timeout_seconds));
@@ -161,6 +178,9 @@ impl StreamingResponse {
             if let Some(session) = &self.session_id {
                 upstream = upstream.header("x-opencode-session", session);
             }
+            if let Some(reservation) = &self.settlement {
+                reservation.mark_dispatched();
+            }
             upstream.send().await.map_err(|error| Failure {
                 status: if error.is_timeout() { 504 } else { 502 },
                 reason: "provider streaming request failed",
@@ -168,9 +188,27 @@ impl StreamingResponse {
         })
         .await?;
         if !response.status().is_success() {
+            let status = response.status().as_u16();
+            // Strict mode drains within the response bounds: a truncated or slow
+            // error body leaves the provider outcome, and the reservation, uncertain.
+            let mut received = 0_usize;
+            while self.settlement.is_some()
+                && let Some(chunk) = guarded(reader, total.min(first), async {
+                    response.chunk().await.map_err(|error| Failure {
+                        status: if error.is_timeout() { 504 } else { 502 },
+                        reason: "provider stream read failed",
+                    })
+                })
+                .await?
+            {
+                received = received
+                    .checked_add(chunk.len())
+                    .filter(|size| *size <= self.max_response_bytes)
+                    .ok_or_else(|| Failure::upstream("stream exceeds configured response limit"))?;
+            }
             return Err(Failure {
-                status: response.status().as_u16(),
-                reason: "provider rejected streaming request",
+                status,
+                reason: PROVIDER_REJECTED,
             });
         }
         let mime = response
@@ -192,6 +230,12 @@ impl StreamingResponse {
         }
         let mut parser = SseParser::new(self.policy.max_event_bytes);
         let mut protocol = Protocol::new(self.route == "/v1/responses");
+        if let Some(guard) = &self.usage_guard {
+            protocol.accounting = Some((guard, &self.model_policy));
+        }
+        if self.settlement.is_some() {
+            protocol.expected_model = Some(&self.model_policy.name);
+        }
         let mut received = 0_usize;
         loop {
             let deadline = total.min(Instant::now() + idle);
@@ -234,7 +278,7 @@ impl StreamingResponse {
                     // Persist completion admission before releasing the terminal marker.
                     self.audit.record(&self.agent, "llm", outcome, json!({
                         "route": self.route, "provider": self.target.host,
-                        "model": self.model, "streaming": true, "status": 200,
+                        "model": self.model_policy.name, "streaming": true, "status": 200,
                         "response_bytes": received, "latency_ms": started.elapsed().as_millis(),
                         "usage": protocol.usage,
                     })).map_err(|_| Failure { status: 503, reason: "audit log is unavailable" })?;
@@ -245,7 +289,7 @@ impl StreamingResponse {
                 write_bytes(reader, writer, deadline, b"\r\n").await?;
                 if event.terminal.is_some() {
                     write_bytes(reader, writer, deadline, b"0\r\n\r\n").await?;
-                    return Ok(());
+                    return Ok(event.terminal == Some("completed"));
                 }
             }
         }
@@ -306,19 +350,25 @@ struct Event {
     terminal: Option<&'static str>,
 }
 
-struct Protocol {
+struct Protocol<'a> {
     responses: bool,
     chat_finished: bool,
     usage: Value,
+    expected_model: Option<&'a str>,
+    accounting: Option<(&'a UsageGuard, &'a ModelPolicy)>,
+    completion_id: Option<String>,
     first_frame: bool,
 }
 
-impl Protocol {
+impl<'a> Protocol<'a> {
     fn new(responses: bool) -> Self {
         Self {
             responses,
             chat_finished: false,
             usage: Value::Null,
+            expected_model: None,
+            accounting: None,
+            completion_id: None,
             first_frame: true,
         }
     }
@@ -356,6 +406,11 @@ impl Protocol {
                     "completion ended without a finish reason",
                 ));
             }
+            if self.expected_model.is_some() && self.completion_id.is_none() {
+                return Err(Failure::upstream(
+                    "completion stream did not identify the allowed model and completion",
+                ));
+            }
             return Ok(Event {
                 has_data: true,
                 terminal: Some("completed"),
@@ -365,6 +420,17 @@ impl Protocol {
             .map_err(|_| Failure::upstream("event data is not valid JSON"))?;
         if !value.is_object() {
             return Err(Failure::upstream("event data must be a JSON object"));
+        }
+        if let Some((guard, model)) = self.accounting {
+            let usage = if self.responses {
+                value.pointer("/response/usage")
+            } else {
+                value.get("usage")
+            };
+            observe_usage(guard, model, usage).map_err(|_| Failure {
+                status: 503,
+                reason: "budget accounting is unavailable",
+            })?;
         }
         let terminal = if self.responses {
             let kind = value
@@ -398,15 +464,48 @@ impl Protocol {
                     "provider returned an invalid completion chunk",
                 ));
             }
+            if let Some(expected) = self.expected_model {
+                if !value
+                    .get("model")
+                    .and_then(Value::as_str)
+                    .is_some_and(|model| provider_model_matches(expected, model))
+                {
+                    return Err(Failure::upstream(
+                        "completion stream model does not match the allowed model",
+                    ));
+                }
+                let id = value
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .filter(|id| !id.trim().is_empty())
+                    .ok_or_else(|| Failure::upstream("completion stream has no completion id"))?;
+                match &self.completion_id {
+                    Some(previous) if previous != id => {
+                        return Err(Failure::upstream("completion stream completion id changed"));
+                    }
+                    Some(_) => {}
+                    None => self.completion_id = Some(id.to_owned()),
+                }
+            }
             let choices = value
                 .get("choices")
                 .and_then(Value::as_array)
                 .ok_or_else(|| Failure::upstream("completion chunk has no choices"))?;
+            if self.expected_model.is_some() && choices.len() > 1 {
+                return Err(Failure::upstream("completion stream has multiple choices"));
+            }
             for choice in choices {
                 if choice.get("index").and_then(Value::as_u64) != Some(0) {
                     return Err(Failure::upstream(
                         "completion choice is outside the requested limit",
                     ));
+                }
+                // Only the strict profile requires deltas; ordinary providers may
+                // send choice-level metadata chunks, such as content filter results.
+                if self.expected_model.is_some()
+                    && !choice.get("delta").is_some_and(valid_chat_delta)
+                {
+                    return Err(Failure::upstream("completion choice has an invalid delta"));
                 }
                 match choice.get("finish_reason") {
                     None | Some(Value::Null) => {}
@@ -435,24 +534,61 @@ impl Protocol {
     }
 }
 
-fn sanitize_usage(usage: Option<&Value>) -> Value {
-    let Some(value) = usage else {
-        return Value::Null;
+fn valid_chat_delta(value: &Value) -> bool {
+    let Some(delta) = value.as_object() else {
+        return false;
     };
-    let input = value
-        .get("input_tokens")
-        .or_else(|| value.get("prompt_tokens"))
-        .and_then(Value::as_u64);
-    let output = value
-        .get("output_tokens")
-        .or_else(|| value.get("completion_tokens"))
-        .and_then(Value::as_u64);
-    let total = value.get("total_tokens").and_then(Value::as_u64);
-    match (input, output, total) {
-        (Some(input), Some(output), Some(total)) if input.checked_add(output) == Some(total) => {
+    if delta
+        .get("role")
+        .is_some_and(|role| !role.is_null() && role.as_str() != Some("assistant"))
+        || ["content", "refusal"].iter().any(|field| {
+            delta
+                .get(*field)
+                .is_some_and(|value| !value.is_null() && !value.is_string())
+        })
+    {
+        return false;
+    }
+    if let Some(calls) = delta.get("tool_calls").filter(|value| !value.is_null())
+        && !calls.as_array().is_some_and(|calls| {
+            calls.iter().all(|call| {
+                call.is_object()
+                    && call.get("index").and_then(Value::as_u64).is_some()
+                    && call
+                        .get("id")
+                        .is_none_or(|id| id.is_null() || id.is_string())
+                    && call
+                        .get("type")
+                        .is_none_or(|kind| kind.is_null() || kind.as_str() == Some("function"))
+                    && call
+                        .get("function")
+                        .is_none_or(|function| function.is_null() || valid_function_delta(function))
+            })
+        })
+    {
+        return false;
+    }
+    delta
+        .get("function_call")
+        .is_none_or(|call| call.is_null() || valid_function_delta(call))
+}
+
+fn valid_function_delta(value: &Value) -> bool {
+    value.as_object().is_some_and(|function| {
+        ["name", "arguments"].iter().all(|field| {
+            function
+                .get(*field)
+                .is_none_or(|value| value.is_null() || value.is_string())
+        })
+    })
+}
+
+fn sanitize_usage(usage: Option<&Value>) -> Value {
+    match parse_usage(usage) {
+        Some((input, output, total)) => {
             json!({ "input_tokens": input, "output_tokens": output, "total_tokens": total })
         }
-        _ => Value::Null,
+        None => Value::Null,
     }
 }
 

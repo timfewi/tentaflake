@@ -461,7 +461,7 @@
 
         machine.succeed(
             "printf 'hermes\\tmissing-fixture\\tmissing-fixture\\t"
-            "tentaflake-diagnostics-nonexistent-fixture.service\\t/tmp/missing-fixture\\n' "
+            "tentaflake-diagnostics-nonexistent-fixture.service\\t/tmp/missing-fixture\\ttrue\\n' "
             "> /tmp/tentaflake-diagnostics-missing.tsv"
         )
         machine.succeed(

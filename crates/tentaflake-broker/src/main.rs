@@ -24,7 +24,17 @@ fn main() {
 }
 
 fn run() -> Result<(), String> {
-    let path = parse_args()?;
+    let path = match parse_args()? {
+        Command::Serve(path) => path,
+        Command::InitializeStrictBudget(path) => return state::Limits::initialize_strict(&path),
+        Command::ReconcileStrictBudget(path) => {
+            let (unsettled, pending) = state::Limits::reconcile_strict(&path)?;
+            println!(
+                "resolved {unsettled} held reservations and {pending} usage holds without refunds"
+            );
+            return Ok(());
+        }
+    };
     let config = Config::load(&path)?;
     let listener = TcpListener::bind(config.listen)
         .map_err(|error| format!("cannot bind broker listener {}: {error}", config.listen))?;
@@ -111,15 +121,29 @@ impl Drop for ActiveGuard {
     }
 }
 
-fn parse_args() -> Result<PathBuf, String> {
+enum Command {
+    Serve(PathBuf),
+    InitializeStrictBudget(PathBuf),
+    ReconcileStrictBudget(PathBuf),
+}
+
+fn parse_args() -> Result<Command, String> {
     let mut args = env::args_os();
     let _program = args.next();
-    if args.next().as_deref() != Some(std::ffi::OsStr::new("--config")) {
-        return Err("usage: tentaflake-broker --config /absolute/path/config.json".into());
+    let operation = args.next().ok_or("missing broker operation")?;
+    let path = PathBuf::from(args.next().ok_or("missing absolute path")?);
+    if args.next().is_some()
+        || !path.is_absolute()
+        || path
+            .components()
+            .any(|part| matches!(part, std::path::Component::ParentDir))
+    {
+        return Err("broker operation requires one absolute path without traversal".into());
     }
-    let path = PathBuf::from(args.next().ok_or("missing --config path")?);
-    if args.next().is_some() || !path.is_absolute() {
-        return Err("--config requires one absolute path".into());
+    match operation.to_str() {
+        Some("--config") => Ok(Command::Serve(path)),
+        Some("--initialize-strict-budget") => Ok(Command::InitializeStrictBudget(path)),
+        Some("--reconcile-strict-budget") => Ok(Command::ReconcileStrictBudget(path)),
+        _ => Err("usage: tentaflake-broker --config /absolute/path/config.json | --initialize-strict-budget /absolute/path/budget.json | --reconcile-strict-budget /absolute/path/budget.json".into()),
     }
-    Ok(path)
 }

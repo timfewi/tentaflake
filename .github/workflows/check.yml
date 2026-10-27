@@ -179,7 +179,7 @@ jobs:
             selected_checks+=(.#checks.x86_64-linux.devcontainer-cli)
           fi
           if [[ "$CHECK_EVALUATE" == true ]]; then
-            selected_checks+=(.#checks.x86_64-linux.image-pinning .#checks.x86_64-linux.agent-adapters)
+            selected_checks+=(.#checks.x86_64-linux.image-pinning .#checks.x86_64-linux.agent-adapters .#checks.x86_64-linux.hardening-journald)
           fi
           if [[ "$CHECK_CLI" == true ]]; then
             selected_checks+=(.#checks.x86_64-linux.tentaflake-cli)

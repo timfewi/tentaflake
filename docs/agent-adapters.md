@@ -2,7 +2,7 @@
 
 Status: common schema-v1 OCI definitions and preset discovery are available.
 Generic workloads remain stopped pending capability-specific admission. OpenClaw
-remains a stopped scaffold; vendor runtime acceptance is separate.
+and Pi remain stopped scaffolds; vendor runtime acceptance is separate.
 
 The requirement is one discoverable adapter per integrated runtime, a common
 consumer builder, unchanged Hermes/ZeroClaw state and public arguments, and
@@ -23,12 +23,24 @@ fixtures, and `just fast`. Vendor runtime acceptance is a separate workload.
 ]
 ```
 
-This creates private state/workspace directories and an intentionally stopped
-refusal unit. It creates no OCI container, downloads no image, and grants no
-network or Research capability. An explicit start fails with the missing
+This creates only an intentionally stopped refusal unit. It creates no OCI
+container or state directory, downloads no image, and grants no network or
+Research capability. OpenClaw and Pi share one scaffold builder
+(`lib/stoppedScaffold.nix`), so a same-identity OCI container or enabled quota
+fails the assertions of either. An explicit start fails with the missing
 acceptance requirements. `autoStart = true`, runtime settings, and image/tool
 overrides are unavailable until those requirements are verified. This is partial
 delivery, not a working secure OpenClaw deployment.
+
+The planned Pi Durable 1.4.0 integration is likewise discoverable as
+`adapter = "pi"` with `autoStart = false`. It produces only a stopped refusal
+unit: no OCI container, state directories, image, credential, network or socket
+projection. Its UID/GID 10100, distinct from the Hermes default identity, and
+its state/workspace paths are reserved metadata, not provisioned resources.
+Automatic start, runtime settings and image or mount overrides are rejected. The version names the target
+documentation, not an installed or verified SDK artifact. A reviewed image,
+actual runner and separate broker, Research, Board, lifecycle and host-boundary
+acceptance remain required before a runnable adapter can be considered.
 
 For current runtimes use `adapter = "hermes"` or `"zeroclaw"`. Their supported
 arguments and defaults are those of `mkHermesAgent` and `mkZeroClawAgent`.
@@ -128,7 +140,7 @@ See [the comparison and evidence limits](roadmap.md#inspiration-and-evidence-lim
 ## Schema version 1
 
 `adapters/default.nix` explicitly imports the generic workload and the Hermes,
-ZeroClaw and OpenClaw presets.
+ZeroClaw, OpenClaw and Pi presets.
 Imports are lazy; discovering names requires no packages, image downloads or
 services. `mkAgent` validates only the selected adapter. Unsupported options,
 invalid settings shapes and unknown adapters fail during evaluation.
@@ -172,7 +184,8 @@ identities in CLI commands to select one unambiguously.
 | Generic workload | `generic-NAME` / `BACKEND-generic-NAME.service` | `/var/lib/generic-NAME` / `workspace` | 10000:10000, with definition ownership |
 | Hermes | `hermes-NAME` / `BACKEND-hermes-NAME.service` | `/var/lib/hermes-NAME` / `workspace` | 10000:10000, retaining overrides |
 | ZeroClaw | `zeroclaw-NAME` / `BACKEND-zeroclaw-NAME.service` | `/var/lib/zeroclaw-NAME` / `data` | 65534:65534 |
-| OpenClaw scaffold | Reserved `openclaw-NAME` identity / refusal unit | `/var/lib/openclaw-NAME` / `workspace` | 1000:1000 |
+| OpenClaw scaffold | Reserved `openclaw-NAME` identity / refusal unit | Unprovisioned `/var/lib/openclaw-NAME` / `workspace` | 1000:1000 |
+| Pi scaffold | Reserved `pi-NAME` identity / refusal unit | Unprovisioned `/var/lib/pi-NAME` / `workspace` | 10100:10100 |
 
 Custom existing state directories, host users, seed destinations, no-clobber
 copying, numeric owners, commands and optional operational services stay intact.
@@ -234,13 +247,14 @@ and reviewed by the operator; its catalog entry selects no image.
 | generic | 1 | definition | source-regression | operator-owned |
 | hermes | image-snapshot-2026-07-18 | compatibility | source-regression | pending |
 | openclaw | 2026.9.7 | scaffold | refusal-regression | pending |
+| pi | 1.4.0 | scaffold | refusal-regression | pending |
 | zeroclaw | 0.8.2 | compatibility | source-regression | pending |
 
 <!-- runtime-catalog:end -->
 
-OpenCode and Goose are the next investigations. Codex, Claude Code, Aider, Pi
-and OpenHands remain candidates. No adapter files or support claims are added
-for them.
+OpenCode and Goose are the next investigations. Codex, Claude Code, Aider and
+OpenHands remain candidates. No adapter files or support claims are added for
+them. Pi is listed only as the non-runnable scaffold described above.
 
 Primary OpenClaw sources read through the isolated Research service:
 

@@ -141,6 +141,19 @@ mod tests {
     }
 
     #[test]
+    fn resolver_failure_is_a_pre_dispatch_error_without_network() {
+        let hosts = vec!["allowed.example".into()];
+        let result = resolve_public_target_with(
+            "https://allowed.example/v1/",
+            &hosts,
+            false,
+            false,
+            |_, _| Err("synthetic DNS failure".into()),
+        );
+        assert!(matches!(result, Err(reason) if reason == "synthetic DNS failure"));
+    }
+
+    #[test]
     fn blocks_ssrf_ip_literals_even_when_exactly_allowlisted() {
         for host in ["127.0.0.1", "169.254.169.254", "100.100.100.100"] {
             assert!(

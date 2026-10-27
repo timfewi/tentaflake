@@ -13,6 +13,7 @@ pub struct Response {
     pub status: u16,
     pub content_type: String,
     pub body: Vec<u8>,
+    pub settlement: Option<crate::state::Reservation>,
     pub streaming: Option<Box<crate::streaming::StreamingResponse>>,
 }
 
@@ -23,6 +24,7 @@ impl Response {
             content_type: "application/json".into(),
             body: serde_json::to_vec(&value)
                 .unwrap_or_else(|_| b"{\"error\":\"encoding\"}".to_vec()),
+            settlement: None,
             streaming: None,
         }
     }
@@ -148,7 +150,13 @@ pub fn write_response(stream: &mut TcpStream, response: Response) -> std::io::Re
         response.content_type,
         response.body.len()
     )?;
-    stream.write_all(&response.body)
+    stream.write_all(&response.body)?;
+    // A failed downstream write leaves the reservation unresolved. Successful
+    // writes still cannot prove remote receipt, so a later crash remains held.
+    if let Some(reservation) = response.settlement {
+        reservation.settle().map_err(std::io::Error::other)?;
+    }
+    Ok(())
 }
 
 #[cfg(test)]
