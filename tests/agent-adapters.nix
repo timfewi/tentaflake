@@ -62,6 +62,7 @@ let
     (instance "hermes" "zeroclaw-named")
     (instance "zeroclaw" "hermes-named")
     (instance "openclaw" "assistant")
+    (instance "pi" "pilot")
   ];
   containers = config.virtualisation.oci-containers.containers;
   records = config.tentaflake.agentInstances;
@@ -200,6 +201,7 @@ let
     { tentaflake.security.profile = lib.mkForce "dev"; }
   ];
 in
+assert import ./hardening-journald.nix { inherit pkgs; };
 assert lib.all
   (
     access:
@@ -296,9 +298,10 @@ assert
 assert
   builtins.functionArgs builders.mkZeroClawAgent
   == builtins.functionArgs builders.adapters.zeroclaw.build;
-assert lib.all (unit: !(lib.hasInfix "zeroclaw" unit) && !(lib.hasInfix "openclaw" unit)) (
-  builtins.attrNames single.systemd.services
-);
+assert lib.all (
+  unit:
+  !(lib.hasInfix "zeroclaw" unit) && !(lib.hasInfix "openclaw" unit) && !(lib.hasInfix "pi-" unit)
+) (builtins.attrNames single.systemd.services);
 assert rejects (json ./fixtures/adapter-input/unknown-agent-field.json);
 assert rejects (json ./fixtures/adapter-input/invalid-auto-start.json);
 assert rejects (json ./fixtures/adapter-input/secret-setting.json);
@@ -307,6 +310,7 @@ assert
     "generic"
     "hermes"
     "openclaw"
+    "pi"
     "zeroclaw"
   ];
 assert rejects (contract "broken" { });
@@ -337,6 +341,7 @@ assert
     "hermes-legacy"
     "hermes-zeroclaw-named"
     "openclaw-assistant"
+    "pi-pilot"
     "zeroclaw-hermes-named"
     "zeroclaw-legacy"
   ];
@@ -365,6 +370,15 @@ assert lib.hasInfix "acceptance evidence" config.systemd.services.docker-opencla
 assert lib.hasInfix "opt-in streaming" config.systemd.services.docker-openclaw-assistant.script;
 assert
   !(lib.hasInfix "current LLM broker rejects" config.systemd.services.docker-openclaw-assistant.script);
+assert records.pi-pilot.runnable == false;
+assert records.pi-pilot.uid == 10000 && records.pi-pilot.gid == 10000;
+assert records.pi-pilot.unit == "docker-pi-pilot.service";
+assert !(containers ? pi-pilot);
+assert config.systemd.services.docker-pi-pilot.wantedBy == [ ];
+assert config.systemd.services.docker-pi-pilot.serviceConfig.Restart == "no";
+assert lib.hasInfix "acceptance evidence" config.systemd.services.docker-pi-pilot.script;
+assert lib.hasInfix "exit 1" config.systemd.services.docker-pi-pilot.script;
+assert lib.all (rule: !(lib.hasInfix "/var/lib/pi-pilot" rule)) config.systemd.tmpfiles.rules;
 assert lib.elem "--network=none" containers.hermes-zeroclaw-named.extraOptions;
 assert failures config == [ ];
 assert lib.hasInfix
@@ -413,6 +427,14 @@ assert rejects
       autoStart = true;
     })
   ]).tentaflake.agentInstances;
+assert rejects
+  (eval [
+    (builders.mkAgent {
+      adapter = "pi";
+      name = "invalid";
+      autoStart = true;
+    })
+  ]).tentaflake.agentInstances;
 assert denies "credential" { envFile = "/run/provider.env"; };
 assert denies "secret-like settings" { settings.model.api_key = "fixture-only"; };
 assert denies "publish container ports" { extraContainerConfig.ports = [ "8080:8080" ]; };
@@ -430,4 +452,5 @@ assert rejects
       image = "example.invalid/runtime:latest";
     })
   ]).virtualisation.oci-containers.containers.hermes-mutable.image;
+assert import ./pi-adapter.nix { inherit pkgs; };
 import ./agent-state-quota.nix { inherit pkgs eval builders; }

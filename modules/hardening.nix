@@ -80,12 +80,13 @@ lib.mkIf cfg.enable {
     ];
   };
 
-  services.journald.extraConfig = ''
-    RateLimitIntervalSec=5s
-    RateLimitBurst=1000
-    Compress=yes
-    SystemMaxUse=500M
-  '';
+  services.journald.settings.Journal = {
+    RateLimitIntervalSec = "5s";
+    RateLimitBurst = 1000;
+    Compress = "yes";
+    # The consuming host may specify a tighter or otherwise reviewed limit.
+    SystemMaxUse = lib.mkDefault "500M";
+  };
 
   systemd.settings.Manager = lib.mkIf cfg.watchdog.enable {
     WatchdogDevice = cfg.watchdog.device;

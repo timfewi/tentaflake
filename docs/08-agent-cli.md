@@ -49,8 +49,10 @@ overwritten: review it before removing it. The running host remains unchanged.
 names, paths, image references and failure details. Nix source diagnostics are
 not printed because source excerpts may contain private operator data. Plans
 report source validation and pending vendor evidence, not live readiness or
-vendor acceptance. OpenClaw remains a non-runnable scaffold. Unsupported generic
-model/Research capabilities are refused; current secure startup gates still apply.
+vendor acceptance. OpenClaw and Pi remain non-runnable scaffolds: `stats` omits
+them and container `shell`/`exec` commands refuse them without calling a backend.
+Unsupported generic model/Research capabilities are refused; current secure
+startup gates still apply.
 
 Review and track `agents.json` before an explicit host update. Git-backed flakes
 only evaluate tracked files, including source-only `my-agents.nix` instances:
@@ -97,7 +99,7 @@ reviewed broker path exists.
 
 Use `mkAgent { adapter = "hermes"; ... }` or the compatible runtime-specific
 builders according to the runtime contract. See [agent adapters](agent-adapters.md)
-for the lazy registry and OpenClaw's stopped scaffold and acceptance limits.
+for the lazy registry and stopped scaffold acceptance limits.
 See the adapter implementations and example file for runtime-specific options.
 
 ## JSON definitions

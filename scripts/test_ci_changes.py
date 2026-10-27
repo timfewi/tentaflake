@@ -91,7 +91,7 @@ class CiSelection(unittest.TestCase):
     def test_shared_security_and_unknown_paths_require_both(self):
         for name in ("modules/security.nix", "lib/constants.nix", "lib/control-data.md", "flake.nix",
                      "adapters/default.nix", "adapters/hermes.nix", "adapters/zeroclaw.nix",
-                     "adapters/openclaw.nix", "tests/agent-adapters.nix",
+                     "adapters/openclaw.nix", "adapters/pi.nix", "tests/agent-adapters.nix",
                      "new-component/config"):
             with self.subTest(name=name):
                 base = self.git("rev-parse", "HEAD")

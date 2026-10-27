@@ -30,6 +30,8 @@ yet been published as a new release.
 Discover presets with `tentaflake runtimes --json`. A digest-pinned image and
 command can use the [common isolated workload definition](docs/agent-adapters.md#generic-isolated-workload)
 without a new adapter; generic startup remains gated pending capability admission.
+The Pi preset is a stopped refusal scaffold with no selected runtime image or
+host socket access; it is not an operational Pi integration.
 
 ## Current scope
 
@@ -138,8 +140,9 @@ cp my-agents.nix.example my-agents.nix
 Alternatively, use the non-secret data shape in `agents.json.example`.
 The versioned generic `agents` array accepts the same adapter arguments.
 See [agent adapters](docs/agent-adapters.md) for the contract, complete secure
-consumer example and evidence limits. OpenClaw v2026.9.7 is a stopped scaffold;
-it creates no runtime container and is not operationally supported yet.
+consumer example and evidence limits. OpenClaw v2026.9.7 and Pi Durable 1.4.0
+are stopped scaffolds; neither creates a runtime container or has operational
+support yet.
 `agents.json` is declarative input; the removed interactive wizard no longer
 edits it.
 
@@ -289,11 +292,19 @@ runtime-only host files and are loaded only into the LLM broker. The agent
 receives a random per-boot virtual key; it never receives the provider key.
 
 Chat Completions and Responses support bounded SSE when the exact broker's
-`llm.streaming.enable = true`. It defaults to false and preserves conservative
-budget accounting. See [streaming limits and failure behavior](docs/12-brokered-egress.md#streaming-model-responses).
+`llm.streaming.enable = true`. It defaults to false. See
+[streaming limits and failure behavior](docs/12-brokered-egress.md#streaming-model-responses).
 Both routes preserve optional, bounded `x-opencode-session` conversation metadata
 for JSON and SSE. The client supplies the value; see the
 [header contract](docs/12-brokered-egress.md#declaration).
+
+`llm.strictCostEnvelope` is a separate opt-in, local-text-only Chat
+Completions profile with explicit one-time budget initialization, durable
+reservation and fail-closed handling of reported overages. Ordinary shared
+state does not provide the same guarantee. Neither profile guarantees provider
+invoices or account-wide spending;
+see the [strict cost-envelope prerequisites](docs/12-brokered-egress.md#strict-cost-envelope)
+before authorizing paid dispatch.
 
 ```nix
 tentaflake.broker.agents.hermes-coding = {

@@ -52,6 +52,8 @@ pub struct LlmPolicy {
     #[serde(default = "default_max_completion_tokens")]
     pub max_completion_tokens: u64,
     #[serde(default)]
+    pub strict_cost_envelope: bool,
+    #[serde(default)]
     pub streaming: StreamingPolicy,
     #[serde(default)]
     pub allow_plain_http_for_tests: bool,
@@ -398,6 +400,7 @@ mod tests {
                     output_microusd_per_million: 20,
                 }],
                 max_completion_tokens: 100,
+                strict_cost_envelope: false,
                 streaming: StreamingPolicy::default(),
                 allow_plain_http_for_tests: false,
             }),
@@ -408,6 +411,25 @@ mod tests {
     #[test]
     fn accepts_one_fail_closed_mode() {
         base_config().validate().unwrap();
+    }
+
+    #[test]
+    fn strict_cost_envelope_is_opt_in_in_serialized_configuration() {
+        let mut value = serde_json::json!({
+            "upstream_base_url": "https://api.example.com/v1/",
+            "provider_credential_file": "/run/credentials/provider",
+            "allowed_models": [{
+                "name": "fixture-model",
+                "input_microusd_per_million": 1,
+                "output_microusd_per_million": 1
+            }]
+        });
+        let default: LlmPolicy = serde_json::from_value(value.clone()).unwrap();
+        assert!(!default.strict_cost_envelope);
+        value["strict_cost_envelope"] = serde_json::json!(true);
+        let enabled: LlmPolicy = serde_json::from_value(value).unwrap();
+        assert!(enabled.strict_cost_envelope);
+        enabled.validate().unwrap();
     }
 
     #[test]
@@ -446,8 +468,11 @@ mod tests {
 
     #[test]
     fn rejects_unpriced_llm_models() {
-        let mut config = base_config();
-        config.llm.as_mut().unwrap().allowed_models[0].input_microusd_per_million = 0;
-        assert!(config.validate().is_err());
+        for strict in [false, true] {
+            let mut config = base_config();
+            config.llm.as_mut().unwrap().strict_cost_envelope = strict;
+            config.llm.as_mut().unwrap().allowed_models[0].input_microusd_per_million = 0;
+            assert!(config.validate().is_err());
+        }
     }
 }

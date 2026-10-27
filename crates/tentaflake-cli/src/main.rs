@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::env;
 use std::ffi::OsString;
 use std::fs;
@@ -2311,14 +2311,49 @@ fn finding(ok: bool, message: &str) {
     println!("  {} {message}", if ok { "✓" } else { "✗" });
 }
 
+fn scaffold_runtimes() -> Result<BTreeSet<String>, String> {
+    let catalog: serde_json::Value =
+        serde_json::from_str(RUNTIME_CATALOG).map_err(|_| "invalid runtime catalog")?;
+    let presets = catalog["presets"]
+        .as_object()
+        .ok_or("invalid runtime catalog")?;
+    let mut scaffolds = BTreeSet::new();
+    for (name, preset) in presets {
+        let status = preset["identity"]["status"]
+            .as_str()
+            .ok_or("missing runtime status")?;
+        if status == "scaffold" {
+            scaffolds.insert(name.clone());
+        }
+    }
+    Ok(scaffolds)
+}
+
+fn require_container(agent: &Agent) -> Result<(), String> {
+    if scaffold_runtimes()?.contains(&agent.runtime) {
+        Err("stopped scaffold has no accepted container".into())
+    } else {
+        Ok(())
+    }
+}
+
 fn stats(config: &Config, agents: &[Agent]) -> Result<u8, String> {
     if agents.is_empty() {
         println!("no agents defined");
         return Ok(0);
     }
+    let scaffolds = scaffold_runtimes()?;
+    let runnable: Vec<_> = agents
+        .iter()
+        .filter(|agent| !scaffolds.contains(&agent.runtime))
+        .collect();
+    if runnable.is_empty() {
+        println!("no runnable agents defined");
+        return Ok(0);
+    }
     let mut command = backend_command(config);
     command.arg("stats").arg("--no-stream");
-    for agent in agents {
+    for agent in runnable {
         command.arg(&agent.container);
     }
     exec(command)
@@ -2356,6 +2391,7 @@ fn systemd_unit_exists(unit: &str) -> bool {
 
 fn container_shell(config: &Config, agents: &[Agent], args: &[String]) -> Result<u8, String> {
     let agent = find_agent(agents, args.first())?;
+    require_container(agent)?;
     let mut command = backend_command(config);
     command.args(["exec", "-it", &agent.container, "sh"]);
     exec(command)
@@ -2363,6 +2399,7 @@ fn container_shell(config: &Config, agents: &[Agent], args: &[String]) -> Result
 
 fn container_exec(config: &Config, agents: &[Agent], args: &[String]) -> Result<u8, String> {
     let agent = find_agent(agents, args.first())?;
+    require_container(agent)?;
     let command_args = args[1..].strip_prefix(&["--".into()]).unwrap_or(&args[1..]);
     if command_args.is_empty() {
         return Err("missing command after agent name".into());

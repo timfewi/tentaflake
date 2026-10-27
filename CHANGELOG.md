@@ -14,7 +14,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Preserve that development in Git history; this is not a new published tag.
 - Keep release tagging explicit, as on the preceding main branch; restoring
   the declarative product does not resume automatic patch releases.
+### Added
+- Add an opt-in strict local-text LLM cost envelope with explicit one-time
+  budget provisioning, exclusive state ownership, checksum-protected durable
+  reservations, uncertain-hold rollover blocking and clock-rollback refusal.
+  Provider pricing or hard caps remain prerequisites for paid admission; the
+  ordinary request policy remains unchanged.
+- Add a stopped Pi Durable adapter scaffold with no runtime image, container,
+  host-state creation or socket access. Runtime acceptance remains pending.
 ### Maintenance
+- Reject empty strict completion payloads and malformed streaming deltas;
+  durably exhaust strict daily budgets on reported usage or price overages.
+  Interrupted usage accounting blocks admission until operator reconciliation;
+  ordinary shared-state budgets retain their existing limitations.
 - Retain bounded sequential flake evaluation, explicit build/VM gates and
   read-only formatting checks from the later 0.4 development.
 - Update libc, Tokio, Quinn and Rustls and retain the Dev Containers

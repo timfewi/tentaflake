@@ -191,6 +191,51 @@
         "vendorAcceptance": "pending"
       }
     },
+    "pi": {
+      "schemaVersion": 1,
+      "identity": {
+        "id": "pi",
+        "version": "1.4.0",
+        "status": "scaffold"
+      },
+      "artifact": {
+        "kind": "unselected",
+        "reference": null,
+        "reviewed": false
+      },
+      "command": [],
+      "configuration": {
+        "format": "none",
+        "readOnly": true
+      },
+      "ownership": {
+        "uid": 10000,
+        "gid": 10000
+      },
+      "layout": {
+        "state": "/var/lib/pi-<name>",
+        "workspace": "workspace",
+        "writable": [],
+        "directories": []
+      },
+      "lifecycle": "stopped-scaffold",
+      "model": {
+        "protocols": [],
+        "streaming": "unknown"
+      },
+      "research": {
+        "supported": false
+      },
+      "execution": {
+        "interface": "unverified",
+        "automatic": false
+      },
+      "capabilities": [],
+      "evidence": {
+        "fixture": "refusal-regression",
+        "vendorAcceptance": "pending"
+      }
+    },
     "generic": {
       "schemaVersion": 1,
       "identity": {

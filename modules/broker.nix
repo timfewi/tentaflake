@@ -107,6 +107,7 @@ let
             type = lib.types.ints.positive;
             default = 4096;
           };
+          strictCostEnvelope = lib.mkEnableOption "strict local text-only chat and durable cost-envelope admission";
           streaming = {
             enable = lib.mkEnableOption "bounded SSE model responses for this agent";
             maxEventBytes = lib.mkOption {
@@ -186,6 +187,7 @@ let
           upstream_base_url = agent.llm.upstreamBaseUrl;
           provider_credential_file = "$CREDENTIALS_DIRECTORY/provider";
           max_completion_tokens = agent.llm.maxCompletionTokens;
+          strict_cost_envelope = agent.llm.strictCostEnvelope;
           streaming = {
             inherit (agent.llm.streaming) enable;
             max_event_bytes = agent.llm.streaming.maxEventBytes;
@@ -336,7 +338,7 @@ let
   };
 
   hardenedService =
-    name: mode: configFile: loadCredential:
+    name: mode: configFile: loadCredential: strict:
     lib.recursiveUpdate serviceRecovery {
       description = "Tentaflake ${mode} policy broker for ${name}";
       requires = [
@@ -384,8 +386,43 @@ let
         # Empty lists omit the directive; an empty string clears the set.
         CapabilityBoundingSet = "";
         SystemCallArchitectures = "native";
+      }
+      // lib.optionalAttrs strict {
+        User = bridgeName name;
       };
     };
+
+  # Never wanted by, or ordered before, the broker: an operator must explicitly
+  # start this one-shot unit for a previously unprovisioned state directory.
+  strictInitializationService = name: {
+    description = "One-time strict LLM budget initialization for ${name}";
+    serviceConfig = {
+      Type = "oneshot";
+      DynamicUser = true;
+      User = bridgeName name;
+      StateDirectory = "tentaflake-broker-llm-${name}";
+      StateDirectoryMode = "0700";
+      ExecStart = "${lib.getExe brokerPackage} --initialize-strict-budget /var/lib/tentaflake-broker-llm-${name}/budget.json";
+      UMask = "0077";
+      NoNewPrivileges = true;
+      PrivateDevices = true;
+      PrivateTmp = true;
+      ProtectClock = true;
+      ProtectControlGroups = true;
+      ProtectHome = true;
+      ProtectHostname = true;
+      ProtectKernelLogs = true;
+      ProtectKernelModules = true;
+      ProtectKernelTunables = true;
+      ProtectSystem = "strict";
+      RestrictAddressFamilies = [ "AF_UNIX" ];
+      RestrictRealtime = true;
+      RestrictSUIDSGID = true;
+      LockPersonality = true;
+      CapabilityBoundingSet = "";
+      SystemCallArchitectures = "native";
+    };
+  };
 
   servicesFor =
     name: agent:
@@ -395,12 +432,15 @@ let
       "tentaflake-broker-llm-${name}" = hardenedService name "llm" (llmConfig name agent) [
         "agent-token:/run/tentaflake-broker/${name}/agent-token"
         "provider:${agent.llm.providerCredentialFile}"
-      ];
+      ] agent.llm.strictCostEnvelope;
+    }
+    // lib.optionalAttrs (agent.llm.enable && agent.llm.strictCostEnvelope) {
+      "tentaflake-broker-llm-initialize-${name}" = strictInitializationService name;
     }
     // lib.optionalAttrs agent.fetch.enable {
       "tentaflake-broker-fetch-${name}" = hardenedService name "fetch" (fetchConfig name agent) [
         "agent-token:/run/tentaflake-broker/${name}/agent-token"
-      ];
+      ] false;
     };
 
   allServices = lib.foldlAttrs (
@@ -626,6 +666,19 @@ in
               && agent.llm.streaming.idleTimeoutSeconds <= agent.llm.streaming.totalTimeoutSeconds
             );
           message = "tentaflake broker ${name} streaming requires an enabled LLM broker and event/time limits within the response/total ceilings.";
+        }
+        {
+          assertion = !agent.llm.strictCostEnvelope || agent.llm.enable;
+          message = "tentaflake broker ${name} strict cost envelope requires an enabled LLM broker.";
+        }
+        {
+          assertion =
+            !agent.llm.strictCostEnvelope
+            || (
+              !(builtins.hasAttr (bridgeName name) config.users.users)
+              && !(builtins.hasAttr (bridgeName name) config.users.groups)
+            );
+          message = "tentaflake broker ${name} strict budget dynamic user and group must not collide with configured identities.";
         }
         {
           assertion =
