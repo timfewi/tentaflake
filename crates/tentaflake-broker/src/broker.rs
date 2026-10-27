@@ -294,15 +294,17 @@ impl Broker {
             )
             .map_err(|_| Failure::new(503, "llm", "budget accounting is unavailable"))?;
         }
+        // A completely read non-2xx response ends the provider request; its
+        // reservation stays charged but no longer blocks a later UTC day.
         let confirmed = reservation.is_some()
-            && status == 200
-            && content_type
-                .split(';')
-                .next()
-                .is_some_and(|value| value.trim().eq_ignore_ascii_case("application/json"))
-            && response_json
-                .as_ref()
-                .is_some_and(|value| complete_chat_response(value, &model_name));
+            && (status >= 300
+                || status == 200
+                    && content_type.split(';').next().is_some_and(|value| {
+                        value.trim().eq_ignore_ascii_case("application/json")
+                    })
+                    && response_json
+                        .as_ref()
+                        .is_some_and(|value| complete_chat_response(value, &model_name)));
         let usage = response_json
             .as_ref()
             .and_then(|value| value.get("usage").cloned())
@@ -580,9 +582,30 @@ pub(crate) fn observe_usage(
     Ok(())
 }
 
+// Providers may answer an alias with its dated snapshot, such as
+// `gpt-4o-2024-08-06` or `claude-x-20241022`. Other suffixes select a
+// differently priced model and remain unconfirmed.
+pub(crate) fn provider_model_matches(requested: &str, returned: &str) -> bool {
+    returned == requested
+        || returned
+            .strip_prefix(requested)
+            .and_then(|rest| rest.strip_prefix('-'))
+            .is_some_and(|snapshot| {
+                snapshot
+                    .bytes()
+                    .all(|byte| byte.is_ascii_digit() || byte == b'-')
+                    && snapshot.starts_with(|c: char| c.is_ascii_digit())
+                    && snapshot.ends_with(|c: char| c.is_ascii_digit())
+                    && snapshot.bytes().filter(u8::is_ascii_digit).count() >= 4
+            })
+}
+
 fn complete_chat_response(value: &Value, requested_model: &str) -> bool {
     if value.get("object").and_then(Value::as_str) != Some("chat.completion")
-        || value.get("model").and_then(Value::as_str) != Some(requested_model)
+        || !value
+            .get("model")
+            .and_then(Value::as_str)
+            .is_some_and(|model| provider_model_matches(requested_model, model))
         || !value
             .get("id")
             .and_then(Value::as_str)
@@ -613,18 +636,17 @@ fn complete_chat_response(value: &Value, requested_model: &str) -> bool {
             if calls.is_some() && !valid_calls {
                 return false;
             }
-            let content = message.get("content").is_some_and(|content| {
-                (content.as_str().is_some_and(|text| !text.is_empty())
-                    || content.as_array().is_some_and(|parts| {
-                        !parts.is_empty()
-                            && parts.iter().any(|part| nonempty_string(part.get("text")))
-                    }))
-                    && text_content(content)
-            });
-            let refusal = nonempty_string(message.get("refusal"));
+            // A finished choice is complete even when its text is empty or was
+            // withheld by a content filter; only the output shape is checked.
+            let content = message
+                .get("content")
+                .is_none_or(|content| content.is_null() || text_content(content));
+            let refusal = message
+                .get("refusal")
+                .is_none_or(|refusal| refusal.is_null() || refusal.is_string());
             match choices[0].get("finish_reason").and_then(Value::as_str) {
                 Some("tool_calls") => valid_calls,
-                Some("stop" | "length" | "content_filter") => content || refusal || valid_calls,
+                Some("stop" | "length" | "content_filter") => content && refusal,
                 _ => false,
             }
         })
@@ -1256,6 +1278,29 @@ mod tests {
         invalid["messages"][2]["tool_calls"][0]["function"]["server_url"] =
             json!("https://example.invalid");
         assert!(require_strict_envelope(invalid.as_object().unwrap()).is_err());
+    }
+
+    #[test]
+    fn provider_model_accepts_only_dated_snapshots_of_the_requested_alias() {
+        for returned in [
+            "gpt-4o",
+            "gpt-4o-2024-08-06",
+            "gpt-4o-20240806",
+            "gpt-4o-0613",
+        ] {
+            assert!(provider_model_matches("gpt-4o", returned), "{returned}");
+        }
+        for returned in [
+            "gpt-4o-mini",
+            "gpt-4o-mini-2024-07-18",
+            "gpt-4o-",
+            "gpt-4o-12",
+            "gpt-4o-2024-",
+            "gpt-4o2024-08-06",
+            "other",
+        ] {
+            assert!(!provider_model_matches("gpt-4o", returned), "{returned}");
+        }
     }
 
     #[test]

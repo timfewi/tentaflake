@@ -207,7 +207,8 @@
   },
   "module-fixtures": {
     "paths": [
-      "tests/module-eval.nix"
+      "tests/module-eval.nix",
+      "tests/hardening-journald.nix"
     ],
     "checks": [
       "evaluate",

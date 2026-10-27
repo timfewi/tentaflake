@@ -86,4 +86,4 @@ assert lib.any (
   lib.hasInfix "services.journald.extraConfig" message
   && lib.hasInfix "services.journald.settings.Journal" message
 ) (failed legacy);
-true
+pkgs.runCommand "tentaflake-hardening-journald" { } "touch $out"

@@ -23,9 +23,11 @@ fixtures, and `just fast`. Vendor runtime acceptance is a separate workload.
 ]
 ```
 
-This creates private state/workspace directories and an intentionally stopped
-refusal unit. It creates no OCI container, downloads no image, and grants no
-network or Research capability. An explicit start fails with the missing
+This creates only an intentionally stopped refusal unit. It creates no OCI
+container or state directory, downloads no image, and grants no network or
+Research capability. OpenClaw and Pi share one scaffold builder
+(`lib/stoppedScaffold.nix`), so a same-identity OCI container or enabled quota
+fails the assertions of either. An explicit start fails with the missing
 acceptance requirements. `autoStart = true`, runtime settings, and image/tool
 overrides are unavailable until those requirements are verified. This is partial
 delivery, not a working secure OpenClaw deployment.
@@ -33,10 +35,9 @@ delivery, not a working secure OpenClaw deployment.
 The planned Pi Durable 1.4.0 integration is likewise discoverable as
 `adapter = "pi"` with `autoStart = false`. It produces only a stopped refusal
 unit: no OCI container, state directories, image, credential, network or socket
-projection. Its UID/GID 10000 and state/workspace paths are reserved metadata,
-not provisioned resources. Automatic start, runtime settings and image or
-mount overrides are rejected; a same-identity OCI container or enabled quota
-also fails the scaffold's assertions. The version names the target
+projection. Its UID/GID 10100, distinct from the Hermes default identity, and
+its state/workspace paths are reserved metadata, not provisioned resources.
+Automatic start, runtime settings and image or mount overrides are rejected. The version names the target
 documentation, not an installed or verified SDK artifact. A reviewed image,
 actual runner and separate broker, Research, Board, lifecycle and host-boundary
 acceptance remain required before a runnable adapter can be considered.
@@ -183,8 +184,8 @@ identities in CLI commands to select one unambiguously.
 | Generic workload | `generic-NAME` / `BACKEND-generic-NAME.service` | `/var/lib/generic-NAME` / `workspace` | 10000:10000, with definition ownership |
 | Hermes | `hermes-NAME` / `BACKEND-hermes-NAME.service` | `/var/lib/hermes-NAME` / `workspace` | 10000:10000, retaining overrides |
 | ZeroClaw | `zeroclaw-NAME` / `BACKEND-zeroclaw-NAME.service` | `/var/lib/zeroclaw-NAME` / `data` | 65534:65534 |
-| OpenClaw scaffold | Reserved `openclaw-NAME` identity / refusal unit | `/var/lib/openclaw-NAME` / `workspace` | 1000:1000 |
-| Pi scaffold | Reserved `pi-NAME` identity / refusal unit | Unprovisioned `/var/lib/pi-NAME` / `workspace` | 10000:10000 |
+| OpenClaw scaffold | Reserved `openclaw-NAME` identity / refusal unit | Unprovisioned `/var/lib/openclaw-NAME` / `workspace` | 1000:1000 |
+| Pi scaffold | Reserved `pi-NAME` identity / refusal unit | Unprovisioned `/var/lib/pi-NAME` / `workspace` | 10100:10100 |
 
 Custom existing state directories, host users, seed destinations, no-clobber
 copying, numeric owners, commands and optional operational services stay intact.

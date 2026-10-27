@@ -27,6 +27,13 @@ fn run() -> Result<(), String> {
     let path = match parse_args()? {
         Command::Serve(path) => path,
         Command::InitializeStrictBudget(path) => return state::Limits::initialize_strict(&path),
+        Command::ReconcileStrictBudget(path) => {
+            let (unsettled, pending) = state::Limits::reconcile_strict(&path)?;
+            println!(
+                "resolved {unsettled} held reservations and {pending} usage holds without refunds"
+            );
+            return Ok(());
+        }
     };
     let config = Config::load(&path)?;
     let listener = TcpListener::bind(config.listen)
@@ -117,6 +124,7 @@ impl Drop for ActiveGuard {
 enum Command {
     Serve(PathBuf),
     InitializeStrictBudget(PathBuf),
+    ReconcileStrictBudget(PathBuf),
 }
 
 fn parse_args() -> Result<Command, String> {
@@ -135,6 +143,7 @@ fn parse_args() -> Result<Command, String> {
     match operation.to_str() {
         Some("--config") => Ok(Command::Serve(path)),
         Some("--initialize-strict-budget") => Ok(Command::InitializeStrictBudget(path)),
-        _ => Err("usage: tentaflake-broker --config /absolute/path/config.json | --initialize-strict-budget /absolute/path/budget.json".into()),
+        Some("--reconcile-strict-budget") => Ok(Command::ReconcileStrictBudget(path)),
+        _ => Err("usage: tentaflake-broker --config /absolute/path/config.json | --initialize-strict-budget /absolute/path/budget.json | --reconcile-strict-budget /absolute/path/budget.json".into()),
     }
 }

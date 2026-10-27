@@ -209,8 +209,8 @@
         "readOnly": true
       },
       "ownership": {
-        "uid": 10000,
-        "gid": 10000
+        "uid": 10100,
+        "gid": 10100
       },
       "layout": {
         "state": "/var/lib/pi-<name>",

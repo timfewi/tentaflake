@@ -49,8 +49,9 @@ overwritten: review it before removing it. The running host remains unchanged.
 names, paths, image references and failure details. Nix source diagnostics are
 not printed because source excerpts may contain private operator data. Plans
 report source validation and pending vendor evidence, not live readiness or
-vendor acceptance. OpenClaw and Pi remain non-runnable scaffolds: `stats` omits
-them and container `shell`/`exec` commands refuse them without calling a backend.
+vendor acceptance. OpenClaw and Pi remain non-runnable scaffolds. The inventory
+records each instance's `runnable` flag: `stats` omits non-runnable instances and
+container `shell`/`exec` commands refuse them without calling a backend.
 Unsupported generic model/Research capabilities are refused; current secure
 startup gates still apply.
 

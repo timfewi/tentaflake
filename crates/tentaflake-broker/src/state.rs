@@ -162,6 +162,28 @@ impl Limits {
         sync_parent(path)
     }
 
+    // Explicit operator recovery after the provider-side outcome and usage of
+    // held requests were verified. It requires the broker to be stopped, clears
+    // held reservations and orphaned usage holds, and never refunds counters.
+    pub fn reconcile_strict(path: &Path) -> Result<(u64, u64), String> {
+        Self::reconcile_strict_at(path, unix_seconds())
+    }
+
+    fn reconcile_strict_at(path: &Path, now: u64) -> Result<(u64, u64), String> {
+        let _owner = StrictState::acquire(path)?;
+        let mut budget = read_strict_budget(path)?;
+        check_strict_clock(&budget, now)?;
+        let resolved = (
+            budget.unsettled.unwrap_or(0),
+            budget.pending_usage.unwrap_or(0),
+        );
+        budget.unsettled = Some(0);
+        budget.pending_usage = None;
+        budget.last_seen_seconds = Some(now);
+        atomic_json(path, &mut budget, true)?;
+        Ok(resolved)
+    }
+
     pub fn load(
         path: PathBuf,
         window_seconds: u64,
@@ -192,16 +214,7 @@ impl Limits {
         now: Option<u64>,
     ) -> Result<Self, String> {
         let (strict_state, legacy_owner) = if now.is_some() {
-            let lock_path = state_sidecar(&path, ".lock");
-            let owner = open_private(&lock_path)?;
-            lock_owner(&owner, true)?;
-            let strict_state = StrictState {
-                owner,
-                lock_path,
-                marker_path: state_sidecar(&path, ".initialized"),
-            };
-            strict_state.verify_owner_and_marker()?;
-            (Some(strict_state), None)
+            (Some(StrictState::acquire(&path)?), None)
         } else {
             // Ordinary brokers can still share legacy state, but they must hold
             // a shared lock so they cannot race strict provisioning/ownership.
@@ -469,9 +482,6 @@ impl Limits {
             return;
         };
         budget.pending_usage = (pending != 0).then_some(pending);
-        if pending == 0 && (self.strict.is_none() || budget.unsettled == Some(0)) {
-            budget.day = budget.day.max(now / 86_400);
-        }
         if self.strict.is_some() {
             budget.last_seen_seconds = Some(now);
         }
@@ -501,11 +511,9 @@ impl Limits {
                 .checked_sub(1)
                 .ok_or("strict reservation was already settled")?,
         );
-        // Carry previous counters forward only once *all* old requests have
-        // settled. One completion must not release other unresolved old holds.
-        if budget.unsettled == Some(0) {
-            budget.day = budget.day.max(now / 86_400);
-        }
+        // The counters stay on their admission day. Once *all* old requests
+        // have settled, the next admission starts a fresh UTC day; one
+        // completion never releases other unresolved old holds.
         budget.last_seen_seconds = Some(now);
         self.persist_budget(&mut budget)?;
         state.0 = budget;
@@ -519,6 +527,19 @@ impl Limits {
 }
 
 impl StrictState {
+    fn acquire(path: &Path) -> Result<Self, String> {
+        let lock_path = state_sidecar(path, ".lock");
+        let owner = open_private(&lock_path)?;
+        lock_owner(&owner, true)?;
+        let state = Self {
+            owner,
+            lock_path,
+            marker_path: state_sidecar(path, ".initialized"),
+        };
+        state.verify_owner_and_marker()?;
+        Ok(state)
+    }
+
     fn verify_owner_and_marker(&self) -> Result<(), String> {
         let current = open_private(&self.lock_path)?;
         let held = self
@@ -1278,7 +1299,7 @@ mod tests {
     }
 
     #[test]
-    fn settled_spend_ages_out_and_cross_midnight_completion_is_carried_forward() {
+    fn settled_spend_ages_out_including_cross_midnight_completion() {
         let (directory, budget) = strict_fixture("strict-midnight-settled");
         let end = 259_199;
         Limits::initialize_strict_at(&budget, end - 1).unwrap();
@@ -1312,18 +1333,83 @@ mod tests {
                 .contains("unsettled")
         );
         limits.settle_at(end + 1).unwrap();
+        // The settled request stays charged to its admission day only.
+        let settled = read_strict_budget(&budget).unwrap();
+        assert_eq!(
+            (settled.day, settled.cost_microusd, settled.unsettled),
+            (end / 86_400, 30, Some(0))
+        );
         limits.reserve_at(5, 7, end + 1).unwrap();
+        let state = read_strict_budget(&budget).unwrap();
+        assert_eq!(
+            (
+                state.day,
+                state.requests,
+                state.tokens,
+                state.cost_microusd,
+                state.unsettled
+            ),
+            ((end + 1) / 86_400, 1, 5, 7, Some(1))
+        );
+        drop(limits);
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn cross_midnight_usage_hold_release_does_not_carry_counters() {
+        let (directory, budget) = strict_fixture("strict-midnight-usage");
+        // The usage release samples the real clock, so admit just before today.
+        let end = unix_seconds() / 86_400 * 86_400 - 1;
+        Limits::initialize_strict_at(&budget, end).unwrap();
+        let limits = Arc::new(strict_limits(&budget, end).unwrap());
+        limits.reserve_with_clock(90, 90, true, || end).unwrap();
+        // Release after midnight, then settle the matching reservation.
+        limits.release_usage(true);
+        limits.settle_with_clock(unix_seconds).unwrap();
+        let now = unix_seconds();
+        limits.reserve_at(5, 7, now).unwrap();
+        let state = read_strict_budget(&budget).unwrap();
+        assert_eq!(
+            (state.day, state.tokens, state.cost_microusd),
+            (now / 86_400, 5, 7)
+        );
+        drop(limits);
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn reconciliation_resolves_holds_without_refunds_and_requires_ownership() {
+        let (directory, budget) = strict_fixture("strict-reconcile");
+        let now = 200_000;
+        assert!(Limits::reconcile_strict_at(&budget, now).is_err());
+        Limits::initialize_strict_at(&budget, now).unwrap();
+        let limits = strict_limits(&budget, now).unwrap();
+        limits.reserve_with_clock(20, 5, true, || now).unwrap();
+        // The running broker owns the state; reconciliation must not race it.
+        assert!(Limits::reconcile_strict_at(&budget, now).is_err());
+        drop(limits);
+        assert!(
+            Limits::reconcile_strict_at(&budget, now - 1)
+                .unwrap_err()
+                .contains("rollback")
+        );
+        assert_eq!(Limits::reconcile_strict_at(&budget, now + 1), Ok((1, 1)));
         let state = read_strict_budget(&budget).unwrap();
         assert_eq!(
             (
                 state.requests,
                 state.tokens,
                 state.cost_microusd,
-                state.unsettled
+                state.unsettled,
+                state.pending_usage
             ),
-            (2, 25, 37, Some(1))
+            (1, 20, 5, Some(0), None)
         );
-        drop(limits);
+        let restarted = strict_limits(&budget, now + 86_400).unwrap();
+        restarted.reserve_at(1, 1, now + 86_400).unwrap();
+        drop(restarted);
+        fs::remove_file(state_sidecar(&budget, ".initialized")).unwrap();
+        assert!(Limits::reconcile_strict_at(&budget, now + 86_400).is_err());
         fs::remove_dir_all(directory).unwrap();
     }
 

@@ -393,16 +393,17 @@ let
     };
 
   # Never wanted by, or ordered before, the broker: an operator must explicitly
-  # start this one-shot unit for a previously unprovisioned state directory.
-  strictInitializationService = name: {
-    description = "One-time strict LLM budget initialization for ${name}";
+  # start these one-shot units, initialization only for a previously
+  # unprovisioned state directory and reconciliation only with the broker stopped.
+  strictBudgetService = name: operation: description: {
+    inherit description;
     serviceConfig = {
       Type = "oneshot";
       DynamicUser = true;
       User = bridgeName name;
       StateDirectory = "tentaflake-broker-llm-${name}";
       StateDirectoryMode = "0700";
-      ExecStart = "${lib.getExe brokerPackage} --initialize-strict-budget /var/lib/tentaflake-broker-llm-${name}/budget.json";
+      ExecStart = "${lib.getExe brokerPackage} --${operation}-strict-budget /var/lib/tentaflake-broker-llm-${name}/budget.json";
       UMask = "0077";
       NoNewPrivileges = true;
       PrivateDevices = true;
@@ -435,7 +436,12 @@ let
       ] agent.llm.strictCostEnvelope;
     }
     // lib.optionalAttrs (agent.llm.enable && agent.llm.strictCostEnvelope) {
-      "tentaflake-broker-llm-initialize-${name}" = strictInitializationService name;
+      "tentaflake-broker-llm-initialize-${name}" =
+        strictBudgetService name "initialize"
+          "One-time strict LLM budget initialization for ${name}";
+      "tentaflake-broker-llm-reconcile-${name}" =
+        strictBudgetService name "reconcile"
+          "Operator reconciliation of held strict LLM budget for ${name}";
     }
     // lib.optionalAttrs agent.fetch.enable {
       "tentaflake-broker-fetch-${name}" = hardenedService name "fetch" (fetchConfig name agent) [

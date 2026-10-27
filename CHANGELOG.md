@@ -21,12 +21,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Provider pricing or hard caps remain prerequisites for paid admission; the
   ordinary request policy remains unchanged.
 - Add a stopped Pi Durable adapter scaffold with no runtime image, container,
-  host-state creation or socket access. Runtime acceptance remains pending.
+  host-state creation or socket access, reserving its own UID/GID 10100.
+  Runtime acceptance remains pending.
+- Add `tentaflake-broker --reconcile-strict-budget` and the explicit
+  `tentaflake-broker-llm-reconcile-NAME` unit. With the broker stopped, it
+  resolves held strict reservations and orphaned usage holds without refunds.
 ### Maintenance
-- Reject empty strict completion payloads and malformed streaming deltas;
-  durably exhaust strict daily budgets on reported usage or price overages.
-  Interrupted usage accounting blocks admission until operator reconciliation;
-  ordinary shared-state budgets retain their existing limitations.
+- Settle strict reservations on complete provider error responses, finished
+  choices with empty or filtered content, and dated snapshots of the allowed
+  model; malformed outputs, partial streams and lost responses stay held.
+  Settled cross-midnight spend stays on its admission day instead of being
+  carried into the next. Durably exhaust strict daily budgets on reported usage
+  or price overages. Interrupted usage accounting blocks admission until
+  operator reconciliation; ordinary shared-state budgets retain their existing
+  limitations. Ordinary streams again accept choice chunks without a delta.
+- OpenClaw now uses the shared stopped-scaffold builder: it no longer creates
+  host state directories and gains same-identity OCI and quota assertions.
+- `agents.tsv` adds a sixth `runnable` field; CLI `stats`, `shell` and `exec`
+  use it instead of re-reading the runtime catalog.
+- Move the journald hardening regression into `checks.*.hardening-journald`.
 - Retain bounded sequential flake evaluation, explicit build/VM gates and
   read-only formatting checks from the later 0.4 development.
 - Update libc, Tokio, Quinn and Rustls and retain the Dev Containers

@@ -12,8 +12,10 @@ Nix writes two non-secret files:
   agent inventory path.
 - `/etc/tentaflake/agents.tsv` uses explicit `tentaflake.agentInstances`
   metadata for adapters and retains a fallback for unmanaged OCI containers.
-  Its five fields are adapter, instance name, container name, systemd unit,
-  and state directory. Stopped scaffolds can appear without an OCI container.
+  Its six fields are adapter, instance name, container name, systemd unit,
+  state directory and the instance's `runnable` flag. Stopped scaffolds appear
+  with `false` and no OCI container; `stats`, `shell` and `exec` skip or refuse
+  them by that flag, not by runtime name.
 
 Do not hand-edit them. Change the Nix configuration and rebuild explicitly.
 

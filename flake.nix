@@ -146,6 +146,7 @@
         ci-vm-selection = import ./tests/ci-vm-selection.nix { inherit pkgs; };
         rust-package-sources = import ./tests/rust-package-sources.nix { inherit self pkgs; };
         image-pinning = import ./lib/pinnedImage-test.nix { inherit pkgs; };
+        hardening-journald = import ./tests/hardening-journald.nix { inherit pkgs; };
         agent-adapters =
           let
             tests = import ./tests/agent-adapters.nix { inherit pkgs; };

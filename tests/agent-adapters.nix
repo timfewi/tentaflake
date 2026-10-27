@@ -94,6 +94,7 @@ let
       container = "misleading-volume";
       unit = "declared.service";
       stateDir = "/declared-state";
+      runnable = false;
     };
   };
   # Real source files work even during read-only flake evaluation on a cold
@@ -201,7 +202,6 @@ let
     { tentaflake.security.profile = lib.mkForce "dev"; }
   ];
 in
-assert import ./hardening-journald.nix { inherit pkgs; };
 assert lib.all
   (
     access:
@@ -300,7 +300,12 @@ assert
   == builtins.functionArgs builders.adapters.zeroclaw.build;
 assert lib.all (
   unit:
-  !(lib.hasInfix "zeroclaw" unit) && !(lib.hasInfix "openclaw" unit) && !(lib.hasInfix "pi-" unit)
+  !(lib.hasInfix "zeroclaw" unit)
+  && !(lib.hasInfix "openclaw" unit)
+  && !(lib.any (backend: lib.hasPrefix "${backend}-pi-" unit) [
+    "docker"
+    "podman"
+  ])
 ) (builtins.attrNames single.systemd.services);
 assert rejects (json ./fixtures/adapter-input/unknown-agent-field.json);
 assert rejects (json ./fixtures/adapter-input/invalid-auto-start.json);
@@ -364,27 +369,16 @@ assert config.systemd.services.hermes-legacy-git-identity.script != "";
 assert
   records.zeroclaw-legacy.uid == 65534
   && records.zeroclaw-legacy.workspace == "/var/lib/zeroclaw-legacy/data";
-assert records.openclaw-assistant.runnable == false;
-assert config.systemd.services.docker-openclaw-assistant.wantedBy == [ ];
-assert lib.hasInfix "acceptance evidence" config.systemd.services.docker-openclaw-assistant.script;
 assert lib.hasInfix "opt-in streaming" config.systemd.services.docker-openclaw-assistant.script;
 assert
   !(lib.hasInfix "current LLM broker rejects" config.systemd.services.docker-openclaw-assistant.script);
-assert records.pi-pilot.runnable == false;
-assert records.pi-pilot.uid == 10000 && records.pi-pilot.gid == 10000;
-assert records.pi-pilot.unit == "docker-pi-pilot.service";
-assert !(containers ? pi-pilot);
-assert config.systemd.services.docker-pi-pilot.wantedBy == [ ];
-assert config.systemd.services.docker-pi-pilot.serviceConfig.Restart == "no";
-assert lib.hasInfix "acceptance evidence" config.systemd.services.docker-pi-pilot.script;
-assert lib.hasInfix "exit 1" config.systemd.services.docker-pi-pilot.script;
-assert lib.all (rule: !(lib.hasInfix "/var/lib/pi-pilot" rule)) config.systemd.tmpfiles.rules;
+assert import ./stopped-scaffold.nix { inherit pkgs builders config; };
 assert lib.elem "--network=none" containers.hermes-zeroclaw-named.extraOptions;
 assert failures config == [ ];
 assert lib.hasInfix
-  "openclaw\thermes-assistant\tmisleading-volume\tdeclared.service\t/declared-state"
+  "openclaw\thermes-assistant\tmisleading-volume\tdeclared.service\t/declared-state\tfalse"
   inventory;
-assert lib.hasInfix "agent\tunmanaged\tunmanaged\tpodman-unmanaged.service\t/legacy-fallback"
+assert lib.hasInfix "agent\tunmanaged\tunmanaged\tpodman-unmanaged.service\t/legacy-fallback\ttrue"
   inventory;
 assert dataConfig.tentaflake.agentInstances.hermes-generic.name == "generic";
 assert dataConfig.virtualisation.oci-containers.containers.hermes-from-data.autoStart;
@@ -452,5 +446,4 @@ assert rejects
       image = "example.invalid/runtime:latest";
     })
   ]).virtualisation.oci-containers.containers.hermes-mutable.image;
-assert import ./pi-adapter.nix { inherit pkgs; };
 import ./agent-state-quota.nix { inherit pkgs eval builders; }

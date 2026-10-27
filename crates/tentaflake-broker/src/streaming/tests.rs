@@ -403,8 +403,78 @@ fn strict_stream_failure_event_does_not_settle() {
 }
 
 #[test]
+fn strict_stream_settles_a_dated_snapshot_of_the_allowed_model() {
+    let exchange = Exchange::start_with_session(
+        false,
+        |cfg| cfg.llm.as_mut().unwrap().strict_cost_envelope = true,
+        None,
+        |mut socket| {
+            headers(&mut socket);
+            let chunk = json!({"object":"chat.completion.chunk","id":"fixture",
+                "model":"fixture-model-2024-08-06",
+                "choices":[{"index":0,"delta":{"content":"ok"},"finish_reason":"stop"}]});
+            let _ = write!(socket, "data: {chunk}\n\ndata: [DONE]\n\n");
+        },
+    );
+    let (raw, audit, budget) = exchange.finish(Vec::new());
+    assert!(String::from_utf8_lossy(&raw).contains("[DONE]"));
+    assert!(audit.contains("\"outcome\":\"completed\""));
+    assert_eq!(budget["unsettled"], 0);
+}
+
+#[test]
+fn strict_stream_settles_only_a_complete_provider_error() {
+    for (body, complete) in [
+        (r#"{"error":{"code":"context_length_exceeded"}}"#, true),
+        ("truncated", false),
+    ] {
+        let exchange = Exchange::start_with_session(
+            false,
+            |cfg| cfg.llm.as_mut().unwrap().strict_cost_envelope = true,
+            None,
+            move |mut socket| {
+                // A truncated body announces more bytes than it sends.
+                let length = if complete {
+                    body.len()
+                } else {
+                    body.len() + 16
+                };
+                let _ = write!(
+                    socket,
+                    "HTTP/1.1 400 Bad Request\r\nContent-Type: application/json\r\nContent-Length: {length}\r\nConnection: close\r\n\r\n{body}"
+                );
+            },
+        );
+        let (raw, audit, budget) = exchange.finish(Vec::new());
+        assert!(String::from_utf8_lossy(&raw).starts_with("HTTP/1.1 "));
+        assert!(audit.contains("stream_aborted"));
+        assert_eq!(budget["requests"], 1);
+        assert_eq!(budget["unsettled"], if complete { 0 } else { 1 }, "{body}");
+    }
+}
+
+#[test]
+fn ordinary_stream_accepts_choice_metadata_without_a_delta() {
+    let exchange = Exchange::start(
+        false,
+        |_| {},
+        |mut socket| {
+            headers(&mut socket);
+            let filter = json!({"object":"chat.completion.chunk","id":"fixture","model":"fixture-model",
+                "choices":[{"index":0,"finish_reason":null,"content_filter_results":{}}]});
+            let _ = write!(socket, "data: {filter}\n\n");
+            socket.write_all(&chat(json!({}), json!("stop"))).unwrap();
+            socket.write_all(b"data: [DONE]\n\n").unwrap();
+        },
+    );
+    let (raw, audit, _) = exchange.finish(Vec::new());
+    assert!(String::from_utf8_lossy(&raw).contains("[DONE]"));
+    assert!(audit.contains("\"outcome\":\"completed\""));
+}
+
+#[test]
 fn strict_stream_does_not_settle_without_the_confirmed_priced_model() {
-    for model in [None, Some("other-model")] {
+    for model in [None, Some("other-model"), Some("fixture-model-mini")] {
         let exchange = Exchange::start_with_session(
             false,
             |cfg| cfg.llm.as_mut().unwrap().strict_cost_envelope = true,
@@ -499,7 +569,7 @@ fn strict_stream_rejects_missing_or_malformed_delta_before_completion() {
 }
 
 #[test]
-fn strict_nonstream_settles_only_verified_audited_delivered_success() {
+fn strict_nonstream_settles_only_verified_audited_delivered_outcomes() {
     use crate::http::Request;
     use std::collections::HashMap;
     use std::os::unix::fs::symlink;
@@ -510,6 +580,10 @@ fn strict_nonstream_settles_only_verified_audited_delivered_success() {
     incomplete["choices"][0]["finish_reason"] = Value::Null;
     let mut wrong_model = complete.clone();
     wrong_model["model"] = json!("other-model");
+    let mut snapshot_model = complete.clone();
+    snapshot_model["model"] = json!("fixture-model-2024-08-06");
+    let mut variant_model = complete.clone();
+    variant_model["model"] = json!("fixture-model-mini");
     let mut no_output = complete.clone();
     no_output["choices"][0]["message"] = json!({"role":"assistant"});
     let mut empty_output = complete.clone();
@@ -524,12 +598,39 @@ fn strict_nonstream_settles_only_verified_audited_delivered_success() {
     filtered["choices"][0]["message"] = json!({"role":"assistant", "refusal":"blocked"});
     let mut limited = complete.clone();
     limited["choices"][0]["finish_reason"] = json!("length");
+    let mut withheld = complete.clone();
+    withheld["choices"][0]["finish_reason"] = json!("content_filter");
+    withheld["choices"][0]["message"] = json!({"role":"assistant", "content":null});
+    let mut malformed_output = complete.clone();
+    malformed_output["choices"][0]["message"]["content"] = json!(42);
     let cases = [
         (200, serde_json::to_vec(&complete).unwrap(), false, true, 0),
-        (200, serde_json::to_vec(&no_output).unwrap(), false, true, 1),
+        (200, serde_json::to_vec(&no_output).unwrap(), false, true, 0),
         (
             200,
             serde_json::to_vec(&empty_output).unwrap(),
+            false,
+            true,
+            0,
+        ),
+        (200, serde_json::to_vec(&withheld).unwrap(), false, true, 0),
+        (
+            200,
+            serde_json::to_vec(&malformed_output).unwrap(),
+            false,
+            true,
+            1,
+        ),
+        (
+            200,
+            serde_json::to_vec(&snapshot_model).unwrap(),
+            false,
+            true,
+            0,
+        ),
+        (
+            200,
+            serde_json::to_vec(&variant_model).unwrap(),
             false,
             true,
             1,
@@ -552,7 +653,17 @@ fn strict_nonstream_settles_only_verified_audited_delivered_success() {
             1,
         ),
         (200, b"not-json".to_vec(), false, true, 1),
-        (500, serde_json::to_vec(&complete).unwrap(), false, true, 1),
+        // Complete provider errors end the request; they are not refunded.
+        (
+            400,
+            br#"{"error":{"code":"context_length_exceeded"}}"#.to_vec(),
+            false,
+            true,
+            0,
+        ),
+        (429, b"rate limited".to_vec(), false, true, 0),
+        (500, serde_json::to_vec(&complete).unwrap(), false, true, 0),
+        (500, serde_json::to_vec(&complete).unwrap(), false, false, 1),
         (200, serde_json::to_vec(&complete).unwrap(), true, true, 1),
         (200, serde_json::to_vec(&complete).unwrap(), false, false, 1),
     ];
@@ -619,7 +730,7 @@ fn strict_nonstream_settles_only_verified_audited_delivered_success() {
                 ]),
                 body,
             });
-            assert_eq!(response.status, 200);
+            assert_eq!(response.status, status);
             // A lost downstream response never consumes the completion capability.
             drop(response);
         }

@@ -1,5 +1,5 @@
 //! Bounded, single-dispatch SSE forwarding. No provider body is written to audit.
-use crate::broker::{observe_usage, parse_usage};
+use crate::broker::{observe_usage, parse_usage, provider_model_matches};
 use crate::config::{ModelPolicy, StreamingPolicy};
 use crate::policy::ResolvedTarget;
 use crate::state::{Audit, UsageGuard};
@@ -36,6 +36,10 @@ struct Failure {
     status: u16,
     reason: &'static str,
 }
+
+// With a strict reservation this is produced only after the complete bounded
+// error body was read, so the provider request has ended and may settle.
+const PROVIDER_REJECTED: &str = "provider rejected streaming request";
 
 impl Failure {
     fn upstream(reason: &'static str) -> Self {
@@ -107,10 +111,11 @@ impl StreamingResponse {
                 Ok(completed) => completed,
                 Err(failure) => {
                 // Reasons are static broker strings, never upstream error text.
-                let _ = self.audit.record(&self.agent, "llm", "stream_aborted", json!({
+                let audited = self.audit.record(&self.agent, "llm", "stream_aborted", json!({
                     "route": self.route, "model": self.model_policy.name,
                     "provider": self.target.host, "reason": failure.reason,
-                }));
+                })).is_ok();
+                let mut delivered = false;
                 if !headers_sent && failure.status != 0 && Instant::now() < total {
                     let body = serde_json::to_vec(&json!({"error": failure.reason})).unwrap();
                     let header = format!(
@@ -118,8 +123,11 @@ impl StreamingResponse {
                         failure.status, body.len()
                     );
                     let deadline = total.min(Instant::now() + Duration::from_secs(self.policy.idle_timeout_seconds));
-                    let _ = write_bytes(&mut reader, &mut writer, deadline, header.as_bytes()).await;
-                    let _ = write_bytes(&mut reader, &mut writer, deadline, &body).await;
+                    delivered = write_bytes(&mut reader, &mut writer, deadline, header.as_bytes()).await.is_ok()
+                        && write_bytes(&mut reader, &mut writer, deadline, &body).await.is_ok();
+                }
+                if failure.reason == PROVIDER_REJECTED && audited && delivered {
+                    return Ok(true);
                 }
                 // After headers, close a truncated chunked body. Never fabricate
                 // [DONE], a Responses terminal event, or a successful HTTP end.
@@ -180,9 +188,27 @@ impl StreamingResponse {
         })
         .await?;
         if !response.status().is_success() {
+            let status = response.status().as_u16();
+            // Strict mode drains within the response bounds: a truncated or slow
+            // error body leaves the provider outcome, and the reservation, uncertain.
+            let mut received = 0_usize;
+            while self.settlement.is_some()
+                && let Some(chunk) = guarded(reader, total.min(first), async {
+                    response.chunk().await.map_err(|error| Failure {
+                        status: if error.is_timeout() { 504 } else { 502 },
+                        reason: "provider stream read failed",
+                    })
+                })
+                .await?
+            {
+                received = received
+                    .checked_add(chunk.len())
+                    .filter(|size| *size <= self.max_response_bytes)
+                    .ok_or_else(|| Failure::upstream("stream exceeds configured response limit"))?;
+            }
             return Err(Failure {
-                status: response.status().as_u16(),
-                reason: "provider rejected streaming request",
+                status,
+                reason: PROVIDER_REJECTED,
             });
         }
         let mime = response
@@ -439,7 +465,11 @@ impl<'a> Protocol<'a> {
                 ));
             }
             if let Some(expected) = self.expected_model {
-                if value.get("model").and_then(Value::as_str) != Some(expected) {
+                if !value
+                    .get("model")
+                    .and_then(Value::as_str)
+                    .is_some_and(|model| provider_model_matches(expected, model))
+                {
                     return Err(Failure::upstream(
                         "completion stream model does not match the allowed model",
                     ));
@@ -470,7 +500,11 @@ impl<'a> Protocol<'a> {
                         "completion choice is outside the requested limit",
                     ));
                 }
-                if !choice.get("delta").is_some_and(valid_chat_delta) {
+                // Only the strict profile requires deltas; ordinary providers may
+                // send choice-level metadata chunks, such as content filter results.
+                if self.expected_model.is_some()
+                    && !choice.get("delta").is_some_and(valid_chat_delta)
+                {
                     return Err(Failure::upstream("completion choice has an invalid delta"));
                 }
                 match choice.get("finish_reason") {

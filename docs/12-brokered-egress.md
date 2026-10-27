@@ -233,14 +233,21 @@ Each strict reservation remains counted for its admission day even when local
 preflight proves no upstream send was attempted. Resolution/address rejection,
 unavailable credentials and audit failures before dispatch can clear only the
 uncertainty, not that day's charge. Once a send may have begun, only a verified
-complete successful response, a durable terminal audit, and successful
-downstream writes settle its uncertainty. HTTP errors, malformed or partial
-responses, cancellation, timeouts, post-dispatch audit failures and observed
-delivery failures leave it unsettled. Non-streaming success must identify the
-exact allowed model and one finished choice containing nonempty text, a refusal,
-or valid local function calls. Every successful SSE completion chunk must carry
-that model and the same nonempty completion ID, and each choice must have a
-valid delta object before the real terminal event.
+complete provider response, a durable terminal audit, and successful
+downstream writes settle its uncertainty. A completely read non-2xx provider
+response (for example 400, 401, 429 or 500) ends the provider request and
+settles without a refund; a truncated, slow or oversized error body does not.
+Malformed or partial responses, cancellation, timeouts, post-dispatch audit
+failures and observed delivery failures leave it unsettled. Non-streaming
+success must identify the allowed model and one finished choice whose output
+is well formed: text (possibly empty or withheld by a content filter), a
+refusal, or valid local function calls. Every successful SSE completion chunk
+must carry that model and the same nonempty completion ID, and each choice must
+have a valid delta object before the real terminal event. The allowed model
+also matches its dated provider snapshot, such as `gpt-4o-2024-08-06` or
+`model-20241022`; any other suffix, such as `-mini`, stays unconfirmed. Ordinary
+(non-strict) streams do not require deltas, so choice-level metadata chunks such
+as content filter results are forwarded unchanged.
 
 Strict mode persists a usage-accounting hold with each reservation before
 dispatch. If provider-reported numeric usage exceeds the reserved token total
@@ -256,18 +263,40 @@ additional provider charges.
 The hold is cleared after normal processing, without refunding the reservation.
 If the process dies while it is held, or an overage update cannot be persisted,
 future admission is blocked even within the same day, including after restart,
-until separately authorized operator reconciliation. A crash before dispatch can
-therefore also require reconciliation. Live requests can run concurrently, but
+until separately authorized operator reconciliation (see below). A crash before
+dispatch can therefore also require reconciliation. Live requests can run concurrently, but
 unresolved usage holds prevent a day reset.
 
 An unsettled prior-day reservation prevents a UTC-day reset. If one request
 completes after midnight while another prior-day request remains unresolved,
-admission remains blocked. When all prior holds settle after midnight, all
-accumulated counters are conservatively carried into that completion day; a
-previously settled day can otherwise age out. Completion capabilities are not
-recreated after a restart, so a lost upstream response can block later-day
-admission indefinitely until separately authorized operator reconciliation.
+admission remains blocked. Every reservation stays charged to its admission day:
+once all prior holds settle after midnight, the next admission starts a fresh
+UTC day, so a request running across midnight does not charge the previous
+day's spend, or a previous-day overage exhaustion, against the new day.
+Completion capabilities are not recreated after a restart, so a lost upstream
+response blocks later-day admission until operator reconciliation.
 Do not remove the marker or initialize an empty replacement.
+
+### Reconciling held strict budgets
+
+Reconciliation is an explicit operator decision, never part of startup or
+restart. First stop the agent and its broker, then verify the provider-side
+outcome and usage of the held requests, for example in the provider's usage
+console. Then run the generated one-shot unit:
+
+```sh
+systemctl start tentaflake-broker-llm-reconcile-hermes-coding.service
+```
+
+The underlying command is `tentaflake-broker --reconcile-strict-budget
+/absolute/path/budget.json`. It takes the exclusive budget lock, so it fails
+while a broker owns the state, and requires a valid marker, checksum and
+non-rolled-back clock. It clears held reservations and orphaned usage holds and
+reports how many it resolved. Counters are never refunded: the held requests stay
+charged to their admission day. If the provider reports usage above those
+reservations, keep admission disabled for that day and adjust provider-side
+limits; reconciliation does not record that overage. A missing or corrupt state
+is not reconcilable and still needs separate investigation.
 
 Successful downstream `write_all` confirms only that the local kernel accepted
 the bytes; it does not acknowledge that the runner received them. Consequently

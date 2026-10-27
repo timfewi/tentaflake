@@ -35,7 +35,9 @@ observed elapsed time, without evidence of a hang or failure.
 `just generated-flake` validates the installer-generated flake separately.
 `checks.*.agent-adapters` covers compatible mappings, JSON, inventory, lazy
 selection, stopped OpenClaw and Pi scaffolds, quota declarations and generated
-quota-helper refusal regressions without mounts. `just ci`/`just e2e` run the
+quota-helper refusal regressions without mounts. `checks.*.hardening-journald`
+separately covers the hardening journald defaults, host overrides and the legacy
+`extraConfig` refusal. `just ci`/`just e2e` run the
 complete gate, both VM suites and the installer ISO. Run an affected VM suite
 when changing runtime or security behavior; use the ISO gate when changing
 installation.

@@ -52,8 +52,8 @@ exit "$FIXTURE_DISK_EXIT""#,
         }
         fs::write(
             root.join("agents.tsv"),
-            "hermes\tcoding-private-fixture\tcoding-fixture\tcoding-fixture.service\t/tmp/coding-fixture\n\
-             hermes\tstopped-private-fixture\tstopped-fixture\tstopped-fixture.service\t/tmp/stopped-fixture\n",
+            "hermes\tcoding-private-fixture\tcoding-fixture\tcoding-fixture.service\t/tmp/coding-fixture\ttrue\n\
+             hermes\tstopped-private-fixture\tstopped-fixture\tstopped-fixture.service\t/tmp/stopped-fixture\ttrue\n",
         )
         .unwrap();
         fs::write(
@@ -261,10 +261,11 @@ fn stats_omit_stopped_scaffolds_but_keep_real_and_unmanaged_agents() {
     fake_backend(&fixture);
     fs::write(
         fixture.0.join("agents.tsv"),
-        "pi\tpilot\tpi-pilot\tdocker-pi-pilot.service\t/var/lib/pi-pilot\n\
-         openclaw\tchat\topenclaw-chat\tdocker-openclaw-chat.service\t/var/lib/openclaw-chat\n\
-         hermes\tworker\thermes-worker\tdocker-hermes-worker.service\t/var/lib/hermes-worker\n\
-         agent\tlegacy\tunmanaged\tdocker-unmanaged.service\t/var/lib/unmanaged\n",
+        "pi\tpilot\tpi-pilot\tdocker-pi-pilot.service\t/var/lib/pi-pilot\tfalse\n\
+         openclaw\tchat\topenclaw-chat\tdocker-openclaw-chat.service\t/var/lib/openclaw-chat\tfalse\n\
+         hermes\tworker\thermes-worker\tdocker-hermes-worker.service\t/var/lib/hermes-worker\ttrue\n\
+         hermes\tparked\thermes-parked\tdocker-hermes-parked.service\t/var/lib/hermes-parked\tfalse\n\
+         agent\tlegacy\tunmanaged\tdocker-unmanaged.service\t/var/lib/unmanaged\ttrue\n",
     )
     .unwrap();
     let output = fixture.run("stats", false, false, &[]);
@@ -290,8 +291,8 @@ fn scaffold_only_stats_and_container_commands_never_invoke_backend() {
     fake_backend(&fixture);
     fs::write(
         fixture.0.join("agents.tsv"),
-        "pi\tpilot\tpi-pilot\tdocker-pi-pilot.service\t/var/lib/pi-pilot\n\
-         openclaw\tchat\topenclaw-chat\tdocker-openclaw-chat.service\t/var/lib/openclaw-chat\n",
+        "pi\tpilot\tpi-pilot\tdocker-pi-pilot.service\t/var/lib/pi-pilot\tfalse\n\
+         openclaw\tchat\topenclaw-chat\tdocker-openclaw-chat.service\t/var/lib/openclaw-chat\tfalse\n",
     )
     .unwrap();
     let stats = fixture.run("stats", false, false, &[]);

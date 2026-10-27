@@ -865,10 +865,6 @@ assert core.config.environment.etc."tentaflake/agents.tsv".text == "";
 assert watchdog.config.systemd.settings.Manager.WatchdogDevice == "/dev/watchdog0";
 assert watchdog.config.systemd.settings.Manager.RuntimeWatchdogSec == "45s";
 assert watchdog.config.systemd.settings.Manager.RebootWatchdogSec == "5min";
-assert watchdog.config.services.journald.settings.Journal.RateLimitIntervalSec == "5s";
-assert watchdog.config.services.journald.settings.Journal.RateLimitBurst == 1000;
-assert watchdog.config.services.journald.settings.Journal.Compress == "yes";
-assert watchdog.config.services.journald.settings.Journal.SystemMaxUse == "500M";
 assert !(core.options.tentaflake ? profiles);
 assert !(core.options.tentaflake ? editor);
 assert !(builtins.hasAttr "hive-research" core.options.services);
@@ -1016,6 +1012,17 @@ assert lib.hasInfix "--initialize-strict-budget"
   strictBrokerCapsule.config.systemd.services."tentaflake-broker-llm-initialize-hermes-brokered".serviceConfig.ExecStart;
 assert
   strictBrokerCapsule.config.systemd.services."tentaflake-broker-llm-initialize-hermes-brokered".wantedBy
+  == [ ];
+assert
+  !(builtins.hasAttr "tentaflake-broker-llm-reconcile-hermes-brokered" brokerCapsule.config.systemd.services);
+assert
+  strictBrokerCapsule.config.systemd.services."tentaflake-broker-llm-reconcile-hermes-brokered".serviceConfig.User
+  == brokerBridge;
+assert lib.hasInfix
+  "--reconcile-strict-budget /var/lib/tentaflake-broker-llm-hermes-brokered/budget.json"
+  strictBrokerCapsule.config.systemd.services."tentaflake-broker-llm-reconcile-hermes-brokered".serviceConfig.ExecStart;
+assert
+  strictBrokerCapsule.config.systemd.services."tentaflake-broker-llm-reconcile-hermes-brokered".wantedBy
   == [ ];
 assert !(lib.all (item: item.assertion) strictBrokerIdentityCollision.config.assertions);
 assert lib.hasInfix "OPENAI_API_KEY=%s"
