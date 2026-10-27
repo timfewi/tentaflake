@@ -37,7 +37,7 @@ disk_contains() {
 
 prepare_disk() {
   local DISK INSTALL_LOG="$2" stack volumes device kind canonical pv group other_pv other_group index
-  local EFI_PART ROOT_PART prefix
+  local EFI_PART ROOT_PART prefix disk_lock
   local -a devices=() paths=() kinds=()
   DISK=$(readlink -f -- "$1") || die "Cannot resolve selected disk '$1'."
   [ -b "$DISK" ] || die "Selected target '$DISK' is not a block device."
@@ -80,6 +80,11 @@ prepare_disk() {
         die "Cannot close encrypted target ${paths[index]}."
     fi
   done
+
+  # Hold udev's whole-disk lock while rewriting the table: udev otherwise
+  # rescans after each write, and a concurrent BLKRRPART fails with EBUSY.
+  exec {disk_lock}<"$DISK" || die "Cannot open target $DISK for locking."
+  flock -x "$disk_lock" || die "Cannot lock target $DISK."
   wipefs -a "$DISK" >>"$INSTALL_LOG" 2>&1 || die "Cannot wipe target signatures."
 
   # Numeric device names (NVMe, MMC, loop) use a p before the partition number.
@@ -91,6 +96,7 @@ prepare_disk() {
   sgdisk -o -n 1:0:+1024M -t 1:ef00 -c 1:EFI -n 2:0:0 -t 2:8300 -c 2:NixOS \
     "$DISK" >>"$INSTALL_LOG" 2>&1 || die "Failed to create target partitions."
   blockdev --rereadpt "$DISK" >>"$INSTALL_LOG" 2>&1 || die "Failed to re-read partition table."
+  exec {disk_lock}<&-
   wait_for_partitions "$ROOT_PART" "$EFI_PART" || die "Target partitions never appeared."
 
   dialog --infobox "Formatting partitions ..." 4 50
