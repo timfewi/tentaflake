@@ -14,11 +14,15 @@ alias list := default
 # ── The gates ────────────────────────────────────────────────
 
 # Full local gate: source checks, all flake checks and the installer ISO
-ci: formatter-test lint shellcheck rust ci-policy check generated-flake iso-installer
+ci: formatter-test lint shellcheck rust host-api-test ci-policy check generated-flake iso-installer
     @echo "==> all green"
 
 # Fast source checks; evaluation and all Nix package/runtime builds are explicit
-fast: formatter-test lint shellcheck rust ci-policy
+fast: formatter-test lint shellcheck rust host-api-test ci-policy
+
+# Exercise the optional local host API with isolated Unix sockets and fake host tools
+host-api-test:
+    python3 -m unittest discover -s host-api/tests -p 'test_*.py'
 
 # Test routing with real Git histories and validate workflow syntax
 ci-policy:

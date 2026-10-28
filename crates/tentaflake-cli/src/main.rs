@@ -2194,10 +2194,20 @@ fn find_agent<'a>(agents: &'a [Agent], query: Option<&String>) -> Result<&'a Age
             .join(" ");
         format!("missing agent name; available: {names}")
     })?;
-    agents
-        .iter()
-        .find(|agent| &agent.name == query || &agent.container == query)
-        .ok_or_else(|| format!("unknown agent `{query}`"))
+    // A display name must never shadow another instance's canonical identity.
+    if let Some(agent) = agents.iter().find(|agent| &agent.container == query) {
+        return Ok(agent);
+    }
+    let mut matches = agents.iter().filter(|agent| &agent.name == query);
+    let agent = matches
+        .next()
+        .ok_or_else(|| format!("unknown agent `{query}`"))?;
+    if matches.next().is_some() {
+        return Err(format!(
+            "ambiguous agent name `{query}`; use an exact container ID from `tentaflake status --json`"
+        ));
+    }
+    Ok(agent)
 }
 
 fn status(config: &Config, agents: &[Agent], mode: OutputMode) -> Result<u8, String> {
@@ -2218,11 +2228,14 @@ fn status(config: &Config, agents: &[Agent], mode: OutputMode) -> Result<u8, Str
                 print!(",");
             }
             let name = mode.agent(index, &agent.name);
+            let id = mode.agent(index, &agent.container);
             print!(
-                "{{\"name\":\"{}\",\"runtime\":\"{}\",\"state\":\"{}\"}}",
+                "{{\"id\":\"{}\",\"name\":\"{}\",\"runtime\":\"{}\",\"state\":\"{}\",\"runnable\":{}}}",
+                json_escape(&id),
                 json_escape(&name),
                 json_escape(&agent.runtime),
-                json_escape(state)
+                json_escape(state),
+                agent.runnable
             );
         }
         println!("]}}");
@@ -2777,6 +2790,41 @@ mod tests {
                 .unwrap()
                 .name,
             "assistant"
+        );
+    }
+
+    #[test]
+    fn exact_container_identity_wins_over_another_agents_display_name() {
+        let agents = parse_agents(
+            "hermes\tzeroclaw-coding\thermes-zeroclaw-coding\tdocker-hermes-zeroclaw-coding.service\t/var/lib/hermes-zeroclaw-coding\ttrue\n\
+             zeroclaw\tcoding\tzeroclaw-coding\tdocker-zeroclaw-coding.service\t/var/lib/zeroclaw-coding\ttrue\n",
+        )
+        .unwrap();
+        assert_eq!(
+            find_agent(&agents, Some(&"zeroclaw-coding".into()))
+                .unwrap()
+                .runtime,
+            "zeroclaw"
+        );
+    }
+
+    #[test]
+    fn ambiguous_display_names_require_a_canonical_identity() {
+        let agents = parse_agents(
+            "hermes\tassistant\thermes-assistant\tdocker-hermes-assistant.service\t/var/lib/hermes-assistant\ttrue\n\
+             zeroclaw\tassistant\tzeroclaw-assistant\tdocker-zeroclaw-assistant.service\t/var/lib/zeroclaw-assistant\ttrue\n",
+        )
+        .unwrap();
+        assert!(
+            find_agent(&agents, Some(&"assistant".into()))
+                .unwrap_err()
+                .contains("ambiguous")
+        );
+        assert_eq!(
+            find_agent(&agents, Some(&"hermes-assistant".into()))
+                .unwrap()
+                .runtime,
+            "hermes"
         );
     }
 

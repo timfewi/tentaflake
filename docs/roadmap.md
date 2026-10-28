@@ -11,6 +11,12 @@ with the CLI and apply the NixOS configuration explicitly. Keep the existing
 builders, agent state and operational commands. An agent does not require a
 web control service, a company model or a mandatory shared agent runtime.
 
+The opt-in [local host API](19-web-ui.md) lets a separately supplied web UI
+inspect inventory/health and, when enabled, control fixed systemd actions.
+This is an alternative operator interface over declarative instances, not a
+replacement for the builders or a requirement to adopt HQ task ownership.
+Native runtime chat remains a separate integration and acceptance step.
+
 The existing security boundaries remain: balanced agents need their broker,
 Research relay, worker and workspace quota; `dev` is for trusted compatibility
 use and `strict` remains unavailable. A configuration that evaluates is not

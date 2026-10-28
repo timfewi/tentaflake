@@ -10,8 +10,9 @@ control service, web UI or single agent runtime.
 
 `just` recipes load the pinned contributor tools automatically; `just list`
 lists them. Enter `nix develop` before running Cargo or lint tools directly.
-Start with `just fast`: formatting, lint, ShellCheck, Rust unit checks and
-CI routing/small evaluator fixtures and actionlint. Host evaluation and builds are explicit gates.
+Start with `just fast`: formatting, lint, ShellCheck, Rust unit checks, optional
+host API tests, CI routing/small evaluator fixtures and actionlint. Host
+evaluation and builds are explicit gates.
 GitHub PR/push runs always check routing and whitespace, plus affected static
 and Rust checks. `.github/ci-paths.json` also selects affected build/evaluation/VM
 gates for `workflow_dispatch`; optional `base_sha` is a full comparison SHA.
@@ -129,6 +130,15 @@ are already published or require access to another repository for public checks.
 - Host diagnostics share checked systemd/disk evidence; failed or unknown
   agent states are problems, while stopped agents remain valid. `--hide`
   must redact host and agent names in both text and JSON.
+- `host-api/` and `modules/host-api.nix` implement an optional Unix-only operator
+  API, disabled by default. Actions and journal access are separately default-off.
+  Resolve canonical inventory IDs only; never accept arbitrary commands, unit
+  names, sockets, provider keys or Nix activation from clients. Keep root peer
+  verification and the private `tentaflake-api` group boundary. Durable action
+  receipts precede dispatch; retries reuse the original request ID, and unknown
+  outcomes never replay automatically. Host-only UI mode does not create or
+  migrate task state and does not claim native chat support. See
+  `docs/19-web-ui.md`; include `just host-api-test` in fast verification.
 - `lib/mkRustPackage.nix` shares Rust packaging: root Cargo files, all member
   manifests, and only the selected crate's source. Add required root inputs
   explicitly. Versions come from the root Cargo workspace; descriptions from

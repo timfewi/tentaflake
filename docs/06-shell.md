@@ -47,6 +47,12 @@ tentaflake update
 `--hide` redacts the host and agent names. `tentaflake-status` invokes the same
 status renderer and is used by the login banner.
 
+JSON status entries include a canonical container `id` and `runnable` flag.
+Use that ID for automation: exact container IDs take precedence over display
+names, and ambiguous short names are rejected. `--hide` redacts both the name
+and ID. The optional [local host API](19-web-ui.md) uses canonical IDs only and
+can expose this inventory to an independently installed web interface.
+
 `runtimes` lists the pinned preset catalog and its support/evidence levels;
 `--json` emits the complete schema-v1 catalog. It performs no host reads or
 image downloads. See [generic workloads](agent-adapters.md#generic-isolated-workload).

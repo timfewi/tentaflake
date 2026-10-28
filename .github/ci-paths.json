@@ -1,4 +1,16 @@
 {
+  "host-api": {
+    "paths": [
+      "host-api/**",
+      "modules/host-api.nix",
+      "pkgs/tentaflake-host-api/**",
+      "tests/host-api*.nix"
+    ],
+    "checks": [
+      "evaluate",
+      "static"
+    ]
+  },
   "flake-evaluation": {
     "paths": [
       "scripts/eval_flake.py",

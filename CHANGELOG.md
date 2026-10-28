@@ -15,6 +15,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Keep release tagging explicit, as on the preceding main branch; restoring
   the declarative product does not resume automatic patch releases.
 ### Added
+- Add an opt-in Unix host API with canonical agent inventory, host health,
+  separately enabled bounded logs and fixed lifecycle actions. Durable request
+  receipts prevent automatic replay after uncertain action outcomes. A separate
+  compatible web UI can use host-only mode without task migration or Pi.
 - Add an opt-in strict local-text LLM cost envelope with explicit one-time
   budget provisioning, exclusive state ownership, checksum-protected durable
   reservations, uncertain-hold rollover blocking and clock-rollback refusal.
@@ -27,6 +31,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `tentaflake-broker-llm-reconcile-NAME` unit. With the broker stopped, it
   resolves held strict reservations and orphaned usage holds without refunds.
 ### Maintenance
+- Expose canonical IDs and runnable flags in CLI JSON status, prefer exact
+  container IDs over display-name aliases, and reject ambiguous short names.
 - Settle strict reservations on complete provider error responses, finished
   choices with empty or filtered content, and dated snapshots of the allowed
   model; malformed outputs, partial streams and lost responses stay held.

@@ -100,6 +100,10 @@ jobs:
         if: needs.changes.outputs.static == 'true'
         run: nix develop --command actionlint .github/workflows/*.yml
 
+      - name: Optional host API protocol and action tests
+        if: needs.changes.outputs.static == 'true'
+        run: nix develop --command just host-api-test
+
       - name: Rust lint and unit tests
         if: needs.changes.outputs.rust == 'true'
         env:
@@ -180,6 +184,7 @@ jobs:
           fi
           if [[ "$CHECK_EVALUATE" == true ]]; then
             selected_checks+=(.#checks.x86_64-linux.image-pinning .#checks.x86_64-linux.agent-adapters .#checks.x86_64-linux.hardening-journald)
+            selected_checks+=(.#checks.x86_64-linux.host-api .#checks.x86_64-linux.host-api-evaluation)
           fi
           if [[ "$CHECK_CLI" == true ]]; then
             selected_checks+=(.#checks.x86_64-linux.tentaflake-cli)

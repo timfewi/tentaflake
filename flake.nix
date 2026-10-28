@@ -142,6 +142,8 @@
         tentaflake-broker = self.packages.${system}.tentaflake-broker;
         tentaflake-worker = self.packages.${system}.tentaflake-worker;
         tentaflake-worker-image = self.packages.${system}.tentaflake-worker-image;
+        host-api = self.packages.${system}.tentaflake-host-api;
+        host-api-evaluation = import ./tests/host-api-evaluation.nix { inherit pkgs; };
         devcontainer-cli = self.packages.${system}.devcontainer-cli;
         ci-vm-selection = import ./tests/ci-vm-selection.nix { inherit pkgs; };
         rust-package-sources = import ./tests/rust-package-sources.nix { inherit self pkgs; };
@@ -263,6 +265,7 @@
         tentaflake-cli = pkgs.callPackage ./pkgs/tentaflake-cli { };
         tentaflake-broker = pkgs.callPackage ./pkgs/tentaflake-broker { };
         tentaflake-worker = pkgs.callPackage ./pkgs/tentaflake-worker { };
+        tentaflake-host-api = pkgs.callPackage ./pkgs/tentaflake-host-api { };
         tentaflake-worker-image = pkgs.callPackage ./pkgs/tentaflake-worker/image.nix { };
         installer-iso = self.nixosConfigurations.installer-iso.config.system.build.isoImage;
       };

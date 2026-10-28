@@ -69,11 +69,13 @@ nix build .#installer-iso
 ```
 
 Start with `just fast`: formatting, lint, ShellCheck, Rust formatting/Clippy/unit
-tests, real-Git CI routing regressions and actionlint. It does not prepare
-Research closures, evaluate configurations or generated flakes, or build Nix
-packages, images, systems or VMs. The pinned development environment may still
-need to realize its tools. Run `just eval` and `just generated-flake` explicitly
-for configuration changes, and affected VM suites for runtime/security changes.
+tests, optional host API Unix protocol tests, real-Git CI routing regressions
+and actionlint. It does not prepare Research closures, evaluate configurations
+or generated flakes, or build Nix packages, images, systems or VMs. The pinned
+development environment may still need to realize its tools. Run `just eval`
+and `just generated-flake` explicitly for configuration changes, and affected
+VM suites for runtime/security changes. `just host-api-test` runs the focused
+API protocol suite with temporary state and fake host commands.
 `just ci` runs the full local gate, including the installer build. GitHub-only
 security services may add checks that cannot be reproduced locally.
 

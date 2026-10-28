@@ -45,6 +45,13 @@ sudo journalctl -u <exact-unit> --since '1 hour ago' -n 100 --no-pager
 data or credentials. Diagnostic `--hide` redacts host/agent names; other logs
 still need review before sharing.
 
+An operator may instead choose the optional [web interface](../../../docs/19-web-ui.md).
+Its local host API is disabled by default, with separate action/log permissions.
+Use canonical container IDs, inspect current state after an unknown action,
+and retry an uncertain HTTP response with the original request ID. Never treat
+host readiness as native chat or provider acceptance, or assign the API socket
+group to an agent. Nix remains authoritative for agent definitions.
+
 ## Perform the authorized operation
 
 Prefer `tentaflake start|stop|restart <exact-container>`. `stop` also stops the

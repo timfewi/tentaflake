@@ -40,6 +40,7 @@ host socket access; it is not an operational Pi integration.
 | Installed NixOS host | Core |
 | Adapter registry and Hermes/ZeroClaw builders | Core |
 | Rust `tentaflake` CLI | Core |
+| Local Unix host API for an optional operator UI | Opt-in; read-only by default |
 | Rust LLM/fetch policy broker | Core, opt-in per agent |
 | `secure-research-tool` web research | Pinned public service; required for balanced auto-start |
 | Disposable no-egress tool worker | Core; required for balanced auto-start |
@@ -50,8 +51,9 @@ host socket access; it is not an operational Pi integration.
 | Prometheus, Grafana, Loki, Alloy | Optional profile |
 | Falco runtime detection | Optional profile |
 
-There is no live-agent ISO, bundled audit daemon, SQLite event store, custom
-web console, or Go workspace.
+There is no live-agent ISO, bundled audit daemon, mandatory web console, or Go
+workspace. An optional local host API can connect an independently supplied
+operator UI; its private SQLite state contains action receipts, not agent tasks.
 
 ## Quick start
 
@@ -375,6 +377,20 @@ The same declaration accepts `state = { path = "/var/lib/hermes-coding"; sizeMiB
 to bound private state separately. Its path/owner must match adapter metadata;
 existing state requires an explicit offline migration.
 
+## Optional web interface
+
+Keep using the CLI, or enable `tentaflake.hostApi.enable` and connect a
+compatible operator UI through `/run/tentaflake-api/host.sock`. The API is
+disabled by default. Its read-only contract exposes stable agent IDs, runtime
+states and host health; `allowActions` and `allowLogs` separately opt into fixed
+lifecycle actions and bounded journal access.
+
+Nix remains authoritative for agent definitions. The UI's host-only mode needs
+no HQ task migration or Pi runtime. Native chat requires separate runtime API
+configuration and acceptance; the host API does not advertise chat support.
+See [optional web UI and host API](docs/19-web-ui.md) for the consumer example,
+authentication/transport boundary and durable action-retry contract.
+
 ## Optional observability
 
 Import `nixosModules.observability`, enable the profile, and provide runtime
@@ -464,6 +480,7 @@ therefore be newer than the website.
 | Model, research and execution | [Broker](docs/12-brokered-egress.md), [research](docs/16-research.md), [worker](docs/13-disposable-worker.md) |
 | Storage and monitoring | [Workspace quota](docs/14-workspace-quota.md), [observability](docs/09-observability.md) |
 | Documentation maintenance | [Source ownership and release synchronization](docs/18-documentation.md) |
+| Optional web management | [Web UI and local host API](docs/19-web-ui.md) |
 
 [Archive comparison](docs/archive-comparison.md) records a historical review;
 use the current guides for implementation and support status.

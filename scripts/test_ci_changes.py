@@ -186,6 +186,18 @@ class CiSelection(unittest.TestCase):
         self.write(".devcontainer/devcontainer.json")
         self.assertEqual(select(self.base, self.commit(), self.repository), {"devcontainer", "static"})
 
+    def test_host_api_changes_select_protocol_and_configuration_checks(self):
+        for name in ("host-api/tentaflake_host_api/server.py", "modules/host-api.nix",
+                     "pkgs/tentaflake-host-api/default.nix", "tests/host-api-evaluation.nix"):
+            with self.subTest(name=name):
+                base = self.git("rev-parse", "HEAD")
+                self.write(name)
+                affected = select(base, self.commit(), self.repository)
+                self.assertEqual(affected, {"evaluate", "static"})
+                self.assertTrue(execution(affected, "fast")["static"])
+                self.assertFalse(execution(affected, "fast")["builds"])
+                self.assertTrue(execution(affected, "full")["builds"])
+
     def test_research_only_changes_do_not_build_rust_packages(self):
         self.lock["nodes"]["tentaflake-research"]["locked"]["rev"] = "new"
         self.write("flake.lock", json.dumps(self.lock))

@@ -10,6 +10,7 @@
     ./backup.nix
     ./broker.nix
     ./hardening.nix
+    ./host-api.nix
     ./image-provenance.nix
     ./locale.nix
     ./management.nix

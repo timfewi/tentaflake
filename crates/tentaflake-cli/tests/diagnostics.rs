@@ -153,6 +153,23 @@ fn hidden_diagnostics_redact_names_in_both_formats() {
 }
 
 #[test]
+fn status_exposes_stable_ids_and_redacts_them_when_hidden() {
+    let fixture = Fixture::new();
+    let output = fixture.run("status", true, false, &[]);
+    assert!(output.status.success());
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(value["agents"][0]["id"], "coding-fixture");
+    assert_eq!(value["agents"][0]["runnable"], true);
+
+    let hidden = fixture.run("status", true, true, &[]);
+    assert!(hidden.status.success());
+    let value: serde_json::Value = serde_json::from_slice(&hidden.stdout).unwrap();
+    assert_eq!(value["agents"][0]["id"], "agent-1");
+    assert_eq!(value["agents"][0]["name"], "agent-1");
+    assert!(!String::from_utf8_lossy(&hidden.stdout).contains("fixture"));
+}
+
+#[test]
 fn unavailable_host_evidence_never_reports_success() {
     let fixture = Fixture::new();
     for command in ["doctor", "health"] {

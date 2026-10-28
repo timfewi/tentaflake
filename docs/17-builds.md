@@ -1,7 +1,8 @@
 # Build boundaries and contributor checks
 
 Start with `just fast`. It runs formatting, Nix lint, ShellCheck, Rust
-formatting/Clippy/unit tests, CI routing, small no-build evaluator fixtures and actionlint.
+formatting/Clippy/unit tests, optional host API protocol tests, CI routing,
+small no-build evaluator fixtures and actionlint.
 It does not prepare Research closures, evaluate configurations/generated flakes,
 or build Nix packages, images, systems or VMs. Loading the pinned development
 environment can still realize contributor tools.
@@ -90,6 +91,7 @@ comparison adds the affected expensive gates below to its fast checks.
 | CI routing/workflow/test definition or contributor tooling | Static | None | None |
 | One Rust crate/package | Static and affected crate | Affected package and source-boundary check; worker includes its image | Runtime |
 | Worker module | Static and worker crate | Worker package/image and source-boundary check | Runtime |
+| Optional host API/module | Static and isolated Unix protocol tests | Host API package and module evaluation | None |
 | Shared Cargo inputs | Static and all Rust crates | All Rust packages/image and source-boundary check | Runtime |
 | Installer scripts or host VM fixture | Static | Generated installed flake | Runtime |
 | Installer Nix | Static | Configuration evaluation, generated installed flake and host build | Runtime |
