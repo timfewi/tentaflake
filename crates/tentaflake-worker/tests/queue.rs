@@ -52,6 +52,49 @@ impl Fixture {
         command.arg("--config").arg(&self.config).args(args);
         command
     }
+
+    fn success(&self, args: &[&str]) -> serde_json::Value {
+        let output = self.command(args).output().unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        serde_json::from_slice(&output.stdout).unwrap()
+    }
+
+    fn capture(&self) -> serde_json::Value {
+        let request = serde_json::json!({
+            "version":1,"id":"job_1","action_class":"communicative",
+            "argv":["printf", "%s\\n", "literal\nargument", "☃"],"timeout_seconds":1
+        });
+        fs::write(
+            self.root
+                .join("workspace/.tentaflake-worker/inbox/job_1.json"),
+            serde_json::to_vec(&request).unwrap(),
+        )
+        .unwrap();
+        let output = self.command(&["drain"]).output().unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        request
+    }
+
+    fn request_digest(&self) -> String {
+        self.success(&["requests"])["requests"][0]["request_digest"]
+            .as_str()
+            .unwrap()
+            .to_owned()
+    }
+
+    fn decide(&self, decision: &str, digest: &str) -> std::process::Output {
+        self.command(&["decide", "job_1", decision, "--expected-digest", digest])
+            .output()
+            .unwrap()
+    }
 }
 
 impl Drop for Fixture {
@@ -64,11 +107,25 @@ impl Drop for Fixture {
 fn actual_commands_reject_competing_queue_owner_without_mutation() {
     let f = Fixture::new();
     let lock = File::create(f.root.join("state/.queue.lock")).unwrap();
+    lock.set_permissions(fs::Permissions::from_mode(0o600))
+        .unwrap();
     assert_eq!(
         unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) },
         0
     );
-    for args in [&["drain"][..], &["approve", "job_1"], &["deny", "job_1"]] {
+    for args in [
+        &["drain"][..],
+        &["approve", "job_1"],
+        &["deny", "job_1"],
+        &["requests"],
+        &[
+            "decide",
+            "job_1",
+            "approve",
+            "--expected-digest",
+            &"0".repeat(64),
+        ],
+    ] {
         let output = f.command(args).output().unwrap();
         assert!(!output.status.success());
         assert!(String::from_utf8_lossy(&output.stderr).contains("busy"));
@@ -168,4 +225,325 @@ fn interrupted_private_write_keeps_inbox_and_restart_captures_complete_request()
         !f.root.join("calls").exists(),
         "unapproved request must never dispatch"
     );
+}
+
+#[test]
+fn inspection_never_initializes_state_and_only_displays_captured_requests() {
+    let f = Fixture::new();
+    fs::remove_dir(f.root.join("state")).unwrap();
+    let row = f.success(&["requests"]);
+    assert_eq!(row["initialized"], false);
+    assert_eq!(row["requests"], serde_json::json!([]));
+    assert!(!f.root.join("state").exists());
+    let original = f.capture();
+    // A later agent-controlled file is never the approval display's source.
+    fs::write(
+        f.root.join("workspace/.tentaflake-worker/inbox/job_1.json"),
+        b"not the captured request",
+    )
+    .unwrap();
+    let mut config: serde_json::Value =
+        serde_json::from_slice(&fs::read(&f.config).unwrap()).unwrap();
+    config["container_gid"] = serde_json::json!(unsafe { libc::getegid() }.saturating_add(1));
+    fs::write(&f.config, serde_json::to_vec(&config).unwrap()).unwrap();
+    let lock = f.root.join("state/.queue.lock");
+    fs::set_permissions(&lock, fs::Permissions::from_mode(0o400)).unwrap();
+    let row = f.success(&["requests"]);
+    assert_eq!(row["requests"][0]["argv"], original["argv"]);
+    assert_eq!(row["requests"][0]["approval_status"], "pending");
+    assert_eq!(row["requests"][0]["can_approve"], true);
+    assert_eq!(row["truncated"], false);
+    assert!(!f.root.join("state/decisions").exists());
+    assert!(!f.root.join("calls").exists());
+}
+
+#[test]
+fn decisions_are_record_only_idempotent_and_first_choice_wins() {
+    for decision in ["approve", "deny"] {
+        let f = Fixture::new();
+        f.capture();
+        let digest = f.request_digest();
+        let first = f.decide(decision, &digest);
+        assert!(
+            first.status.success(),
+            "{}",
+            String::from_utf8_lossy(&first.stderr)
+        );
+        let retry = f.decide(decision, &digest);
+        assert!(retry.status.success());
+        assert_eq!(retry.stdout, first.stdout);
+        let receipt: serde_json::Value = serde_json::from_slice(&first.stdout).unwrap();
+        assert_eq!(receipt["state"], "recorded");
+        assert_eq!(receipt["drain_required"], true);
+        let other = if decision == "approve" {
+            "deny"
+        } else {
+            "approve"
+        };
+        let conflict = f.decide(other, &digest);
+        assert!(!conflict.status.success());
+        assert!(String::from_utf8_lossy(&conflict.stderr).contains("conflict:"));
+        let legacy = f.command(&[other, "job_1"]).output().unwrap();
+        assert!(!legacy.status.success());
+        assert!(f.root.join("state/pending/job_1.json").is_file());
+        assert!(!f.root.join("state/approvals/job_1").exists());
+        assert!(!f.root.join("state/results/job_1").exists());
+        assert!(
+            !f.root.join("calls").exists(),
+            "recording must never invoke OCI"
+        );
+        if decision == "deny" {
+            assert!(f.command(&["drain"]).output().unwrap().status.success());
+            assert!(!f.root.join("state/pending/job_1.json").exists());
+            assert_eq!(f.decide(decision, &digest).stdout, first.stdout);
+            assert!(
+                !f.root.join("calls").exists(),
+                "draining denial must not invoke OCI"
+            );
+        }
+    }
+}
+
+#[test]
+fn changed_captured_request_never_inherits_an_old_approval() {
+    for field in ["argv", "action_class", "timeout_seconds"] {
+        let f = Fixture::new();
+        let mut request = f.capture();
+        let digest = f.request_digest();
+        assert!(f.decide("approve", &digest).status.success());
+        request[field] = match field {
+            "argv" => serde_json::json!(["different-command"]),
+            "action_class" => serde_json::json!("financial"),
+            _ => serde_json::json!(2),
+        };
+        fs::write(
+            f.root.join("state/pending/job_1.json"),
+            serde_json::to_vec(&request).unwrap(),
+        )
+        .unwrap();
+        for output in [
+            f.decide("approve", &digest),
+            f.command(&["drain"]).output().unwrap(),
+            f.command(&["requests"]).output().unwrap(),
+        ] {
+            assert!(!output.status.success());
+            assert!(String::from_utf8_lossy(&output.stderr).contains("conflict:"));
+        }
+        assert!(!f.root.join("calls").exists());
+    }
+}
+
+#[test]
+fn forbidden_invalid_and_stale_decisions_do_not_create_records() {
+    let f = Fixture::new();
+    let mut request = f.capture();
+    let stale = f.decide("approve", &"0".repeat(64));
+    assert!(!stale.status.success());
+    assert!(String::from_utf8_lossy(&stale.stderr).contains("conflict:"));
+    let invalid = f.decide("execute", &f.request_digest());
+    assert!(!invalid.status.success());
+    request["action_class"] = serde_json::json!("forbidden");
+    fs::write(
+        f.root.join("state/pending/job_1.json"),
+        serde_json::to_vec(&request).unwrap(),
+    )
+    .unwrap();
+    let row = f.success(&["requests"]);
+    assert_eq!(row["requests"][0]["can_approve"], false);
+    assert!(!f.decide("approve", &f.request_digest()).status.success());
+    assert!(!f.root.join("state/decisions").exists());
+    assert!(!f.root.join("calls").exists());
+}
+
+#[test]
+fn review_refuses_links_oversized_files_and_shared_private_directories() {
+    use std::os::unix::fs::symlink;
+    for case in ["link", "large", "permissions", "running"] {
+        let f = Fixture::new();
+        f.capture();
+        let digest = f.request_digest();
+        let path = f.root.join("state/pending/job_1.json");
+        match case {
+            "link" => {
+                fs::rename(&path, f.root.join("elsewhere")).unwrap();
+                symlink(f.root.join("elsewhere"), &path).unwrap();
+            }
+            "large" => fs::write(&path, vec![b' '; 65537]).unwrap(),
+            "permissions" => fs::set_permissions(
+                f.root.join("state/pending"),
+                fs::Permissions::from_mode(0o770),
+            )
+            .unwrap(),
+            _ => fs::copy(&path, f.root.join("state/running/job_1.json"))
+                .map(|_| ())
+                .unwrap(),
+        }
+        assert!(
+            !f.command(&["requests"]).output().unwrap().status.success(),
+            "{case}"
+        );
+        assert!(!f.decide("approve", &digest).status.success(), "{case}");
+        assert!(!f.root.join("state/decisions").exists());
+        assert!(!f.root.join("calls").exists());
+    }
+}
+
+#[test]
+fn list_bounds_rows_and_bytes_without_truncating_any_argv() {
+    let f = Fixture::new();
+    let original = f.capture();
+    let pending = f.root.join("state/pending");
+    for index in 2..=110 {
+        let mut request = original.clone();
+        request["id"] = serde_json::json!(format!("job_{index}"));
+        let path = pending.join(format!("job_{index}.json"));
+        fs::write(&path, serde_json::to_vec(&request).unwrap()).unwrap();
+        fs::set_permissions(path, fs::Permissions::from_mode(0o600)).unwrap();
+    }
+    let rows = f.success(&["requests"]);
+    assert_eq!(rows["requests"].as_array().unwrap().len(), 100);
+    assert_eq!(rows["truncated"], true);
+    for row in rows["requests"].as_array().unwrap() {
+        assert_eq!(row["argv"], original["argv"]);
+    }
+    for index in 1..=110 {
+        let mut request = original.clone();
+        request["id"] = serde_json::json!(format!("job_{index}"));
+        request["argv"] = serde_json::json!(["x".repeat(4096), "y".repeat(4096)]);
+        fs::write(
+            pending.join(format!("job_{index}.json")),
+            serde_json::to_vec(&request).unwrap(),
+        )
+        .unwrap();
+    }
+    let output = f.command(&["requests"]).output().unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(output.stdout.len() <= 256 * 1024 + 1);
+    let rows: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(rows["truncated"], true);
+    assert!(rows["requests"].as_array().unwrap().len() < 100);
+    for row in rows["requests"].as_array().unwrap() {
+        assert_eq!(
+            row["argv"],
+            serde_json::json!(["x".repeat(4096), "y".repeat(4096)])
+        );
+    }
+}
+
+#[test]
+fn interrupted_receipt_publication_remains_retryable_and_recovers_without_execution() {
+    let f = Fixture::new();
+    f.capture();
+    let digest = f.request_digest();
+    let first = f.decide("deny", &digest);
+    assert!(first.status.success());
+    let final_path = f.root.join("state/decisions/job_1");
+    let staging = f.root.join("state/decisions/.job_1.new");
+    fs::hard_link(&final_path, &staging).unwrap();
+    let retry = f.decide("deny", &digest);
+    assert!(
+        retry.status.success(),
+        "{}",
+        String::from_utf8_lossy(&retry.stderr)
+    );
+    assert_eq!(retry.stdout, first.stdout);
+    assert_eq!(
+        f.success(&["requests"])["requests"][0]["approval_status"],
+        "denied"
+    );
+    assert!(f.command(&["drain"]).output().unwrap().status.success());
+    assert!(!staging.exists());
+    assert!(final_path.is_file());
+    assert_eq!(f.decide("deny", &digest).stdout, first.stdout);
+    assert!(!f.root.join("calls").exists());
+}
+
+#[test]
+fn racing_opposite_decisions_record_only_one_choice() {
+    let f = Fixture::new();
+    f.capture();
+    let digest = f.request_digest();
+    let mut approve = f.command(&["decide", "job_1", "approve", "--expected-digest", &digest]);
+    let mut deny = f.command(&["decide", "job_1", "deny", "--expected-digest", &digest]);
+    let first = approve
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let second = deny
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let results = [
+        first.wait_with_output().unwrap(),
+        second.wait_with_output().unwrap(),
+    ];
+    assert_eq!(
+        results
+            .iter()
+            .filter(|result| result.status.success())
+            .count(),
+        1
+    );
+    let receipt: serde_json::Value =
+        serde_json::from_slice(&fs::read(f.root.join("state/decisions/job_1")).unwrap()).unwrap();
+    let winner = receipt["decision"].as_str().unwrap();
+    assert!(f.decide(winner, &digest).status.success());
+    assert!(
+        !f.decide(
+            if winner == "approve" {
+                "deny"
+            } else {
+                "approve"
+            },
+            &digest
+        )
+        .status
+        .success()
+    );
+    assert!(!f.root.join("calls").exists());
+}
+
+#[test]
+fn lost_decision_acknowledgement_is_uncertain_and_exact_retry_is_safe() {
+    let f = Fixture::new();
+    f.capture();
+    let digest = f.request_digest();
+    let failed_stdout = fs::OpenOptions::new()
+        .write(true)
+        .open("/dev/full")
+        .unwrap();
+    let result = f
+        .command(&["decide", "job_1", "deny", "--expected-digest", &digest])
+        .stdout(failed_stdout)
+        .output()
+        .unwrap();
+    assert!(!result.status.success());
+    assert!(String::from_utf8_lossy(&result.stderr).contains("uncertain:"));
+    let receipt: serde_json::Value =
+        serde_json::from_slice(&fs::read(f.root.join("state/decisions/job_1")).unwrap()).unwrap();
+    assert_eq!(receipt["decision"], "deny");
+    assert!(f.decide("deny", &digest).status.success());
+    assert!(!f.root.join("calls").exists());
+}
+
+#[test]
+fn request_scan_counts_ignored_entries_before_reporting_any_rows() {
+    let f = Fixture::new();
+    f.capture();
+    fs::write(f.root.join("state/pending/ignored"), b"staging").unwrap();
+    let mut config: serde_json::Value =
+        serde_json::from_slice(&fs::read(&f.config).unwrap()).unwrap();
+    config["max_queue_entries"] = serde_json::json!(1);
+    fs::write(&f.config, serde_json::to_vec(&config).unwrap()).unwrap();
+    let output = f.command(&["requests"]).output().unwrap();
+    assert!(!output.status.success());
+    assert!(output.stdout.is_empty());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("limit:"));
+    assert!(!f.root.join("calls").exists());
 }

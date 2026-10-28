@@ -132,6 +132,72 @@ The root operator command adopts the worker's declared capsule group before it
 creates a snapshot. Direct approval therefore uses the same read-only snapshot
 permissions as the systemd queue service and does not require `CAP_CHOWN`.
 
+For an operator interface, use the separate JSON commands:
+
+```text
+sudo tentaflake-worker --config \
+  /etc/tentaflake/workers/hermes-coding.json requests
+
+sudo tentaflake-worker --config \
+  /etc/tentaflake/workers/hermes-coding.json \
+  decide message_1 approve --expected-digest <request_digest>
+
+sudo tentaflake-worker --config \
+  /etc/tentaflake/workers/hermes-coding.json \
+  decide message_1 deny --expected-digest <request_digest>
+```
+
+`requests` reads captured private pending state, never the controller's inbox.
+It returns `schema_version`, `agent`, `initialized`, `truncated`, and `requests`.
+Each row carries the exact `id`, full `argv` array, `action_class`,
+`timeout_seconds`, fixed capsule `cwd` (`/workspace`), `request_digest`,
+`state` (`pending`), `approval_status`, `can_approve`, and `can_deny`.
+The digest is lowercase SHA-256 of the complete validated request serialized
+by the worker, including version, ID, action class, all arguments, and the
+effective timeout. Display every argument with its boundaries before confirming
+a decision. Arguments are untrusted content and can contain sensitive data;
+they are not instructions to the interface and should not enter request logs.
+
+These commands acquire the existing private lock without waiting. They neither
+initialize the queue nor adopt the capsule group, touch the workspace, recover
+jobs, or invoke the container runtime. An uninitialized queue lists no requests;
+a busy worker returns `busy:` promptly, including while a long job is executing.
+Inspection uses read-only file descriptors and works with read-only worker
+state. Only `decide` requires write access to the private decision directory.
+
+Inspection permits at most 256 pending directory entries and 8 MiB of entry
+sizes, or the configured queue limits when smaller. Each request is limited to
+64 KiB, or the configured request limit when smaller. Responses include at most
+100 complete rows and 256 KiB of JSON. `truncated: true` means more rows remain;
+no returned argument is shortened. Process the displayed requests and refresh
+to inspect the remainder. Unsafe links, ownership/permissions, malformed state,
+or scan overflow fail closed instead of producing partial approval evidence.
+
+`decide` records authorization only. It returns a durable receipt containing
+`schema_version`, `agent`, `job_id`, `request_digest`, `decision`,
+`state: "recorded"`, and `drain_required: true`. It does not execute the job or
+write a terminal job result. The operator interface must separately schedule
+the normal per-agent worker service for either decision; the next drain runs
+an approved request or finalizes a denied request without invoking OCI.
+The existing `approve` command still processes ready work immediately, and the
+existing `deny` command still finalizes a denial directly.
+
+The first recorded decision wins. Repeating the same decision and digest
+returns the same receipt, including after the request has retired. A different
+decision, changed request, existing legacy approval, or terminal/running job
+conflicts. `forbidden` and automatic `local-reversible` requests cannot be
+approved. A stale decision also prevents drain from dispatching a replacement
+request with the same ID. Publication or acknowledgement failures return
+`uncertain:`: the decision may already be durable, so preserve the identity and
+retry that exact decision rather than inventing a new request or assuming it
+was rejected.
+
+Private `decisions/<id>` receipts survive result expiration and prevent job-ID
+reuse. Their separate limit is 4096 records / 4 MiB. At capacity, existing
+decisions remain retryable but new decisions fail visibly. Archive or retire
+decision history only through an explicit offline operator procedure, with
+all writers stopped and with the loss of replay protection understood.
+
 Approval is an authorization decision outside the LLM. It does not change the
 capsule: approved jobs still have no network, secrets, host devices, runtime
 socket, added capabilities, or writable host bind. Therefore an approved
@@ -181,6 +247,7 @@ capture therefore copies into private state before removing the inbox entry.
 |---|---|
 | `pending/<id>.json` | Validated immutable request; approval remains outside the agent. |
 | `running/<id>.json` | Atomically claimed and synced before any OCI dispatch. |
+| `decisions/<id>` | Digest-bound operator decision retained after retirement; an exact retry never changes it. |
 | `results/<id>/result.json` | Terminal result and artifacts synced before publication. |
 
 After a crash, a running claim is never dispatched again. Recovery checks the

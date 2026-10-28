@@ -15,6 +15,8 @@ let
     }
   );
   cli = pkgs.callPackage ../pkgs/tentaflake-cli { };
+  workers = lib.filterAttrs (_: agent: agent.enable) config.tentaflake.worker.agents;
+  policies = import ../lib/hostApiPolicy.nix { inherit config lib; };
   cliConfig = pkgs.writeText "tentaflake-api-cli.conf" ''
     backend=${backend}
     flake_dir=/etc/nixos
@@ -30,6 +32,19 @@ let
       security_profile = config.tentaflake.security.profile;
       allow_actions = cfg.allowActions;
       allow_logs = cfg.allowLogs;
+      allow_tool_requests = cfg.allowToolRequests;
+      allow_tool_decisions = cfg.allowToolDecisions;
+      inherit policies;
+      worker =
+        if cfg.allowToolRequests && workers != { } then
+          lib.getExe config.tentaflake.worker.package
+        else
+          null;
+      worker_configs = lib.optionalAttrs cfg.allowToolRequests (
+        lib.mapAttrs (
+          name: _: toString config.environment.etc."tentaflake/workers/${name}.json".source
+        ) workers
+      );
       systemctl = "${pkgs.systemd}/bin/systemctl";
       journalctl = "${pkgs.systemd}/bin/journalctl";
       cli = lib.getExe cli;
@@ -60,6 +75,8 @@ in
     enable = lib.mkEnableOption "the optional local operator API";
     allowActions = lib.mkEnableOption "fixed agent start, stop and restart operations";
     allowLogs = lib.mkEnableOption "bounded agent journal reads for trusted operators";
+    allowToolRequests = lib.mkEnableOption "bounded reads of captured private worker requests";
+    allowToolDecisions = lib.mkEnableOption "digest-bound approval and denial of captured worker requests";
     package = lib.mkOption {
       type = lib.types.package;
       default = pkgs.callPackage ../pkgs/tentaflake-host-api { };
@@ -67,6 +84,12 @@ in
     };
   };
   config = lib.mkIf cfg.enable {
+    assertions = [
+      {
+        assertion = !cfg.allowToolDecisions || cfg.allowToolRequests;
+        message = "tentaflake.hostApi.allowToolDecisions requires allowToolRequests so operators can inspect the captured request.";
+      }
+    ];
     users.groups.tentaflake-api = { };
     systemd.services.tentaflake-api = {
       description = "Optional local tentaflake operator API";
@@ -91,6 +114,9 @@ in
         PrivateDevices = true;
         PrivateTmp = true;
         ProtectSystem = "strict";
+        ReadWritePaths = lib.optionals cfg.allowToolDecisions (
+          lib.mapAttrsToList (name: _: "-/var/lib/tentaflake-worker-${name}") workers
+        );
         ProtectHome = true;
         ProtectKernelTunables = true;
         ProtectKernelModules = true;

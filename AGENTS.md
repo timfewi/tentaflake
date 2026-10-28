@@ -139,6 +139,15 @@ are already published or require access to another repository for public checks.
   outcomes never replay automatically. Host-only UI mode does not create or
   migrate task state and does not claim native chat support. See
   `docs/19-web-ui.md`; include `just host-api-test` in fast verification.
+- Per-agent Host details project only explicit non-secret Nix policy. Keep
+  declared access separate from live readiness. Configuration proposals accept
+  allowlisted typed fields and an exact policy revision; they only return an
+  escaped Nix module and must never apply configuration. Worker request viewing
+  and decisions are separate default-off grants. Review the full captured argv
+  and digest, record decisions under the private queue lock without draining
+  work, and preserve first-decision-wins semantics and durable API retry keys.
+  A recorded decision or queued systemd drain is not execution success. Never
+  widen worker network/credential rights or expose its inbox as approved work.
 - `lib/mkRustPackage.nix` shares Rust packaging: root Cargo files, all member
   manifests, and only the selected crate's source. Add required root inputs
   explicitly. Versions come from the root Cargo workspace; descriptions from

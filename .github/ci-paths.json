@@ -2,6 +2,7 @@
   "host-api": {
     "paths": [
       "host-api/**",
+      "lib/hostApiPolicy.nix",
       "modules/host-api.nix",
       "pkgs/tentaflake-host-api/**",
       "tests/host-api*.nix"

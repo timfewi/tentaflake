@@ -2,6 +2,7 @@
 
 import argparse
 import fcntl
+import hashlib
 import json
 import os
 import re
@@ -23,6 +24,24 @@ MAX_HEADERS = 8192
 MAX_OUTPUT = 512 * 1024
 MAX_RESPONSE = 768 * 1024
 MAX_RECEIPTS = 10000
+JOB_ID = re.compile(r"[a-z0-9][a-z0-9_-]{0,63}\Z")
+DIGEST = re.compile(r"[a-f0-9]{64}\Z")
+MODEL = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/+-]{0,199}\Z")
+WORKER_LIMITS = {
+    "max_timeout_seconds": ("maxTimeoutSeconds", 86400),
+    "max_queue_entries": ("maxQueueEntries", 4096),
+    "max_queue_bytes": ("maxQueueBytes", 1024**3),
+    "max_snapshot_bytes": ("maxSnapshotBytes", 16 * 1024**3),
+    "max_log_bytes": ("maxLogBytes", 1024**3),
+}
+APPROVAL_CLASSES = [
+    "external-reversible",
+    "irreversible",
+    "financial",
+    "production",
+    "communicative",
+    "privileged",
+]
 STATES = {
     "active",
     "inactive",
@@ -51,6 +70,45 @@ def decode(raw):
         return result
 
     return json.loads(raw, object_pairs_hook=unique)
+
+
+def nix_string(value):
+    """Literal Nix double-quoted string, including interpolation protection."""
+    return json.dumps(value, ensure_ascii=False).replace("${", r"\${")
+
+
+def unknown_policy():
+    return {
+        "managed": False,
+        "authority": "nix",
+        "auto_start": None,
+        "llm": {
+            "enabled": False,
+            "allowed_models": [],
+            "max_completion_tokens": None,
+            "streaming": False,
+            "strict_cost_envelope": False,
+            "budgets": None,
+        },
+        "fetch": {"enabled": False, "allowed_hosts": []},
+        "research": {"enabled": False, "readiness": "unverified"},
+        "worker": {
+            "enabled": False,
+            "network": "none",
+            "limits": None,
+            "approval_required": APPROVAL_CLASSES,
+        },
+        "storage": {
+            "workspace_quota_mib": None,
+            "private_state_quota_mib": None,
+            "resize": "migration-required",
+        },
+        "management": {
+            "transport": "tailscale",
+            "ssh_authorization": "disabled",
+            "remote_grants": "unverified",
+        },
+    }
 
 
 def command(argv, *, environment, timeout=10, maximum=MAX_OUTPUT):
@@ -136,6 +194,12 @@ class Service:
         for key in ("allow_actions", "allow_logs"):
             if type(config.get(key)) is not bool:
                 raise ValueError("Host API permissions must be explicit booleans")
+        for key in ("allow_tool_requests", "allow_tool_decisions"):
+            config.setdefault(key, False)
+            if type(config[key]) is not bool:
+                raise ValueError("Host API permissions must be explicit booleans")
+        if config["allow_tool_decisions"] and not config["allow_tool_requests"]:
+            raise ValueError("Worker decisions require request inspection")
         if config.get("backend") not in {"docker", "podman"} or config.get(
             "security_profile"
         ) not in {"dev", "balanced", "strict"}:
@@ -173,6 +237,28 @@ class Service:
             }
         if len(self.agents) > 256:
             raise ValueError("Host inventory exceeds its agent limit")
+        self.policies = config.get("policies", {})
+        self.worker_configs = config.get("worker_configs", {})
+        if (
+            not isinstance(self.policies, dict)
+            or set(self.policies) - set(self.agents)
+            or len(json.dumps(self.policies).encode()) > MAX_OUTPUT
+            or not isinstance(self.worker_configs, dict)
+            or any(
+                aid not in self.agents
+                or not isinstance(path, str)
+                or not Path(path).is_absolute()
+                for aid, path in self.worker_configs.items()
+            )
+            or (
+                self.worker_configs
+                and (
+                    not isinstance(config.get("worker"), str)
+                    or not Path(config["worker"]).is_absolute()
+                )
+            )
+        ):
+            raise ValueError("Invalid immutable policy or worker inventory")
         self.stop_units = config.get("stop_units", {})
         if not isinstance(self.stop_units, dict) or any(
             aid not in self.agents
@@ -233,6 +319,9 @@ class Service:
             self.db.execute(
                 "CREATE TABLE IF NOT EXISTS actions (request_id TEXT PRIMARY KEY, agent_id TEXT NOT NULL, action TEXT NOT NULL, response TEXT NOT NULL)"
             )
+            self.db.execute(
+                "CREATE TABLE IF NOT EXISTS tool_decisions (request_id TEXT PRIMARY KEY, intent TEXT NOT NULL, response TEXT NOT NULL)"
+            )
         except BaseException:
             self.close()
             raise
@@ -262,6 +351,10 @@ class Service:
                 "actions": self.config["allow_actions"],
                 "logs": self.config["allow_logs"],
                 "chat": False,
+                "details": True,
+                "config_proposals": True,
+                "tool_requests": self.config["allow_tool_requests"],
+                "tool_decisions": self.config["allow_tool_decisions"],
             },
         }
 
@@ -312,11 +405,405 @@ class Service:
                         else [],
                         "logs": self.config["allow_logs"],
                         "chat": False,
-                    },
+                    }
+                    | self.management_capabilities(agent),
                 }
                 for agent in self.agents.values()
             ],
         }
+
+    def policy(self, agent):
+        return self.policies.get(agent["id"], unknown_policy())
+
+    def editable_fields(self, agent):
+        policy = self.policy(agent)
+        if not policy["managed"]:
+            return []
+        return (
+            (["llm.allowed_models"] if policy["llm"]["enabled"] else [])
+            + (["fetch.allowed_hosts"] if policy["fetch"]["enabled"] else [])
+            + (
+                [f"worker.{field}" for field in WORKER_LIMITS]
+                if policy["worker"]["enabled"]
+                else []
+            )
+        )
+
+    def management_capabilities(self, agent):
+        worker = (
+            agent["id"] in self.worker_configs
+            and self.policy(agent)["worker"]["enabled"]
+        )
+        return {
+            "details": True,
+            "config_proposals": bool(self.editable_fields(agent)),
+            "tool_requests": worker and self.config["allow_tool_requests"],
+            "tool_decisions": worker and self.config["allow_tool_decisions"],
+        }
+
+    def details(self, agent):
+        policy = self.policy(agent)
+        revision = hashlib.sha256(
+            json.dumps(
+                {"agent_id": agent["id"], "policy": policy},
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=False,
+            ).encode()
+        ).hexdigest()
+        return {
+            "schema_version": 1,
+            "agent_id": agent["id"],
+            "policy_revision": revision,
+            "policy": policy,
+            "editable_fields": self.editable_fields(agent),
+            "capabilities": self.management_capabilities(agent),
+        }
+
+    def proposal(self, agent, body):
+        details = self.details(agent)
+        if not isinstance(body, dict) or set(body) != {"policy_revision", "changes"}:
+            raise APIError("A policy_revision and changes object are required")
+        revision = body["policy_revision"]
+        if not isinstance(revision, str) or not DIGEST.fullmatch(revision):
+            raise APIError("Invalid policy revision")
+        if revision != details["policy_revision"]:
+            raise APIError("Declared policy changed; inspect the current policy", 409)
+        changes = body["changes"]
+        if (
+            not isinstance(changes, dict)
+            or not changes
+            or set(changes) - set(details["editable_fields"])
+        ):
+            raise APIError("Only advertised editable fields may be proposed")
+        assignments = []
+        for field, value in sorted(changes.items()):
+            broker = f"tentaflake.broker.agents.{nix_string(agent['id'])}"
+            if field == "llm.allowed_models":
+                if (
+                    not isinstance(value, list)
+                    or not 1 <= len(value) <= 32
+                    or any(
+                        not isinstance(model, dict)
+                        or set(model)
+                        != {
+                            "name",
+                            "input_microusd_per_million",
+                            "output_microusd_per_million",
+                        }
+                        or not isinstance(model["name"], str)
+                        or not MODEL.fullmatch(model["name"])
+                        or any(
+                            type(model[key]) is not int
+                            or not 1 <= model[key] <= 2**53 - 1
+                            for key in (
+                                "input_microusd_per_million",
+                                "output_microusd_per_million",
+                            )
+                        )
+                        for model in value
+                    )
+                    or len({model["name"] for model in value}) != len(value)
+                ):
+                    raise APIError(
+                        "Models require unique exact names and positive explicit prices"
+                    )
+                models = "\n".join(
+                    "    { name = "
+                    + nix_string(model["name"])
+                    + f"; inputMicrousdPerMillion = {model['input_microusd_per_million']};"
+                    + f" outputMicrousdPerMillion = {model['output_microusd_per_million']}; }}"
+                    for model in value
+                )
+                assignments.append(
+                    f"  {broker}.llm.allowedModels = lib.mkForce [\n{models}\n  ];"
+                )
+            elif field == "fetch.allowed_hosts":
+                if (
+                    not isinstance(value, list)
+                    or not 1 <= len(value) <= 64
+                    or any(
+                        not isinstance(host, str)
+                        or not 1 <= len(host) <= 253
+                        or any(
+                            not re.fullmatch(
+                                r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?", label
+                            )
+                            for label in host.split(".")
+                        )
+                        for host in value
+                    )
+                    or len(set(value)) != len(value)
+                ):
+                    raise APIError(
+                        "Fetch hosts must be unique exact lowercase DNS names"
+                    )
+                hosts = " ".join(nix_string(host) for host in value)
+                assignments.append(
+                    f"  {broker}.fetch.allowedHosts = lib.mkForce [ {hosts} ];"
+                )
+            else:
+                option, maximum = WORKER_LIMITS[field.removeprefix("worker.")]
+                if type(value) is not int or not 1 <= value <= maximum:
+                    raise APIError("Worker limit is outside the proposal bounds")
+                assignments.append(
+                    f"  tentaflake.worker.agents.{nix_string(agent['id'])}.{option} = lib.mkForce {value};"
+                )
+        return {
+            "schema_version": 1,
+            "agent_id": agent["id"],
+            "policy_revision": revision,
+            "validation": "structure-only",
+            "activation": "explicit-host-update-required",
+            "changes": changes,
+            "filename": f"tentaflake-{agent['id']}-proposal.nix",
+            "nix": f"# Declared policy revision: {revision}\n# Proposal only: evaluate and review the full host before activation.\n{{ lib, ... }}:\n{{\n"
+            + "\n".join(assignments)
+            + "\n}\n",
+            "warnings": [
+                "Structure and declared revision checked; full Nix evaluation and build have not run.",
+                "The module replaces submitted options with lib.mkForce; review the complete host policy before applying.",
+                "No host files, credentials or running configuration were changed.",
+            ],
+        }
+
+    def worker_arguments(self, agent, operation):
+        if not self.management_capabilities(agent)[operation]:
+            raise APIError("This worker operation is not enabled", 403)
+        return [self.config["worker"], "--config", self.worker_configs[agent["id"]]]
+
+    @staticmethod
+    def worker_error(diagnostic):
+        # Only classify known categories; never publish worker paths or input.
+        for marker, message, status in (
+            (b"busy:", "Worker queue is busy; inspect it again", 409),
+            (b"conflict:", "Worker request or decision changed", 409),
+            (b"not found:", "Captured worker request was not found", 404),
+            (b"limit:", "Worker inspection exceeded its safety bound", 503),
+            (b"invalid:", "Worker state or decision is invalid", 409),
+        ):
+            if diagnostic.startswith(b"tentaflake-worker: " + marker):
+                return APIError(message, status)
+        return APIError("Worker operation is unavailable", 503)
+
+    def tool_requests(self, agent):
+        arguments = self.worker_arguments(agent, "tool_requests")
+        code, output, diagnostic = self.run([*arguments, "requests"], timeout=5)
+        if code:
+            raise self.worker_error(diagnostic)
+        try:
+            result = decode(output)
+            if (
+                not isinstance(result, dict)
+                or result.get("schema_version") != 1
+                or result.get("agent") != agent["id"]
+                or type(result.get("truncated")) is not bool
+                or not isinstance(result.get("requests"), list)
+                or len(result["requests"]) > 100
+            ):
+                raise ValueError("Invalid worker snapshot")
+            rows = []
+            seen = set()
+            for row in result["requests"]:
+                if (
+                    not isinstance(row, dict)
+                    or not isinstance(row.get("id"), str)
+                    or not JOB_ID.fullmatch(row["id"])
+                    or row["id"] in seen
+                    or not isinstance(row.get("request_digest"), str)
+                    or not DIGEST.fullmatch(row["request_digest"])
+                    or row.get("action_class")
+                    not in [*APPROVAL_CLASSES, "local-reversible", "forbidden"]
+                    or row.get("cwd") != "/workspace"
+                    or row.get("state") != "pending"
+                    or type(row.get("timeout_seconds")) is not int
+                    or row["timeout_seconds"] <= 0
+                    or row.get("approval_status")
+                    not in {
+                        "pending",
+                        "approved",
+                        "denied",
+                        "not-required",
+                        "forbidden",
+                    }
+                    or type(row.get("can_approve")) is not bool
+                    or type(row.get("can_deny")) is not bool
+                    or not isinstance(row.get("argv"), list)
+                    or not 1 <= len(row["argv"]) <= 128
+                    or any(
+                        not isinstance(arg, str)
+                        or not 1 <= len(arg.encode()) <= 4096
+                        or "\0" in arg
+                        for arg in row["argv"]
+                    )
+                ):
+                    raise ValueError("Invalid worker request")
+                seen.add(row["id"])
+                rows.append(
+                    {
+                        key: row[key]
+                        for key in (
+                            "id",
+                            "request_digest",
+                            "action_class",
+                            "argv",
+                            "cwd",
+                            "timeout_seconds",
+                            "state",
+                            "approval_status",
+                            "can_approve",
+                            "can_deny",
+                        )
+                    }
+                )
+        except (ValueError, TypeError, UnicodeError) as exc:
+            raise APIError("Worker returned an invalid snapshot", 502) from exc
+        return {
+            "schema_version": 1,
+            "agent_id": agent["id"],
+            "truncated": result["truncated"],
+            "requests": rows,
+        }
+
+    @staticmethod
+    def decision_receipt(response):
+        if "_error" in response:
+            raise APIError(response["_error"], response["_status"])
+        return response
+
+    def tool_decision(self, agent, body):
+        arguments = self.worker_arguments(agent, "tool_decisions")
+        if not isinstance(body, dict) or set(body) != {
+            "job_id",
+            "request_digest",
+            "decision",
+            "request_id",
+        }:
+            raise APIError(
+                "A job_id, request_digest, decision and request_id are required"
+            )
+        job, digest, decision, rid = (
+            body[key] for key in ("job_id", "request_digest", "decision", "request_id")
+        )
+        if (
+            not isinstance(job, str)
+            or not JOB_ID.fullmatch(job)
+            or not isinstance(digest, str)
+            or not DIGEST.fullmatch(digest)
+            or not isinstance(decision, str)
+            or decision not in {"approve", "deny"}
+            or not isinstance(rid, str)
+            or not IDENTIFIER.fullmatch(rid)
+        ):
+            raise APIError("Invalid worker decision")
+        intent = json.dumps([agent["id"], job, digest, decision], separators=(",", ":"))
+        with self.lock:
+            previous = self.db.execute(
+                "SELECT intent,response FROM tool_decisions WHERE request_id=?", (rid,)
+            ).fetchone()
+            if previous is not None:
+                if previous[0] != intent:
+                    raise APIError(
+                        "Request ID already identifies a different decision", 409
+                    )
+                return self.decision_receipt(decode(previous[1]))
+            if (
+                self.db.execute("SELECT COUNT(*) FROM tool_decisions").fetchone()[0]
+                >= MAX_RECEIPTS
+            ):
+                raise APIError(
+                    "Worker decision receipt capacity reached; operator maintenance required",
+                    503,
+                )
+            if not self.action_lock.acquire(blocking=False):
+                raise APIError("Another host action is in progress", 409)
+            response = {
+                "schema_version": 1,
+                "agent_id": agent["id"],
+                "job_id": job,
+                "request_digest": digest,
+                "decision": decision,
+                "request_id": rid,
+                "state": "unknown",
+                "drain_state": "not-requested",
+            }
+            try:
+                self.db.execute(
+                    "INSERT INTO tool_decisions VALUES (?,?,?)",
+                    (rid, intent, json.dumps(response)),
+                )
+            except BaseException:
+                self.action_lock.release()
+                raise
+        try:
+            try:
+                code, output, diagnostic = self.run(
+                    [*arguments, "decide", job, decision, "--expected-digest", digest],
+                    timeout=5,
+                )
+                if code:
+                    # Only explicit pre-publication rejections prove no decision
+                    # was committed. Crashes, signals and unknown diagnostics do not.
+                    if code > 0 and any(
+                        diagnostic.startswith(b"tentaflake-worker: " + marker)
+                        for marker in (
+                            b"busy:",
+                            b"conflict:",
+                            b"not found:",
+                            b"limit:",
+                            b"invalid:",
+                        )
+                    ):
+                        error = self.worker_error(diagnostic)
+                        response.update(
+                            state="failed", _error=str(error), _status=error.status
+                        )
+                else:
+                    result = decode(output)
+                    expected = {
+                        "schema_version": 1,
+                        "agent": agent["id"],
+                        "job_id": job,
+                        "request_digest": digest,
+                        "decision": decision,
+                        "state": "recorded",
+                        "drain_required": True,
+                    }
+                    if result != expected:
+                        raise ValueError("Invalid worker decision receipt")
+                    response["state"] = "recorded"
+                    # Commit the recorded decision before attempting to schedule.
+                    # A crash cannot downgrade it to an unrecorded authorization.
+                    response["drain_state"] = "unknown"
+                    with self.lock:
+                        self.db.execute(
+                            "UPDATE tool_decisions SET response=? WHERE request_id=?",
+                            (json.dumps(response), rid),
+                        )
+                    code, _, _ = self.run(
+                        [
+                            self.config["systemctl"],
+                            "start",
+                            "--no-block",
+                            "--no-ask-password",
+                            "--",
+                            f"tentaflake-worker-{agent['id']}.service",
+                        ],
+                        timeout=5,
+                    )
+                    if code == 0:
+                        response["drain_state"] = "queued"
+            except (APIError, ValueError, UnicodeError):
+                # Dispatch may have committed. Unknown never becomes automatic replay.
+                pass
+            with self.lock:
+                self.db.execute(
+                    "UPDATE tool_decisions SET response=? WHERE request_id=?",
+                    (json.dumps(response), rid),
+                )
+            return self.decision_receipt(response)
+        finally:
+            self.action_lock.release()
 
     def health(self):
         code, output, _ = self.run([self.config["cli"], "health", "--json"], timeout=15)
@@ -488,7 +975,8 @@ class Service:
             if path == "/v1/health":
                 return self.health()
         match = re.fullmatch(
-            r"/v1/agents/([A-Za-z0-9][A-Za-z0-9_.-]{0,127})/(logs|actions)", path
+            r"/v1/agents/([A-Za-z0-9][A-Za-z0-9_.-]{0,127})/(logs|actions|details|config-proposals|tool-requests|tool-decisions)",
+            path,
         )
         if match:
             agent = self.agents.get(match[1])
@@ -498,6 +986,15 @@ class Service:
                 return self.logs(agent, parsed.query)
             if method == "POST" and match[2] == "actions" and not parsed.query:
                 return self.action(agent, body)
+            if not parsed.query:
+                handlers = {
+                    ("GET", "details"): lambda: self.details(agent),
+                    ("POST", "config-proposals"): lambda: self.proposal(agent, body),
+                    ("GET", "tool-requests"): lambda: self.tool_requests(agent),
+                    ("POST", "tool-decisions"): lambda: self.tool_decision(agent, body),
+                }
+                if (method, match[2]) in handlers:
+                    return handlers[method, match[2]]()
         raise APIError("Host API route not found", 404)
 
 

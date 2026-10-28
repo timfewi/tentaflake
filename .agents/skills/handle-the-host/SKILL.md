@@ -1,7 +1,7 @@
 ---
 name: handle-the-host
 description: Inspect or maintain a deployed Tentaflake host through its authorized Tailscale SSH management path.
-version: 1.1.0
+version: 1.2.0
 ---
 
 # Handle the host
@@ -51,6 +51,14 @@ Use canonical container IDs, inspect current state after an unknown action,
 and retry an uncertain HTTP response with the original request ID. Never treat
 host readiness as native chat or provider acceptance, or assign the API socket
 group to an agent. Nix remains authoritative for agent definitions.
+
+Agent policy details describe declarations, not successful connections. A Host
+configuration proposal is a downloadable draft: review its diff and evaluate
+the complete consumer before any authorized activation. For a worker decision,
+inspect the complete captured argument vector, class and digest; approve or
+deny that exact request only. Retain its API request ID after lost responses.
+Approval preserves the offline worker boundary; a saved decision or queued
+drain is not proof of execution. See `docs/19-web-ui.md` for the separate grants.
 
 ## Perform the authorized operation
 

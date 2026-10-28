@@ -226,8 +226,13 @@ pub(super) fn retire(config: &Config, directory: &str, request: &JobRequest) -> 
 }
 
 pub(super) fn recover(config: &Config) -> Result<()> {
-    for directory in ["pending", "approvals"] {
+    for directory in ["pending", "approvals", "decisions"] {
         let parent = config.state_dir.join(directory);
+        if directory == "decisions"
+            && matches!(fs::symlink_metadata(&parent), Err(error) if error.kind() == io::ErrorKind::NotFound)
+        {
+            continue;
+        }
         open_path_no_symlinks(&parent)?;
         for entry in fs::read_dir(&parent).map_err(|e| e.to_string())? {
             let entry = entry.map_err(|e| e.to_string())?;

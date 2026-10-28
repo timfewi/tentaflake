@@ -187,7 +187,7 @@ class CiSelection(unittest.TestCase):
         self.assertEqual(select(self.base, self.commit(), self.repository), {"devcontainer", "static"})
 
     def test_host_api_changes_select_protocol_and_configuration_checks(self):
-        for name in ("host-api/tentaflake_host_api/server.py", "modules/host-api.nix",
+        for name in ("host-api/tentaflake_host_api/server.py", "lib/hostApiPolicy.nix", "modules/host-api.nix",
                      "pkgs/tentaflake-host-api/default.nix", "tests/host-api-evaluation.nix"):
             with self.subTest(name=name):
                 base = self.git("rev-parse", "HEAD")

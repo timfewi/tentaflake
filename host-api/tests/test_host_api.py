@@ -104,6 +104,96 @@ sys.exit(int(failed))
                 "hermes-coding": ["tentaflake-broker-llm-hermes-coding.service"]
             },
         }
+        policy = api.unknown_policy()
+        policy.update(managed=True, auto_start=False)
+        policy["llm"].update(
+            enabled=True,
+            allowed_models=[
+                {
+                    "name": "model-a",
+                    "input_microusd_per_million": 2,
+                    "output_microusd_per_million": 3,
+                }
+            ],
+            max_completion_tokens=4096,
+            budgets={
+                "max_concurrency": 4,
+                "max_requests_per_minute": 30,
+                "daily_request_budget": 1000,
+                "daily_token_budget": 1000000,
+                "daily_cost_microusd": 10000000,
+            },
+        )
+        policy["fetch"].update(enabled=True, allowed_hosts=["example.org"])
+        policy["worker"].update(
+            enabled=True,
+            limits={
+                "max_timeout_seconds": 900,
+                "max_queue_entries": 256,
+                "max_queue_bytes": 8 * 1024**2,
+                "max_snapshot_bytes": 1024**3,
+                "max_log_bytes": 1024**2,
+            },
+        )
+        self.config["policies"] = {"hermes-coding": policy}
+        self.config["worker_configs"] = {
+            "hermes-coding": str(self.root / "worker.json")
+        }
+        worker = self.root / "worker"
+        worker.write_text(
+            f"#!{sys.executable}\n"
+            + """
+import json
+from pathlib import Path
+import sys
+root = Path(__file__).parent
+args = sys.argv[1:]
+with (root / 'worker-calls.jsonl').open('a') as output:
+    output.write(json.dumps(args) + '\\n')
+if (root / 'worker-uncertain').exists():
+    (root / 'committed-decision').touch()
+    print('tentaflake-worker: uncertain: decision publication or output failed', file=sys.stderr)
+    sys.exit(1)
+if (root / 'worker-fail').exists():
+    print('tentaflake-worker: conflict: private request /secret/path', file=sys.stderr)
+    sys.exit(1)
+if args[2] == 'requests':
+    print((root / 'requests.json').read_text())
+elif args[2] == 'decide':
+    response = {'schema_version':1,'agent':'hermes-coding','job_id':args[3],
+        'request_digest':args[6], 'decision':args[4], 'state':'recorded', 'drain_required':True}
+    if (root / 'worker-invalid').exists():
+        response['agent'] = 'another-agent'
+    print(json.dumps(response))
+else:
+    sys.exit(2)
+"""
+        )
+        worker.chmod(0o700)
+        self.config["worker"] = str(worker)
+        self.worker_request = {
+            "id": "job-1",
+            "request_digest": "a" * 64,
+            "action_class": "external-reversible",
+            "argv": ["printf", "${untrusted}\ntext"],
+            "cwd": "/workspace",
+            "timeout_seconds": 30,
+            "state": "pending",
+            "approval_status": "pending",
+            "can_approve": True,
+            "can_deny": True,
+        }
+        (self.root / "requests.json").write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "agent": "hermes-coding",
+                    "initialized": True,
+                    "requests": [self.worker_request],
+                    "truncated": False,
+                }
+            )
+        )
         self.service = None
         self.server = None
         self.thread = None
@@ -157,7 +247,16 @@ sys.exit(int(failed))
         status, info = self.request("GET", "/v1/info")
         self.assertEqual(status, 200)
         self.assertEqual(
-            info["capabilities"], {"actions": False, "logs": False, "chat": False}
+            info["capabilities"],
+            {
+                "actions": False,
+                "logs": False,
+                "chat": False,
+                "details": True,
+                "config_proposals": True,
+                "tool_requests": False,
+                "tool_decisions": False,
+            },
         )
         status, result = self.request("GET", "/v1/agents")
         self.assertEqual(status, 200)
@@ -183,6 +282,275 @@ sys.exit(int(failed))
         self.assertEqual(self.mutations(), [])
         self.assertEqual(Path(self.socket).stat().st_mode & 0o777, 0o660)
         self.assertEqual(Path(self.config["state"]).stat().st_mode & 0o777, 0o700)
+
+    def test_details_separate_declaration_from_observation_and_exclude_host_paths(self):
+        self.start()
+        status, details = self.request("GET", "/v1/agents/hermes-coding/details")
+        self.assertEqual(status, 200)
+        self.assertEqual(len(details["policy_revision"]), 64)
+        self.assertEqual(details["policy"]["research"]["readiness"], "unverified")
+        self.assertEqual(details["policy"]["management"]["remote_grants"], "unverified")
+        self.assertEqual(len(details["editable_fields"]), 7)
+        self.assertFalse(details["capabilities"]["tool_decisions"])
+        self.assertNotIn(str(self.root), json.dumps(details))
+        self.assertNotIn("credential", json.dumps(details))
+        _, unmanaged = self.request("GET", "/v1/agents/zeroclaw-coding/details")
+        self.assertFalse(unmanaged["policy"]["managed"])
+        self.assertEqual(unmanaged["editable_fields"], [])
+        self.assertNotEqual(unmanaged["policy_revision"], details["policy_revision"])
+
+    def test_proposals_are_revision_bound_downloads_without_mutation(self):
+        self.start()
+        _, details = self.request("GET", "/v1/agents/hermes-coding/details")
+        changes = {
+            "llm.allowed_models": [
+                {
+                    "name": "provider/model-a",
+                    "input_microusd_per_million": 7,
+                    "output_microusd_per_million": 11,
+                }
+            ],
+            "fetch.allowed_hosts": ["example.org"],
+            "worker.max_timeout_seconds": 120,
+        }
+        status, result = self.request(
+            "POST",
+            "/v1/agents/hermes-coding/config-proposals",
+            {
+                "policy_revision": details["policy_revision"],
+                "changes": changes,
+            },
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(result["changes"], changes)
+        self.assertEqual(result["validation"], "structure-only")
+        self.assertEqual(result["activation"], "explicit-host-update-required")
+        self.assertIn(
+            'agents."hermes-coding".llm.allowedModels = lib.mkForce', result["nix"]
+        )
+        self.assertIn("maxTimeoutSeconds = lib.mkForce 120;", result["nix"])
+        self.assertEqual(self.mutations(), [])
+        self.assertFalse((self.root / "worker-calls.jsonl").exists())
+        self.assertFalse((self.root / result["filename"]).exists())
+        self.assertEqual(
+            self.request(
+                "POST",
+                "/v1/agents/hermes-coding/config-proposals",
+                {
+                    "policy_revision": "0" * 64,
+                    "changes": changes,
+                },
+            )[0],
+            409,
+        )
+
+    def test_proposals_reject_policy_bypass_and_literal_injection(self):
+        self.start()
+        _, details = self.request("GET", "/v1/agents/hermes-coding/details")
+        for changes in (
+            {"worker.enable": False},
+            {"llm.providerCredentialFile": "/secret"},
+            {"worker.max_timeout_seconds": True},
+            {"worker.max_timeout_seconds": 86401},
+            {"worker.max_snapshot_bytes": 16 * 1024**3 + 1},
+            {"fetch.allowed_hosts": ["*.example.org"]},
+            {"fetch.allowed_hosts": ["a.example\nmalicious"]},
+            {"fetch.allowed_hosts": ["${builtins.readFile /secret}"]},
+            {
+                "llm.allowed_models": [
+                    {
+                        "name": "${builtins.readFile /secret}",
+                        "input_microusd_per_million": 1,
+                        "output_microusd_per_million": 1,
+                    }
+                ]
+            },
+            {
+                "llm.allowed_models": [
+                    {
+                        "name": "model",
+                        "input_microusd_per_million": 0,
+                        "output_microusd_per_million": 1,
+                    }
+                ]
+            },
+            {"llm.allowed_models": [{"name": "model"}]},
+        ):
+            with self.subTest(changes=changes):
+                self.assertEqual(
+                    self.request(
+                        "POST",
+                        "/v1/agents/hermes-coding/config-proposals",
+                        {
+                            "policy_revision": details["policy_revision"],
+                            "changes": changes,
+                        },
+                    )[0],
+                    400,
+                )
+        self.assertEqual(api.nix_string('a"\\${x}'), '"a\\"\\\\\\${x}"')
+        _, unmanaged = self.request("GET", "/v1/agents/zeroclaw-coding/details")
+        self.assertEqual(
+            self.request(
+                "POST",
+                "/v1/agents/zeroclaw-coding/config-proposals",
+                {
+                    "policy_revision": unmanaged["policy_revision"],
+                    "changes": {"worker.max_queue_entries": 2},
+                },
+            )[0],
+            400,
+        )
+
+    def test_worker_requests_require_separate_permission_and_preserve_full_review_text(
+        self,
+    ):
+        self.start()
+        self.assertEqual(
+            self.request("GET", "/v1/agents/hermes-coding/tool-requests")[0], 403
+        )
+        self.close()
+        self.start(allow_tool_requests=True)
+        status, result = self.request("GET", "/v1/agents/hermes-coding/tool-requests")
+        self.assertEqual(status, 200)
+        self.assertEqual(result["requests"], [self.worker_request])
+        self.assertFalse(result["truncated"])
+        self.assertEqual(
+            self.request("GET", "/v1/agents/zeroclaw-coding/tool-requests")[0], 403
+        )
+        bad = dict(self.worker_request, argv=["x" * 4097])
+        (self.root / "requests.json").write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "agent": "hermes-coding",
+                    "requests": [bad],
+                    "truncated": False,
+                }
+            )
+        )
+        self.assertEqual(
+            self.request("GET", "/v1/agents/hermes-coding/tool-requests")[0], 502
+        )
+        self.assertEqual(self.mutations(), [])
+
+    def decision_body(self, **overrides):
+        return {
+            "job_id": "job-1",
+            "request_digest": "a" * 64,
+            "decision": "approve",
+            "request_id": "approval-1",
+        } | overrides
+
+    def test_worker_decisions_are_durable_intent_bound_and_schedule_only_fixed_worker(
+        self,
+    ):
+        self.start(allow_tool_requests=True, allow_tool_decisions=True)
+        path = "/v1/agents/hermes-coding/tool-decisions"
+        status, receipt = self.request("POST", path, self.decision_body())
+        self.assertEqual(status, 200)
+        self.assertEqual(receipt["state"], "recorded")
+        self.assertEqual(receipt["drain_state"], "queued")
+        self.assertEqual(
+            self.mutations(),
+            [
+                [
+                    "start",
+                    "--no-block",
+                    "--no-ask-password",
+                    "--",
+                    "tentaflake-worker-hermes-coding.service",
+                ]
+            ],
+        )
+        self.close()
+        self.start()
+        self.assertEqual(
+            self.request("POST", path, self.decision_body()), (200, receipt)
+        )
+        self.assertEqual(
+            len((self.root / "worker-calls.jsonl").read_text().splitlines()), 1
+        )
+        self.assertEqual(len(self.mutations()), 1)
+        self.assertEqual(
+            self.request("POST", path, self.decision_body(decision="deny"))[0], 409
+        )
+        self.assertEqual(
+            self.request("POST", path, self.decision_body(job_id="../job"))[0], 400
+        )
+
+    def test_worker_scheduling_failure_preserves_recorded_authorization(self):
+        self.start(allow_tool_requests=True, allow_tool_decisions=True)
+        (self.root / "fail").touch()
+        path = "/v1/agents/hermes-coding/tool-decisions"
+        _, receipt = self.request("POST", path, self.decision_body(decision="deny"))
+        self.assertEqual(receipt["state"], "recorded")
+        self.assertEqual(receipt["drain_state"], "unknown")
+        (self.root / "fail").unlink()
+        self.assertEqual(
+            self.request("POST", path, self.decision_body(decision="deny")),
+            (200, receipt),
+        )
+        self.assertEqual(len(self.mutations()), 1)
+
+    def test_uncertain_worker_dispatch_never_replays_and_known_conflicts_are_safe(self):
+        self.start(allow_tool_requests=True, allow_tool_decisions=True)
+        (self.root / "worker-invalid").touch()
+        path = "/v1/agents/hermes-coding/tool-decisions"
+        _, receipt = self.request("POST", path, self.decision_body())
+        self.assertEqual(receipt["state"], "unknown")
+        self.assertEqual(receipt["drain_state"], "not-requested")
+        (self.root / "worker-invalid").unlink()
+        self.close()
+        self.start()
+        self.assertEqual(
+            self.request("POST", path, self.decision_body()), (200, receipt)
+        )
+        self.assertEqual(
+            len((self.root / "worker-calls.jsonl").read_text().splitlines()), 1
+        )
+        (self.root / "worker-fail").touch()
+        status, failure = self.request(
+            "POST", path, self.decision_body(request_id="approval-2")
+        )
+        self.assertEqual(status, 409)
+        self.assertNotIn("/secret", str(failure))
+        (self.root / "worker-fail").unlink()
+        self.assertEqual(
+            self.request("POST", path, self.decision_body(request_id="approval-2")),
+            (status, failure),
+        )
+        self.assertEqual(self.mutations(), [])
+
+    def test_worker_decisions_need_inspection_and_declared_worker(self):
+        with self.assertRaises(ValueError):
+            api.Service(self.config | {"allow_tool_decisions": True})
+        self.start(allow_tool_requests=True)
+        self.assertEqual(
+            self.request(
+                "POST", "/v1/agents/hermes-coding/tool-decisions", self.decision_body()
+            )[0],
+            403,
+        )
+
+    def test_post_publication_worker_error_stays_unknown_without_replay(self):
+        self.start(allow_tool_requests=True, allow_tool_decisions=True)
+        (self.root / "worker-uncertain").touch()
+        path = "/v1/agents/hermes-coding/tool-decisions"
+        status, receipt = self.request("POST", path, self.decision_body())
+        self.assertEqual(status, 200)
+        self.assertEqual(receipt["state"], "unknown")
+        self.assertTrue((self.root / "committed-decision").exists())
+        (self.root / "worker-uncertain").unlink()
+        self.close()
+        self.start()
+        self.assertEqual(
+            self.request("POST", path, self.decision_body()), (status, receipt)
+        )
+        self.assertEqual(
+            len((self.root / "worker-calls.jsonl").read_text().splitlines()), 1
+        )
+        self.assertEqual(self.mutations(), [])
 
     def test_health_preserves_unhealthy_exit_one_as_evidence(self):
         self.start()

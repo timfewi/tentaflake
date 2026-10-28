@@ -15,6 +15,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Keep release tagging explicit, as on the preceding main branch; restoring
   the declarative product does not resume automatic patch releases.
 ### Added
+- Extend optional host management with per-agent declared access/tool policy,
+  revision-bound Nix change proposals, and separately enabled captured worker
+  request review and digest-bound decisions. Worker decisions are durable and
+  do not synchronously run queued jobs; scheduling and execution remain distinct.
 - Add an opt-in Unix host API with canonical agent inventory, host health,
   separately enabled bounded logs and fixed lifecycle actions. Durable request
   receipts prevent automatic replay after uncertain action outcomes. A separate

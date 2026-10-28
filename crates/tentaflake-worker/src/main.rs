@@ -13,6 +13,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 type Result<T> = std::result::Result<T, String>;
 
 mod queue;
+mod review;
 
 const RESOLVE_NO_MAGICLINKS: u64 = 0x02;
 const RESOLVE_NO_SYMLINKS: u64 = 0x04;
@@ -166,7 +167,7 @@ fn main() {
 fn run() -> Result<()> {
     let mut args = std::env::args().skip(1);
     if args.next().as_deref() != Some("--config") {
-        return Err("usage: tentaflake-worker --config FILE drain|approve|deny [JOB]".into());
+        return Err("usage: tentaflake-worker --config FILE drain|requests|approve JOB|deny JOB|decide JOB approve|deny --expected-digest SHA256".into());
     }
     let config_path = args
         .next()
@@ -179,6 +180,15 @@ fn run() -> Result<()> {
     )
     .map_err(|error| format!("parse {config_path}: {error}"))?;
     validate_config(&config)?;
+    // Inspection and recorded decisions never adopt the capsule group, create
+    // queue/workspace state, recover jobs, or dispatch an OCI command.
+    if command == "requests" {
+        reject_extra_args(args)?;
+        return review::requests(&config);
+    }
+    if command == "decide" {
+        return review::decide_command(&config, args);
+    }
     enter_worker_group(&config)?;
     ensure_state_layout(&config)?;
     let _queue_lock = queue::lock(&config)?;
@@ -512,6 +522,17 @@ fn process_ready(config: &Config, workspace_fd: RawFd) -> Result<()> {
             queue::retire(config, "pending", &request)?;
             continue;
         }
+        let decision = review::decision_for(config, &request)?;
+        if decision == Some(review::Decision::Deny) {
+            finish_without_run(
+                config,
+                &request,
+                "denied",
+                "host operator denied the request",
+            )?;
+            queue::retire(config, "pending", &request)?;
+            continue;
+        }
         if request.action_class == ActionClass::Forbidden {
             finish_without_run(
                 config,
@@ -522,7 +543,8 @@ fn process_ready(config: &Config, workspace_fd: RawFd) -> Result<()> {
             queue::retire(config, "pending", &request)?;
             continue;
         }
-        let approved = queue::approved(config, &request.id)?;
+        let approved =
+            decision == Some(review::Decision::Approve) || queue::approved(config, &request.id)?;
         if request.action_class.needs_approval() && !approved {
             continue;
         }
@@ -553,8 +575,14 @@ fn approve(config: &Config, job: &str) -> Result<()> {
     if !request.action_class.needs_approval() || request.action_class == ActionClass::Forbidden {
         return Err("this action class cannot be approved".into());
     }
-    let approval = config.state_dir.join("approvals").join(job);
-    queue::write_private(&approval, b"approved\n")?;
+    let decision = review::decision_for(config, &request)?;
+    if decision == Some(review::Decision::Deny) {
+        return Err("conflict: job has a recorded denial".into());
+    }
+    if decision.is_none() {
+        let approval = config.state_dir.join("approvals").join(job);
+        queue::write_private(&approval, b"approved\n")?;
+    }
     audit(
         config,
         job,
@@ -570,6 +598,9 @@ fn deny(config: &Config, job: &str) -> Result<()> {
     let request = read_pending(config, job)?;
     if queue::terminal(config, &request)? {
         return Err("job is already terminal; drain the queue to retire its stale request".into());
+    }
+    if review::decision_for(config, &request)? == Some(review::Decision::Approve) {
+        return Err("conflict: job has a recorded approval".into());
     }
     finish_without_run(
         config,
@@ -605,6 +636,7 @@ fn job_exists(config: &Config, job: &str) -> bool {
         || config.state_dir.join("approvals").join(job).exists()
         || config.state_dir.join("results").join(job).exists()
         || config.state_dir.join("jobs").join(job).exists()
+        || config.state_dir.join("decisions").join(job).exists()
 }
 
 fn execute(config: &Config, workspace_fd: RawFd, request: &JobRequest) -> Result<()> {

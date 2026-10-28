@@ -385,6 +385,14 @@ disabled by default. Its read-only contract exposes stable agent IDs, runtime
 states and host health; `allowActions` and `allowLogs` separately opt into fixed
 lifecycle actions and bounded journal access.
 
+An agent inspector shows declared model access, Research/fetch policy, worker
+limits and storage boundaries. It can prepare a revision-bound Nix change
+proposal for supported settings. Proposals require review, full host evaluation
+and explicit activation; preparing one changes no running permission. Separately
+enable `allowToolRequests` and `allowToolDecisions` to review captured worker
+requests and record digest-bound approve/deny decisions. Approval preserves the
+worker's offline containment and does not certify successful execution.
+
 Nix remains authoritative for agent definitions. The UI's host-only mode needs
 no HQ task migration or Pi runtime. Native chat requires separate runtime API
 configuration and acceptance; the host API does not advertise chat support.
