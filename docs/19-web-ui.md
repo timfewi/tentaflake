@@ -235,8 +235,12 @@ A decision accepts exactly:
 The worker records the first decision durably under its queue lock and verifies
 the digest again. Repeating the same decision is idempotent; a different digest
 or conflicting decision is refused. The decision command never drains jobs
-synchronously. The host API subsequently asks systemd to start only that
-agent's configured worker service without waiting for the job to execute.
+synchronously. Before committing a new decision it durably publishes a private
+drain marker under the queue lock. The worker path unit rechecks that marker
+after the service exits, so a decision cannot lose its wakeup when a start
+request joins a retiring oneshot. Only a subsequent drain consumes the marker.
+The host API additionally asks systemd to start only that agent's configured
+worker service without waiting for the job to execute.
 
 The API receipt separates `state` (`recorded`, `failed`, `unknown`) from
 `drain_state` (`queued`, `unknown`, `not-requested`). A recorded decision proves

@@ -373,6 +373,7 @@ fn hardened_shared_directory_mode(current: u32) -> u32 {
 }
 
 fn drain(config: &Config) -> Result<()> {
+    queue::consume_drain_request(config)?;
     queue::recover(config)?;
     let workspace = open_path_no_symlinks(&config.workspace)?;
     process_ready(config, workspace.as_raw_fd())?;

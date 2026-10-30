@@ -237,6 +237,9 @@ let
       unitConfig.DefaultDependencies = false;
       pathConfig = {
         DirectoryNotEmpty = "${agent.workspace}/.tentaflake-worker/inbox";
+        # Rechecked when the service exits: unlike another start job, this
+        # survives a decision recorded after drain unlocks but before exit.
+        PathExists = "${stateDir name}/.drain-request";
         Unit = "tentaflake-worker-${name}.service";
       };
     }

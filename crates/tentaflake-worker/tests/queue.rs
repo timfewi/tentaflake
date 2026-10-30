@@ -258,6 +258,71 @@ fn inspection_never_initializes_state_and_only_displays_captured_requests() {
 }
 
 #[test]
+fn recorded_decisions_keep_a_wakeup_until_the_next_drain() {
+    for decision in ["approve", "deny"] {
+        let f = Fixture::new();
+        f.capture();
+        let digest = f.request_digest();
+        let wakeup = f.root.join("state/.drain-request");
+        assert!(!wakeup.exists());
+        assert!(f.decide(decision, &digest).status.success());
+        assert_eq!(fs::read(&wakeup).unwrap(), b"drain\n");
+        // Inspection and matching retries must not consume the level-triggered
+        // wakeup, even if a systemd start joined a retiring worker invocation.
+        f.success(&["requests"]);
+        assert!(f.decide(decision, &digest).status.success());
+        assert!(wakeup.is_file());
+        if decision == "deny" {
+            assert!(f.command(&["drain"]).output().unwrap().status.success());
+            assert!(!wakeup.exists());
+            assert!(!f.root.join("state/pending/job_1.json").exists());
+            assert!(f.decide(decision, &digest).status.success());
+            assert!(!wakeup.exists(), "a receipt retry must not schedule replay");
+        }
+        assert!(!f.root.join("calls").exists());
+    }
+}
+
+#[test]
+fn wakeup_survives_interrupted_publication_and_coalesces_new_decisions() {
+    let f = Fixture::new();
+    f.capture();
+    let wakeup = f.root.join("state/.drain-request");
+    // Simulate interruption after wakeup publication but before the receipt,
+    // including the final/staging hard-link pair write_private can leave.
+    fs::write(&wakeup, b"drain\n").unwrap();
+    fs::set_permissions(&wakeup, fs::Permissions::from_mode(0o600)).unwrap();
+    fs::hard_link(&wakeup, f.root.join("state/..drain-request.new")).unwrap();
+    assert!(f.decide("deny", &f.request_digest()).status.success());
+    assert!(f.command(&["drain"]).output().unwrap().status.success());
+    assert!(!wakeup.exists());
+    assert!(f.root.join("state/results/job_1").is_dir());
+    assert!(!f.root.join("calls").exists());
+}
+
+#[test]
+fn unsafe_wakeup_refuses_decision_publication() {
+    use std::os::unix::fs::symlink;
+    for symlinked in [false, true] {
+        let f = Fixture::new();
+        f.capture();
+        let digest = f.request_digest();
+        let wakeup = f.root.join("state/.drain-request");
+        let target = f.root.join("unrelated");
+        fs::write(&target, b"untouched").unwrap();
+        if symlinked {
+            symlink(&target, &wakeup).unwrap();
+        } else {
+            fs::write(&wakeup, b"invalid\n").unwrap();
+            fs::set_permissions(&wakeup, fs::Permissions::from_mode(0o600)).unwrap();
+        }
+        assert!(!f.decide("deny", &digest).status.success());
+        assert!(!f.root.join("state/decisions/job_1").exists());
+        assert_eq!(fs::read(target).unwrap(), b"untouched");
+    }
+}
+
+#[test]
 fn decisions_are_record_only_idempotent_and_first_choice_wins() {
     for decision in ["approve", "deny"] {
         let f = Fixture::new();

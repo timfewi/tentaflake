@@ -212,7 +212,9 @@ jobs:
 
       - name: nix build (runtime VM integration test)
         if: needs.changes.outputs.runtime == 'true'
-        run: nix build --no-link -L .#checks.x86_64-linux.vm-integration
+        run: |
+          nix build --no-link -L .#checks.x86_64-linux.vm-integration
+          nix build --no-link -L .#checks.x86_64-linux.worker-drain-wakeup
 
       - name: nix build (research VM integration test)
         if: needs.changes.outputs.research == 'true'

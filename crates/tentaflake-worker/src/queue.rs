@@ -1,6 +1,18 @@
 //! Private queue ownership and durable transitions. All mutations hold `lock`.
 use super::*;
 
+pub(super) const DRAIN_REQUEST: &str = ".drain-request";
+
+// Called at drain entry with the queue lock held. A later decision cannot
+// publish its wakeup until this invocation has finished all queue processing.
+pub(super) fn consume_drain_request(config: &Config) -> Result<()> {
+    match fs::remove_file(config.state_dir.join(DRAIN_REQUEST)) {
+        Ok(()) => sync_directory(&config.state_dir),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(format!("consume drain request: {error}")),
+    }
+}
+
 pub(super) fn lock(config: &Config) -> Result<File> {
     open_path_no_symlinks(&config.state_dir)?;
     let path = config.state_dir.join(".queue.lock");
@@ -25,7 +37,7 @@ pub(super) fn lock(config: &Config) -> Result<File> {
     Ok(file)
 }
 
-fn sync_directory(path: &Path) -> Result<()> {
+pub(super) fn sync_directory(path: &Path) -> Result<()> {
     let fd = open_path_no_symlinks(path)?;
     let readable = open_dir_at(fd.as_raw_fd(), OsStr::new("."))
         .map_err(|e| format!("open directory for sync: {e}"))?;

@@ -117,6 +117,9 @@ assert inspectedWorker.systemd.services.tentaflake-api.serviceConfig.ReadWritePa
 assert
   controlledWorker.systemd.services.tentaflake-api.serviceConfig.ReadWritePaths
   == [ "-/var/lib/tentaflake-worker-hermes-operator" ];
+assert
+  controlledWorker.systemd.paths.tentaflake-worker-hermes-operator.pathConfig.PathExists
+  == "/var/lib/tentaflake-worker-hermes-operator/.drain-request";
 assert controlledWorker.systemd.services.tentaflake-api.serviceConfig.CapabilityBoundingSet == "";
 assert pkgs.lib.hasInfix "tentaflake-host-api --config /nix/store/"
   controlledWorker.systemd.services.tentaflake-api.serviceConfig.ExecStart;

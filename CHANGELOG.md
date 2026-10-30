@@ -35,6 +35,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `tentaflake-broker-llm-reconcile-NAME` unit. With the broker stopped, it
   resolves held strict reservations and orphaned usage holds without refunds.
 ### Maintenance
+- Preserve worker decision wakeups across the retiring-oneshot window with a
+  durable queue-locked drain marker and a level-triggered systemd path watch.
 - Expose canonical IDs and runnable flags in CLI JSON status, prefer exact
   container IDs over display-name aliases, and reject ambiguous short names.
 - Settle strict reservations on complete provider error responses, finished

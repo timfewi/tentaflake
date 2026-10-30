@@ -163,7 +163,8 @@ initialize the queue nor adopt the capsule group, touch the workspace, recover
 jobs, or invoke the container runtime. An uninitialized queue lists no requests;
 a busy worker returns `busy:` promptly, including while a long job is executing.
 Inspection uses read-only file descriptors and works with read-only worker
-state. Only `decide` requires write access to the private decision directory.
+state. Only `decide` requires write access to private worker state for the
+decision receipt and drain wakeup.
 
 Inspection permits at most 256 pending directory entries and 8 MiB of entry
 sizes, or the configured queue limits when smaller. Each request is limited to
@@ -176,9 +177,16 @@ or scan overflow fail closed instead of producing partial approval evidence.
 `decide` records authorization only. It returns a durable receipt containing
 `schema_version`, `agent`, `job_id`, `request_digest`, `decision`,
 `state: "recorded"`, and `drain_required: true`. It does not execute the job or
-write a terminal job result. The operator interface must separately schedule
-the normal per-agent worker service for either decision; the next drain runs
-an approved request or finalizes a denied request without invoking OCI.
+write a terminal job result. Before publishing a new decision, it durably
+publishes a private `.drain-request` marker under the same queue lock. The
+per-agent path unit watches this marker as well as the inbox and rechecks it
+when the worker exits. Thus a decision recorded after a drain releases its lock
+but before systemd finishes that invocation still triggers another drain.
+Only a new drain consumes the marker, at entry under the lock. An interrupted
+publication may cause a harmless extra drain, not a lost committed decision.
+An operator interface may additionally start the normal per-agent worker
+service for prompt scheduling; it must not restart or kill a running worker.
+The next drain runs an approved request or finalizes a denied request without OCI.
 The existing `approve` command still processes ready work immediately, and the
 existing `deny` command still finalizes a denial directly.
 

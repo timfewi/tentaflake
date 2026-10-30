@@ -391,6 +391,15 @@ pub(super) fn decide_command(
         state: "recorded".into(),
         drain_required: true,
     };
+    // Publish the level-triggered wakeup BEFORE the decision, while holding the
+    // queue lock. A crash can cause a harmless extra drain, never a committed
+    // decision without a wakeup. Only a subsequent drain consumes the marker.
+    match read_at(queue.root.as_raw_fd(), queue::DRAIN_REQUEST, 16)? {
+        Some(bytes) if bytes == b"drain\n" => queue::sync_directory(&config.state_dir),
+        Some(_) => return Err("invalid: malformed drain request".into()),
+        None => queue::write_private(&config.state_dir.join(queue::DRAIN_REQUEST), b"drain\n"),
+    }
+    .map_err(|error| format!("uncertain: drain wakeup publication did not finish: {error}"))?;
     queue::write_private(
         &config.state_dir.join("decisions").join(job),
         &serde_json::to_vec(&receipt).map_err(invalid)?,

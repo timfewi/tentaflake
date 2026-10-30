@@ -191,6 +191,7 @@
           import ./tests/integration.nix { inherit self mkHermesAgent mkZeroClawAgent; }
         );
         research-integration = import ./tests/research-integration.nix { inherit self pkgs; };
+        worker-drain-wakeup = import ./tests/worker-drain-wakeup.nix { inherit self pkgs; };
         research-policy = import ./tests/research-policy.nix { inherit self pkgs; };
       };
 

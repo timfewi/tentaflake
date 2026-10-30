@@ -146,6 +146,8 @@ are already published or require access to another repository for public checks.
   and decisions are separate default-off grants. Review the full captured argv
   and digest, record decisions under the private queue lock without draining
   work, and preserve first-decision-wins semantics and durable API retry keys.
+  Publish the durable drain marker before new decisions under the queue lock;
+  consume it only at drain entry and retain the level-triggered path watcher.
   A recorded decision or queued systemd drain is not execution success. Never
   widen worker network/credential rights or expose its inbox as approved work.
 - `lib/mkRustPackage.nix` shares Rust packaging: root Cargo files, all member

@@ -38,10 +38,13 @@ observed elapsed time, without evidence of a hang or failure.
 selection, stopped OpenClaw and Pi scaffolds, quota declarations and generated
 quota-helper refusal regressions without mounts. `checks.*.hardening-journald`
 separately covers the hardening journald defaults, host overrides and the legacy
-`extraConfig` refusal. `just ci`/`just e2e` run the
-complete gate, both VM suites and the installer ISO. Run an affected VM suite
-when changing runtime or security behavior; use the ISO gate when changing
-installation.
+`extraConfig` refusal. `checks.*.worker-drain-wakeup` boots a focused synthetic
+host and holds its worker in `ExecStartPost` to verify decisions cannot lose
+their wakeup between queue unlock and oneshot completion, using the real local
+API sandbox without executing containers. Explicit runtime CI includes this
+check alongside the main runtime suite. `just ci`/`just e2e` run the complete
+gate, all VM checks and the installer ISO. Run an affected VM suite when changing
+runtime or security behavior; use the ISO gate when changing installation.
 
 ## Rust cache boundaries
 

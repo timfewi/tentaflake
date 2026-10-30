@@ -57,8 +57,10 @@ configuration proposal is a downloadable draft: review its diff and evaluate
 the complete consumer before any authorized activation. For a worker decision,
 inspect the complete captured argument vector, class and digest; approve or
 deny that exact request only. Retain its API request ID after lost responses.
-Approval preserves the offline worker boundary; a saved decision or queued
-drain is not proof of execution. See `docs/19-web-ui.md` for the separate grants.
+The private drain marker keeps new decisions scheduled across worker exit;
+never restart or kill a worker to force a drain. Approval preserves the offline
+boundary; a saved decision or queued drain is not proof of execution. See
+`docs/19-web-ui.md` for the separate grants.
 
 ## Perform the authorized operation
 
