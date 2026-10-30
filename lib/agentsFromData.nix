@@ -16,8 +16,12 @@ let
       fail "provide exactly one file or data object."
     else if data != null then
       data
+    else if !lib.hasSuffix ".toml" (toString file) then
+      fail "public inventories must be TOML files; manually migrate legacy JSON to agents.toml before loading."
+    else if builtins.pathExists (builtins.dirOf (toString file) + "/agents.json") then
+      fail "legacy agents.json conflicts with the TOML inventory; manually migrate it and remove agents.json before loading."
     else
-      builtins.fromJSON (builtins.readFile file);
+      builtins.fromTOML (builtins.readFile file);
   checkFields =
     location: allowed: value:
     let
@@ -27,9 +31,22 @@ let
       value
     else
       fail "${location} has unknown field(s): ${lib.concatStringsSep ", " unknown}.";
+  finiteNumbers =
+    value:
+    if builtins.isFloat value then
+      # Only finite floats subtract from themselves to zero (NaN != 0).
+      value - value == 0
+    else if builtins.isList value then
+      lib.all finiteNumbers value
+    else if builtins.isAttrs value then
+      lib.all finiteNumbers (builtins.attrValues value)
+    else
+      true;
   checkedData =
     if !builtins.isAttrs rawData then
       fail "root must be an object."
+    else if !finiteNumbers rawData then
+      fail "inventory values must not contain non-finite numbers."
     else
       checkFields "root" [ "schemaVersion" "agents" "_securityNote" ] rawData;
   registry = import ../adapters { inherit pkgs lib; };

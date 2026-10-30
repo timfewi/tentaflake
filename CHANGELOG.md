@@ -7,13 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 ### Direction
-- Keep declarative JSON onboarding, installation and Nix host policy
+- Keep declarative TOML onboarding, installation and Nix host policy
   runtime-agnostic, with no mandatory runtime or control service.
 - Preserve earlier development in Git history; this is not a new published tag.
 - Keep release tagging explicit, as on the preceding main branch; restoring
   the declarative product does not resume automatic patch releases.
 ### Breaking changes
-- Make schema-v1 `agents.json` the only public instance-definition path.
+- Make schema-v1 `agents.toml` the only public instance-definition path.
+  Replace the JSON inventory with a safely empty TOML default and remove the
+  separate example file. Existing `agents.json` requires deliberate migration;
+  it is refused rather than silently ignored, even when TOML also exists.
   Remove `my-agents.nix` and its example; a remaining legacy file requires
   manual migration and is refused without evaluation. Expose only file-based
   `agentsFromData`, runtime catalog and constants; builders and adapter builds
@@ -28,10 +31,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Make each adapter Nix file the runtime implementation/preset owner; generate
   CLI catalog JSON and docs from those presets. Vendor acceptance stays pending.
 ### Added
-- Provide inactive stopped native settings in `agents.json.example`; installers
-  initialize an empty live JSON file instead of enabling examples. Model and
-  network allowlists, pricing, worker, quota and Research remain Nix host policy;
-  samples do not establish vendor acceptance.
+- Document stopped TOML examples in the guides; ship and initialize only an
+  empty live inventory (`schemaVersion = 1`, `agents = []`). Model and network
+  allowlists, pricing, worker, quota and Research remain Nix host policy;
+  samples do not establish vendor acceptance or automatically start agents.
 - Extend optional host management with per-agent declared access/tool policy,
   revision-bound Nix change proposals, and separately enabled captured worker
   request review and digest-bound decisions. Worker decisions are durable and

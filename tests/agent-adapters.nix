@@ -5,8 +5,8 @@ let
   mkAgent = import ../lib/mkAgent.nix { inherit pkgs lib; };
   adapters = import ../adapters { inherit pkgs lib; };
   internalParser = import ../lib/agentsFromData.nix { inherit pkgs lib; };
-  exampleData = builtins.fromJSON (builtins.readFile ../agents.json.example);
-  example = eval (builders.agentsFromData { file = ../agents.json.example; });
+  exampleData = builtins.fromTOML (builtins.readFile ./fixtures/adapter-input/stopped-runtimes.toml);
+  example = eval (builders.agentsFromData { file = ./fixtures/adapter-input/stopped-runtimes.toml; });
   exampleContainers = example.virtualisation.oci-containers.containers;
   security = import ../lib/containerSecurity.nix { inherit lib; };
   eval =
@@ -110,14 +110,14 @@ let
   };
   # Real source files work even during read-only flake evaluation on a cold
   # store. toFile returns an unregistered path in that mode, masking validation.
-  json =
+  toml =
     file:
     builders.agentsFromData {
       inherit file;
     };
-  genericJson = eval (json ./fixtures/adapter-input/generic.json);
+  genericToml = eval (toml ./fixtures/adapter-input/generic.toml);
   dataConfig = eval (
-    (json ./fixtures/adapter-input/mixed.json)
+    (toml ./fixtures/adapter-input/mixed.toml)
     ++ [ { tentaflake.security.profile = lib.mkForce "dev"; } ]
   );
   registryNames = builtins.attrNames (
@@ -241,10 +241,22 @@ assert
     "file"
   ];
 assert rejects (internalParser {
-  file = ../agents.json.example;
+  file = ../agents.toml;
   data = exampleData;
 });
 assert rejects (internalParser { });
+assert
+  builtins.fromTOML (builtins.readFile ../agents.toml) == {
+    schemaVersion = 1;
+    agents = [ ];
+  };
+assert builders.agentsFromData { file = ../agents.toml; } == [ ];
+assert rejects (toml ./fixtures/adapter-input/legacy-only/agents.json);
+assert rejects (toml ./fixtures/adapter-input/conflicting-inventories/agents.json);
+assert rejects (toml ./fixtures/adapter-input/conflicting-inventories/agents.toml);
+assert rejects (toml ./fixtures/adapter-input/nonfinite-nan.toml);
+assert rejects (toml ./fixtures/adapter-input/nonfinite-infinity.toml);
+assert rejects (toml ./fixtures/adapter-input/nonfinite-negative-infinity.toml);
 assert
   builtins.length (internalParser {
     data = exampleData;
@@ -294,10 +306,10 @@ assert lib.all
     "rw"
     "ro"
   ];
-assert failures genericJson == [ ];
-assert genericJson.tentaflake.agentInstances.agent-from-json.adapter == "generic";
+assert failures genericToml == [ ];
+assert genericToml.tentaflake.agentInstances.agent-from-json.adapter == "generic";
 assert
-  genericJson.virtualisation.oci-containers.containers.agent-from-json.cmd == [
+  genericToml.virtualisation.oci-containers.containers.agent-from-json.cmd == [
     "fixture"
     "--workspace"
     "/workspace"
@@ -464,9 +476,9 @@ assert lib.all (name: lib.hasInfix "agent\t${name}\t${name}\tpodman-${name}.serv
   "hermes-unmanaged"
   "zeroclaw-unmanaged"
 ];
-assert rejects (json ./fixtures/adapter-input/unknown-agent-field.json);
-assert rejects (json ./fixtures/adapter-input/invalid-auto-start.json);
-assert rejects (json ./fixtures/adapter-input/secret-setting.json);
+assert rejects (toml ./fixtures/adapter-input/unknown-agent-field.toml);
+assert rejects (toml ./fixtures/adapter-input/invalid-auto-start.toml);
+assert rejects (toml ./fixtures/adapter-input/secret-setting.toml);
 assert
   registryNames == [
     "generic"
@@ -539,13 +551,13 @@ assert lib.hasInfix "agent\tunmanaged\tunmanaged\tpodman-unmanaged.service\t/leg
   inventory;
 assert dataConfig.tentaflake.agentInstances.agent-generic.name == "generic";
 assert dataConfig.virtualisation.oci-containers.containers.agent-from-data.autoStart;
-assert rejects (json ./fixtures/adapter-input/missing-schema.json);
-assert rejects (json ./fixtures/adapter-input/unsupported-schema.json);
-assert rejects (json ./fixtures/adapter-input/unknown-root-field.json);
-assert rejects (json ./fixtures/adapter-input/incomplete-legacy.json);
-assert rejects (json ./fixtures/adapter-input/unknown-adapter.json);
-assert rejects (json ./fixtures/adapter-input/duplicate-identity.json);
-assert rejects (json ./fixtures/adapter-input/legacy-mixed.json);
+assert rejects (toml ./fixtures/adapter-input/missing-schema.toml);
+assert rejects (toml ./fixtures/adapter-input/unsupported-schema.toml);
+assert rejects (toml ./fixtures/adapter-input/unknown-root-field.toml);
+assert rejects (toml ./fixtures/adapter-input/incomplete-legacy.toml);
+assert rejects (toml ./fixtures/adapter-input/unknown-adapter.toml);
+assert rejects (toml ./fixtures/adapter-input/duplicate-identity.toml);
+assert rejects (toml ./fixtures/adapter-input/legacy-mixed.toml);
 assert rejects
   (eval [
     (instance "hermes" "same")

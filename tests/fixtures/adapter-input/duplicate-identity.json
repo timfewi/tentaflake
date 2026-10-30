@@ -1,7 +1,0 @@
-{
-  "schemaVersion": 1,
-  "agents": [
-    {"adapter": "hermes", "name": "from-data", "autoStart": false},
-    {"adapter": "zeroclaw", "name": "from-data", "autoStart": false}
-  ]
-}

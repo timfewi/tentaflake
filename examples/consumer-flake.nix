@@ -117,7 +117,7 @@
             ./machines/agent-box/host-policy.nix
             ./secrets/secrets.nix
           ]
-          ++ agentsFromData { file = ./agents.json; };
+          ++ agentsFromData { file = ./agents.toml; };
         };
 
         # ── Future machines: just add a new mkHost call ──

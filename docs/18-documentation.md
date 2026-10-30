@@ -29,8 +29,9 @@ policy details instead of copying security essays across guides. Record actual
 checks and unknown evidence; identify new/renamed/removed guides in the PR.
 
 The next release sync must replace dual Nix/JSON onboarding and direct builder
-examples with the JSON-only workflow, including file-only consumer imports,
-inactive samples, empty installer defaults and explicit manual migration.
+examples with the TOML-only workflow, including file-only consumer imports,
+stopped examples in guides instead of an example inventory, empty template and
+installer defaults, and explicit manual JSON migration without silent fallback.
 Keep broker/worker/quota/Research policy in Nix and vendor acceptance pending.
 This source change does not claim website publication.
 

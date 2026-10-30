@@ -2,7 +2,7 @@
 
 ## Result
 
-Installed hosts default to `balanced`. JSON-defined instances use the internal
+Installed hosts default to `balanced`. TOML-defined instances use the internal
 builder and shared containment policy on final merged OCI configurations.
 OpenClaw and Pi remain stopped scaffolds without containers or operational support.
 The policy rejects unsafe configurations during NixOS evaluation instead of

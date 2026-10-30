@@ -6,9 +6,8 @@
 # A helper the generated flake forgets to pass therefore does NOT fail with
 # "called without required argument" — Nix falls back to config._module.args,
 # which needs config, which needs imports, and the rebuild dies with
-# "infinite recursion encountered". That is invisible until an agent exists,
-# because `lib.optionals (pathExists ./agents.json)` keeps agentsFromData
-# unforced on a fresh install. So this test writes an agents.json first.
+# "infinite recursion encountered". Exercise nonempty declarations so lazy
+# evaluation cannot hide a missing helper behind the safe empty inventory.
 #
 # Usage: ./scripts/generated-flake-test.sh
 set -euo pipefail
@@ -30,44 +29,97 @@ cp "$REPO_DIR/Cargo.toml" \
   "$REPO_DIR/Cargo.lock" \
   "$TARGET_NIXOS/"
 cp "$REPO_DIR/configuration.nix" "$TARGET_NIXOS/configuration.nix"
-cp "$REPO_DIR/agents.json.example" "$TARGET_NIXOS/agents.json.example"
 
 # Exercise the installer's actual guarded initialization, not a copied recipe.
-sed -n '/^# Never enable bundled examples/,/^# Generate user-config.nix/p' \
+# Keep refusal ahead of all target copies, not merely ahead of inventory writes.
+python3 - "$REPO_DIR/installer/installer.sh" <<'PY'
+from pathlib import Path
+import sys
+
+source = Path(sys.argv[1]).read_text()
+guard = source.index("# Never enable bundled examples")
+copy = source.index("# Copy the declarative system")
+assert guard < copy
+assert source.index('if [ -e "$TARGET_NIXOS/agents.json" ]', guard) < copy
+assert source.index('if [ -L "$TARGET_NIXOS/agents.toml" ]', guard) < copy
+PY
+sed -n '/^# Never enable bundled examples/,/^# Copy the declarative system/p' \
   "$REPO_DIR/installer/installer.sh" >"$WORK/initialize-agents.sh"
 test -s "$WORK/initialize-agents.sh"
 export TARGET_NIXOS
 die() { printf '%s\n' "$*" >&2; exit 1; }
 export -f die
 bash "$WORK/initialize-agents.sh"
-jq -e '. == {"schemaVersion": 1, "agents": []}' "$TARGET_NIXOS/agents.json"
+python3 -c 'import pathlib, sys, tomllib; assert tomllib.loads(pathlib.Path(sys.argv[1]).read_text()) == {"schemaVersion": 1, "agents": []}' "$TARGET_NIXOS/agents.toml"
 test ! -e "$TARGET_NIXOS/my-agents.nix"
-cmp "$REPO_DIR/agents.json.example" "$TARGET_NIXOS/agents.json.example"
+test ! -e "$TARGET_NIXOS/agents.json.example"
+test ! -e "$TARGET_NIXOS/agents.toml.example"
 
 # Unsafe paths must refuse without touching external files or enabling samples.
 mkdir "$WORK/unsafe-inventory"
 printf '%s\n' 'outside inventory sentinel' >"$WORK/outside-inventory"
 cp "$WORK/outside-inventory" "$WORK/outside-before"
-ln -s "$WORK/outside-inventory" "$WORK/unsafe-inventory/agents.json"
+ln -s "$WORK/outside-inventory" "$WORK/unsafe-inventory/agents.toml"
 if TARGET_NIXOS="$WORK/unsafe-inventory" bash "$WORK/initialize-agents.sh"; then
   echo "FAIL: accepted inventory symlink" >&2
   exit 1
 fi
 cmp "$WORK/outside-before" "$WORK/outside-inventory"
-rm "$WORK/unsafe-inventory/agents.json"
-ln -s "$WORK/missing-outside" "$WORK/unsafe-inventory/agents.json"
+rm "$WORK/unsafe-inventory/agents.toml"
+ln -s "$WORK/missing-outside" "$WORK/unsafe-inventory/agents.toml"
 if TARGET_NIXOS="$WORK/unsafe-inventory" bash "$WORK/initialize-agents.sh"; then
   echo "FAIL: accepted dangling inventory symlink" >&2
   exit 1
 fi
 test ! -e "$WORK/missing-outside"
-rm "$WORK/unsafe-inventory/agents.json"
-mkdir "$WORK/unsafe-inventory/agents.json"
+rm "$WORK/unsafe-inventory/agents.toml"
+mkdir "$WORK/unsafe-inventory/agents.toml"
 if TARGET_NIXOS="$WORK/unsafe-inventory" bash "$WORK/initialize-agents.sh"; then
   echo "FAIL: accepted inventory directory" >&2
   exit 1
 fi
-test -d "$WORK/unsafe-inventory/agents.json"
+test -d "$WORK/unsafe-inventory/agents.toml"
+
+# A legacy inventory must never be ignored, even beside an existing TOML file.
+mkdir "$WORK/legacy-inventory"
+printf '%s\n' '{"schemaVersion":1,"agents":[]}' >"$WORK/legacy-inventory/agents.json"
+cp "$WORK/legacy-inventory/agents.json" "$WORK/legacy-before"
+for existing_toml in no yes; do
+  if [ "$existing_toml" = yes ]; then
+    cp "$TARGET_NIXOS/agents.toml" "$WORK/legacy-inventory/agents.toml"
+  fi
+  if TARGET_NIXOS="$WORK/legacy-inventory" bash "$WORK/initialize-agents.sh"; then
+    echo "FAIL: ignored legacy JSON inventory" >&2
+    exit 1
+  fi
+  cmp "$WORK/legacy-before" "$WORK/legacy-inventory/agents.json"
+  if [ "$existing_toml" = yes ]; then
+    cmp "$TARGET_NIXOS/agents.toml" "$WORK/legacy-inventory/agents.toml"
+  else
+    test ! -e "$WORK/legacy-inventory/agents.toml"
+  fi
+done
+rm "$WORK/legacy-inventory/agents.json" "$WORK/legacy-inventory/agents.toml"
+for legacy_kind in symlink dangling directory; do
+  case "$legacy_kind" in
+  symlink) ln -s "$WORK/outside-inventory" "$WORK/legacy-inventory/agents.json" ;;
+  dangling) ln -s "$WORK/missing-outside" "$WORK/legacy-inventory/agents.json" ;;
+  directory) mkdir "$WORK/legacy-inventory/agents.json" ;;
+  esac
+  if TARGET_NIXOS="$WORK/legacy-inventory" bash "$WORK/initialize-agents.sh"; then
+    echo "FAIL: ignored legacy inventory $legacy_kind" >&2
+    exit 1
+  fi
+  test ! -e "$WORK/legacy-inventory/agents.toml"
+  if [ "$legacy_kind" = directory ]; then
+    rmdir "$WORK/legacy-inventory/agents.json"
+  else
+    test -L "$WORK/legacy-inventory/agents.json"
+    rm "$WORK/legacy-inventory/agents.json"
+  fi
+done
+cmp "$WORK/outside-before" "$WORK/outside-inventory"
+test ! -e "$WORK/missing-outside"
 
 HOSTNAME_T="tentaflake"
 cat >"$TARGET_NIXOS/user-config.nix" <<EOF
@@ -86,7 +138,7 @@ cat >"$TARGET_NIXOS/hardware-configuration.nix" <<'EOF'
   boot.loader.systemd-boot.enable = true;
   nixpkgs.hostPlatform = lib.mkDefault "x86_64-linux";
   # Host-owned unmanaged OCI fixture: this is not a supported agent input.
-  # Its name must still conflict with incoming JSON when active TSV is empty.
+  # Its name must still conflict with incoming TOML when active TSV is empty.
   virtualisation.oci-containers.containers.agent-unmanaged-fixture = {
     image = "example.invalid/unmanaged@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     autoStart = false;
@@ -94,20 +146,28 @@ cat >"$TARGET_NIXOS/hardware-configuration.nix" <<'EOF'
 }
 EOF
 
-# All multi-runtime declarations come from the single public JSON inventory.
-cat >"$TARGET_NIXOS/agents.json" <<'EOF'
-{
-  "schemaVersion": 1,
-  "agents": [
-    { "adapter": "hermes", "name": "generic-json", "autoStart": false },
-    { "adapter": "openclaw", "name": "assistant", "autoStart": false },
-    { "adapter": "zeroclaw", "name": "ops", "autoStart": false }
-  ]
-}
+# All multi-runtime declarations come from the single public TOML inventory.
+cat >"$TARGET_NIXOS/agents.toml" <<'EOF'
+schemaVersion = 1
+
+[[agents]]
+adapter = "hermes"
+name = "generic-toml"
+autoStart = false
+
+[[agents]]
+adapter = "openclaw"
+name = "assistant"
+autoStart = false
+
+[[agents]]
+adapter = "zeroclaw"
+name = "ops"
+autoStart = false
 EOF
-cp "$TARGET_NIXOS/agents.json" "$WORK/existing-agents.json"
+cp "$TARGET_NIXOS/agents.toml" "$WORK/existing-agents.toml"
 bash "$WORK/initialize-agents.sh"
-cmp "$WORK/existing-agents.json" "$TARGET_NIXOS/agents.json"
+cmp "$WORK/existing-agents.toml" "$TARGET_NIXOS/agents.toml"
 
 # ── Generate flake.nix from installer.sh's own heredoc ──
 # Extracted from the real source (not a copy) so this test cannot go stale.
@@ -140,7 +200,7 @@ git -C "$TARGET_NIXOS" init -q
 git -C "$TARGET_NIXOS" add -A
 git -C "$TARGET_NIXOS" -c user.email=t@t -c user.name=t commit -q -m generated
 
-echo "Evaluating generated flake (versioned agents.json present) ..."
+echo "Evaluating generated flake (versioned agents.toml present) ..."
 if nix eval --no-write-lock-file \
   "$TARGET_NIXOS#nixosConfigurations.$HOSTNAME_T.config.system.build.toplevel.drvPath" \
   >"$WORK/out" 2>"$WORK/err"; then
@@ -161,7 +221,7 @@ for rejected in public-data public-builder internal-builder; do
       pkgs = flake.inputs.nixpkgs.legacyPackages.x86_64-linux;
       public = (import (root + "/lib") { inherit pkgs; inherit (pkgs) lib; }).agentsFromData;
       internal = import (root + "/lib/agentsFromData.nix") { inherit pkgs; inherit (pkgs) lib; };
-      file = root + "/agents.json.example";
+      file = root + "/agents.toml";
       data = { schemaVersion = 1; agents = []; };
     in { result =
       if rejected == "public-data" then public { inherit file data; }
@@ -177,7 +237,7 @@ done
 
 # Exercise the real operator CLI against an installed, balanced source fixture.
 # No VM, host activation, OCI image or Research closure is involved.
-printf '%s\n' '{"schemaVersion":1,"agents":[]}' >"$TARGET_NIXOS/agents.json"
+printf '%s\n' 'schemaVersion = 1' 'agents = []' >"$TARGET_NIXOS/agents.toml"
 nix eval --impure --json --no-write-lock-file --expr \
   '{ root }: let f = builtins.getFlake root; in { result = import (root + "/tests/agent-onboarding.nix") { pkgs = f.inputs.nixpkgs.legacyPackages.x86_64-linux; }; }' result \
   --argstr root "$REPO_DIR" \

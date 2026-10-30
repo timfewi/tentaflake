@@ -1,14 +1,14 @@
 # Agent instructions — Tentaflake
 
 Generic NixOS template for isolated agents. Deployment identities, hardware,
-secrets, private memories and company policy belong in forks. Nix/JSON/settings
+secrets, private memories and company policy belong in forks. Nix/TOML/settings
 and seed inputs enter the Nix store. Never print credentials for diagnostics.
 Do not replace declarative agents with a mandatory runtime, UI or control service.
 
 ## Ownership
 
-- `agents.json` is the only public instance-definition source. Public
-  `agentsFromData { file = ./agents.json; }` is file-only; `mkAgent` and adapter
+- `agents.toml` is the only public instance-definition source. Public
+  `agentsFromData { file = ./agents.toml; }` is file-only; `mkAgent` and adapter
   builds are internal. Each `adapters/<id>.nix` owns one runtime implementation
   and pure `preset` facts. `lib/runtimeCatalog.nix`
   projects presets; `adapters/catalog.json` and the marked adapter-doc table are
@@ -21,8 +21,11 @@ Do not replace declarative agents with a mandatory runtime, UI or control servic
 - All managed IDs are `agent-<name>`, names globally unique; default host state
   is `/var/lib/tentaflake/agents/<name>`. Read explicit `agentInstances` metadata
   for effective paths, `stateStorage`, workspace, numeric owners and `runnable`.
-  Inventory retains unmanaged OCI fallback. JSON requires `schemaVersion = 1`
+  Inventory retains unmanaged OCI fallback. TOML requires `schemaVersion = 1`
   and `agents`; optional `_securityNote` is metadata. No legacy wrapper/data APIs.
+  Ship only the empty inventory (`schemaVersion = 1`, `agents = []`), without
+  an example file. Remaining `agents.json` requires explicit migration and must
+  never be silently ignored, including when TOML also exists.
 - Hermes/ZeroClaw real vendor acceptance is pending. OpenClaw/Pi are stopped
   refusal units only: no OCI artifact, state, credentials or sockets. Generic
   custom OCI is offline, with no accepted model/Research integration. Synthetic

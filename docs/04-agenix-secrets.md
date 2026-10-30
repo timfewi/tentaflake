@@ -76,7 +76,7 @@ and persistence across reboot. Balanced disables OpenSSH, so do not assume an
 SSH host key exists automatically.
 
 Encrypted `.age` files can enter the store. Plaintext must never enter Nix
-settings, JSON, `extraEnvironment`, seed directories or derivations; do not
+settings, TOML/JSON, `extraEnvironment`, seed directories or derivations; do not
 use `builtins.readFile` to load a runtime secret.
 
 ## Connect only the host broker

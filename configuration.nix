@@ -7,14 +7,16 @@
 }:
 let
   cfg = config.tentaflake;
-  # agents.json is the only instance input; a missing file defines an empty host.
-  # Never evaluate removed Nix declarations or silently drop existing instances.
+  # agents.toml is the only instance input; a missing file defines an empty host.
+  # Never evaluate removed declarations or silently drop existing instances.
   dataAgents =
     if builtins.pathExists ./my-agents.nix then
-      throw "tentaflake: my-agents.nix is no longer supported. Manually migrate declarations to agents.json and host policy to Nix modules, preserving names, state paths and ownership; then remove my-agents.nix. No automatic migration is performed."
+      throw "tentaflake: my-agents.nix is no longer supported. Manually migrate declarations to agents.toml and host policy to Nix modules, preserving names, state paths and ownership; then remove my-agents.nix. No automatic migration is performed."
+    else if builtins.pathExists ./agents.json then
+      throw "tentaflake: legacy agents.json is no longer supported, including alongside agents.toml. Manually migrate all declarations to agents.toml, preserving names, state paths and ownership; then remove agents.json. No automatic migration is performed."
     else
-      lib.optionals (builtins.pathExists ./agents.json) (agentsFromData {
-        file = ./agents.json;
+      lib.optionals (builtins.pathExists ./agents.toml) (agentsFromData {
+        file = ./agents.toml;
       });
 in
 {

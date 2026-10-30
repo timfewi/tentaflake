@@ -221,7 +221,7 @@
         research-policy = import ./tests/research-policy.nix { inherit self pkgs; };
       };
 
-      # ── tentaflake: Installed system, consumes agents.json ──
+      # ── tentaflake: Installed system, consumes agents.toml ──
       # Attr name is `hostName` so it always matches what `tentaflake rebuild`
       # passes to `nixos-rebuild --flake .#<host>`.
       nixosConfigurations.${hostName} = nixpkgs.lib.nixosSystem {

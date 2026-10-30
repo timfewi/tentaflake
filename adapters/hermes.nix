@@ -1,7 +1,7 @@
 { pkgs, lib }:
 
 # ────────────────────────────────────────────────────────────
-# Internal Hermes implementation, selected by adapter = "hermes" in agents.json.
+# Internal Hermes implementation, selected by adapter = "hermes" in agents.toml.
 #
 # Each agent gets:
 #   - System user  agent-<name>

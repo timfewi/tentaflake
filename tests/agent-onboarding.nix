@@ -2,7 +2,7 @@
 let
   inherit (pkgs) lib;
   plan = import ../lib/agentPlan.nix { inherit pkgs; };
-  generic = builtins.fromJSON (builtins.readFile ./fixtures/adapter-input/generic.json);
+  generic = fromTOML (builtins.readFile ./fixtures/adapter-input/generic.toml);
   hermes = {
     schemaVersion = 1;
     agents = [

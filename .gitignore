@@ -2,12 +2,12 @@ result
 result-*
 *.tmp
 *.bak
-.agents.json.lock
-agents.json.pending
+.agents.toml.lock
+agents.toml.pending
 
 # Local overrides — user secrets and home-manager config.
-# Note: agents.json is intentionally NOT ignored — the flake must evaluate it,
-# and flakes only see git-tracked files (run `git add agents.json`).
+# Note: agents.toml is intentionally NOT ignored — the flake must evaluate it,
+# and flakes only see git-tracked files (run `git add agents.toml`).
 home.nix
 secrets/*.env
 

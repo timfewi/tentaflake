@@ -45,7 +45,7 @@ checks without compiling Rust packages. Do not expose the whole Nix store or
 remove source checks to make evaluation pass. The normal full flake check
 permits required builds.
 
-Focused adapter checks cover common IDs, JSON rejection/validation, lazy
+Focused adapter checks cover common IDs, TOML rejection/validation, lazy
 selection, metadata, scaffold refusal and quota-helper negative cases.
 `checks.*.hardening-journald` covers defaults/overrides and legacy configuration
 refusal. `checks.*.worker-drain-wakeup` uses a synthetic host and real API sandbox

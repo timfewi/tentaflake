@@ -1,22 +1,31 @@
 # Declarative agent configuration
 
-Use `agents.json` as the only public instance-definition source, with non-secret
+Use `agents.toml` as the only public instance-definition source, with non-secret
 schema-v1 data. Runtime-native settings belong to the selected adapter; broker,
 worker, quota and Research authority stays in Nix host modules. Host policy may
 consume instance metadata, but must not define additional instances.
 
-The installer initializes an empty live `agents.json` when absent. The populated
-`agents.json.example` is an inactive reference, never enabled automatically.
-A missing live file in the template means an empty host.
+The template ships an empty `agents.toml`; the installer initializes the same
+safe default when absent:
+
+```toml
+schemaVersion = 1
+agents = []
+```
+
+There is no separate example inventory. No agent is declared or started by this
+default. Existing `agents.json` requires conscious
+[migration](agent-adapters.md#breaking-migration), even if TOML also exists;
+it must never be silently ignored as an empty host.
 
 ## Add an agent on an installed host
 
 ```bash
 tentaflake runtimes --json
-tentaflake agent template hermes assistant > incoming.json
-tentaflake agent validate incoming.json
-tentaflake agent plan incoming.json --json
-tentaflake agent import incoming.json
+tentaflake agent template hermes assistant > incoming.toml
+tentaflake agent validate incoming.toml
+tentaflake agent plan incoming.toml --json
+tentaflake agent import incoming.toml
 ```
 
 For a custom OCI workload, supply your reviewed digest and command:
@@ -24,9 +33,9 @@ For a custom OCI workload, supply your reviewed digest and command:
 ```bash
 tentaflake agent template generic coding \
   --image "$REVIEWED_AGENT_IMAGE" -- agent-command --workspace /workspace \
-  > incoming.json
-tentaflake agent plan incoming.json
-tentaflake agent import incoming.json
+  > incoming.toml
+tentaflake agent plan incoming.toml
+tentaflake agent import incoming.toml
 ```
 
 Templates require no host configuration. Validation/plans/import require the
@@ -36,14 +45,16 @@ files are limited to 1 MiB and 128 stopped additions. Alternate host mounts,
 operational services and credential paths remain administrator-owned. Generic
 onboarding requires balanced and has no accepted model/Research hooks.
 
-Import atomically adds to the same live `agents.json` schema-v1 document,
+Import atomically adds to the same live `agents.toml` schema-v1 document,
 preserving optional `_securityNote`. It rejects legacy arrays and duplicate
-names/identities across JSON, active inventory and host declarations, including
+names/identities across TOML, active inventory and host declarations, including
 unmanaged OCI containers.
+Existing inventory comments and formatting are retained; comments from incoming
+files are not imported.
 Inputs/destination must be regular files. Failure preserves existing bytes;
 imports share a lock and check for changes before publication. Administrators
 can still edit after that
-check. A leftover `agents.json.pending` is refused, not overwritten.
+check. A leftover `agents.toml.pending` is refused, not overwritten.
 
 `--json` and `--hide` apply to validate/plan/import. Hidden plans redact names,
 paths, image references and errors. Raw Nix source diagnostics are not printed.
@@ -54,41 +65,50 @@ Import does not stage Git files, rebuild, activate or start anything. Review and
 track inputs before a deliberate host update: Git-backed flakes only include
 tracked sources. A failed update does not replace the active generation.
 
-## JSON definitions
+## TOML definitions
 
-```json
-{
-  "schemaVersion": 1,
-  "agents": [
-    { "adapter": "hermes", "name": "assistant", "autoStart": false },
-    { "adapter": "pi", "name": "experiment", "autoStart": false }
-  ]
-}
+To declare stopped instances, replace the empty inventory with reviewed entries
+(do not retain `agents = []` alongside `[[agents]]`):
+
+```toml
+schemaVersion = 1
+
+[[agents]]
+adapter = "hermes"
+name = "assistant"
+autoStart = false
+
+[[agents]]
+adapter = "pi"
+name = "experiment"
+autoStart = false
 ```
 
 Both root fields are required. `_securityNote` is optional metadata; unknown
 root/entry fields, legacy runtime arrays, unsupported versions and malformed
-arguments fail. Adapter arguments are subject to the shared validation.
-Never include literal credentials: JSON, settings, environment values and seed
+arguments fail. Adapter arguments are subject to the shared validation. TOML
+date/time values and non-finite floats (`nan`, `inf`) are unsupported; use the
+JSON-compatible value types required by the shared semantic schema.
+Never include literal credentials: TOML, settings, environment values and seed
 paths become Nix-store inputs. [Secrets](04-agenix-secrets.md) belong in runtime
 files outside the capsule.
 
 Names are globally unique across adapters; the IDs above are `agent-assistant`
 and `agent-experiment`. Host state defaults to `/var/lib/tentaflake/agents/<name>`.
-The reference file includes stopped Hermes/ZeroClaw native settings with a
-public `example-model` and broker-only URL, plus stopped OpenClaw/Pi entries
-without native settings. These samples require matching Nix broker model
-allowlists, network and pricing policy, plus worker, quota and Research policy.
-They are not turnkey integrations or evidence of vendor acceptance.
+The examples above are documentation only, not an installed inventory. Native
+settings belong in each entry's `[agents.settings]` table. Any configured model
+and broker URL require matching Nix broker model allowlists, network and pricing
+policy, plus worker, quota and Research policy. Examples are not turnkey
+integrations or evidence of vendor acceptance.
 
 ## Consumer flakes
 
-Import the same JSON file into a NixOS module:
+Import the same TOML file into a NixOS module:
 
 ```nix
 { agentsFromData, ... }:
 {
-  imports = agentsFromData { file = ./agents.json; };
+  imports = agentsFromData { file = ./agents.toml; };
 }
 ```
 

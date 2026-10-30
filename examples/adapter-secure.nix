@@ -5,7 +5,7 @@
   agentsFromData,
   agentsFile,
   agentName ? "coding",
-  # Must match the selected JSON instance's native model configuration.
+  # Must match the selected TOML instance's native model configuration.
   model,
   inputMicrousdPerMillion,
   outputMicrousdPerMillion,

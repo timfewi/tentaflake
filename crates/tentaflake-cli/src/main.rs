@@ -2685,7 +2685,7 @@ fn print_help() {
            tentaflake doctor --security [--json]\n\
            tentaflake backup <name>\n\
            tentaflake rebuild|update\n\n\
-         Agent definitions are declarative: edit agents.json, then rebuild."
+         Agent definitions are declarative: edit agents.toml, then rebuild."
     );
 }
 

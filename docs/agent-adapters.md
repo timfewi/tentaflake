@@ -1,6 +1,6 @@
 # Agent adapters
 
-`agents.json` is the only public instance-definition source. Each
+`agents.toml` is the only public instance-definition source. Each
 `adapters/<id>.nix` owns that runtime's implementation and pure `preset` facts:
 image, native configuration, commands, layout, ownership, hooks and evidence.
 Shared host modules own
@@ -9,12 +9,12 @@ runtime never selects a weaker security implementation.
 
 ## Consumer API
 
-Consumer NixOS modules load the JSON file with the public file-only helper:
+Consumer NixOS modules load the TOML file with the public file-only helper:
 
 ```nix
 { agentsFromData, ... }:
 {
-  imports = agentsFromData { file = ./agents.json; };
+  imports = agentsFromData { file = ./agents.toml; };
 }
 ```
 
@@ -23,7 +23,7 @@ Inline `data`, `mkAgent` and adapter `.build` functions are not public APIs.
 
 Choose `hermes`, `zeroclaw`, `generic`, `openclaw` or `pi`. Unsupported adapter
 arguments fail evaluation. The registry is lazy: discovery does not download
-images or instantiate services. See [configuration](08-agent-cli.md) for JSON
+images or instantiate services. See [configuration](08-agent-cli.md) for TOML
 and installed-host onboarding, and [the secure consumer example](../examples/adapter-secure.nix)
 for matching host declarations.
 
@@ -38,28 +38,28 @@ retains a fallback for unmanaged OCI containers.
 
 ## Generic isolated workload
 
-A reviewed custom OCI image requires no new adapter. In `agents.json`:
+A reviewed custom OCI image requires no new adapter. In `agents.toml`, replace
+the empty inventory with the reviewed definition:
 
-```json
-{
-  "schemaVersion": 1,
-  "agents": [
-    {
-      "adapter": "generic",
-      "name": "coding",
-      "autoStart": false,
-      "definition": {
-        "schemaVersion": 1,
-        "image": "registry.example.invalid/agent@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-        "command": ["agent", "--interactive"],
-        "ownership": { "uid": 10000, "gid": 10000 },
-        "workspace": "/workspace",
-        "lifecycle": "stopped",
-        "capabilities": ["files", "shell", "terminal"]
-      }
-    }
-  ]
-}
+```toml
+schemaVersion = 1
+
+[[agents]]
+adapter = "generic"
+name = "coding"
+autoStart = false
+
+[agents.definition]
+schemaVersion = 1
+image = "registry.example.invalid/agent@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+command = ["agent", "--interactive"]
+workspace = "/workspace"
+lifecycle = "stopped"
+capabilities = ["files", "shell", "terminal"]
+
+[agents.definition.ownership]
+uid = 10000
+gid = 10000
 ```
 
 Replace the illustrative, non-runnable image with your reviewed artifact.
@@ -152,15 +152,25 @@ model/Research/execution/lifecycle acceptance. See [verification](17-builds.md).
 
 This is a clean interface cutover, **not a data migration**:
 
-1. Manually translate `my-agents.nix` declarations into `agents.json`, with
-   explicit `adapter` fields and required `{"schemaVersion":1,"agents":[...]}`.
-   Remove the old Nix file only after reviewing the complete translation;
-   a remaining file is refused, never evaluated or silently ignored.
-   The old example and public builders are removed; consumer flakes use
-   file-only `agentsFromData`. Legacy `hermes`/`zeroclaw` arrays are rejected;
-   only optional `_securityNote` root metadata is retained. Use the
+1. Deliberately translate existing `agents.json` or `my-agents.nix` declarations
+   into `agents.toml`, retaining every reviewed instance and its native settings,
+   explicit `adapter`, paths and optional `_securityNote` metadata. Both
+   `schemaVersion = 1` and `agents` are required: use `agents = []` only for an
+   intentionally empty host, otherwise `[[agents]]` tables as shown above.
+   TOML has no JSON `null`; omit optional unset fields rather than inventing
+   values. Keep credentials outside the inventory and Nix store.
+   Review the complete translation before removing the old live file; keep
+   any backup outside the live inventory path. A remaining `agents.json`
+   is refused, even alongside TOML, never silently ignored or automatically
+   converted. A remaining `my-agents.nix` is refused without evaluation.
+   No separate example inventory is shipped: the checked-in and installer
+   default is empty, not a migration of existing instances.
+   Consumer flakes use file-only `agentsFromData { file = ./agents.toml; }`.
+   Legacy `hermes`/`zeroclaw` arrays and public builders are removed. Use the
    `tentaflake` host CLI; the old host `hermes` alias and runtime-specific
-   skills are removed. CLI import writes the same JSON source.
+   skills are removed. CLI import writes the same TOML source and never starts
+   agents. Review, track, evaluate and build the migrated source before a
+   separately authorized activation.
 2. Resolve duplicate short names before switching: names are now globally
    unique. Map each old runtime-prefixed ID to `agent-<name>`.
 3. Back up and verify state and mounted workspaces. Explicitly retain old

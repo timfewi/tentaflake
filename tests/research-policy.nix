@@ -110,7 +110,7 @@ let
     imports = [
       (import ../examples/adapter-secure.nix {
         inherit (builders) agentsFromData;
-        agentsFile = ./fixtures/adapter-input/secure-example.json;
+        agentsFile = ./fixtures/adapter-input/secure-example.toml;
         agentName = "assistant";
         model = "fixture-model";
         inputMicrousdPerMillion = 1;

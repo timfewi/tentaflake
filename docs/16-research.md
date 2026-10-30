@@ -12,7 +12,7 @@ The template does not create an Internet route or obtain provider credentials.
 
 ## Configuration
 
-Declare a registered Research-capable adapter in `agents.json`, then configure
+Declare a registered Research-capable adapter in `agents.toml`, then configure
 Nix host policy for its common container ID and globally unique instance name:
 
 ```nix

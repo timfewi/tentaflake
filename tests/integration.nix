@@ -47,10 +47,10 @@
         imports = [
           self.nixosModules.default
         ]
-        ++ agentsFromData { file = ./fixtures/adapter-input/integration-docker.json; };
+        ++ agentsFromData { file = ./fixtures/adapter-input/integration-docker.toml; };
 
         # OCI backend + docker are wired in the template's configuration.nix, which
-        # we don't import here (it pulls in hardware config / agents.json); set
+        # we don't import here (it pulls in hardware config / agents.toml); set
         # the pieces the agent unit needs directly.
         virtualisation = {
           oci-containers.backend = "docker";
@@ -245,7 +245,7 @@
         imports = [
           self.nixosModules.default
         ]
-        ++ agentsFromData { file = ./fixtures/adapter-input/integration-podman.json; };
+        ++ agentsFromData { file = ./fixtures/adapter-input/integration-podman.toml; };
 
         virtualisation.oci-containers.backend = "podman";
         virtualisation.podman.enable = true;

@@ -18,8 +18,10 @@ Read `AGENTS.md` and `CONTRIBUTING.md`, then inspect only the relevant owners:
 | CLI/API | `crates/tentaflake-cli/`, `host-api/` | [CLI](../../../docs/06-shell.md), [API](../../../docs/19-web-ui.md) |
 | Installer/builds | `installer/disk.sh`, `lib/mkRustPackage.nix`, `scripts/eval_flake.py` | [Install](../../../docs/00-install.md), [Builds](../../../docs/17-builds.md) |
 
-Define instances only in `agents.json`; public `agentsFromData` accepts only
-`{ file = ./agents.json; }`. `mkAgent` and adapter builds are internal. Keep
+Define instances only in `agents.toml`; public `agentsFromData` accepts only
+`{ file = ./agents.toml; }`. Ship an empty schema-v1 inventory without an example
+file; refuse leftover `agents.json` until consciously migrated, never ignore it.
+`mkAgent` and adapter builds are internal. Keep
 native behavior in the selected adapter and host authority in Nix policy,
 which may consume metadata but must not define more instances.
 Adapter `preset` facts are the editable source;
