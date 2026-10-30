@@ -10,7 +10,7 @@ let
       inherit system modules;
       specialArgs = { inherit researchFlake; };
     };
-  builders = import ../lib { inherit pkgs lib; };
+  mkAgent = import ../lib/mkAgent.nix { inherit pkgs lib; };
   containerSecurity = import ../lib/containerSecurity.nix { inherit lib; };
   hostModule = profile: {
     system.stateVersion = "26.05";
@@ -69,12 +69,12 @@ let
   capsule = eval [
     ../modules/default.nix
     (hostModule "balanced")
-    (builders.mkAgent {
+    (mkAgent {
       adapter = "hermes";
       name = "hermes-fixture";
       autoStart = false;
     })
-    (builders.mkAgent {
+    (mkAgent {
       adapter = "zeroclaw";
       name = "zeroclaw-fixture";
       autoStart = false;
@@ -95,7 +95,7 @@ let
   provenanceCapsule = eval [
     ../modules/default.nix
     (hostModule "balanced")
-    (builders.mkAgent {
+    (mkAgent {
       adapter = "hermes";
       name = "signed";
       autoStart = false;
@@ -118,7 +118,7 @@ let
   missingProvenanceCapsule = eval [
     ../modules/default.nix
     (hostModule "balanced")
-    (builders.mkAgent {
+    (mkAgent {
       adapter = "hermes";
       name = "unsigned";
       autoStart = false;
@@ -144,7 +144,7 @@ let
         };
       };
     }
-    (builders.mkAgent {
+    (mkAgent {
       adapter = "hermes";
       name = "podman-fixture";
       autoStart = false;
@@ -229,7 +229,7 @@ let
   disabledGitFixture = eval [
     ../modules/default.nix
     (hostModule "balanced")
-    (builders.mkAgent {
+    (mkAgent {
       adapter = "hermes";
       name = "disabled-git";
       autoStart = false;
@@ -240,7 +240,7 @@ let
   gitFixture = eval [
     ../modules/default.nix
     (hostModule "balanced")
-    (builders.mkAgent {
+    (mkAgent {
       adapter = "hermes";
       name = "git";
       autoStart = false;
@@ -256,7 +256,7 @@ let
   unsafeGitFixture = eval [
     ../modules/default.nix
     (hostModule "balanced")
-    (builders.mkAgent {
+    (mkAgent {
       adapter = "hermes";
       name = "unsafe-git";
       autoStart = false;
@@ -268,7 +268,7 @@ let
   unsafeGitRootFixture = eval [
     ../modules/default.nix
     (hostModule "balanced")
-    (builders.mkAgent {
+    (mkAgent {
       adapter = "hermes";
       name = "unsafe-git-root";
       autoStart = false;
@@ -367,7 +367,7 @@ let
   mutableImageFixture = eval [
     ../modules/default.nix
     (hostModule "balanced")
-    (builders.mkAgent {
+    (mkAgent {
       adapter = "hermes";
       name = "mutable";
       autoStart = false;
@@ -380,7 +380,7 @@ let
   publishedPortFixture = eval [
     ../modules/default.nix
     (hostModule "balanced")
-    (builders.mkAgent {
+    (mkAgent {
       adapter = "zeroclaw";
       name = "published";
       autoStart = false;
@@ -392,7 +392,7 @@ let
   rootHermesFixture = eval [
     ../modules/default.nix
     (hostModule "balanced")
-    (builders.mkAgent {
+    (mkAgent {
       adapter = "hermes";
       name = "root-hermes";
       autoStart = false;
@@ -405,7 +405,7 @@ let
   unsafeHealFixture = eval [
     ../modules/default.nix
     (hostModule "balanced")
-    (builders.mkAgent {
+    (mkAgent {
       adapter = "hermes";
       name = "unsafe-heal";
       autoStart = false;
@@ -418,13 +418,13 @@ let
   seededCapsule = eval [
     ../modules/default.nix
     (hostModule "balanced")
-    (builders.mkAgent {
+    (mkAgent {
       adapter = "hermes";
       name = "seeded-hermes";
       autoStart = false;
       seedDir = seedFixture;
     })
-    (builders.mkAgent {
+    (mkAgent {
       adapter = "zeroclaw";
       name = "seeded-zero";
       autoStart = false;
@@ -436,7 +436,7 @@ let
   devFixture = eval [
     ../modules/default.nix
     (hostModule "dev")
-    (builders.mkAgent {
+    (mkAgent {
       adapter = "hermes";
       name = "dev";
       autoStart = false;
@@ -449,7 +449,7 @@ let
   brokerCapsule = eval [
     ../modules/default.nix
     (hostModule "balanced")
-    (builders.mkAgent {
+    (mkAgent {
       adapter = "hermes";
       name = "brokered";
       autoStart = false;
@@ -599,7 +599,7 @@ let
   brokerAggregateBudgetFixture = eval [
     ../modules/default.nix
     (hostModule "balanced")
-    (builders.mkAgent {
+    (mkAgent {
       adapter = "hermes";
       name = "broker-overbudget";
       autoStart = false;
@@ -627,12 +627,12 @@ let
   workerCapsule = eval [
     ../modules/default.nix
     (hostModule "balanced")
-    (builders.mkAgent {
+    (mkAgent {
       adapter = "hermes";
       name = "worker";
       autoStart = true;
     })
-    (builders.mkAgent {
+    (mkAgent {
       adapter = "zeroclaw";
       name = "zero-worker";
       autoStart = false;
@@ -701,7 +701,7 @@ let
   unsafeWorkerFixture = eval [
     ../modules/default.nix
     (hostModule "balanced")
-    (builders.mkAgent {
+    (mkAgent {
       adapter = "hermes";
       name = "unsafe-worker";
       autoStart = false;
@@ -718,7 +718,7 @@ let
   incompleteAutostartFixture = eval [
     ../modules/default.nix
     (hostModule "balanced")
-    (builders.mkAgent {
+    (mkAgent {
       adapter = "hermes";
       name = "incomplete-autostart";
       autoStart = true;
@@ -729,7 +729,7 @@ let
   unsafeQuotaFixture = eval [
     ../modules/default.nix
     (hostModule "balanced")
-    (builders.mkAgent {
+    (mkAgent {
       adapter = "zeroclaw";
       name = "unsafe-quota";
       autoStart = false;
@@ -748,7 +748,7 @@ let
   unsafeBrokerFixture = eval [
     ../modules/default.nix
     (hostModule "balanced")
-    (builders.mkAgent {
+    (mkAgent {
       adapter = "hermes";
       name = "unsafe-broker";
       autoStart = false;
@@ -771,12 +771,12 @@ let
     eval [
       ../modules/default.nix
       (hostModule "balanced")
-      (builders.mkAgent {
+      (mkAgent {
         adapter = "hermes";
         name = "fixture";
         autoStart = false;
       })
-      (builders.mkAgent {
+      (mkAgent {
         adapter = "hermes";
         name = "fixture-other";
         autoStart = false;
@@ -824,7 +824,7 @@ let
     ../modules/default.nix
     ../modules/profiles/observability.nix
     (hostModule "balanced")
-    (builders.mkAgent {
+    (mkAgent {
       adapter = "hermes";
       name = "observed";
       autoStart = false;
@@ -879,7 +879,7 @@ let
     eval [
       ../modules/default.nix
       (hostModule "balanced")
-      (builders.mkAgent {
+      (mkAgent {
         adapter = "hermes";
         name = "escaped-reference";
         autoStart = false;

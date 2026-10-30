@@ -1,18 +1,7 @@
 { pkgs, lib }:
 
 # ────────────────────────────────────────────────────────────
-# mkAgent — create one isolated Hermes agent as a NixOS module
-#
-# Usage in my-agents.nix:
-#
-#   { mkAgent }:
-#   [
-#     (mkAgent {
-#       adapter = "hermes";
-#       name = "coding";
-#       autoStart = false;
-#     })
-#   ]
+# Internal Hermes implementation, selected by adapter = "hermes" in agents.json.
 #
 # Each agent gets:
 #   - System user  agent-<name>

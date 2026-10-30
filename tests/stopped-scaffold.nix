@@ -7,6 +7,8 @@
 }:
 let
   inherit (pkgs) lib;
+  mkAgent = import ../lib/mkAgent.nix { inherit pkgs lib; };
+  adapters = import ../adapters { inherit pkgs lib; };
   contract = import ../lib/adapterContract.nix { inherit lib; };
   rejects = value: !(builtins.tryEval (builtins.deepSeq value true)).success;
   scaffold =
@@ -19,13 +21,13 @@ let
       capabilities,
     }:
     let
-      adapter = builders.adapters.${id};
+      adapter = adapters.${id};
       container = "agent-${name}";
       instance =
         args: backend:
         let
           selected =
-            builders.mkAgent
+            mkAgent
               (
                 {
                   adapter = id;
@@ -113,7 +115,7 @@ in
 assert lib.all (
   id:
   presets.${id}.identity.status != "scaffold"
-  || !(builders.adapters.${id}.metadata { name = "fixture"; } "docker").runnable
+  || !(adapters.${id}.metadata { name = "fixture"; } "docker").runnable
 ) (builtins.attrNames presets);
 assert lib.length (lib.unique reserved) == lib.length reserved;
 assert scaffold {

@@ -59,10 +59,41 @@ def main():
         run("agent", "import", path, success=False)
         assert destination.read_bytes() == before
 
-        # Source-only Nix instances are checked even if absent from active TSV.
-        existing = json.loads(run("agent", "template", "zeroclaw", "generic-nix").stdout)
-        denied = json.loads(run("agent", "plan", candidate(existing), "--json", success=False).stdout)
+        # Tracked JSON declarations reserve names even when active TSV is empty.
+        assert inventory.read_text() == ""
+        existing = json.loads(run("agent", "template", "zeroclaw", "new-preset").stdout)
+        denied = run("agent", "plan", candidate(existing), "--json", success=False)
+        assert "agent identity conflicts with existing configuration or active inventory" in denied.stderr
+        assert destination.read_bytes() == before
+
+        # Host-owned unmanaged OCI containers also reserve identities, even
+        # without any matching declaration in JSON or the active TSV inventory.
+        unmanaged = json.loads(run("agent", "template", "pi", "unmanaged-fixture").stdout)
+        denied = json.loads(run("agent", "plan", candidate(unmanaged), "--json", success=False).stdout)
         assert not denied["valid"] and "already exists" in denied["errors"][0]
+        assert destination.read_bytes() == before
+
+        # A removed Nix inventory must refuse without evaluating its contents
+        # or publishing any change to the sole supported JSON inventory.
+        obsolete = flake / "my-agents.nix"
+        obsolete.write_text('throw "obsolete-evaluation-private-sentinel"\n')
+        subprocess.run(["git", "-C", str(flake), "add", "my-agents.nix"], check=True)
+        try:
+            evaluation = subprocess.run(
+                ["nix", "eval", "--no-write-lock-file",
+                 f"{flake}#nixosConfigurations.{hostname}.config.tentaflake.agentInstances",
+                 "--json"], capture_output=True, text=True, timeout=75)
+            assert evaluation.returncode != 0
+            assert "Manually migrate declarations to agents.json" in evaluation.stderr
+            assert "obsolete-evaluation-private-sentinel" not in evaluation.stdout + evaluation.stderr
+            fresh_legacy = json.loads(run("agent", "template", "hermes", "legacy-refusal").stdout)
+            result = run("agent", "import", candidate(fresh_legacy), success=False)
+            assert "obsolete-evaluation-private-sentinel" not in result.stdout + result.stderr
+            assert destination.read_bytes() == before
+            assert obsolete.read_text() == 'throw "obsolete-evaluation-private-sentinel"\n'
+        finally:
+            obsolete.unlink()
+            subprocess.run(["git", "-C", str(flake), "add", "-u", "my-agents.nix"], check=True)
 
         invalid = [
             {**generic, "schemaVersion": 2},

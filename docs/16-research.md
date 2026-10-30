@@ -12,8 +12,8 @@ The template does not create an Internet route or obtain provider credentials.
 
 ## Configuration
 
-Declare a registered Research-capable adapter with `mkAgent`, then use its
-common container ID, with a globally unique instance name:
+Declare a registered Research-capable adapter in `agents.json`, then configure
+Nix host policy for its common container ID and globally unique instance name:
 
 ```nix
 tentaflake.research.agents = {

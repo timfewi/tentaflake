@@ -13,7 +13,7 @@
 #
 # Run just this check:
 #   nix build .#checks.x86_64-linux.vm-integration -L
-{ self, mkAgent }:
+{ self, agentsFromData }:
 {
   name = "tentaflake-integration";
 
@@ -46,23 +46,11 @@
       {
         imports = [
           self.nixosModules.default
-          # One declarative Hermes agent, kept stopped so no image pull happens.
-          (mkAgent {
-            adapter = "hermes";
-            name = "test";
-            autoStart = false;
-          })
-          # One ZeroClaw agent (second runtime), also stopped — exercises the
-          # shared builder and multi-runtime discovery.
-          (mkAgent {
-            adapter = "zeroclaw";
-            name = "assistant";
-            autoStart = false;
-          })
-        ];
+        ]
+        ++ agentsFromData { file = ./fixtures/adapter-input/integration-docker.json; };
 
         # OCI backend + docker are wired in the template's configuration.nix, which
-        # we don't import here (it pulls in hardware config / my-agents.nix); set
+        # we don't import here (it pulls in hardware config / agents.json); set
         # the pieces the agent unit needs directly.
         virtualisation = {
           oci-containers.backend = "docker";
@@ -256,12 +244,8 @@
       {
         imports = [
           self.nixosModules.default
-          (mkAgent {
-            adapter = "zeroclaw";
-            name = "podman";
-            autoStart = false;
-          })
-        ];
+        ]
+        ++ agentsFromData { file = ./fixtures/adapter-input/integration-podman.json; };
 
         virtualisation.oci-containers.backend = "podman";
         virtualisation.podman.enable = true;

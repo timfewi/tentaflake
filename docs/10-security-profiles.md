@@ -2,8 +2,8 @@
 
 ## Result
 
-Installed hosts default to `balanced`. `mkAgent` and the shared containment
-builder apply one policy to final merged OCI configurations.
+Installed hosts default to `balanced`. JSON-defined instances use the internal
+builder and shared containment policy on final merged OCI configurations.
 OpenClaw and Pi remain stopped scaffolds without containers or operational support.
 The policy rejects unsafe configurations during NixOS evaluation instead of
 silently weakening them. `strict` also fails because no tested separate-kernel boundary

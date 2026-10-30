@@ -1,4 +1,4 @@
-# Versioned, non-secret declarative input for the single public builder.
+# Internal versioned, non-secret parser shared by file loading and onboarding.
 {
   lib,
   pkgs ? null,
@@ -7,9 +7,9 @@
 {
   file ? null,
   data ? null,
-  mkAgent,
 }:
 let
+  mkAgent = import ./mkAgent.nix { inherit pkgs lib; };
   fail = message: throw "tentaflake agentsFromData: ${message}";
   rawData =
     if (file == null) == (data == null) then

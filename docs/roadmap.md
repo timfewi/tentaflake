@@ -1,13 +1,13 @@
 # Product direction
 
-Tentaflake is a declarative, runtime-agnostic host: one `mkAgent` builder,
+Tentaflake is a declarative, runtime-agnostic host: one `agents.json` source,
 one implementation per adapter, shared containment and explicit operator
 activation. It requires neither a shared agent runtime nor a mandatory web UI.
 This checkout is not a new published release; tags define released behavior.
 
 ## Priorities
 
-1. Keep Nix/JSON onboarding and installation simple without hiding policy,
+1. Keep JSON onboarding and installation simple without hiding Nix host policy,
    changing defaults or silently relocating state/accounting.
 2. Complete actual vendor startup, model transport, Research discovery,
    execution mediation, lifecycle and restore acceptance for each runtime.

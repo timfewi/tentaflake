@@ -30,13 +30,44 @@ cp "$REPO_DIR/Cargo.toml" \
   "$REPO_DIR/Cargo.lock" \
   "$TARGET_NIXOS/"
 cp "$REPO_DIR/configuration.nix" "$TARGET_NIXOS/configuration.nix"
-cat >"$TARGET_NIXOS/my-agents.nix" <<'EOF'
-{ mkAgent }:
-[
-  (mkAgent { adapter = "hermes"; name = "generic-nix"; autoStart = false; })
-  (mkAgent { adapter = "zeroclaw"; name = "second-nix"; autoStart = false; })
-]
-EOF
+cp "$REPO_DIR/agents.json.example" "$TARGET_NIXOS/agents.json.example"
+
+# Exercise the installer's actual guarded initialization, not a copied recipe.
+sed -n '/^# Never enable bundled examples/,/^# Generate user-config.nix/p' \
+  "$REPO_DIR/installer/installer.sh" >"$WORK/initialize-agents.sh"
+test -s "$WORK/initialize-agents.sh"
+export TARGET_NIXOS
+die() { printf '%s\n' "$*" >&2; exit 1; }
+export -f die
+bash "$WORK/initialize-agents.sh"
+jq -e '. == {"schemaVersion": 1, "agents": []}' "$TARGET_NIXOS/agents.json"
+test ! -e "$TARGET_NIXOS/my-agents.nix"
+cmp "$REPO_DIR/agents.json.example" "$TARGET_NIXOS/agents.json.example"
+
+# Unsafe paths must refuse without touching external files or enabling samples.
+mkdir "$WORK/unsafe-inventory"
+printf '%s\n' 'outside inventory sentinel' >"$WORK/outside-inventory"
+cp "$WORK/outside-inventory" "$WORK/outside-before"
+ln -s "$WORK/outside-inventory" "$WORK/unsafe-inventory/agents.json"
+if TARGET_NIXOS="$WORK/unsafe-inventory" bash "$WORK/initialize-agents.sh"; then
+  echo "FAIL: accepted inventory symlink" >&2
+  exit 1
+fi
+cmp "$WORK/outside-before" "$WORK/outside-inventory"
+rm "$WORK/unsafe-inventory/agents.json"
+ln -s "$WORK/missing-outside" "$WORK/unsafe-inventory/agents.json"
+if TARGET_NIXOS="$WORK/unsafe-inventory" bash "$WORK/initialize-agents.sh"; then
+  echo "FAIL: accepted dangling inventory symlink" >&2
+  exit 1
+fi
+test ! -e "$WORK/missing-outside"
+rm "$WORK/unsafe-inventory/agents.json"
+mkdir "$WORK/unsafe-inventory/agents.json"
+if TARGET_NIXOS="$WORK/unsafe-inventory" bash "$WORK/initialize-agents.sh"; then
+  echo "FAIL: accepted inventory directory" >&2
+  exit 1
+fi
+test -d "$WORK/unsafe-inventory/agents.json"
 
 HOSTNAME_T="tentaflake"
 cat >"$TARGET_NIXOS/user-config.nix" <<EOF
@@ -54,10 +85,16 @@ cat >"$TARGET_NIXOS/hardware-configuration.nix" <<'EOF'
   fileSystems."/" = { device = "/dev/disk/by-label/nixos"; fsType = "btrfs"; };
   boot.loader.systemd-boot.enable = true;
   nixpkgs.hostPlatform = lib.mkDefault "x86_64-linux";
+  # Host-owned unmanaged OCI fixture: this is not a supported agent input.
+  # Its name must still conflict with incoming JSON when active TSV is empty.
+  virtualisation.oci-containers.containers.agent-unmanaged-fixture = {
+    image = "example.invalid/unmanaged@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    autoStart = false;
+  };
 }
 EOF
 
-# The trigger: one declarative JSON agent fixture.
+# All multi-runtime declarations come from the single public JSON inventory.
 cat >"$TARGET_NIXOS/agents.json" <<'EOF'
 {
   "schemaVersion": 1,
@@ -68,6 +105,9 @@ cat >"$TARGET_NIXOS/agents.json" <<'EOF'
   ]
 }
 EOF
+cp "$TARGET_NIXOS/agents.json" "$WORK/existing-agents.json"
+bash "$WORK/initialize-agents.sh"
+cmp "$WORK/existing-agents.json" "$TARGET_NIXOS/agents.json"
 
 # ── Generate flake.nix from installer.sh's own heredoc ──
 # Extracted from the real source (not a copy) so this test cannot go stale.
@@ -110,6 +150,30 @@ else
   tail -30 "$WORK/err" >&2
   exit 1
 fi
+
+# Unexpected function arguments are Nix evaluation errors, not catchable
+# tryEval throws. Exercise rejected public/programmatic calls out of process.
+for rejected in public-data public-builder internal-builder; do
+  if nix eval --impure --json --no-write-lock-file --expr '
+    { root, rejected }:
+    let
+      flake = builtins.getFlake root;
+      pkgs = flake.inputs.nixpkgs.legacyPackages.x86_64-linux;
+      public = (import (root + "/lib") { inherit pkgs; inherit (pkgs) lib; }).agentsFromData;
+      internal = import (root + "/lib/agentsFromData.nix") { inherit pkgs; inherit (pkgs) lib; };
+      file = root + "/agents.json.example";
+      data = { schemaVersion = 1; agents = []; };
+    in { result =
+      if rejected == "public-data" then public { inherit file data; }
+      else if rejected == "public-builder" then public { inherit file; mkAgent = _: {}; }
+      else internal { inherit data; mkAgent = _: {}; };
+    }' result --argstr root "$TARGET_NIXOS" --argstr rejected "$rejected" \
+    >"$WORK/rejected.out" 2>"$WORK/rejected.err"; then
+    echo "FAIL: accepted removed instance API: $rejected" >&2
+    exit 1
+  fi
+  grep -q 'unexpected argument' "$WORK/rejected.err"
+done
 
 # Exercise the real operator CLI against an installed, balanced source fixture.
 # No VM, host activation, OCI image or Research closure is involved.

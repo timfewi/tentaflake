@@ -2,6 +2,13 @@
 let
   inherit (pkgs) lib;
   builders = import ../lib { inherit pkgs lib; };
+  mkAgent = import ../lib/mkAgent.nix { inherit pkgs lib; };
+  adapters = import ../adapters { inherit pkgs lib; };
+  internalParser = import ../lib/agentsFromData.nix { inherit pkgs lib; };
+  exampleData = builtins.fromJSON (builtins.readFile ../agents.json.example);
+  example = eval (builders.agentsFromData { file = ../agents.json.example; });
+  exampleContainers = example.virtualisation.oci-containers.containers;
+  security = import ../lib/containerSecurity.nix { inherit lib; };
   eval =
     modules:
     (import (pkgs.path + "/nixos/lib/eval-config.nix") {
@@ -33,12 +40,12 @@ let
     }).config;
   instance =
     adapter: name:
-    builders.mkAgent {
+    mkAgent {
       inherit adapter name;
       autoStart = false;
     };
   config = eval [
-    (builders.mkAgent {
+    (mkAgent {
       adapter = "hermes";
       name = "custom";
       autoStart = false;
@@ -55,7 +62,7 @@ let
         email = "fixture@example.invalid";
       };
     })
-    (builders.mkAgent {
+    (mkAgent {
       adapter = "zeroclaw";
       name = "zero-seeded";
       autoStart = false;
@@ -73,7 +80,7 @@ let
     text: extra:
     lib.any (lib.hasInfix text) (
       failures (eval [
-        (builders.mkAgent (
+        (mkAgent (
           {
             adapter = "hermes";
             name = "negative";
@@ -107,7 +114,6 @@ let
     file:
     builders.agentsFromData {
       inherit file;
-      inherit (builders) mkAgent;
     };
   genericJson = eval (json ./fixtures/adapter-input/generic.json);
   dataConfig = eval (
@@ -138,7 +144,7 @@ let
     };
   };
   generic = eval [
-    (builders.mkAgent {
+    (mkAgent {
       adapter = "generic";
       name = "coding";
       inherit definition;
@@ -174,7 +180,7 @@ let
       approvedReadOnlyDestinations = [ "/workspace" ];
     };
   genericStarted = eval [
-    (builders.mkAgent {
+    (mkAgent {
       adapter = "generic";
       name = "coding";
       inherit definition;
@@ -182,7 +188,7 @@ let
     { virtualisation.oci-containers.containers.agent-coding.autoStart = lib.mkForce true; }
   ];
   genericPodman = eval [
-    (builders.mkAgent {
+    (mkAgent {
       adapter = "generic";
       name = "coding";
       inherit definition;
@@ -195,7 +201,7 @@ let
     { virtualisation.oci-containers.containers.agent-forced.autoStart = lib.mkForce true; }
   ];
   devRoot = eval [
-    (builders.mkAgent {
+    (mkAgent {
       adapter = "hermes";
       name = "dev-root";
       autoStart = false;
@@ -209,12 +215,12 @@ let
   defaults = eval (
     map (
       adapter:
-      builders.mkAgent (
+      mkAgent (
         {
           inherit adapter;
           name = "default-${adapter}";
         }
-        // lib.optionalAttrs ((builtins.functionArgs builders.adapters.${adapter}.build) ? autoStart) {
+        // lib.optionalAttrs ((builtins.functionArgs adapters.${adapter}.build) ? autoStart) {
           autoStart = false;
         }
         // lib.optionalAttrs (adapter == "generic") { inherit definition; }
@@ -227,6 +233,56 @@ let
   ];
   hasParentGuard = service: lib.hasInfix "refusing unsafe agent parent" service.preStart;
 in
+assert !(builders ? mkAgent) && !(builders ? adapters);
+assert builtins.attrNames (builtins.functionArgs builders.agentsFromData) == [ "file" ];
+assert
+  builtins.attrNames (builtins.functionArgs internalParser) == [
+    "data"
+    "file"
+  ];
+assert rejects (internalParser {
+  file = ../agents.json.example;
+  data = exampleData;
+});
+assert rejects (internalParser { });
+assert
+  builtins.length (internalParser {
+    data = exampleData;
+  }) == builtins.length exampleData.agents;
+assert failures example == [ ];
+assert builtins.length exampleData.agents == 4;
+assert
+  map (entry: entry.adapter) (lib.filter (entry: entry ? settings) exampleData.agents) == [
+    "hermes"
+    "zeroclaw"
+  ];
+assert lib.all (preset: !(preset ? build)) (lib.attrValues builders.runtimeCatalog.presets);
+assert
+  builtins.attrNames example.tentaflake.agentInstances
+  == map (entry: "agent-${entry.name}") (lib.sort (a: b: a.name < b.name) exampleData.agents);
+assert lib.all (
+  entry:
+  !entry.autoStart
+  && !security.containsSensitiveValue (entry.settings or { })
+  && example.tentaflake.agentInstances."agent-${entry.name}".adapter == entry.adapter
+) exampleData.agents;
+assert lib.all (container: !container.autoStart && container.environmentFiles == [ ]) (
+  lib.attrValues exampleContainers
+);
+assert lib.all (
+  entry:
+  let
+    container = "agent-${entry.name}";
+    destination =
+      if entry.adapter == "hermes" then "/state/config.yaml" else "/zeroclaw-data/.zeroclaw/config.toml";
+    generated = adapters.${entry.adapter}.configuration.generate container entry.settings;
+  in
+  lib.elem "${generated}:${destination}:ro" exampleContainers.${container}.volumes
+  && lib.elem "--pids-limit=512" exampleContainers.${container}.extraOptions
+) (lib.filter (entry: entry ? settings) exampleData.agents);
+assert !(exampleContainers ? agent-preview) && !(exampleContainers ? agent-scratch);
+assert !example.tentaflake.agentInstances.agent-preview.runnable;
+assert !example.tentaflake.agentInstances.agent-scratch.runnable;
 assert lib.all
   (
     access:
@@ -316,12 +372,12 @@ assert lib.all (bad: rejects (runtimeContract (definition // bad))) [
     ];
   }
 ];
-assert lib.all (name: (contract name builders.adapters.${name}).identity.id == name) registryNames;
+assert lib.all (name: (contract name adapters.${name}).identity.id == name) registryNames;
 assert devRoot.tentaflake.agentInstances.agent-dev-root.uid == 0;
 assert devRoot.virtualisation.oci-containers.containers.agent-dev-root.user == "0:0";
 assert failures devRoot == [ ];
 assert lib.any (lib.hasInfix "requires an enabled broker") (failures forcedStart);
-assert builtins.isFunction builders.mkAgent;
+assert builtins.isFunction mkAgent;
 assert lib.all (
   adapter:
   let
@@ -333,9 +389,7 @@ assert lib.all (
   && record.container == "agent-${name}"
   && record.unit == "docker-agent-${name}.service"
   && record.stateDir == "/var/lib/tentaflake/agents/${name}"
-  &&
-    record.workspace
-    == "/var/lib/tentaflake/agents/${name}/${builders.adapters.${adapter}.layout.workspace}"
+  && record.workspace == "/var/lib/tentaflake/agents/${name}/${adapters.${adapter}.layout.workspace}"
   && record.uid == builders.runtimeCatalog.presets.${adapter}.ownership.uid
   && record.gid == builders.runtimeCatalog.presets.${adapter}.ownership.gid
 ) registryNames;
@@ -422,15 +476,15 @@ assert
     "zeroclaw"
   ];
 assert rejects (contract "broken" { });
-assert rejects (contract "hermes" (builders.adapters.hermes // { schemaVersion = 2; }));
+assert rejects (contract "hermes" (adapters.hermes // { schemaVersion = 2; }));
 assert lib.all
   (
     directory:
     rejects (
       contract "hermes" (
-        builders.adapters.hermes
+        adapters.hermes
         // {
-          layout = builders.adapters.hermes.layout // {
+          layout = adapters.hermes.layout // {
             directories = [ directory ];
           };
         }
@@ -502,36 +556,28 @@ assert rejects
     (instance "hermes" "same")
     (instance "hermes" "same")
   ]).tentaflake.agentInstances;
-assert rejects (
-  builders.mkAgent {
-    adapter = "unknown";
-    name = "invalid";
-  }
-);
-assert rejects (
-  builders.mkAgent {
-    adapter = "hermes";
-    name = "invalid";
-    unknown = true;
-  }
-);
-assert rejects (
-  builders.mkAgent {
-    adapter = "hermes";
-    name = "obsolete-option";
-    gitAutoPush = null;
-  }
-);
-assert rejects (
-  builders.mkAgent {
-    adapter = "hermes";
-    name = "invalid";
-    settings = [ ];
-  }
-);
+assert rejects (mkAgent {
+  adapter = "unknown";
+  name = "invalid";
+});
+assert rejects (mkAgent {
+  adapter = "hermes";
+  name = "invalid";
+  unknown = true;
+});
+assert rejects (mkAgent {
+  adapter = "hermes";
+  name = "obsolete-option";
+  gitAutoPush = null;
+});
+assert rejects (mkAgent {
+  adapter = "hermes";
+  name = "invalid";
+  settings = [ ];
+});
 assert rejects
   (eval [
-    (builders.mkAgent {
+    (mkAgent {
       adapter = "openclaw";
       name = "invalid";
       autoStart = true;
@@ -539,7 +585,7 @@ assert rejects
   ]).tentaflake.agentInstances;
 assert rejects
   (eval [
-    (builders.mkAgent {
+    (mkAgent {
       adapter = "pi";
       name = "invalid";
       autoStart = true;
@@ -556,11 +602,11 @@ assert denies "requires an enabled broker" { autoStart = true; };
 assert denies "requires an enabled broker" { extraContainerConfig.autoStart = true; };
 assert rejects
   (eval [
-    (builders.mkAgent {
+    (mkAgent {
       adapter = "hermes";
       name = "mutable";
       autoStart = false;
       image = "example.invalid/runtime:latest";
     })
   ]).virtualisation.oci-containers.containers.agent-mutable.image;
-import ./agent-state-quota.nix { inherit pkgs eval builders; }
+import ./agent-state-quota.nix { inherit pkgs eval; }

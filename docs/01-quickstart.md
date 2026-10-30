@@ -9,7 +9,7 @@ a stopped declaration, not vendor-runtime acceptance.
    network/SSH grants before relying on the tailnet alone. No allow-all policy,
    Funnel or public agent API; protect identity and recovery access.
 2. **Declare or import a stopped agent.** Follow [configuration](08-agent-cli.md)
-   with `mkAgent` plus adapter selection or schema-v1 JSON. Names are globally
+   with schema-v1 `agents.json` and adapter selection. Names are globally
    unique; use `agent-<name>` for all host services. For a custom reviewed OCI
    image use the [generic definition](agent-adapters.md#generic-isolated-workload).
    OpenClaw/Pi are refusal scaffolds, not containers.

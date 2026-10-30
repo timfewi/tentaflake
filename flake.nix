@@ -54,9 +54,8 @@
       # ── Template constants ──
       constants = import ./lib/constants.nix;
 
-      # ── Shared agent builders ──
-      inherit ((import ./lib { inherit pkgs lib; })) mkAgent adapters runtimeCatalog;
-      inherit ((import ./lib { inherit pkgs lib; })) agentsFromData;
+      # ── Public JSON loading and runtime facts ──
+      inherit ((import ./lib { inherit pkgs lib; })) agentsFromData runtimeCatalog;
 
       # Module set imported by external consumers and built-in hosts
       tentaflakeModules = import ./modules/default.nix { researchFlake = inputs.tentaflake-research; };
@@ -123,7 +122,6 @@
           inputs
           self
           agentsFromData
-          mkAgent
           repoRoot
           constants
           ;
@@ -145,8 +143,6 @@
       lib.${system} = {
         inherit
           agentsFromData
-          mkAgent
-          adapters
           runtimeCatalog
           constants
           ;
@@ -218,14 +214,14 @@
         # VM integration test: boots the host and asserts the runtime path
         # (Rust CLI, status, and agent unit/user/state dir).
         vm-integration = pkgs.testers.runNixOSTest (
-          import ./tests/integration.nix { inherit self mkAgent; }
+          import ./tests/integration.nix { inherit self agentsFromData; }
         );
         research-integration = import ./tests/research-integration.nix { inherit self pkgs; };
         worker-drain-wakeup = import ./tests/worker-drain-wakeup.nix { inherit self pkgs; };
         research-policy = import ./tests/research-policy.nix { inherit self pkgs; };
       };
 
-      # ── tentaflake: Installed system, consumes my-agents.nix ──
+      # ── tentaflake: Installed system, consumes agents.json ──
       # Attr name is `hostName` so it always matches what `tentaflake rebuild`
       # passes to `nixos-rebuild --flake .#<host>`.
       nixosConfigurations.${hostName} = nixpkgs.lib.nixosSystem {

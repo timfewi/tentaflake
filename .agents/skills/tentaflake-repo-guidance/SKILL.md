@@ -18,8 +18,11 @@ Read `AGENTS.md` and `CONTRIBUTING.md`, then inspect only the relevant owners:
 | CLI/API | `crates/tentaflake-cli/`, `host-api/` | [CLI](../../../docs/06-shell.md), [API](../../../docs/19-web-ui.md) |
 | Installer/builds | `installer/disk.sh`, `lib/mkRustPackage.nix`, `scripts/eval_flake.py` | [Install](../../../docs/00-install.md), [Builds](../../../docs/17-builds.md) |
 
-Use only `mkAgent`; keep native behavior inside the selected adapter and common
-host policy outside it. Adapter `preset` facts are the editable source;
+Define instances only in `agents.json`; public `agentsFromData` accepts only
+`{ file = ./agents.json; }`. `mkAgent` and adapter builds are internal. Keep
+native behavior in the selected adapter and host authority in Nix policy,
+which may consume metadata but must not define more instances.
+Adapter `preset` facts are the editable source;
 `python3 scripts/runtime-catalog-docs.py` regenerates the JSON/docs projections.
 Names are globally unique and host IDs are `agent-<name>`. Use metadata for
 paths/owners; never move existing data or reset budgets implicitly.

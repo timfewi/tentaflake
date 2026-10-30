@@ -2,7 +2,7 @@
 { self, pkgs }:
 let
   inherit (pkgs) lib;
-  builders = import ../lib { inherit pkgs lib; };
+  mkAgent = import ../lib/mkAgent.nix { inherit pkgs lib; };
   image = pkgs.dockerTools.buildLayeredImage {
     name = "tentaflake-research-fixture";
     tag = "test";
@@ -81,7 +81,7 @@ pkgs.testers.runNixOSTest {
   nodes.machine = { config, ... }: {
     imports = [
       self.nixosModules.default
-      (builders.mkAgent {
+      (mkAgent {
         adapter = "hermes";
         name = "hermes-research";
         autoStart = false;
@@ -89,7 +89,7 @@ pkgs.testers.runNixOSTest {
           agent.disabled_toolsets = [ ];
         };
       })
-      (builders.mkAgent {
+      (mkAgent {
         adapter = "zeroclaw";
         name = "zero-research";
         autoStart = false;

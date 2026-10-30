@@ -1,6 +1,6 @@
 { pkgs }:
 let
-  builders = import ../lib {
+  mkAgent = import ../lib/mkAgent.nix {
     inherit pkgs;
     inherit (pkgs) lib;
   };
@@ -48,7 +48,7 @@ let
     decisions:
     evaluate {
       imports = [
-        (builders.mkAgent {
+        (mkAgent {
           adapter = "hermes";
           name = "operator";
           autoStart = false;

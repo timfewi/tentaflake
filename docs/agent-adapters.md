@@ -1,23 +1,25 @@
 # Agent adapters
 
-`mkAgent` is the only public builder. Each `adapters/<id>.nix` owns that
-runtime's implementation and pure `preset` facts: image, native configuration,
-commands, layout, ownership, hooks and evidence. Shared host modules own
+`agents.json` is the only public instance-definition source. Each
+`adapters/<id>.nix` owns that runtime's implementation and pure `preset` facts:
+image, native configuration, commands, layout, ownership, hooks and evidence.
+Shared host modules own
 containment, broker, worker, quota, Research and recovery policy; selecting a
 runtime never selects a weaker security implementation.
 
 ## Consumer API
 
+Consumer NixOS modules load the JSON file with the public file-only helper:
+
 ```nix
-{ mkAgent, ... }:
-[
-  (mkAgent {
-    adapter = "hermes";
-    name = "assistant";
-    autoStart = false;
-  })
-]
+{ agentsFromData, ... }:
+{
+  imports = agentsFromData { file = ./agents.json; };
+}
 ```
+
+Pass `tentaflake.lib.${system}.agentsFromData` through `specialArgs`.
+Inline `data`, `mkAgent` and adapter `.build` functions are not public APIs.
 
 Choose `hermes`, `zeroclaw`, `generic`, `openclaw` or `pi`. Unsupported adapter
 arguments fail evaluation. The registry is lazy: discovery does not download
@@ -26,8 +28,8 @@ and installed-host onboarding, and [the secure consumer example](../examples/ada
 for matching host declarations.
 
 All managed identities are `agent-<name>` with unit
-`<backend>-agent-<name>.service`. Names must be globally unique across adapters,
-Nix imports and JSON. Default host state is
+`<backend>-agent-<name>.service`. Names must be globally unique across adapters
+and must not conflict with other host OCI declarations. Default host state is
 `/var/lib/tentaflake/agents/<name>`; an explicit adapter `stateDir` preserves an
 operator-selected path. Read `tentaflake.agentInstances` metadata for effective
 container/unit, logical state root, actual `stateStorage`, workspace, numeric
@@ -36,27 +38,31 @@ retains a fallback for unmanaged OCI containers.
 
 ## Generic isolated workload
 
-A reviewed custom OCI image requires no new adapter:
+A reviewed custom OCI image requires no new adapter. In `agents.json`:
 
-```nix
-{ mkAgent, ... }:
-[
-  (mkAgent {
-    adapter = "generic";
-    name = "coding";
-    definition = {
-      schemaVersion = 1;
-      # Replace with your reviewed artifact; this illustrative image is not runnable.
-      image = "registry.example.invalid/agent@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
-      command = [ "agent" "--interactive" ];
-      ownership = { uid = 10000; gid = 10000; };
-      workspace = "/workspace";
-      lifecycle = "stopped";
-      capabilities = [ "files" "shell" "terminal" ];
-    };
-  })
-]
+```json
+{
+  "schemaVersion": 1,
+  "agents": [
+    {
+      "adapter": "generic",
+      "name": "coding",
+      "autoStart": false,
+      "definition": {
+        "schemaVersion": 1,
+        "image": "registry.example.invalid/agent@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "command": ["agent", "--interactive"],
+        "ownership": { "uid": 10000, "gid": 10000 },
+        "workspace": "/workspace",
+        "lifecycle": "stopped",
+        "capabilities": ["files", "shell", "terminal"]
+      }
+    }
+  ]
+}
 ```
+
+Replace the illustrative, non-runnable image with your reviewed artifact.
 
 The argument vector preserves the OCI entrypoint. The root-owned, mode-0700
 instance root is unmounted; separate UID/GID-owned `state` and `workspace`
@@ -146,11 +152,15 @@ model/Research/execution/lifecycle acceptance. See [verification](17-builds.md).
 
 This is a clean interface cutover, **not a data migration**:
 
-1. Replace `mkHermesAgent`/`mkZeroClawAgent` with `mkAgent` and explicit `adapter`.
-   Replace legacy `hermes`/`zeroclaw` JSON arrays with required
-   `{"schemaVersion":1,"agents":[...]}`; only optional `_securityNote` root
-   metadata is retained. Legacy arrays are rejected. Use the `tentaflake` host
-   CLI; the old host `hermes` alias and runtime-specific skills are removed.
+1. Manually translate `my-agents.nix` declarations into `agents.json`, with
+   explicit `adapter` fields and required `{"schemaVersion":1,"agents":[...]}`.
+   Remove the old Nix file only after reviewing the complete translation;
+   a remaining file is refused, never evaluated or silently ignored.
+   The old example and public builders are removed; consumer flakes use
+   file-only `agentsFromData`. Legacy `hermes`/`zeroclaw` arrays are rejected;
+   only optional `_securityNote` root metadata is retained. Use the
+   `tentaflake` host CLI; the old host `hermes` alias and runtime-specific
+   skills are removed. CLI import writes the same JSON source.
 2. Resolve duplicate short names before switching: names are now globally
    unique. Map each old runtime-prefixed ID to `agent-<name>`.
 3. Back up and verify state and mounted workspaces. Explicitly retain old

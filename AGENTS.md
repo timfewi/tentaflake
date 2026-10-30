@@ -7,14 +7,17 @@ Do not replace declarative agents with a mandatory runtime, UI or control servic
 
 ## Ownership
 
-- `lib/mkAgent.nix` is the sole public builder. Each `adapters/<id>.nix` owns one
-  runtime implementation and pure `preset` facts. `lib/runtimeCatalog.nix`
+- `agents.json` is the only public instance-definition source. Public
+  `agentsFromData { file = ./agents.json; }` is file-only; `mkAgent` and adapter
+  builds are internal. Each `adapters/<id>.nix` owns one runtime implementation
+  and pure `preset` facts. `lib/runtimeCatalog.nix`
   projects presets; `adapters/catalog.json` and the marked adapter-doc table are
   generated with `python3 scripts/runtime-catalog-docs.py`, never edited as
   independent runtime sources.
 - `lib/runtimeContract.nix` owns generic definitions; `lib/containerSecurity.nix`
   owns shared containment. `modules/` owns host broker, Research, worker, quota,
-  backup, provenance and management policy. Runtime hooks cannot weaken it.
+  backup, provenance and management policy. Runtime hooks cannot weaken it;
+  host policy may consume instance metadata but must not define more instances.
 - All managed IDs are `agent-<name>`, names globally unique; default host state
   is `/var/lib/tentaflake/agents/<name>`. Read explicit `agentInstances` metadata
   for effective paths, `stateStorage`, workspace, numeric owners and `runnable`.

@@ -6,7 +6,7 @@ Change deployment-specific values in a fork, never in the generic template.
 |---|---|
 | Host and admin defaults | `lib/constants.nix` |
 | Host modules | `flake.nix` |
-| Agent definitions | `my-agents.nix` |
+| Agent definitions | `agents.json` (inactive reference: `agents.json.example`) |
 | Runtime secret paths | Host broker, backup and optional profile declarations; direct-agent paths are dev-only |
 | SSH keys | `tentaflake.adminAuthorizedKeys` |
 | Timezone and locale | `tentaflake.*` options |

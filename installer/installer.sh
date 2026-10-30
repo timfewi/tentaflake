@@ -252,7 +252,16 @@ cp -r "$REPO_DIR/crates" "$TARGET_NIXOS/crates"
 cp "$REPO_DIR/Cargo.toml" "$TARGET_NIXOS/Cargo.toml"
 cp "$REPO_DIR/Cargo.lock" "$TARGET_NIXOS/Cargo.lock"
 cp "$REPO_DIR/configuration.nix" "$TARGET_NIXOS/configuration.nix"
-cp "$REPO_DIR/my-agents.nix" "$TARGET_NIXOS/my-agents.nix" 2>/dev/null || echo '{ mkAgent }: [ ]' >"$TARGET_NIXOS/my-agents.nix"
+# Never enable bundled examples or replace an existing instance inventory.
+if [ -L "$TARGET_NIXOS/agents.json" ] || { [ -e "$TARGET_NIXOS/agents.json" ] && [ ! -f "$TARGET_NIXOS/agents.json" ]; }; then
+  die "Refusing unsafe agents.json: expected a regular file, not a symlink or other file type."
+fi
+if [ ! -e "$TARGET_NIXOS/agents.json" ]; then
+  (
+    set -C
+    printf '%s\n' '{"schemaVersion":1,"agents":[]}' >"$TARGET_NIXOS/agents.json"
+  ) || die "Could not exclusively create agents.json; existing files are never replaced."
+fi
 
 # Generate user-config.nix
 cat >"$TARGET_NIXOS/user-config.nix" <<EOF
@@ -292,7 +301,7 @@ cat >"$TARGET_NIXOS/flake.nix" <<FLAKEEOF
       pkgs      = nixpkgs.legacyPackages.\${system};
       lib       = nixpkgs.lib;
       uc        = import ./user-config.nix;
-      # Pass the complete helper set (mkAgent, adapters, agentsFromData,
+      # Pass the complete public helper set (agentsFromData, runtimeCatalog,
       # constants) instead of listing helpers by hand, so this
       # generated flake cannot drift out of sync with what configuration.nix
       # asks for. Drift does not fail loudly: configuration.nix consumes these
@@ -381,7 +390,7 @@ unset PASSWORD
 # ════════════════════════════════════════════════════════════
 # STEP 12: Copy agent examples
 # ════════════════════════════════════════════════════════════
-cp "$REPO_DIR/my-agents.nix.example" "$TARGET_NIXOS/my-agents.nix.example" 2>/dev/null || true
+cp "$REPO_DIR/agents.json.example" "$TARGET_NIXOS/agents.json.example"
 cp -r "$REPO_DIR/docs" "$TARGET_NIXOS/docs" 2>/dev/null || true
 cp -r "$REPO_DIR/skills" "$TARGET_NIXOS/skills" 2>/dev/null || true
 
@@ -406,7 +415,7 @@ dialog --title "Installation Complete" --msgbox \
 AFTER REBOOT:
   1. Log in as '$USERNAME'
   2. Read /etc/nixos/docs/01-quickstart.md to get started
-  3. Look at /etc/nixos/my-agents.nix.example for agent examples
+  3. Add reviewed agents.json.example entries to agents.json (initially empty)
   4. Configure host-held broker credentials:
      See /etc/nixos/docs/12-brokered-egress.md
   5. Rebuild: sudo nixos-rebuild switch --flake /etc/nixos#$HOSTNAME

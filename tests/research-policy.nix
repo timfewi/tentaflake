@@ -2,6 +2,7 @@
 let
   inherit (pkgs) lib;
   builders = self.lib.${pkgs.stdenv.hostPlatform.system};
+  mkAgent = import ../lib/mkAgent.nix { inherit pkgs lib; };
   host = {
     system.stateVersion = "26.05";
     fileSystems."/" = {
@@ -36,7 +37,7 @@ let
       modules = [
         self.nixosModules.default
         host
-        (builders.mkAgent (
+        (mkAgent (
           {
             adapter = "hermes";
             name = "policy";
@@ -81,7 +82,7 @@ let
   };
   zeroValid = evaluate { } {
     imports = [
-      (builders.mkAgent {
+      (mkAgent {
         adapter = "zeroclaw";
         name = "zero-policy";
         autoStart = false;
@@ -91,7 +92,7 @@ let
   };
   zeroRemote = evaluate { } {
     imports = [
-      (builders.mkAgent {
+      (mkAgent {
         adapter = "zeroclaw";
         name = "zero-policy";
         autoStart = false;
@@ -108,7 +109,9 @@ let
   secureExample = evaluate { } {
     imports = [
       (import ../examples/adapter-secure.nix {
-        inherit (builders) mkAgent;
+        inherit (builders) agentsFromData;
+        agentsFile = ./fixtures/adapter-input/secure-example.json;
+        agentName = "assistant";
         model = "fixture-model";
         inputMicrousdPerMillion = 1;
         outputMicrousdPerMillion = 1;

@@ -6,9 +6,10 @@ still describe an earlier release.
 
 Tentaflake works without a web UI or control service. The optional host API
 lets an operator UI inspect the same declared agents and control their current
-systemd lifecycle. Nix remains authoritative for agent definitions, security
-policy, credentials and automatic startup. The API does not edit Nix, import
-agents, activate configurations or provide arbitrary commands.
+systemd lifecycle. `agents.json` owns instance definitions; Nix owns host
+security policy and credentials and evaluates automatic-startup gates. The API
+does not edit JSON or Nix, import agents, activate configurations or provide
+arbitrary commands.
 
 ## Choose the interface
 

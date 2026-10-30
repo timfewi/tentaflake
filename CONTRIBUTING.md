@@ -62,6 +62,9 @@ Core modules belong in `modules/` and its default import; optional profiles need
 explicit flake exports and documented trust boundaries. Consumer-specific
 editor, Hive Research and speech integrations stay in forks. Adding a runtime
 must reuse shared containment, not establish a parallel security implementation.
+Public instance examples use `agents.json`; consumer Nix modules may only load
+that file through file-only `agentsFromData`. Keep internal builders out of the
+public API and host policy separate from instance definitions.
 
 Contributions use the [MIT license](LICENSE) and [DCO](DCO.txt); name/logo terms
 are in [TRADEMARK.md](TRADEMARK.md). Report vulnerabilities privately through

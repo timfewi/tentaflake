@@ -1,34 +1,25 @@
 {
   config,
   lib,
-  mkAgent,
   agentsFromData,
   profile ? "installed",
   ...
 }:
 let
   cfg = config.tentaflake;
-  # ── Agent modules ──
-  # Define agents in my-agents.nix (see my-agents.nix.example). Auto-imported when
-  # present; git-track it (`git add my-agents.nix`) so the flake can evaluate it.
-  myAgents = lib.optionals (builtins.pathExists ./my-agents.nix) (
-    let
-      f = import ./my-agents.nix;
-    in
-    f { inherit mkAgent; }
-  );
-
-  # agents.json — declarative non-Nix input. Additive to my-agents.nix (both may
-  # coexist); git-tracked and intentionally secret-free.
-  dataAgents = lib.optionals (builtins.pathExists ./agents.json) (agentsFromData {
-    file = ./agents.json;
-    inherit mkAgent;
-  });
+  # agents.json is the only instance input; a missing file defines an empty host.
+  # Never evaluate removed Nix declarations or silently drop existing instances.
+  dataAgents =
+    if builtins.pathExists ./my-agents.nix then
+      throw "tentaflake: my-agents.nix is no longer supported. Manually migrate declarations to agents.json and host policy to Nix modules, preserving names, state paths and ownership; then remove my-agents.nix. No automatic migration is performed."
+    else
+      lib.optionals (builtins.pathExists ./agents.json) (agentsFromData {
+        file = ./agents.json;
+      });
 in
 {
   imports =
-    myAgents
-    ++ dataAgents
+    dataAgents
     ++ lib.optionals (profile == "installed") [
       ./hardware-configuration.nix
     ];

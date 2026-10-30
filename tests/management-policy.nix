@@ -1,7 +1,7 @@
 { pkgs }:
 let
   inherit (pkgs) lib;
-  builders = import ../lib { inherit pkgs lib; };
+  mkAgent = import ../lib/mkAgent.nix { inherit pkgs lib; };
   evaluate =
     extra:
     (import (pkgs.path + "/nixos/lib/eval-config.nix") {
@@ -52,12 +52,12 @@ let
   manifest = valid.environment.etc."tentaflake/security.tsv".text;
   capsules = evaluate {
     imports = [
-      (builders.mkAgent {
+      (mkAgent {
         adapter = "hermes";
         name = "management-hermes";
         autoStart = false;
       })
-      (builders.mkAgent {
+      (mkAgent {
         adapter = "zeroclaw";
         name = "management-zero";
         autoStart = false;
@@ -66,7 +66,7 @@ let
   };
   brokerCapsule = evaluate {
     imports = [
-      (builders.mkAgent {
+      (mkAgent {
         adapter = "hermes";
         name = "management-broker";
         autoStart = false;

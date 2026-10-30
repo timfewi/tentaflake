@@ -7,15 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 ### Direction
-- Keep declarative Nix/JSON onboarding, installation and shared host policy
+- Keep declarative JSON onboarding, installation and Nix host policy
   runtime-agnostic, with no mandatory runtime or control service.
 - Preserve earlier development in Git history; this is not a new published tag.
 - Keep release tagging explicit, as on the preceding main branch; restoring
   the declarative product does not resume automatic patch releases.
 ### Breaking changes
-- Make `mkAgent` the sole builder and require schema-v1 `agents` JSON. Remove
-  runtime-specific wrappers, legacy arrays, the host `hermes` CLI alias,
-  runtime-specific skills, unused Hermes flake input and `gitAutoPush` argument.
+- Make schema-v1 `agents.json` the only public instance-definition path.
+  Remove `my-agents.nix` and its example; a remaining legacy file requires
+  manual migration and is refused without evaluation. Expose only file-based
+  `agentsFromData`, runtime catalog and constants; builders and adapter builds
+  are internal. Remove runtime-specific wrappers, legacy arrays, the host
+  `hermes` CLI alias, runtime-specific skills, unused Hermes flake input and
+  `gitAutoPush` argument.
 - Give every managed instance the globally unique `agent-<name>` ID and default
   host state `/var/lib/tentaflake/agents/<name>`. Existing state, quota images,
   broker budgets and worker queues require explicit operator preservation and
@@ -24,6 +28,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Make each adapter Nix file the runtime implementation/preset owner; generate
   CLI catalog JSON and docs from those presets. Vendor acceptance stays pending.
 ### Added
+- Provide inactive stopped native settings in `agents.json.example`; installers
+  initialize an empty live JSON file instead of enabling examples. Model and
+  network allowlists, pricing, worker, quota and Research remain Nix host policy;
+  samples do not establish vendor acceptance.
 - Extend optional host management with per-agent declared access/tool policy,
   revision-bound Nix change proposals, and separately enabled captured worker
   request review and digest-bound decisions. Worker decisions are durable and

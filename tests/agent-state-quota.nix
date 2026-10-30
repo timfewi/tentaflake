@@ -1,15 +1,15 @@
 {
   pkgs,
   eval,
-  builders,
 }:
 let
   inherit (pkgs) lib;
+  mkAgent = import ../lib/mkAgent.nix { inherit pkgs lib; };
   fixture =
     extra:
     eval (
       [
-        (builders.mkAgent {
+        (mkAgent {
           adapter = "generic";
           name = "generic-quota";
           definition = {
@@ -18,13 +18,13 @@ let
             command = [ "fixture" ];
           };
         })
-        (builders.mkAgent {
+        (mkAgent {
           adapter = "hermes";
           name = "hermes-quota";
           autoStart = false;
           seedDir = ./fixtures/adapter-seed;
         })
-        (builders.mkAgent {
+        (mkAgent {
           adapter = "zeroclaw";
           name = "zero-quota";
           autoStart = false;

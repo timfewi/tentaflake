@@ -1,8 +1,13 @@
 # Declarative agent configuration
 
-Use `my-agents.nix` for the complete `mkAgent` API or `agents.json` for non-secret
-schema-v1 data. Both feed the same parser/adapter contracts. Runtime-native
-settings belong to the selected adapter; host authority stays in host modules.
+Use `agents.json` as the only public instance-definition source, with non-secret
+schema-v1 data. Runtime-native settings belong to the selected adapter; broker,
+worker, quota and Research authority stays in Nix host modules. Host policy may
+consume instance metadata, but must not define additional instances.
+
+The installer initializes an empty live `agents.json` when absent. The populated
+`agents.json.example` is an inactive reference, never enabled automatically.
+A missing live file in the template means an empty host.
 
 ## Add an agent on an installed host
 
@@ -31,11 +36,13 @@ files are limited to 1 MiB and 128 stopped additions. Alternate host mounts,
 operational services and credential paths remain administrator-owned. Generic
 onboarding requires balanced and has no accepted model/Research hooks.
 
-Import atomically adds to a schema-v1 `agents` document, preserving optional
-`_securityNote`. It rejects legacy arrays and duplicate names/identities across
-JSON, active inventory and current flake declarations. Inputs/destination must
-be regular files. Failure preserves existing bytes; imports share a lock and
-check for changes before publication. Administrators can still edit after that
+Import atomically adds to the same live `agents.json` schema-v1 document,
+preserving optional `_securityNote`. It rejects legacy arrays and duplicate
+names/identities across JSON, active inventory and host declarations, including
+unmanaged OCI containers.
+Inputs/destination must be regular files. Failure preserves existing bytes;
+imports share a lock and check for changes before publication. Administrators
+can still edit after that
 check. A leftover `agents.json.pending` is refused, not overwritten.
 
 `--json` and `--hide` apply to validate/plan/import. Hidden plans redact names,
@@ -46,21 +53,6 @@ Scaffolds remain non-runnable, and secure startup gates still apply.
 Import does not stage Git files, rebuild, activate or start anything. Review and
 track inputs before a deliberate host update: Git-backed flakes only include
 tracked sources. A failed update does not replace the active generation.
-
-## Nix definitions
-
-```nix
-{ mkAgent, ... }:
-[
-  (mkAgent { adapter = "hermes"; name = "assistant"; autoStart = false; })
-  (mkAgent { adapter = "zeroclaw"; name = "research"; autoStart = false; })
-]
-```
-
-Names are globally unique across adapters. These IDs are `agent-assistant` and
-`agent-research`; host state defaults to `/var/lib/tentaflake/agents/<name>`.
-See [adapters](agent-adapters.md) for supported fields, generic definitions,
-native layout and migration. No runtime-specific wrapper builders are exported.
 
 ## JSON definitions
 
@@ -76,10 +68,35 @@ native layout and migration. No runtime-specific wrapper builders are exported.
 
 Both root fields are required. `_securityNote` is optional metadata; unknown
 root/entry fields, legacy runtime arrays, unsupported versions and malformed
-arguments fail. Adapter arguments are subject to the same Nix validation.
+arguments fail. Adapter arguments are subject to the shared validation.
 Never include literal credentials: JSON, settings, environment values and seed
 paths become Nix-store inputs. [Secrets](04-agenix-secrets.md) belong in runtime
 files outside the capsule.
+
+Names are globally unique across adapters; the IDs above are `agent-assistant`
+and `agent-experiment`. Host state defaults to `/var/lib/tentaflake/agents/<name>`.
+The reference file includes stopped Hermes/ZeroClaw native settings with a
+public `example-model` and broker-only URL, plus stopped OpenClaw/Pi entries
+without native settings. These samples require matching Nix broker model
+allowlists, network and pricing policy, plus worker, quota and Research policy.
+They are not turnkey integrations or evidence of vendor acceptance.
+
+## Consumer flakes
+
+Import the same JSON file into a NixOS module:
+
+```nix
+{ agentsFromData, ... }:
+{
+  imports = agentsFromData { file = ./agents.json; };
+}
+```
+
+Pass `tentaflake.lib.${system}.agentsFromData` through `specialArgs`. This
+public helper is **file-only**: no inline `data` or injectable builder.
+`mkAgent` and adapter builds are internal implementation details, not public
+instance-definition APIs. See [adapters](agent-adapters.md) for supported
+fields and the [breaking migration](agent-adapters.md#breaking-migration).
 
 ## Apply deliberately
 

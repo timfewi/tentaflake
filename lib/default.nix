@@ -1,8 +1,6 @@
 { pkgs, lib }:
 {
-  mkAgent = import ./mkAgent.nix { inherit pkgs lib; };
   runtimeCatalog = import ./runtimeCatalog.nix;
-  adapters = import ../adapters { inherit pkgs lib; };
-  agentsFromData = import ./agentsFromData.nix { inherit pkgs lib; };
+  agentsFromData = { file }: (import ./agentsFromData.nix { inherit pkgs lib; }) { inherit file; };
   constants = import ./constants.nix;
 }

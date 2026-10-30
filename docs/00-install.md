@@ -108,6 +108,11 @@ or fresh installation. Agent workspace images also use Btrfs; see the
 [workspace migration guide](14-workspace-quota.md) before updating existing
 quota-enabled deployments.
 
+The installer initializes an empty schema-v1 `agents.json` if absent and bundles
+`agents.json.example` separately as an inactive reference. No sample agent is
+enabled automatically; declare or import reviewed stopped instances into the
+live JSON file, then configure matching Nix host policy.
+
 After installation and reboot, continue with
 [the quick start](01-quickstart.md).
 

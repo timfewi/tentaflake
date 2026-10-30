@@ -45,14 +45,14 @@
       pkgs = nixpkgs.legacyPackages.${system};
 
       # ── Import tentaflake helpers ──
-      mkAgent = tentaflake.lib.${system}.mkAgent;
+      agentsFromData = tentaflake.lib.${system}.agentsFromData;
       constants = tentaflake.lib.${system}.constants;
 
       # ── Shared specialArgs for all hosts ──
       specialArgs = {
         inherit
           self
-          mkAgent
+          agentsFromData
           constants
           ;
       };
@@ -113,9 +113,11 @@
           modules = [
             ./machines/agent-box/default.nix
             ./machines/agent-box/hardware-configuration.nix
-            ./machines/agent-box/agents.nix
+            # Host broker, Research, worker and quota policy stays in Nix.
+            ./machines/agent-box/host-policy.nix
             ./secrets/secrets.nix
-          ];
+          ]
+          ++ agentsFromData { file = ./agents.json; };
         };
 
         # ── Future machines: just add a new mkHost call ──

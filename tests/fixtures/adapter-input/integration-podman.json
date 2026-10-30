@@ -1,0 +1,6 @@
+{
+  "schemaVersion": 1,
+  "agents": [
+    { "adapter": "zeroclaw", "name": "podman", "autoStart": false }
+  ]
+}

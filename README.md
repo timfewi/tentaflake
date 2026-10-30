@@ -3,7 +3,7 @@
 ![Tentaflake logo](public/tentaflake-readme.jpg)
 
 A runtime-agnostic NixOS flake template for isolated AI agents on one host.
-Declare agents with one builder, choose an adapter, and manage them through
+Declare agents in `agents.json`, choose an adapter, and manage them through
 systemd and the Rust `tentaflake` CLI. No mandatory web UI or control service.
 
 > **Pre-1.0:** interfaces and security policy can break between releases. Pin a
@@ -17,18 +17,21 @@ systemd and the Rust `tentaflake` CLI. No mandatory web UI or control service.
 3. [Import a stopped agent](docs/08-agent-cli.md), then review and explicitly
    build/activate the host. Import never starts services.
 
-`my-agents.nix`:
+`agents.json`:
 
-```nix
-{ mkAgent, ... }:
-[
-  (mkAgent { adapter = "hermes"; name = "assistant"; autoStart = false; })
-]
+```json
+{
+  "schemaVersion": 1,
+  "agents": [
+    { "adapter": "hermes", "name": "assistant", "autoStart": false }
+  ]
+}
 ```
 
 All managed container IDs are `agent-<name>`; names are globally unique across
 adapters. Default host state is `/var/lib/tentaflake/agents/<name>`.
-[Configuration](docs/08-agent-cli.md) also accepts schema-v1 JSON `agents`.
+[Configuration](docs/08-agent-cli.md) uses this file as the only instance source;
+host broker, worker, quota and Research policy stays in Nix.
 
 ## Scope and support
 
