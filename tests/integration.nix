@@ -925,7 +925,7 @@
         )
         podman.succeed(
             podman_base
-            + "sh -c \"grep -q '^CapEff:[[:space:]]*0*' "
+            + "sh -c \"grep -Eq '^CapEff:[[:space:]]*0+$' "
             + "/proc/self/status\""
         )
         podman.fail(podman_base + "sh -c 'touch /etc/deny'")
@@ -1049,7 +1049,7 @@
         machine.succeed(base + "sh -c 'test $(id -u) = 65534'")
         machine.succeed(
             base
-            + "sh -c \"grep -q '^CapEff:[[:space:]]*0*' "
+            + "sh -c \"grep -Eq '^CapEff:[[:space:]]*0+$' "
             + "/proc/self/status\""
         )
         machine.succeed(
@@ -1318,7 +1318,9 @@
         machine.succeed("systemctl reset-failed " + worker)
         machine.succeed(
             "jq -e '.max_inbox_entries == 4 and .max_queue_entries == 2 and "
-            ".max_queue_bytes == 1048576' /etc/tentaflake/workers/hermes-test.json"
+            ".max_queue_bytes == 1048576 and .max_retained_results == 1024 and "
+            ".max_retained_result_bytes == 4294967296 and .max_retained_entries == 1000000' "
+            "/etc/tentaflake/workers/hermes-test.json"
         )
         for number in (1, 2, 3):
             machine.succeed(

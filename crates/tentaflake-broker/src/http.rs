@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::net::TcpStream;
+use std::time::Instant;
 
 pub struct Request {
     pub method: String,
@@ -34,13 +35,16 @@ pub fn read_request(
     stream: &mut TcpStream,
     max_header_bytes: usize,
     max_body_bytes: usize,
+    deadline: Instant,
 ) -> Result<Request, String> {
     let mut raw = Vec::with_capacity(4096);
     let mut chunk = [0_u8; 4096];
     let header_end = loop {
+        set_remaining_read_timeout(stream, deadline)?;
         let count = stream
             .read(&mut chunk)
             .map_err(|error| format!("read failed: {error}"))?;
+        require_before_deadline(deadline)?;
         if count == 0 {
             return Err("connection closed before request headers".into());
         }
@@ -109,9 +113,11 @@ pub fn read_request(
     while raw.len() - header_end < content_length {
         let remaining = content_length - (raw.len() - header_end);
         let read_length = remaining.min(chunk.len());
+        set_remaining_read_timeout(stream, deadline)?;
         let count = stream
             .read(&mut chunk[..read_length])
             .map_err(|error| format!("body read failed: {error}"))?;
+        require_before_deadline(deadline)?;
         if count == 0 {
             return Err("connection closed before request body".into());
         }
@@ -123,6 +129,19 @@ pub fn read_request(
         headers,
         body: raw[header_end..].to_vec(),
     })
+}
+
+fn require_before_deadline(deadline: Instant) -> Result<std::time::Duration, String> {
+    deadline
+        .checked_duration_since(Instant::now())
+        .filter(|remaining| !remaining.is_zero())
+        .ok_or_else(|| "request ingress deadline exceeded".into())
+}
+
+fn set_remaining_read_timeout(stream: &TcpStream, deadline: Instant) -> Result<(), String> {
+    stream
+        .set_read_timeout(Some(require_before_deadline(deadline)?))
+        .map_err(|_| "cannot set request ingress timeout".into())
 }
 
 pub fn write_response(stream: &mut TcpStream, response: Response) -> std::io::Result<()> {
@@ -173,9 +192,54 @@ mod tests {
             stream.write_all(raw).unwrap();
         });
         let (mut stream, _) = listener.accept().unwrap();
-        let result = read_request(&mut stream, 1024, 1024);
+        let result = read_request(
+            &mut stream,
+            1024,
+            1024,
+            Instant::now() + std::time::Duration::from_secs(5),
+        );
         writer.join().unwrap();
         result
+    }
+
+    #[test]
+    fn trickle_cannot_extend_header_or_shared_body_deadline() {
+        use std::time::Duration;
+        for body in [false, true] {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let address = listener.local_addr().unwrap();
+            let writer = thread::spawn(move || {
+                let mut stream = TcpStream::connect(address).unwrap();
+                if body {
+                    // Header time consumes the same allowance as body time.
+                    thread::sleep(Duration::from_millis(150));
+                    if stream
+                        .write_all(b"POST / HTTP/1.1\r\nContent-Length: 20\r\n\r\n")
+                        .is_err()
+                    {
+                        return;
+                    }
+                }
+                for _ in 0..20 {
+                    if stream.write_all(b"x").is_err() {
+                        break;
+                    }
+                    thread::sleep(Duration::from_millis(40));
+                }
+            });
+            let (mut stream, _) = listener.accept().unwrap();
+            let started = Instant::now();
+            let result = read_request(
+                &mut stream,
+                1024,
+                1024,
+                started + Duration::from_millis(300),
+            );
+            assert!(result.is_err());
+            assert!(started.elapsed() < Duration::from_millis(650));
+            drop(stream);
+            writer.join().unwrap();
+        }
     }
 
     #[test]

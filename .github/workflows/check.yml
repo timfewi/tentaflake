@@ -180,23 +180,23 @@ jobs:
         run: |
           selected_checks=()
           if [[ "$CHECK_DEVCONTAINER" == true ]]; then
-            selected_checks+=(.#checks.x86_64-linux.devcontainer-cli)
+            selected_checks+=(".#checks.x86_64-linux.devcontainer-cli")
           fi
           if [[ "$CHECK_EVALUATE" == true ]]; then
-            selected_checks+=(.#checks.x86_64-linux.image-pinning .#checks.x86_64-linux.agent-adapters .#checks.x86_64-linux.hardening-journald)
-            selected_checks+=(.#checks.x86_64-linux.host-api .#checks.x86_64-linux.host-api-evaluation)
+            selected_checks+=(".#checks.x86_64-linux.image-pinning" ".#checks.x86_64-linux.agent-adapters" ".#checks.x86_64-linux.hardening-journald")
+            selected_checks+=(".#checks.x86_64-linux.host-api" ".#checks.x86_64-linux.host-api-evaluation")
           fi
           if [[ "$CHECK_CLI" == true ]]; then
-            selected_checks+=(.#checks.x86_64-linux.tentaflake-cli)
+            selected_checks+=(".#checks.x86_64-linux.tentaflake-cli")
           fi
           if [[ "$CHECK_BROKER" == true ]]; then
-            selected_checks+=(.#checks.x86_64-linux.tentaflake-broker)
+            selected_checks+=(".#checks.x86_64-linux.tentaflake-broker")
           fi
           if [[ "$CHECK_WORKER" == true ]]; then
-            selected_checks+=(.#checks.x86_64-linux.tentaflake-worker .#checks.x86_64-linux.tentaflake-worker-image)
+            selected_checks+=(".#checks.x86_64-linux.tentaflake-worker" ".#checks.x86_64-linux.tentaflake-worker-image")
           fi
           if [[ "$CHECK_CLI" == true || "$CHECK_BROKER" == true || "$CHECK_WORKER" == true ]]; then
-            selected_checks+=(.#checks.x86_64-linux.rust-package-sources)
+            selected_checks+=(".#checks.x86_64-linux.rust-package-sources")
           fi
           for ((offset=0; offset<${#selected_checks[@]}; offset+=4)); do
             nix build --no-link "${selected_checks[@]:offset:4}"

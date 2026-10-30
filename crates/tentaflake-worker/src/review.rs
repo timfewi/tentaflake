@@ -183,7 +183,10 @@ impl Queue {
 fn digest(request: &JobRequest) -> Result<String> {
     // All validated request fields, including defaulted timeout, are bound.
     let bytes = serde_json::to_vec(request).map_err(invalid)?;
-    Ok(format!("{:x}", Sha256::digest(bytes)))
+    Ok(Sha256::digest(bytes)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect())
 }
 
 fn valid_digest(value: &str) -> bool {
@@ -416,4 +419,23 @@ fn print_json(value: &impl Serialize) -> Result<()> {
     let mut stdout = io::stdout().lock();
     stdout.write_all(&output).map_err(invalid)?;
     stdout.write_all(b"\n").map_err(invalid)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn request_digest_preserves_persisted_receipt_format() {
+        // Canonical pre-upgrade request bytes, independently hashed with SHA-256.
+        let canonical = r#"{"version":1,"id":"job_1","action_class":"communicative","argv":["printf","%s\\n","literal\nargument","☃"],"timeout_seconds":1}"#;
+        let request: JobRequest = serde_json::from_str(canonical).unwrap();
+        assert_eq!(serde_json::to_string(&request).unwrap(), canonical);
+        let hash = digest(&request).unwrap();
+        assert_eq!(
+            hash,
+            "cff399bca7c2ed2cb82b3d2964251f85e6181b0b35625420c5bf5a2ac8cbe118"
+        );
+        assert!(valid_digest(&hash));
+    }
 }

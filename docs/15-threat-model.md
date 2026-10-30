@@ -148,12 +148,17 @@ network access or implement a generic external-action adapter.
 
 ### Host to external systems
 
-Git auto-push, backups, provider access, signature verification, remote
-tailnet policy, and alert delivery execute with host-held authority. Their
-credentials remain runtime files or systemd credentials. Each integration
-must be narrowly scoped by the deployment: exact repository and branch,
-provider account and models, backup repository, signer identity, tailnet
-grants, and alert receiver.
+Backups, provider access, signature verification, remote tailnet policy, and
+alert delivery execute with host-held authority. Their credentials remain
+runtime files or systemd credentials. Each integration must be narrowly scoped
+by the deployment: provider account and models, backup repository, signer
+identity, tailnet grants, and alert receiver.
+
+Host-side Git auto-push is disabled: agent-owned Git configuration and hooks
+are executable input, and fetch-remote checks do not bind push destinations.
+The adapter rejects non-null `gitAutoPush` and emits no publication unit or
+credential import. Existing installations need the explicit
+[stop/revoke/migrate procedure](07-operations.md#git-auto-push).
 
 ### Telemetry and detection
 

@@ -184,6 +184,13 @@ configured provider on the host, rejects non-public addresses, pins the
 validated DNS answer into the TLS client, and rebuilds the Authorization
 header from the host credential.
 
+Chat Completions requests support exactly one completion choice in ordinary
+and strict profiles, with or without streaming. Omit `n` or set it to the JSON
+integer `1`; multiple choices and malformed values (including `null`, strings,
+booleans and fractional numbers) are rejected before budget reservation or
+provider dispatch. The token/cost reservation covers one completion, not a
+batch of choices.
+
 Audit events contain agent, route, model, outcome, status, reserved token/cost
 figures, and timestamps. They never contain request bodies, prompts, virtual
 keys, provider keys, or provider response bodies.
@@ -435,12 +442,37 @@ characters and includes both `trust = "untrusted_external_content"` and an
 instruction boundary. This narrows exposure; it cannot prove that content is
 free of prompt injection.
 
+The legacy fetch implementation retains at most 64 MiB of logical file bytes
+and 1024 objects by default, configured through
+`fetch.maxQuarantineBytes` and `fetch.maxQuarantineEntries` (both positive).
+Binary JSON uses `max_quarantine_bytes` and `max_quarantine_entries` with the
+same defaults. These controls do not enable legacy fetch in balanced profiles.
+Admission scans the host-private directory under a process-exclusive directory
+lock and a writer mutex before creating each object. The scan is bounded by the
+entry limit; quarantine-directory/entry symlinks, nonregular files, hard links,
+foreign ownership, public permissions and already-over-limit legacy contents
+fail closed. Safe existing files count across restarts. Empty responses cost an
+entry, and the entire response length is reserved before writing so partial
+writes remain charged. No retained evidence is automatically deleted; operators
+must stop the broker and explicitly archive/remove retained files or adjust the
+limits before resuming when full. Logical byte limits do not include filesystem
+metadata/block overhead; the entry limit bounds object-count growth.
+The existing host-controlled state parent is resolved before opening a held
+directory descriptor, preserving systemd's private-state parent aliases. The
+quarantine directory itself is never followed through a symlink.
+
 ## Failure and revocation
 
 The brokers fail closed when authentication, policy, DNS, upstream TLS,
 budget-state persistence, quarantine, or audit persistence fails. Budget
 reservations are conservative and are not refunded after a failed upstream
 call.
+
+Unauthenticated ingress shares one absolute `timeout_seconds` deadline (binary
+configuration, default 60 seconds) across
+headers and body, beginning at connection admission. Every socket read uses
+only the remaining time; trickling bytes cannot renew the deadline or retain
+preauthentication concurrency slots indefinitely.
 
 `GET /healthz` verifies that the virtual key, provider credential when
 applicable, and prompt-free audit path are readable. Broker units restart on

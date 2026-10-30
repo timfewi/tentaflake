@@ -86,6 +86,21 @@ let
           default = 8 * 1024 * 1024;
           description = "Combined private pending and running request byte ceiling.";
         };
+        maxRetainedResults = lib.mkOption {
+          type = lib.types.ints.positive;
+          default = 1024;
+          description = "Combined retained result and in-flight job count ceiling; completed receipts are never deleted to admit work.";
+        };
+        maxRetainedResultBytes = lib.mkOption {
+          type = lib.types.ints.positive;
+          default = 4 * 1024 * 1024 * 1024;
+          description = "Aggregate retained payload byte ceiling. Admission reserves two full snapshots, a bounded log and 16 KiB metadata for every running job.";
+        };
+        maxRetainedEntries = lib.mkOption {
+          type = lib.types.ints.positive;
+          default = 1000000;
+          description = "Aggregate retained tree-entry ceiling, including worst-case running reservations.";
+        };
         maxSnapshotBytes = lib.mkOption {
           type = lib.types.ints.positive;
           default = 1024 * 1024 * 1024;
@@ -146,6 +161,9 @@ let
       max_inbox_bytes = agent.maxInboxBytes;
       max_queue_entries = agent.maxQueueEntries;
       max_queue_bytes = agent.maxQueueBytes;
+      max_retained_results = agent.maxRetainedResults;
+      max_retained_result_bytes = agent.maxRetainedResultBytes;
+      max_retained_entries = agent.maxRetainedEntries;
       max_snapshot_bytes = agent.maxSnapshotBytes;
       max_snapshot_entries = agent.maxSnapshotEntries;
       max_log_bytes = agent.maxLogBytes;
@@ -313,6 +331,14 @@ in
             message = "tentaflake worker ${name} snapshot limit may not exceed 16 GiB.";
           }
           {
+            assertion = agent.maxRetainedResultBytes >= 2 * agent.maxSnapshotBytes + agent.maxLogBytes + 16384;
+            message = "tentaflake worker ${name} retained byte capacity must fit two snapshots, a log and 16 KiB metadata.";
+          }
+          {
+            assertion = agent.maxRetainedEntries >= 2 * agent.maxSnapshotEntries + 8;
+            message = "tentaflake worker ${name} retained entry capacity must fit one worst-case running job.";
+          }
+          {
             assertion =
               lib.hasAttr group config.users.groups && config.users.groups.${group}.gid == agent.containerGid;
             message = "tentaflake worker ${name} host group ${group} must exist with GID ${toString agent.containerGid}.";
@@ -365,6 +391,7 @@ in
             "d ${stateDir name}/pending 0700 root root -"
             "d ${stateDir name}/approvals 0700 root root -"
             "d ${stateDir name}/jobs 0700 root root -"
+            "d ${stateDir name}/reservations 0700 root root -"
             "d ${resultDir name} 2750 root ${group} 14d"
           ]
           ++ lib.optionals (!stateParent) [

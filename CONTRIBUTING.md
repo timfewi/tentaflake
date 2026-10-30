@@ -122,6 +122,11 @@ cache guarantees and the Nix/Bazel assessment.
 Semgrep CLI and rule snapshot against tracked source. Semgrep does not contact
 its registry or send metrics; the OSV portion needs network access for current
 advisories, so it remains a separate pre-PR gate rather than part of `just ci`.
+The local Semgrep package preserves the pinned upstream core binary and starts
+it through the Nix dynamic loader with explicit library paths, avoiding the
+wheel's incompatible ELF rewrite. It uses nixpkgs' MCP 1.x compatibility package
+for the CLI's FastMCP imports. Building `.#security-tools` checks core startup
+and retains the upstream CLI tests; `just security` exercises the actual scans.
 
 For end-to-end verification, `just e2e` runs that complete automated gate,
 `just e2e-devcontainer` uses the source- and dependency-hash-pinned

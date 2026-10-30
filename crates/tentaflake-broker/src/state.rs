@@ -56,6 +56,138 @@ pub struct Limits {
     inner: Mutex<(BudgetState, RateState, u64)>,
 }
 
+// The directory lock also excludes brokers configured with different budget
+// files but the same quarantine. Never unlink this lock owner or retained data.
+pub struct Quarantine {
+    directory: File,
+    max_bytes: u64,
+    max_entries: usize,
+    writer: Mutex<()>,
+}
+
+impl Quarantine {
+    pub fn open(path: &Path, max_bytes: u64, max_entries: usize) -> Result<Self, String> {
+        if max_bytes == 0 || max_entries == 0 || !path.is_absolute() {
+            return Err("invalid quarantine limits or path".into());
+        }
+        // systemd DynamicUser state parents may be trusted symlinks into
+        // /var/lib/private. Resolve that parent, verify its authority, then use
+        // held descriptors; never follow the quarantine directory or its entries.
+        let parent = path.parent().ok_or("quarantine has no parent")?;
+        let name = path.file_name().ok_or("quarantine has no directory name")?;
+        let parent = fs::canonicalize(parent).map_err(|_| "cannot resolve quarantine parent")?;
+        let parent = OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC)
+            .open(parent)
+            .map_err(|_| "cannot open quarantine parent")?;
+        // SAFETY: geteuid takes no pointers and has no failure result.
+        let uid = unsafe { libc::geteuid() };
+        let metadata = parent
+            .metadata()
+            .map_err(|_| "cannot inspect quarantine parent")?;
+        if (metadata.uid() != 0 && metadata.uid() != uid)
+            || metadata.permissions().mode() & 0o022 != 0
+        {
+            return Err("quarantine parent must be host-controlled".into());
+        }
+        let next = PathBuf::from(format!("/proc/self/fd/{}", parent.as_raw_fd())).join(name);
+        use std::os::unix::fs::DirBuilderExt;
+        match fs::DirBuilder::new().mode(0o700).create(&next) {
+            Ok(()) => parent
+                .sync_all()
+                .map_err(|_| "cannot sync quarantine parent")?,
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(_) => return Err("cannot create quarantine directory".into()),
+        }
+        let directory = OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC)
+            .open(next)
+            .map_err(|_| "quarantine must be a real directory")?;
+        let metadata = directory
+            .metadata()
+            .map_err(|_| "cannot inspect quarantine")?;
+        if metadata.uid() != uid || metadata.permissions().mode() & 0o077 != 0 {
+            return Err("quarantine must be owned by the broker and host-private".into());
+        }
+        lock_owner(&directory, true)?;
+        let quarantine = Self {
+            directory,
+            max_bytes,
+            max_entries,
+            writer: Mutex::new(()),
+        };
+        quarantine.usage()?;
+        Ok(quarantine)
+    }
+
+    fn anchored_path(&self) -> PathBuf {
+        PathBuf::from(format!("/proc/self/fd/{}", self.directory.as_raw_fd()))
+    }
+
+    fn usage(&self) -> Result<(u64, usize), String> {
+        let mut bytes = 0_u64;
+        let mut entries = 0_usize;
+        let uid = self
+            .directory
+            .metadata()
+            .map_err(|_| "cannot inspect quarantine")?
+            .uid();
+        for entry in fs::read_dir(self.anchored_path()).map_err(|_| "cannot scan quarantine")? {
+            // Stop after max_entries + 1 observations, even for unsafe legacy directories.
+            if entries == self.max_entries {
+                return Err("quarantine entry limit exceeded".into());
+            }
+            let entry = entry.map_err(|_| "cannot inspect quarantine entry")?;
+            let metadata = fs::symlink_metadata(entry.path())
+                .map_err(|_| "cannot inspect quarantine entry")?;
+            if !metadata.is_file()
+                || metadata.nlink() != 1
+                || metadata.uid() != uid
+                || metadata.permissions().mode() & 0o077 != 0
+            {
+                return Err("quarantine contains an unsafe entry".into());
+            }
+            bytes = bytes
+                .checked_add(metadata.len())
+                .ok_or("quarantine byte overflow")?;
+            entries += 1;
+            if bytes > self.max_bytes {
+                return Err("quarantine byte limit exceeded".into());
+            }
+        }
+        Ok((bytes, entries))
+    }
+
+    pub fn store(&self, id: &str, bytes: &[u8]) -> Result<(), String> {
+        if id.is_empty() || !id.bytes().all(|byte| byte.is_ascii_digit() || byte == b'-') {
+            return Err("invalid quarantine object identifier".into());
+        }
+        let _guard = self.writer.lock().map_err(|_| "quarantine lock poisoned")?;
+        let (used_bytes, used_entries) = self.usage()?;
+        let size = u64::try_from(bytes.len()).map_err(|_| "quarantine object too large")?;
+        if used_entries >= self.max_entries || size > self.max_bytes.saturating_sub(used_bytes) {
+            return Err("quarantine capacity exhausted".into());
+        }
+        let mut file = create_private(&self.anchored_path().join(id))?;
+        // Reserve the entire logical size before writing. Failed/partial writes
+        // remain charged, including after restart; zero-byte objects cost an entry.
+        file.set_len(size)
+            .map_err(|_| "cannot reserve quarantine object")?;
+        file.sync_all()
+            .map_err(|_| "cannot sync quarantine reservation")?;
+        self.directory
+            .sync_all()
+            .map_err(|_| "cannot sync quarantine entry")?;
+        file.write_all(bytes)
+            .map_err(|_| "cannot write quarantine object")?;
+        file.sync_all()
+            .map_err(|_| "cannot sync quarantine object")?;
+        Ok(())
+    }
+}
+
 // A strict reservation is a move-only completion capability. A known
 // pre-dispatch failure may resolve uncertainty; a possibly dispatched request
 // remains held unless its response meets the completion contract.
@@ -973,6 +1105,90 @@ mod tests {
             std::process::id(),
             unix_seconds()
         ))
+    }
+
+    #[test]
+    fn quarantine_serializes_admission_and_counts_restart_and_partial_objects() {
+        let directory = test_path("quarantine-capacity");
+        let quarantine = Arc::new(Quarantine::open(&directory, 8, 4).unwrap());
+        assert!(Quarantine::open(&directory, 8, 4).is_err());
+        let threads: Vec<_> = (0..8)
+            .map(|id| {
+                let quarantine = Arc::clone(&quarantine);
+                std::thread::spawn(move || quarantine.store(&id.to_string(), b"1234").is_ok())
+            })
+            .collect();
+        let admitted = threads
+            .into_iter()
+            .map(|thread| usize::from(thread.join().unwrap()))
+            .sum::<usize>();
+        assert_eq!(admitted, 2);
+        assert_eq!(quarantine.usage().unwrap(), (8, 2));
+        drop(quarantine);
+        let quarantine = Quarantine::open(&directory, 8, 4).unwrap();
+        assert!(quarantine.store("20", b"x").is_err());
+        quarantine.store("21", b"").unwrap();
+        quarantine.store("22", b"").unwrap();
+        assert!(quarantine.store("23", b"").is_err());
+        drop(quarantine);
+        assert!(Quarantine::open(&directory, 7, 4).is_err());
+        assert!(Quarantine::open(&directory, 8, 3).is_err());
+        fs::remove_dir_all(&directory).unwrap();
+
+        let directory = test_path("quarantine-partial");
+        let quarantine = Quarantine::open(&directory, 8, 2).unwrap();
+        // Model a crash after size reservation and a partial write.
+        let mut partial = create_private(&directory.join("1")).unwrap();
+        partial.set_len(8).unwrap();
+        partial.write_all(b"x").unwrap();
+        partial.sync_all().unwrap();
+        drop(partial);
+        drop(quarantine);
+        let quarantine = Quarantine::open(&directory, 8, 2).unwrap();
+        assert_eq!(quarantine.usage().unwrap(), (8, 1));
+        assert!(quarantine.store("2", b"x").is_err());
+        assert_eq!(fs::metadata(directory.join("1")).unwrap().len(), 8);
+        drop(quarantine);
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn quarantine_rejects_unsafe_legacy_entries_and_symlink_paths() {
+        use std::os::unix::fs::symlink;
+        for kind in ["symlink", "directory", "hardlink", "public"] {
+            let directory = test_path(&format!("quarantine-unsafe-{kind}"));
+            let quarantine = Quarantine::open(&directory, 8, 2).unwrap();
+            let object = directory.join("1");
+            match kind {
+                "symlink" => symlink("/dev/null", &object).unwrap(),
+                "directory" => fs::create_dir(&object).unwrap(),
+                "hardlink" => {
+                    drop(create_private(&object).unwrap());
+                    fs::hard_link(&object, directory.join("2")).unwrap();
+                }
+                "public" => {
+                    drop(create_private(&object).unwrap());
+                    fs::set_permissions(&object, fs::Permissions::from_mode(0o644)).unwrap();
+                }
+                _ => unreachable!(),
+            }
+            assert!(quarantine.store("3", b"").is_err());
+            drop(quarantine);
+            assert!(Quarantine::open(&directory, 8, 2).is_err());
+            fs::remove_dir_all(directory).unwrap();
+        }
+        let real = test_path("quarantine-real");
+        let alias = test_path("quarantine-alias");
+        let quarantine = Quarantine::open(&real, 8, 2).unwrap();
+        symlink(&real, &alias).unwrap();
+        assert!(Quarantine::open(&alias, 8, 2).is_err());
+        // A systemd-style alias of a protected parent is supported.
+        let child = Quarantine::open(&alias.join("child"), 8, 2).unwrap();
+        drop(child);
+        fs::remove_dir(real.join("child")).unwrap();
+        drop(quarantine);
+        fs::remove_file(alias).unwrap();
+        fs::remove_dir(real).unwrap();
     }
 
     fn strict_fixture(name: &str) -> (PathBuf, PathBuf) {

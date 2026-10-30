@@ -22,8 +22,8 @@
 #
 # Optional operational hardening (all default-off): UID alignment + ownership
 # self-heal, a fail-loud provider preflight, in-container git identity,
-# host-side secret-safe git auto-push, a tailnet-published dashboard, and
-# durable agent-built services. See the argument block below and docs/.
+# a tailnet-published dashboard, and durable agent-built services.
+# Host-side git auto-push is disabled; see docs/07-operations.md.
 # ────────────────────────────────────────────────────────────
 
 let
@@ -126,13 +126,9 @@ let
       #   gitIdentity = { name = "myagent"; email = "myagent@example.com"; };
       gitIdentity ? null,
 
-      # Push the agent's git repos to their remotes from the HOST, using a token the
-      # agent never sees (Hermes strips secrets from the agent terminal by design,
-      # so the agent commits locally and the host pushes). Targets GitHub https
-      # remotes. null = skip. Example:
-      #   gitAutoPush = { tokenEnvFile = "/run/agenix/hermes-<name>-env"; };
-      # Required: tokenEnvFile and allowedRemotes. Optional: allowedBranches
-      # (default [ "main" ]), reposRoot, tokenEnvVar, and interval.
+      # Retained only to provide a migration error for existing consumers.
+      # Non-null values are rejected: agent-owned Git metadata must never run
+      # on the host with root privileges or publication credentials.
       gitAutoPush ? null,
 
       # Expose the agent's web dashboard. Launches `hermes dashboard` inside the
@@ -206,7 +202,6 @@ let
       secureUnitPolicy = import ../lib/serviceRecovery.nix;
       securityResources = config.tentaflake.security.resources;
       ctrBin = "${pkgs.${backend}}/bin/${backend}";
-      tentaflakeCli = pkgs.callPackage ../pkgs/tentaflake-cli { };
 
       ownUid = toString containerUid;
       ownGid = toString containerGid;
@@ -304,73 +299,6 @@ let
           '';
         };
       };
-
-      autopushSvc = lib.optionalAttrs (gitAutoPush != null) (
-        let
-          reposRoot = gitAutoPush.reposRoot or "${stateDir}/workspace";
-          tokenEnvVar = gitAutoPush.tokenEnvVar or "GH_TOKEN";
-          allowedRemotes = gitAutoPush.allowedRemotes or [ ];
-          allowedBranches = gitAutoPush.allowedBranches or [ "main" ];
-        in
-        {
-          "hermes-${name}-autopush" = {
-            description = "Push Hermes ${name} git repos to their GitHub remotes";
-            after = [ ctrService ];
-            path = [
-              pkgs.git
-              pkgs.findutils
-              pkgs.coreutils
-            ];
-            serviceConfig = {
-              Type = "oneshot";
-              EnvironmentFile = gitAutoPush.tokenEnvFile or "/dev/null";
-            };
-            script = ''
-              root=${lib.escapeShellArg reposRoot}
-              [ -d "$root" ] || exit 0
-              helper='!f() { echo username=x-access-token; echo "password=''$${tokenEnvVar}"; }; f'
-              rc=0
-              while IFS= read -r -d "" gd; do
-                repo=$(dirname "$gd")
-                url=$(git -C "$repo" -c safe.directory="$repo" remote get-url origin 2>/dev/null) || {
-                  printf 'git-autopush DENY agent=%q repo=%q reason=no-origin\n' ${lib.escapeShellArg name} "$repo" >&2
-                  rc=1
-                  continue
-                }
-                if ! ${lib.getExe tentaflakeCli} remote-check "$url" ${lib.escapeShellArgs allowedRemotes}; then
-                  printf 'git-autopush DENY agent=%q repo=%q remote=%q reason=remote-policy\n' ${lib.escapeShellArg name} "$repo" "$url" >&2
-                  rc=1
-                  continue
-                fi
-                branch=$(git -C "$repo" -c safe.directory="$repo" symbolic-ref --quiet --short HEAD) || {
-                  printf 'git-autopush DENY agent=%q repo=%q reason=detached-head\n' ${lib.escapeShellArg name} "$repo" >&2
-                  rc=1
-                  continue
-                }
-                branch_ok=false
-                for allowed_branch in ${lib.escapeShellArgs allowedBranches}; do
-                  if [ "$branch" = "$allowed_branch" ]; then
-                    branch_ok=true
-                    break
-                  fi
-                done
-                if [ "$branch_ok" != true ]; then
-                  printf 'git-autopush DENY agent=%q repo=%q branch=%q reason=branch-policy\n' ${lib.escapeShellArg name} "$repo" "$branch" >&2
-                  rc=1
-                  continue
-                fi
-                printf 'git-autopush ALLOW agent=%q repo=%q remote=%q branch=%q\n' ${lib.escapeShellArg name} "$repo" "$url" "$branch"
-                if ! git -C "$repo" -c safe.directory="$repo" \
-                  -c credential.helper="$helper" push origin "HEAD:refs/heads/$branch"; then
-                  printf 'git-autopush ERROR agent=%q repo=%q branch=%q reason=push-failed\n' ${lib.escapeShellArg name} "$repo" "$branch" >&2
-                  rc=1
-                fi
-              done < <(find "$root" -maxdepth 4 -name .git \( -type d -o -type f \) -print0 2>/dev/null)
-              exit "$rc"
-            '';
-          };
-        }
-      );
 
       # Launch `hermes dashboard` inside the container, auto-restarting (a foreground
       # docker exec under Type=simple dies when the container restarts → systemd
@@ -529,41 +457,8 @@ let
         ++ research.assertions
         ++ lib.optionals (gitAutoPush != null) [
           {
-            assertion = gitAutoPush ? tokenEnvFile;
-            message = "tentaflake: Hermes agent ${name} gitAutoPush requires tokenEnvFile pointing to a runtime-only host credential file.";
-          }
-          {
-            assertion = (gitAutoPush.allowedRemotes or [ ]) != [ ];
-            message = "tentaflake: Hermes agent ${name} gitAutoPush requires a non-empty allowedRemotes list of full canonical HTTPS repository URLs.";
-          }
-          {
-            assertion = (gitAutoPush.allowedBranches or [ "main" ]) != [ ];
-            message = "tentaflake: Hermes agent ${name} gitAutoPush requires at least one allowed branch.";
-          }
-          {
-            assertion = lib.match "^[A-Z_][A-Z0-9_]*$" (gitAutoPush.tokenEnvVar or "GH_TOKEN") != null;
-            message = "tentaflake: Hermes agent ${name} gitAutoPush tokenEnvVar is not a safe environment variable name.";
-          }
-          {
-            assertion = lib.match "^/run/[A-Za-z0-9._+/-]+$" (gitAutoPush.tokenEnvFile or "") != null;
-            message = "tentaflake: Hermes agent ${name} gitAutoPush tokenEnvFile must be an absolute, shell-safe runtime path below /run.";
-          }
-          {
-            assertion =
-              let
-                workspaceRoot = "${stateDir}/workspace";
-                reposRoot = gitAutoPush.reposRoot or workspaceRoot;
-              in
-              reposRoot == workspaceRoot || lib.hasPrefix "${workspaceRoot}/" reposRoot;
-            message = "tentaflake: Hermes agent ${name} gitAutoPush reposRoot must stay inside its own workspace.";
-          }
-          {
-            assertion = lib.all (
-              remote:
-              lib.match "^https://github[.]com/[A-Za-z0-9._-]+/[A-Za-z0-9._-]+([.]git)?$" remote != null
-              && !(lib.hasSuffix ".git.git" remote)
-            ) (gitAutoPush.allowedRemotes or [ ]);
-            message = "tentaflake: Hermes agent ${name} gitAutoPush allowedRemotes must contain canonical github.com HTTPS repository URLs.";
+            assertion = false;
+            message = "tentaflake: Hermes agent ${name} gitAutoPush is disabled because agent-owned Git metadata can execute host programs and redirect credentials. Set gitAutoPush = null, stop the old autopush timer/service, and revoke its token; see docs/07-operations.md.";
           }
         ]
         ++ lib.optionals secure [
@@ -656,7 +551,6 @@ let
           healSvc
           seedSvc
           gitIdentitySvc
-          autopushSvc
           dashboardSvc
           agentServicesSvc
           providerHealthcheckSvc
@@ -669,19 +563,6 @@ let
             ${ctrServiceAttr} = {
               requires = runtimeDependencies;
               after = runtimeDependencies;
-            };
-          })
-        ];
-
-        # ── systemd timers (git auto-push) ──
-        timers = lib.mkMerge [
-          (lib.optionalAttrs (gitAutoPush != null) {
-            "hermes-${name}-autopush" = {
-              wantedBy = [ "timers.target" ];
-              timerConfig = {
-                OnBootSec = "3min";
-                OnUnitActiveSec = gitAutoPush.interval or "2min";
-              };
             };
           })
         ];

@@ -151,25 +151,21 @@ allowlist, container `FORWARD` policy, DNS control, or secure egress broker.
 
 ## Git auto-push
 
-Every enabled host-side push needs a runtime `tokenEnvFile`, a non-empty list
-of canonical full GitHub HTTPS remotes, and at least one branch:
+Host-side `gitAutoPush` is disabled in all profiles. Every non-null setting is
+rejected at evaluation; the adapter emits no push service or timer and imports
+no publication credential. Existing consumers must remove the setting or use
+`gitAutoPush = null`.
 
-```nix
-gitAutoPush = {
-  tokenEnvFile = "/run/agenix/github-coding";
-  allowedRemotes = [
-    "https://github.com/example/coding.git"
-  ];
-  allowedBranches = [ "main" ];
-};
-```
+Agent-owned Git metadata is executable input: hooks, included configuration and
+helpers can run with the host process's authority. A checked fetch URL does not
+bind the push destination or credential use. The former root service therefore
+did not provide the advertised credential boundary.
 
-The host helper canonicalizes scheme, host, owner, and repository, rejects
-userinfo, subdomains, alternate schemes, extra paths, query/fragment syntax,
-and double `.git` suffixes, then pushes the exact checked branch. It uses a
-repository-scoped `safe.directory`, never `*`, and writes allow/deny/error
-records to journald. Use a fine-grained repository token or GitHub App
-credential with only contents-write permission.
+Existing installed units are not stopped by a source update. Stop the old timer
+and service, revoke its token, and activate the disabled configuration using the
+[operations migration](07-operations.md#git-auto-push). There is no replacement
+automatic publication capability; local commits and in-container Git identity
+remain available.
 
 ## Posture check
 

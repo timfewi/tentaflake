@@ -98,8 +98,20 @@ pub struct FetchPolicy {
     #[serde(default = "default_content_types")]
     pub allowed_content_types: Vec<String>,
     pub quarantine_dir: PathBuf,
+    #[serde(default = "default_quarantine_bytes")]
+    pub max_quarantine_bytes: u64,
+    #[serde(default = "default_quarantine_entries")]
+    pub max_quarantine_entries: usize,
     #[serde(default = "default_redirects")]
     pub max_redirects: usize,
+}
+
+fn default_quarantine_bytes() -> u64 {
+    64 * 1024 * 1024
+}
+
+fn default_quarantine_entries() -> usize {
+    1024
 }
 
 impl Config {
@@ -250,6 +262,9 @@ impl LlmPolicy {
 impl FetchPolicy {
     fn validate(&self) -> Result<(), String> {
         require_absolute_runtime_path(&self.quarantine_dir)?;
+        if self.max_quarantine_bytes == 0 || self.max_quarantine_entries == 0 {
+            return Err("quarantine byte and entry limits must be positive".into());
+        }
         if self.allowed_hosts.is_empty() || self.allowed_content_types.is_empty() {
             return Err("fetch policy requires non-empty host and content-type allowlists".into());
         }
@@ -433,12 +448,32 @@ mod tests {
     }
 
     #[test]
+    fn quarantine_defaults_are_finite_and_zero_limits_are_rejected() {
+        let value = serde_json::json!({
+            "allowed_hosts": ["example.com"],
+            "quarantine_dir": "/var/lib/tentaflake/quarantine"
+        });
+        let policy: FetchPolicy = serde_json::from_value(value.clone()).unwrap();
+        assert_eq!(policy.max_quarantine_bytes, 64 * 1024 * 1024);
+        assert_eq!(policy.max_quarantine_entries, 1024);
+        policy.validate().unwrap();
+        for field in ["max_quarantine_bytes", "max_quarantine_entries"] {
+            let mut invalid = value.clone();
+            invalid[field] = serde_json::json!(0);
+            let policy: FetchPolicy = serde_json::from_value(invalid).unwrap();
+            assert!(policy.validate().is_err());
+        }
+    }
+
+    #[test]
     fn rejects_dual_mode_and_zero_limits() {
         let mut config = base_config();
         config.fetch = Some(FetchPolicy {
             allowed_hosts: vec!["example.com".into()],
             allowed_content_types: default_content_types(),
             quarantine_dir: "/var/lib/tentaflake/quarantine".into(),
+            max_quarantine_bytes: default_quarantine_bytes(),
+            max_quarantine_entries: default_quarantine_entries(),
             max_redirects: 2,
         });
         assert!(config.validate().is_err());
@@ -461,6 +496,8 @@ mod tests {
             allowed_hosts: vec!["*.example.com".into()],
             allowed_content_types: default_content_types(),
             quarantine_dir: "/var/lib/tentaflake/quarantine".into(),
+            max_quarantine_bytes: default_quarantine_bytes(),
+            max_quarantine_entries: default_quarantine_entries(),
             max_redirects: 2,
         });
         assert!(config.validate().is_err());

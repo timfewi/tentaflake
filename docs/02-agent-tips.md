@@ -121,9 +121,10 @@ runtime secret mechanism and restart only the exact LLM broker. Verify its
 controller never receives the real provider value; the virtual key survives
 broker unit restarts and changes on host reboot.
 
-Research credentials belong to the separate Research service. Git auto-push,
-backup, and observability credentials also stay host-side. Direct environment
-files in an agent are a dev-only compatibility path; consult
+Research credentials belong to the separate Research service. Backup and
+observability credentials also stay host-side. Git auto-push is disabled; see
+the [migration procedure](07-operations.md#git-auto-push) for old tokens.
+Direct environment files in an agent are a dev-only compatibility path; consult
 [Agenix](04-agenix-secrets.md). Runtime files below `/run` must be provisioned
 again at boot by the deployment's secret mechanism.
 

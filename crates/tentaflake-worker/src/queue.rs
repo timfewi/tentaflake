@@ -168,7 +168,271 @@ pub(super) fn usage(config: &Config) -> Result<(usize, u64)> {
     Ok((entries, bytes))
 }
 
+// Empty ID receipts outlive result retention; running claims reserve full
+// worst-case capacity, while completed trees are charged their actual usage.
+#[derive(Debug)]
+pub(super) struct RetainedUsage {
+    receipts: Vec<String>,
+    running: Vec<bool>,
+    bytes: u64,
+    entries: u64,
+    results: usize,
+}
+
+fn job_storage_budget(config: &Config) -> CopyBudget {
+    CopyBudget {
+        bytes_left: config
+            .max_snapshot_bytes
+            .saturating_mul(2)
+            .saturating_add(config.max_log_bytes as u64)
+            .saturating_add(16 * 1024),
+        entries_left: config
+            .max_snapshot_entries
+            .saturating_mul(2)
+            .saturating_add(8),
+    }
+}
+
+// Publication can stop before the link or between link and staging unlink.
+// Recover only empty private staging files whose link count proves either
+// state; never remove a published ID receipt or an unexplained hardlink.
+fn recover_reservation_staging(config: &Config) -> Result<()> {
+    let parent = config.state_dir.join("reservations");
+    let fd = open_path_no_symlinks(&parent)?;
+    let names = list_fd_dir(fd.as_raw_fd(), 8192, false)?;
+    let mut staging = Vec::new();
+    for name in &names {
+        let raw = name.to_str().ok_or("invalid retained reservation name")?;
+        if !raw.starts_with('.') {
+            continue;
+        }
+        let job = raw
+            .strip_prefix('.')
+            .and_then(|s| s.strip_suffix(".new"))
+            .ok_or("unknown reservation staging")?;
+        validate_identifier("reservation staging", job, 64)?;
+        let stat = fstatat_nofollow(fd.as_raw_fd(), name)?;
+        if stat.st_mode & libc::S_IFMT != libc::S_IFREG
+            || stat.st_size != 0
+            || stat.st_mode & 0o077 != 0
+            || stat.st_uid != unsafe { libc::geteuid() }
+        {
+            return Err("unsafe reservation staging".into());
+        }
+        if names.iter().any(|name| name == OsStr::new(job)) {
+            let published = fstatat_nofollow(fd.as_raw_fd(), OsStr::new(job))?;
+            if stat.st_nlink != 2
+                || published.st_nlink != 2
+                || stat.st_dev != published.st_dev
+                || stat.st_ino != published.st_ino
+            {
+                return Err("reservation staging does not match published receipt".into());
+            }
+        } else if stat.st_nlink != 1 {
+            return Err("reservation staging has unexplained hardlinks".into());
+        }
+        staging.push(name);
+    }
+    for name in &staging {
+        unlink_at(fd.as_raw_fd(), name)?;
+    }
+    if !staging.is_empty() {
+        sync_directory(&parent)?;
+    }
+    Ok(())
+}
+
+pub(super) fn check_retained(config: &Config) -> Result<RetainedUsage> {
+    recover_reservation_staging(config)?;
+    let fd = open_path_no_symlinks(&config.state_dir.join("reservations"))?;
+    let names = list_fd_dir(fd.as_raw_fd(), 4096, false)?;
+    let mut reserved = Vec::with_capacity(names.len());
+    for name in names {
+        let job = name.to_str().ok_or("invalid retained reservation name")?;
+        validate_identifier("retained reservation", job, 64)?;
+        let stat = fstatat_nofollow(fd.as_raw_fd(), &name)?;
+        if stat.st_mode & libc::S_IFMT != libc::S_IFREG
+            || stat.st_nlink != 1
+            || stat.st_size != 0
+            || stat.st_mode & 0o022 != 0
+            || stat.st_uid != unsafe { libc::geteuid() }
+        {
+            return Err("unsafe retained reservation".into());
+        }
+        reserved.push(job.to_owned());
+    }
+    reserved.sort_unstable();
+    let full = job_storage_budget(config);
+    let mut budgets: Vec<CopyBudget> = reserved
+        .iter()
+        .map(|_| job_storage_budget(config))
+        .collect();
+    let mut running = vec![false; reserved.len()];
+    let mut occupied = vec![false; reserved.len()];
+    let mut occupied_count = 0;
+    let mut total_bytes = 0_u64;
+    let mut total_entries = 0_u64;
+    for directory in ["running", "results", "jobs"] {
+        let fd = open_path_no_symlinks(&config.state_dir.join(directory))?;
+        let names = list_fd_dir(
+            fd.as_raw_fd(),
+            (config.max_retained_results as u64).saturating_mul(2),
+            false,
+        )?;
+        for name in names {
+            let raw = name.to_str().ok_or("invalid retained state name")?;
+            let job = if directory == "running" {
+                raw.strip_suffix(".json").ok_or("unknown running state")?
+            } else if directory == "results" && raw.starts_with('.') {
+                raw.strip_prefix('.')
+                    .and_then(|s| s.strip_suffix(".tmp"))
+                    .ok_or("unknown result staging")?
+            } else {
+                raw
+            };
+            let index = reserved
+                .binary_search_by(|id| id.as_str().cmp(job))
+                .map_err(|_| "unreserved legacy worker state; operator reconciliation required")?;
+            if !occupied[index] {
+                occupied_count += 1;
+                occupied[index] = true;
+            }
+            if occupied_count > config.max_retained_results {
+                return Err("retained result count ceiling exceeded".into());
+            }
+            let stat = fstatat_nofollow(fd.as_raw_fd(), &name)?;
+            if stat.st_uid != unsafe { libc::geteuid() }
+                || stat.st_mode & 0o022 != 0
+                || (directory == "jobs" && stat.st_mode & 0o077 != 0)
+            {
+                return Err("unsafe retained state ownership or permissions".into());
+            }
+            if directory == "running" {
+                if stat.st_mode & libc::S_IFMT != libc::S_IFREG
+                    || stat.st_nlink != 1
+                    || stat.st_size < 0
+                    || stat.st_size as u64 > config.max_request_bytes
+                {
+                    return Err("unsafe retained running claim".into());
+                }
+                running[index] = true;
+                total_bytes = total_bytes
+                    .checked_add(full.bytes_left)
+                    .ok_or("retained size overflow")?;
+                total_entries = total_entries
+                    .checked_add(full.entries_left)
+                    .ok_or("retained entry overflow")?;
+                if total_bytes > config.max_retained_result_bytes
+                    || total_entries > config.max_retained_entries
+                {
+                    return Err("retained running reservations exceed aggregate capacity".into());
+                }
+                continue;
+            }
+            if stat.st_mode & libc::S_IFMT != libc::S_IFDIR {
+                return Err("retained state must be a directory".into());
+            }
+            let before_bytes = budgets[index].bytes_left;
+            let before_entries = budgets[index].entries_left;
+            let child = open_dir_at(fd.as_raw_fd(), &name).map_err(|e| e.to_string())?;
+            scan_retained_tree(
+                child.as_raw_fd(),
+                &mut budgets[index],
+                0,
+                directory == "jobs",
+            )?;
+            if !running[index] {
+                total_bytes = total_bytes
+                    .checked_add(before_bytes - budgets[index].bytes_left)
+                    .ok_or("retained size overflow")?;
+                total_entries = total_entries
+                    .checked_add(before_entries - budgets[index].entries_left)
+                    .ok_or("retained entry overflow")?;
+                if total_bytes > config.max_retained_result_bytes
+                    || total_entries > config.max_retained_entries
+                {
+                    return Err("retained trees exceed aggregate capacity".into());
+                }
+            }
+        }
+    }
+    Ok(RetainedUsage {
+        results: occupied_count,
+        receipts: reserved,
+        running,
+        bytes: total_bytes,
+        entries: total_entries,
+    })
+}
+
+fn scan_retained_tree(
+    fd: RawFd,
+    budget: &mut CopyBudget,
+    depth: usize,
+    snapshot: bool,
+) -> Result<()> {
+    // One wrapper (input, artifacts-export, or artifacts) surrounds every
+    // producer tree below the job/result directory scanned at depth zero.
+    if depth > MAX_TREE_DEPTH + 1 {
+        return Err("retained directory depth exceeds ceiling".into());
+    }
+    for name in list_fd_dir(fd, budget.entries_left, false)? {
+        budget.entries_left = budget
+            .entries_left
+            .checked_sub(1)
+            .ok_or("retained entry ceiling exceeded")?;
+        let stat = fstatat_nofollow(fd, &name)?;
+        // Snapshot descendants preserve source modes. Their root-owned 0700
+        // job ancestor, checked above, prevents controller access; result
+        // trees have no such private ancestor and must remain non-writable.
+        if stat.st_uid != unsafe { libc::geteuid() }
+            || (!snapshot
+                && stat.st_mode & libc::S_IFMT != libc::S_IFLNK
+                && stat.st_mode & 0o022 != 0)
+        {
+            return Err("unsafe retained entry ownership or permissions".into());
+        }
+        match stat.st_mode & libc::S_IFMT {
+            libc::S_IFDIR => {
+                let child = open_dir_at(fd, &name).map_err(|e| e.to_string())?;
+                scan_retained_tree(child.as_raw_fd(), budget, depth + 1, snapshot)?;
+            }
+            libc::S_IFREG if stat.st_nlink == 1 => {
+                let size = u64::try_from(stat.st_size).map_err(|_| "invalid retained size")?;
+                budget.bytes_left = budget
+                    .bytes_left
+                    .checked_sub(size)
+                    .ok_or("retained byte ceiling exceeded")?;
+            }
+            libc::S_IFLNK if snapshot && stat.st_size <= 4096 => {}
+            _ => return Err("unsafe retained entry".into()),
+        }
+    }
+    Ok(())
+}
+
+pub(super) fn reserve_result(config: &Config, job: &str) -> Result<()> {
+    let usage = check_retained(config)?;
+    let existing = usage.receipts.iter().position(|id| id == job);
+    if existing.is_some_and(|index| usage.running[index]) {
+        return Ok(());
+    }
+    let full = job_storage_budget(config);
+    if usage.results >= config.max_retained_results
+        || full.bytes_left > config.max_retained_result_bytes.saturating_sub(usage.bytes)
+        || full.entries_left > config.max_retained_entries.saturating_sub(usage.entries)
+        || (existing.is_none() && usage.receipts.len() >= 4096)
+    {
+        return Err("retained worker capacity is full; no results or receipts were removed".into());
+    }
+    if existing.is_none() {
+        write_private(&config.state_dir.join("reservations").join(job), b"")?;
+    }
+    Ok(())
+}
+
 pub(super) fn claim(config: &Config, request: &JobRequest) -> Result<()> {
+    reserve_result(config, &request.id)?;
     let pending = config.state_dir.join("pending");
     let running = config.state_dir.join("running");
     let name = format!("{}.json", request.id);
@@ -390,6 +654,9 @@ mod tests {
                 max_inbox_bytes: 8 * 1024 * 1024,
                 max_queue_entries: 256,
                 max_queue_bytes: 8 * 1024 * 1024,
+                max_retained_results: 1024,
+                max_retained_result_bytes: default_retained_result_bytes(),
+                max_retained_entries: default_retained_entries(),
                 max_snapshot_bytes: 65536,
                 max_snapshot_entries: 64,
                 max_log_bytes: 1024,
@@ -509,10 +776,10 @@ mod tests {
         let request = f.request(ActionClass::LocalReversible);
         f.pending(&request);
         fs::create_dir_all(f.config.state_dir.join("jobs/job_1/input")).unwrap();
-        drain(&f.config).unwrap();
-        assert!(!f.calls().contains("create "));
-        assert!(terminal(&f.config, &request).unwrap());
-        assert!(!f.config.state_dir.join("jobs/job_1").exists());
+        assert!(drain(&f.config).unwrap_err().contains("unreserved legacy"));
+        assert_eq!(f.calls(), "");
+        assert!(pending_path(&f.config, &request.id).exists());
+        assert!(f.config.state_dir.join("jobs/job_1/input").is_dir());
     }
 
     #[test]
@@ -649,5 +916,308 @@ mod tests {
         assert!(drain(&f.config).unwrap_err().contains("unowned"));
         assert!(f.config.state_dir.join("running/job_1.json").is_file());
         assert!(!terminal(&f.config, &request).unwrap());
+    }
+
+    #[test]
+    fn aggregate_byte_reservation_is_exact_and_archival_releases_capacity() {
+        let mut f = Fixture::new("aggregate-retained");
+        let full = job_storage_budget(&f.config).bytes_left;
+        f.config.max_retained_result_bytes = full + 100;
+        reserve_result(&f.config, "old").unwrap();
+        let result = f.config.state_dir.join("results/old");
+        fs::create_dir(&result).unwrap();
+        fs::write(result.join("artifact"), [0_u8; 101]).unwrap();
+        assert!(
+            reserve_result(&f.config, "next")
+                .unwrap_err()
+                .contains("capacity is full")
+        );
+        fs::write(result.join("artifact"), [0_u8; 100]).unwrap();
+        let mut request = f.request(ActionClass::LocalReversible);
+        request.id = "next".into();
+        f.pending(&request);
+        claim(&f.config, &request).unwrap();
+        assert_eq!(check_retained(&f.config).unwrap().bytes, full + 100);
+        assert!(reserve_result(&f.config, "third").is_err());
+        // Explicit operator archival preserves the artifact outside active state.
+        fs::rename(&result, f.root.join("archived-result")).unwrap();
+        assert!(job_exists(&f.config, "old"));
+        assert_eq!(check_retained(&f.config).unwrap().bytes, full);
+        assert_eq!(
+            fs::read(f.root.join("archived-result/artifact"))
+                .unwrap()
+                .len(),
+            100
+        );
+        assert_eq!(f.calls(), "");
+    }
+
+    #[test]
+    fn retained_slots_stop_dispatch_without_losing_receipts() {
+        let mut f = Fixture::new("retained-slots");
+        f.config.max_retained_results = 2;
+        for id in ["job_1", "job_2"] {
+            let mut request = f.request(ActionClass::LocalReversible);
+            request.id = id.into();
+            f.pending(&request);
+            assert!(drain(&f.config).is_err()); // fake OCI create fails
+            drain(&f.config).unwrap(); // interrupted, never replayed
+        }
+        let receipt = fs::read(f.config.state_dir.join("results/job_1/result.json")).unwrap();
+        let mut third = f.request(ActionClass::LocalReversible);
+        third.id = "job_3".into();
+        f.pending(&third);
+        let calls = f.calls();
+        for _ in 0..3 {
+            assert!(drain(&f.config).unwrap_err().contains("capacity is full"));
+        }
+        assert_eq!(f.calls(), calls);
+        assert_eq!(
+            fs::read(f.config.state_dir.join("results/job_1/result.json")).unwrap(),
+            receipt
+        );
+        assert!(pending_path(&f.config, "job_3").exists());
+        assert_eq!(check_retained(&f.config).unwrap().results, 2);
+        assert_eq!(
+            fs::read_dir(f.config.state_dir.join("reservations"))
+                .unwrap()
+                .count(),
+            2
+        );
+    }
+
+    #[test]
+    fn retained_scan_enforces_exact_bytes_entries_and_unsafe_state() {
+        let mut f = Fixture::new("retained-scan");
+        f.config.max_retained_results = 1;
+        reserve_result(&f.config, "job_1").unwrap();
+        let result = f.config.state_dir.join("results/job_1");
+        fs::create_dir(&result).unwrap();
+        let path = result.join("artifact");
+        let ceiling = 2 * f.config.max_snapshot_bytes + f.config.max_log_bytes as u64 + 16 * 1024;
+        let file = File::create(&path).unwrap();
+        file.set_len(ceiling).unwrap();
+        check_retained(&f.config).unwrap();
+        file.set_len(ceiling + 1).unwrap();
+        assert!(
+            check_retained(&f.config)
+                .unwrap_err()
+                .contains("byte ceiling")
+        );
+        file.set_len(0).unwrap();
+        let entries = 2 * f.config.max_snapshot_entries + 8;
+        for n in 1..entries {
+            fs::write(result.join(format!("entry_{n}")), b"").unwrap();
+        }
+        check_retained(&f.config).unwrap();
+        fs::write(result.join("overflow"), b"").unwrap();
+        assert!(check_retained(&f.config).is_err());
+        fs::remove_file(result.join("overflow")).unwrap();
+        fs::remove_file(&path).unwrap();
+        symlink(&f.root, &path).unwrap();
+        assert!(check_retained(&f.config).unwrap_err().contains("unsafe"));
+        assert!(
+            fs::symlink_metadata(&path)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+    }
+
+    #[test]
+    fn aggregate_entries_reserve_the_full_inflight_tree() {
+        let mut f = Fixture::new("aggregate-entries");
+        let full = job_storage_budget(&f.config).entries_left;
+        f.config.max_retained_entries = full + 1;
+        reserve_result(&f.config, "old").unwrap();
+        let result = f.config.state_dir.join("results/old");
+        fs::create_dir(&result).unwrap();
+        fs::write(result.join("one"), b"").unwrap();
+        fs::write(result.join("two"), b"").unwrap();
+        assert!(
+            reserve_result(&f.config, "next")
+                .unwrap_err()
+                .contains("capacity is full")
+        );
+        fs::rename(result.join("two"), f.root.join("archived-entry")).unwrap();
+        reserve_result(&f.config, "next").unwrap();
+        assert_eq!(check_retained(&f.config).unwrap().entries, 1);
+        assert!(result.join("one").exists());
+        assert!(f.root.join("archived-entry").exists());
+    }
+
+    #[test]
+    fn reservation_publication_crashes_recover_without_losing_receipts() {
+        for linked in [false, true] {
+            let f = Fixture::new("reservation-publication");
+            let parent = f.config.state_dir.join("reservations");
+            let staging = parent.join(".job_1.new");
+            let receipt = parent.join("job_1");
+            fs::write(&staging, b"").unwrap();
+            fs::set_permissions(&staging, fs::Permissions::from_mode(0o600)).unwrap();
+            if linked {
+                fs::hard_link(&staging, &receipt).unwrap();
+            }
+            drain(&f.config).unwrap();
+            assert!(!staging.exists());
+            assert_eq!(receipt.exists(), linked);
+            if linked {
+                assert!(fs::read(&receipt).unwrap().is_empty());
+                assert!(job_exists(&f.config, "job_1"));
+            }
+            assert_eq!(f.calls(), "");
+        }
+    }
+
+    #[test]
+    fn unsafe_reservation_staging_is_preserved_and_refused() {
+        for case in [
+            "symlink",
+            "nonempty",
+            "unrelated-link",
+            "mismatched-receipt",
+        ] {
+            let f = Fixture::new("unsafe-reservation");
+            let parent = f.config.state_dir.join("reservations");
+            let staging = parent.join(".job_1.new");
+            let outside = f.root.join("outside");
+            fs::write(&outside, b"").unwrap();
+            fs::set_permissions(&outside, fs::Permissions::from_mode(0o600)).unwrap();
+            match case {
+                "symlink" => symlink(&outside, &staging).unwrap(),
+                "unrelated-link" => fs::hard_link(&outside, &staging).unwrap(),
+                _ => {
+                    fs::write(
+                        &staging,
+                        if case == "nonempty" {
+                            b"x".as_slice()
+                        } else {
+                            b"".as_slice()
+                        },
+                    )
+                    .unwrap();
+                    fs::set_permissions(&staging, fs::Permissions::from_mode(0o600)).unwrap();
+                    if case == "mismatched-receipt" {
+                        fs::write(parent.join("job_1"), b"").unwrap();
+                    }
+                }
+            }
+            assert!(drain(&f.config).is_err(), "{case}");
+            assert!(fs::symlink_metadata(&staging).is_ok());
+            assert!(outside.exists());
+            assert_eq!(f.calls(), "");
+        }
+    }
+
+    #[test]
+    fn writable_source_modes_do_not_block_private_snapshot_recovery() {
+        let f = Fixture::new("snapshot-modes");
+        let request = f.request(ActionClass::LocalReversible);
+        f.pending(&request);
+        claim(&f.config, &request).unwrap();
+        let job = f.config.state_dir.join("jobs/job_1");
+        let input = job.join("input");
+        fs::create_dir(&job).unwrap();
+        fs::set_permissions(&job, fs::Permissions::from_mode(0o700)).unwrap();
+        fs::create_dir(&input).unwrap();
+        fs::set_permissions(&input, fs::Permissions::from_mode(0o775)).unwrap();
+        fs::write(input.join("source"), b"fixture").unwrap();
+        fs::set_permissions(input.join("source"), fs::Permissions::from_mode(0o664)).unwrap();
+        drain(&f.config).unwrap();
+        assert!(!job.exists());
+        assert!(!f.calls().contains("create "));
+        let result: JobResult = serde_json::from_slice(
+            &fs::read(f.config.state_dir.join("results/job_1/result.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(result.status, "interrupted");
+        assert!(!f.config.state_dir.join("running/job_1.json").exists());
+    }
+
+    #[test]
+    fn deepest_imported_artifacts_remain_valid_after_publication() {
+        let mut f = Fixture::new("artifact-depth");
+        f.config.max_snapshot_entries = 512;
+        let request = f.request(ActionClass::LocalReversible);
+        reserve_result(&f.config, &request.id).unwrap();
+        let staging = f.config.state_dir.join("results/.job_1.tmp");
+        let artifacts = staging.join("artifacts");
+        fs::create_dir_all(&artifacts).unwrap();
+        let relative: PathBuf = std::iter::repeat_n("d", MAX_TREE_DEPTH).collect();
+        let mut builder = tar::Builder::new(Vec::new());
+        let mut header = tar::Header::new_gnu();
+        header.set_entry_type(tar::EntryType::dir());
+        header.set_mode(0o750);
+        header.set_size(0);
+        header.set_cksum();
+        builder
+            .append_data(&mut header, &relative, io::empty())
+            .unwrap();
+        let archive = builder.into_inner().unwrap();
+        import_artifact_tar(archive.as_slice(), &artifacts, 1024, 512).unwrap();
+        publish_result(&staging, &f.config.state_dir.join("results/job_1")).unwrap();
+        check_retained(&f.config).unwrap();
+        assert!(
+            f.config
+                .state_dir
+                .join("results/job_1/artifacts")
+                .join(relative)
+                .is_dir()
+        );
+    }
+
+    #[test]
+    fn snapshot_depth_boundary_recovers_and_overflow_never_dispatches() {
+        for extra in [0, 1] {
+            let mut f = Fixture::new("snapshot-depth");
+            f.config.max_snapshot_entries = 512;
+            let relative: PathBuf = std::iter::repeat_n("d", MAX_TREE_DEPTH + extra).collect();
+            fs::create_dir_all(f.config.workspace.join(&relative)).unwrap();
+            let request = f.request(ActionClass::LocalReversible);
+            f.pending(&request);
+            if extra == 0 {
+                claim(&f.config, &request).unwrap();
+                let job = f.config.state_dir.join("jobs/job_1");
+                let input = job.join("input");
+                fs::create_dir(&job).unwrap();
+                fs::set_permissions(&job, fs::Permissions::from_mode(0o700)).unwrap();
+                fs::create_dir(&input).unwrap();
+                let source = open_path_no_symlinks(&f.config.workspace).unwrap();
+                let mut budget = CopyBudget {
+                    bytes_left: 65536,
+                    entries_left: 512,
+                };
+                copy_directory_fd(source.as_raw_fd(), &input, &mut budget, true).unwrap();
+                check_retained(&f.config).unwrap();
+            }
+            drain(&f.config).unwrap();
+            let result: JobResult = serde_json::from_slice(
+                &fs::read(f.config.state_dir.join("results/job_1/result.json")).unwrap(),
+            )
+            .unwrap();
+            assert_eq!(
+                result.status,
+                if extra == 0 {
+                    "interrupted"
+                } else {
+                    "rejected"
+                }
+            );
+            assert!(!f.calls().contains("create "));
+            assert!(!f.config.state_dir.join("jobs/job_1").exists());
+            drain(&f.config).unwrap();
+        }
+    }
+
+    #[test]
+    fn repeated_audit_failures_do_not_grow_metadata() {
+        let f = Fixture::new("audit-bound");
+        let path = f.config.state_dir.join("audit.jsonl");
+        let file = File::create(&path).unwrap();
+        file.set_len(1024 * 1024).unwrap();
+        for _ in 0..3 {
+            assert!(audit(&f.config, "unknown", "rejected", None, "fixture").is_err());
+        }
+        assert_eq!(file.metadata().unwrap().len(), 1024 * 1024);
     }
 }

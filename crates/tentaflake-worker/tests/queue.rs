@@ -183,6 +183,93 @@ fn sigkill_at_dispatch_boundary_preserves_claim_and_restart_does_not_replay() {
 }
 
 #[test]
+fn blocking_completion_polls_time_out_clean_up_and_release_queue() {
+    for block_on_recheck in [false, true] {
+        let f = Fixture::new();
+        let runtime = f.root.join("fake-oci");
+        let original = fs::read_to_string(&runtime).unwrap();
+        let shebang = original.lines().next().unwrap();
+        let fifo =
+            std::ffi::CString::new(f.root.join("marker-fifo").as_os_str().as_encoded_bytes())
+                .unwrap();
+        assert_eq!(unsafe { libc::mkfifo(fifo.as_ptr(), 0o600) }, 0);
+        fs::write(
+            &runtime,
+            format!(
+                r#"{shebang}
+cd '{}'
+printf '%s\n' "$1" >> calls
+case "$1" in
+  ps|create|start|kill|rm|logs) exit 0;;
+  inspect) printf 'true\n';;
+  exec)
+    if [ "$3" = head ]; then
+      if [ '{}' = true ] && [ ! -f polled ]; then
+        : > polled
+        printf 'TFW1:0123456789abcdef0123456789abcdef:0\n'
+      else
+        : > blocked
+        read -r marker < marker-fifo
+      fi
+    else
+      tar -cf - --files-from /dev/null
+    fi;;
+  *) exit 77;;
+esac
+"#,
+                f.root.display(),
+                block_on_recheck,
+            ),
+        )
+        .unwrap();
+        fs::write(f.root.join("workspace/.tentaflake-worker/inbox/job_1.json"),
+            br#"{"version":1,"id":"job_1","action_class":"local-reversible","argv":["true"],"timeout_seconds":1}"#).unwrap();
+        let mut child = f
+            .command(&["drain"])
+            .process_group(0)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(4);
+        let status = loop {
+            if let Some(status) = child.try_wait().unwrap() {
+                break Some(status);
+            }
+            if Instant::now() >= deadline {
+                // Bound the regression itself, including the original blocking
+                // runtime when demonstrating failure before the fix.
+                unsafe { libc::kill(-(child.id() as i32), libc::SIGKILL) };
+                child.wait().unwrap();
+                break None;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        };
+        assert!(
+            status.is_some_and(|status| status.success()),
+            "poll held queue past deadline"
+        );
+        assert!(f.root.join("blocked").exists());
+        let result: serde_json::Value = serde_json::from_slice(
+            &fs::read(f.root.join("state/results/job_1/result.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(result["status"], "timed-out");
+        assert_eq!(result["artifacts_available"], false);
+        assert!(!f.root.join("state/jobs/job_1").exists());
+        assert!(!f.root.join("state/running/job_1.json").exists());
+        let calls = fs::read_to_string(f.root.join("calls")).unwrap();
+        assert!(calls.lines().any(|call| call == "kill"));
+        assert!(calls.lines().any(|call| call == "rm"));
+        // A new operator can acquire the lock, and a drain never replays work.
+        f.success(&["requests"]);
+        assert!(f.command(&["drain"]).status().unwrap().success());
+        let calls = fs::read_to_string(f.root.join("calls")).unwrap();
+        assert_eq!(calls.lines().filter(|call| *call == "create").count(), 1);
+    }
+}
+
+#[test]
 fn interrupted_private_write_keeps_inbox_and_restart_captures_complete_request() {
     let f = Fixture::new();
     let inbox = f.root.join("workspace/.tentaflake-worker/inbox/job_1.json");
@@ -610,5 +697,45 @@ fn request_scan_counts_ignored_entries_before_reporting_any_rows() {
     assert!(!output.status.success());
     assert!(output.stdout.is_empty());
     assert!(String::from_utf8_lossy(&output.stderr).contains("limit:"));
+    assert!(!f.root.join("calls").exists());
+}
+
+#[test]
+fn old_config_allows_small_results_and_explicit_count_limit_stops_admission() {
+    let f = Fixture::new();
+    let config: serde_json::Value = serde_json::from_slice(&fs::read(&f.config).unwrap()).unwrap();
+    assert!(config.get("max_retained_results").is_none());
+    assert!(config.get("max_retained_result_bytes").is_none());
+    for id in ["job_1", "job_2", "job_3", "job_4"] {
+        if id == "job_4" {
+            let mut bounded = config.clone();
+            bounded["max_retained_results"] = serde_json::json!(3);
+            fs::write(&f.config, serde_json::to_vec(&bounded).unwrap()).unwrap();
+        }
+        let request = serde_json::json!({
+            "version": 1, "id": id, "action_class": "forbidden",
+            "argv": ["true"], "timeout_seconds": 1
+        });
+        fs::write(
+            f.root
+                .join(format!("workspace/.tentaflake-worker/inbox/{id}.json")),
+            serde_json::to_vec(&request).unwrap(),
+        )
+        .unwrap();
+        let output = f.command(&["drain"]).output().unwrap();
+        assert_eq!(output.status.success(), id != "job_4");
+        if id == "job_4" {
+            assert!(String::from_utf8_lossy(&output.stderr).contains("capacity is full"));
+        }
+    }
+    for id in ["job_1", "job_2", "job_3"] {
+        assert!(
+            f.root
+                .join(format!("state/results/{id}/result.json"))
+                .is_file()
+        );
+        assert!(f.root.join(format!("state/reservations/{id}")).is_file());
+    }
+    assert!(f.root.join("state/pending/job_4.json").is_file());
     assert!(!f.root.join("calls").exists());
 }

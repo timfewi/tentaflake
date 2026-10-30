@@ -99,8 +99,20 @@ while an explicit non-ready response is high severity because broker health
 checks credentials and audit persistence. Complete controller-tool audit
 coverage and cross-agent network denial remain separate runtime evidence.
 
-`backup` creates a mode-`0600`, caller-owned archive of one state directory in
-the current directory. It does not back up secret-provider identities.
+`backup` exclusively creates a mode-`0600`, caller-owned archive of one state
+directory in the current directory before starting privileged reads. Existing
+files and symlinks at the timestamped archive name are refused; retry in a later
+second or use another directory. Privileged `tar` writes to the already-open
+file descriptor, never reopening or changing ownership of an output pathname.
+The source remains the state directory in the trusted host inventory; this
+command does not back up secret-provider identities.
+
+On failure, a private empty or partial archive is retained and reported. Inspect
+and remove it manually before retrying with the same name. The CLI deliberately
+does not unlink the output pathname: another process could have replaced it
+while the backup was running. Use an operator-controlled current directory so
+other users cannot rename or replace the archive; descriptor-based writes do
+not prevent such directory-entry changes.
 
 `rebuild` and the apply step offered by `update` activate NixOS. Invoke them
 only when the target is resolved and activation is intended.

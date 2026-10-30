@@ -19,15 +19,8 @@
       email = "coding@example.invalid";
     };
 
-    # Host-side push is optional. The token never enters the agent, and both
-    # remote and branch must match exactly after canonicalization.
-    # gitAutoPush = {
-    #   tokenEnvFile = "/run/agenix/github-coding";
-    #   allowedRemotes = [
-    #     "https://github.com/example/coding.git"
-    #   ];
-    #   allowedBranches = [ "main" ];
-    # };
+    # Host-side gitAutoPush is disabled: agent-owned Git metadata cannot safely
+    # execute with host credentials. Leave null; see docs/07-operations.md.
   })
 
   (mkZeroClawAgent {

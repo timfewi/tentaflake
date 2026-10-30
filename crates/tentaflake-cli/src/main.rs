@@ -5,6 +5,7 @@ use std::fs;
 use std::io::{self, IsTerminal, Read, Write};
 use std::net::{SocketAddr, TcpStream};
 use std::os::fd::OwnedFd;
+use std::os::unix::fs::OpenOptionsExt;
 use std::os::unix::net::UnixStream;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
@@ -2433,45 +2434,34 @@ fn backup(agents: &[Agent], args: &[String]) -> Result<u8, String> {
     let stamp = output("date", &["-u", "+%Y%m%dT%H%M%SZ"])?;
     let stamp = String::from_utf8_lossy(&stamp.stdout).trim().to_owned();
     let archive = format!("tentaflake-{}-{stamp}.tar.gz", agent.name);
+    // Create as the caller before sudo starts. Never let a privileged command
+    // reopen the caller-controlled archive pathname.
+    let file = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(&archive)
+        .map_err(|error| format!("cannot create private backup {archive}: {error}"))?;
     let status = Command::new("sudo")
         .arg("tar")
         .arg("czf")
-        .arg(&archive)
+        .arg("-")
         .arg("-C")
         .arg(parent)
         .arg(base)
+        .stdout(Stdio::from(file))
         .status()
-        .map_err(|error| format!("cannot execute backup: {error}"))?;
+        .map_err(|error| {
+            format!("cannot execute backup: {error}; private output retained: {archive}")
+        })?;
     if !status.success() {
-        return Ok(status.code().unwrap_or(1) as u8);
-    }
-    let uid = current_id("-u")?;
-    let gid = current_id("-g")?;
-    let owner = format!("{uid}:{gid}");
-    let status = Command::new("sudo")
-        .args(["chown", &owner, &archive])
-        .status()
-        .map_err(|error| format!("cannot restore backup ownership: {error}"))?;
-    if !status.success() {
-        return Ok(status.code().unwrap_or(1) as u8);
-    }
-    let status = Command::new("chmod")
-        .args(["0600", &archive])
-        .status()
-        .map_err(|error| format!("cannot secure backup permissions: {error}"))?;
-    if !status.success() {
+        // The name may have been replaced while tar was running. Do not unlink
+        // it: leave the private partial archive for the operator to inspect.
+        eprintln!("backup failed; private partial output retained: {archive}");
         return Ok(status.code().unwrap_or(1) as u8);
     }
     println!("backup written: {archive}");
     Ok(0)
-}
-
-fn current_id(flag: &str) -> Result<String, String> {
-    let result = output("id", &[flag])?;
-    if !result.status.success() {
-        return Err(format!("`id {flag}` failed"));
-    }
-    Ok(String::from_utf8_lossy(&result.stdout).trim().to_owned())
 }
 
 fn rebuild(config: &Config) -> Result<u8, String> {

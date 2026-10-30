@@ -222,6 +222,17 @@ let
   ];
   publicSshAttempt = builtins.tryEval publicSshFixture.config.system.build.toplevel.drvPath;
 
+  disabledGitFixture = eval [
+    ../modules/default.nix
+    (hostModule "balanced")
+    (builders.mkHermesAgent {
+      name = "disabled-git";
+      autoStart = false;
+      gitAutoPush = null;
+    })
+  ];
+  disabledGitAttempt = builtins.tryEval disabledGitFixture.config.system.build.toplevel.drvPath;
+
   gitFixture = eval [
     ../modules/default.nix
     (hostModule "balanced")
@@ -235,7 +246,6 @@ let
       };
     })
   ];
-  gitScript = gitFixture.config.systemd.services."hermes-git-autopush".script;
   gitAttempt = builtins.tryEval gitFixture.config.system.build.toplevel.drvPath;
 
   unsafeGitFixture = eval [
@@ -945,13 +955,17 @@ assert !oversizedControllerCpuAttempt.success;
 assert !overpreciseControllerCpuAttempt.success;
 assert !missingManagementAttempt.success;
 assert !publicSshAttempt.success;
-assert gitAttempt.success;
+assert disabledGitAttempt.success;
+assert !(disabledGitFixture.config.systemd.services ? hermes-disabled-git-autopush);
+assert !(disabledGitFixture.config.systemd.timers ? hermes-disabled-git-autopush);
+assert !gitAttempt.success;
 assert !unsafeGitAttempt.success;
 assert !unsafeGitRootAttempt.success;
-assert lib.hasInfix "remote-check" gitScript;
-assert lib.hasInfix "safe.directory=\"$repo\"" gitScript;
-assert !(lib.hasInfix "safe.directory='*'" gitScript);
-assert !(lib.hasInfix "case \"$url\" in *github.com*" gitScript);
+assert !(gitFixture.config.systemd.services ? hermes-git-autopush);
+assert !(gitFixture.config.systemd.timers ? hermes-git-autopush);
+assert lib.any (
+  item: !item.assertion && lib.hasInfix "gitAutoPush is disabled" item.message
+) gitFixture.config.assertions;
 assert capsule.config.tentaflake.security.profile == "balanced";
 assert import ./management-policy.nix { inherit pkgs; };
 assert lib.hasPrefix "manifest\t2\n" capsuleManifest;
@@ -1286,6 +1300,7 @@ assert (builtins.head tailscalePolicy.ssh).action == "check";
 # Parse the configured flags with the pinned CLI. --help avoids contacting a
 # daemon, while an unsupported flag before it still fails during parsing.
 pkgs.runCommand "tentaflake-module-evaluation" { } ''
+  ${pkgs.python3}/bin/python3 ${./git-autopush-boundary.py} ${pkgs.git}/bin/git ${pkgs.runtimeShell}
   ${lib.getExe capsule.config.services.tailscale.package} set ${lib.escapeShellArgs capsule.config.services.tailscale.extraSetFlags} --help >/dev/null
   ${lib.getExe capsule.config.services.tailscale.package} up ${lib.escapeShellArgs capsule.config.services.tailscale.extraUpFlags} --help >/dev/null
   touch $out

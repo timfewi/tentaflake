@@ -45,24 +45,36 @@ resolving the target. Source changes and successful builds do not authorize
 
 ## Git auto-push
 
-The agent commits inside its workspace; a host unit performs the push with a
-credential the balanced agent never receives:
+`gitAutoPush` is disabled in every profile. The default remains `null`;
+any non-null value now fails evaluation with a migration error. No auto-push
+service, timer, or credential import is generated.
 
-```nix
-gitAutoPush = {
-  tokenEnvFile = "/run/agenix/github-coding";
-  allowedRemotes = [
-    "https://github.com/example/coding.git"
-  ];
-  allowedBranches = [ "main" ];
-  interval = "2min";
-};
-```
+The former root service ran Git against agent-owned repository metadata with a
+host token. Git hooks, included configuration and helpers can execute programs
+with that authority. Checking the fetch URL also does not constrain `pushurl`,
+URL rewrites or credential-helper destinations. Disabling hooks alone is not
+a fix.
 
-The helper requires an exact canonical HTTPS GitHub repository and exact
-branch. It rejects altered remotes and emits `ALLOW`, `DENY`, or `ERROR` to
-journald. Use a fine-grained repository token or GitHub App credential with
-only the required contents-write permission. The token file stays on the host.
+**Existing hosts require operator action; updating source alone does not stop
+an installed service.** For each previously enabled agent:
+
+1. Stop the timer and service immediately (substitute the configured agent name):
+   `sudo systemctl stop hermes-NAME-autopush.timer hermes-NAME-autopush.service`.
+2. Revoke the old publication credential and review repository/account audit
+   logs for unexpected access. Rotate any other credentials reachable by the
+   former root service if compromise is suspected.
+3. Remove `gitAutoPush` or set it to `null`, then rebuild and activate the host
+   configuration through your normal operator workflow. Confirm the old timer
+   and service are no longer installed or running.
+4. Remove the unused token-file provisioning if no other integration needs it.
+
+Local agent commits and `gitIdentity` remain supported. There is no automatic
+publication replacement. Publish only through an independently reviewed,
+least-privilege workflow with trusted Git metadata and an exact operator-owned
+repository/branch grant. Do not run host Git in the agent workspace or copy its
+`.git` directory into a credentialed checkout. Review exported content as
+untrusted input; neither a token kept outside the container nor a remote
+allowlist alone isolates Git execution.
 
 ## Legacy egress option
 

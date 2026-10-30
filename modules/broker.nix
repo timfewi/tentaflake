@@ -157,6 +157,16 @@ let
             type = lib.types.ints.between 0 10;
             default = 3;
           };
+          maxQuarantineBytes = lib.mkOption {
+            type = lib.types.ints.positive;
+            default = 64 * 1024 * 1024;
+            description = "Aggregate retained quarantine logical-byte limit; full storage fails closed without deleting evidence.";
+          };
+          maxQuarantineEntries = lib.mkOption {
+            type = lib.types.ints.positive;
+            default = 1024;
+            description = "Aggregate retained quarantine entry limit, including empty and partial objects.";
+          };
         };
       };
     }
@@ -214,6 +224,8 @@ let
           allowed_content_types = agent.fetch.allowedContentTypes;
           quarantine_dir = "/var/lib/tentaflake-broker-fetch-${name}/quarantine";
           max_redirects = agent.fetch.maxRedirects;
+          max_quarantine_bytes = agent.fetch.maxQuarantineBytes;
+          max_quarantine_entries = agent.fetch.maxQuarantineEntries;
         };
       }
     );

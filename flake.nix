@@ -73,13 +73,49 @@
       # remaining source- and dependency-hash pinned.
       devcontainerCli = import ./lib/devcontainer-cli.nix { inherit pkgs; };
 
+      # patchelf 0.19.2 cannot safely rewrite the locked upstream wheel's ELF
+      # layout. Invoke the unmodified binary through the Nix dynamic loader
+      # with an explicit library path instead; do not change dependency pins.
+      semgrep =
+        (pkgs.semgrep.override {
+          # Semgrep 1.180 imports FastMCP, removed from the default MCP 2.x.
+          mcp = pkgs.python3Packages.mcp_1;
+          semgrep-core = pkgs.semgrep-core.overrideAttrs {
+            postFixup = ''
+              mkdir -p "$out/libexec"
+              mv "$out/bin/semgrep-core" "$out/libexec/semgrep-core"
+              loader=$(cat ${pkgs.stdenv.cc}/nix-support/dynamic-linker)
+              "$CC" -O2 -Wall -Wextra -Werror \
+                -DLOADER="\"$loader\"" \
+                -DCORE="\"$out/libexec/semgrep-core\"" \
+                -DLIBRARIES="\"$out/bin/libs:${lib.makeLibraryPath [ pkgs.stdenv.cc.libc ]}\"" \
+                ${./lib/semgrep-loader.c} -o "$out/bin/semgrep-core"
+            '';
+            doInstallCheck = true;
+            installCheckPhase = ''
+              runHook preInstallCheck
+              "$out/bin/semgrep-core" -version
+              runHook postInstallCheck
+            '';
+          };
+        }).overrideAttrs
+          (old: {
+            doInstallCheck = true;
+            postInstallCheck = (old.postInstallCheck or "") + ''
+              export SSL_CERT_FILE=${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt
+              export PATH="$out/bin:$PATH"
+              "$out/bin/semgrep" --version
+              # Leave installCheckPhase unset so pytestCheckHook retains its suite.
+            '';
+          });
+
       # Security tools use the locked nixpkgs revisions; rule updates are
       # separate, reviewable hash bumps instead of live registry downloads.
       securityTools = pkgs.symlinkJoin {
         name = "tentaflake-security-tools";
         paths = [
           pkgs.osv-scanner
-          pkgs.semgrep
+          semgrep
         ];
       };
       semgrepRules = pkgs.fetchFromGitHub {

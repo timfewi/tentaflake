@@ -91,7 +91,10 @@ component-by-component `openat` calls with `O_DIRECTORY | O_NOFOLLOW` and
 rejects relative paths plus dot or parent components.
 It then traverses by directory/file descriptors, does not follow file
 symlinks, excludes the queue directory, rejects special files, and stops at
-byte and entry ceilings. This prevents an agent-controlled top-level symlink
+byte and entry ceilings. Directory enumeration retains at most the remaining
+entry budget and rejects the first excess entry before sorting or copying that
+directory; the top-level queue directory does not consume this budget.
+This prevents an agent-controlled top-level symlink
 or rename race from turning the root worker into a reader of an unrelated host
 path. The private host snapshot stays root-owned, while the source owner's read
 and execute bits are mirrored to the already-declared capsule GID before the
@@ -239,8 +242,12 @@ worker's private result directory and is exposed read-only to the controller:
 The controller chooses whether to copy a reviewed artifact into its persistent
 workspace. The worker never writes an artifact directly back into that
 workspace, and the capsule receives no writable host bind for this handoff.
-Result directories expire after 14 days; the prompt-free JSONL audit rotates
-daily with 14 generations.
+Results retain their existing 14-day tmpfiles policy; capacity admission never
+deletes results to make room. Empty private ID receipts survive result expiry
+to prevent replay. The prompt-free JSONL audit rotates daily with 14 generations;
+each active file has a 1 MiB hard append ceiling. Repeated failed admissions
+cannot grow it indefinitely; a full audit fails closed until rotation or
+explicit operator archival.
 
 ## Queue ownership, capacity and recovery
 
@@ -257,6 +264,7 @@ capture therefore copies into private state before removing the inbox entry.
 | `running/<id>.json` | Atomically claimed and synced before any OCI dispatch. |
 | `decisions/<id>` | Digest-bound operator decision retained after retirement; an exact retry never changes it. |
 | `results/<id>/result.json` | Terminal result and artifacts synced before publication. |
+| `reservations/<id>` | Empty durable no-replay receipt; retained independently of result capacity. |
 
 After a crash, a running claim is never dispatched again. Recovery checks the
 exact container name and ownership label before removing its disposable
@@ -275,15 +283,55 @@ directories, but do not traverse directory trees; the workspace quota bounds
 those trees. Admission rejects overflow visibly, records `queue-overload`, and
 preserves the unaccepted inbox request. Existing ready jobs drain before new
 admission, so an overflowing inbox cannot prevent completed work from retiring.
-These ceilings cover requests, not retained results, snapshots or audit archives;
-their existing separate limits and retention still apply.
+Retained storage is separately admitted under the same lock. The positive
+options `maxRetainedResultBytes`, `maxRetainedResults` and `maxRetainedEntries`
+default to **4 GiB**, **1024 jobs** and **1,000,000 tree entries**, respectively.
+Their JSON names are `max_retained_result_bytes`, `max_retained_results` and
+`max_retained_entries`; old JSON configurations use the same finite defaults.
+Completed trees consume their actual payload bytes and entries. Before a
+claim or terminal rejection, admission reserves a full worst-case job:
+`2 * maxSnapshotBytes + maxLogBytes + 16 KiB` and
+`2 * maxSnapshotEntries + 8` entries. These cover simultaneous input/export,
+bounded logs and result metadata. Configurations must fit at least one such
+reservation. Running claims retain the full reservation after a crash until
+recovery publishes a result and retires the claim; jobs are never replayed.
+
+At capacity, the next request stays pending before OCI dispatch, with no
+automatic removal of artifacts or receipts. Existing result expiry or explicit
+operator archival releases actual storage capacity. Empty no-replay ID receipts
+remain separately bounded at 4096 entries, independent of artifact capacity;
+new IDs fail closed at that ceiling just as decision receipts do. Reconcile
+receipt history only offline with all writers stopped and the loss of replay
+protection understood.
+
+Descriptor-relative scans bound bytes, entries and depth, including interrupted
+staging. Unreserved legacy state, unsafe links, special files, hardlinks and
+oversized restored trees fail closed without deleting evidence. Artifact imports
+count implicit parent directories, not just archive headers. Snapshot copying
+and artifact import permit at most 128 nested directories below their tree
+root; retained scans additionally allow the `input`, `artifacts-export` or
+`artifacts` wrapper, so accepted trees remain recoverable after publication
+or a crash. Deeper input is rejected before OCI dispatch. These payload
+limits do not claim exact physical disk quotas: filesystem block rounding,
+directory/inode overhead and bounded snapshot symlink targets require additional
+headroom. Requests, decisions and rotated audits retain separate finite ceilings.
 
 Existing configurations without the new JSON fields use these defaults.
 Upgrade with the worker and watcher stopped and preserve a quota-aware backup.
-Complete legacy pending records and exact approvals remain valid. A legacy
-`jobs/<id>` snapshot with pending state is treated as abandoned execution and
-retired as `interrupted`, without replay. Unpublished private `.new` files are
-discarded during recovery. Malformed legacy pending records fail closed and
+Complete legacy pending records and exact approvals remain valid. Existing
+results, running claims or snapshots without reservation receipts now require
+explicit offline operator reconciliation: inventory and validate their bounds,
+then provision root-owned empty private `reservations/<id>` receipts within
+the receipt limit, preserving every job ID and terminal receipt.
+Unknown legacy execution must never be resubmitted automatically. Unpublished
+private `.new` files are discarded during ordinary queue recovery. Reservation
+publication recovery removes only empty, private `.id.new` files with either
+one link before publication or exactly two links to the matching published
+receipt; the published receipt is preserved. Unknown or unsafe reservation
+staging fails closed. Private snapshot descendants may retain source write
+bits only behind a verified root-owned, owner-only job directory; these bits
+do not prevent interrupted-job recovery or relax published-result permissions.
+Malformed legacy pending records fail closed and
 preserve a complete inbox copy; inspect the exact job and restore or quarantine
 its private record offline before restarting. If restored queues exceed the new
 ceilings, explicitly adjust the ceilings or review and reduce the queue offline.
@@ -306,10 +354,22 @@ The OCI container and temporary host snapshot are removed after every normal
 completion, failure, or timeout. A stale container is removed only when its
 Tentaflake ownership label exactly matches the configured agent.
 
+Both completion-marker reads (initial polling and post-export validation) share
+the job deadline. Their host-side capture is nonblocking and capped at 96 bytes;
+a FIFO or stalled exec helper cannot indefinitely retain the queue lock in this
+poll. At expiry the local exec process group is killed and reaped, the job is
+timed out, and no staged artifacts are published. Container removal still goes
+through the existing cleanup guard. This bounds marker polling, not every OCI
+control operation or artifact archive stream; those still rely on a responsive
+host runtime.
+
 ## Verification boundary and remaining risks
 
 Unit tests cover parser/action policy, bounded reads and snapshots, symlink
-rejection, control-directory exclusion, and log truncation. Module-evaluation
+rejection, control-directory exclusion, and log truncation. Synthetic executable
+fixtures cover FIFO-blocked initial and post-export marker polls, timeout
+results, cleanup, queue-lock release, and no replay without requiring OCI.
+These fixtures do not establish live container-runtime behavior. Module-evaluation
 tests cover builder matching and fail-closed configuration. The NixOS VM test
 submits real local, approval-required, and forbidden jobs, checks no network or
 runtime socket, validates the numeric user and artifacts, and proves container

@@ -5,6 +5,8 @@ use std::io::{self, Read, Write};
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
 use std::os::unix::ffi::{OsStrExt, OsStringExt};
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt, symlink};
+use std::os::unix::net::UnixStream;
+use std::os::unix::process::CommandExt;
 use std::path::{Component, Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 use std::thread;
@@ -18,6 +20,8 @@ mod review;
 const RESOLVE_NO_MAGICLINKS: u64 = 0x02;
 const RESOLVE_NO_SYMLINKS: u64 = 0x04;
 const COMPLETION_MARKER: &str = "/workspace/.tentaflake-worker-complete";
+// Directory components below input/artifacts, excluding their one wrapper.
+const MAX_TREE_DEPTH: usize = 128;
 const WORKSPACE_INIT_SCRIPT: &str = r#"
 cp -R --no-preserve=ownership /input/. /workspace/
 cd /workspace
@@ -62,6 +66,12 @@ struct Config {
     max_queue_entries: usize,
     #[serde(default = "default_queue_bytes")]
     max_queue_bytes: u64,
+    #[serde(default = "default_retained_results")]
+    max_retained_results: usize,
+    #[serde(default = "default_retained_result_bytes")]
+    max_retained_result_bytes: u64,
+    #[serde(default = "default_retained_entries")]
+    max_retained_entries: u64,
     max_snapshot_bytes: u64,
     max_snapshot_entries: u64,
     max_log_bytes: usize,
@@ -155,6 +165,18 @@ fn default_queue_entries() -> usize {
 }
 fn default_queue_bytes() -> u64 {
     8 * 1024 * 1024
+}
+
+fn default_retained_results() -> usize {
+    1024
+}
+
+fn default_retained_result_bytes() -> u64 {
+    4 * 1024 * 1024 * 1024
+}
+
+fn default_retained_entries() -> u64 {
+    1_000_000
 }
 
 fn main() {
@@ -283,6 +305,9 @@ fn validate_config(config: &Config) -> Result<()> {
         || config.max_inbox_bytes == 0
         || config.max_queue_entries == 0
         || config.max_queue_bytes == 0
+        || config.max_retained_results == 0
+        || config.max_retained_result_bytes == 0
+        || config.max_retained_entries == 0
         || config.max_snapshot_bytes == 0
         || config.max_snapshot_entries == 0
         || config.max_log_bytes == 0
@@ -290,6 +315,20 @@ fn validate_config(config: &Config) -> Result<()> {
         || config.pids_limit == 0
     {
         return Err("worker limits must all be positive".into());
+    }
+    if config
+        .max_snapshot_bytes
+        .checked_mul(2)
+        .and_then(|n| n.checked_add(config.max_log_bytes as u64))
+        .and_then(|n| n.checked_add(16 * 1024))
+        .is_none_or(|n| n > config.max_retained_result_bytes)
+        || config
+            .max_snapshot_entries
+            .checked_mul(2)
+            .and_then(|n| n.checked_add(8))
+            .is_none_or(|n| n > config.max_retained_entries)
+    {
+        return Err("retained capacity must fit one worst-case job without overflow".into());
     }
     Ok(())
 }
@@ -336,7 +375,7 @@ fn validate_request(config: &Config, request: &JobRequest) -> Result<()> {
 }
 
 fn ensure_state_layout(config: &Config) -> Result<()> {
-    for name in ["pending", "running", "approvals", "jobs"] {
+    for name in ["pending", "running", "approvals", "jobs", "reservations"] {
         let path = config.state_dir.join(name);
         fs::create_dir_all(&path).map_err(|error| format!("create {}: {error}", path.display()))?;
         open_path_no_symlinks(&path)?;
@@ -373,6 +412,7 @@ fn hardened_shared_directory_mode(current: u32) -> u32 {
 }
 
 fn drain(config: &Config) -> Result<()> {
+    queue::check_retained(config)?;
     queue::consume_drain_request(config)?;
     queue::recover(config)?;
     let workspace = open_path_no_symlinks(&config.workspace)?;
@@ -550,6 +590,7 @@ fn process_ready(config: &Config, workspace_fd: RawFd) -> Result<()> {
             continue;
         }
         queue::claim(config, &request)?;
+        // claim() durably reserves retained storage before this dispatch.
         if config
             .state_dir
             .join("jobs")
@@ -638,6 +679,7 @@ fn job_exists(config: &Config, job: &str) -> bool {
         || config.state_dir.join("results").join(job).exists()
         || config.state_dir.join("jobs").join(job).exists()
         || config.state_dir.join("decisions").join(job).exists()
+        || config.state_dir.join("reservations").join(job).exists()
 }
 
 fn execute(config: &Config, workspace_fd: RawFd, request: &JobRequest) -> Result<()> {
@@ -701,10 +743,15 @@ fn execute(config: &Config, workspace_fd: RawFd, request: &JobRequest) -> Result
                 exit_code = String::from_utf8_lossy(&status.stdout).trim().parse().ok();
                 break;
             }
-            if let Some(marker) = read_completion_marker(config, &container)?
+            if let Some(marker) = read_completion_marker(config, &container, deadline)?
                 && handled_marker.as_ref() != Some(&marker)
-                && let Some(export) =
-                    export_artifacts_if_stable(config, &container, &artifact_export, &marker)?
+                && let Some(export) = export_artifacts_if_stable(
+                    config,
+                    &container,
+                    &artifact_export,
+                    &marker,
+                    deadline,
+                )?
             {
                 command_ok(
                     runtime(config).args(["kill", "--signal=USR1", &container]),
@@ -796,15 +843,72 @@ fn execute(config: &Config, workspace_fd: RawFd, request: &JobRequest) -> Result
     )
 }
 
-fn read_completion_marker(config: &Config, container: &str) -> Result<Option<CompletionMarker>> {
-    let output = runtime(config)
-        .args(["exec", container, "head", "-c", "96", COMPLETION_MARKER])
-        .output()
-        .map_err(|error| format!("read disposable completion marker: {error}"))?;
-    if !output.status.success() {
+fn read_completion_marker(
+    config: &Config,
+    container: &str,
+    deadline: Instant,
+) -> Result<Option<CompletionMarker>> {
+    if Instant::now() >= deadline {
         return Ok(None);
     }
-    Ok(parse_completion_marker(&output.stdout))
+    // Like CLI inspection, use a nonblocking socket rather than reader threads:
+    // a FIFO or an inherited writer must not keep the queue owner waiting.
+    let (mut reader, writer) =
+        UnixStream::pair().map_err(|error| format!("capture completion marker: {error}"))?;
+    reader
+        .set_nonblocking(true)
+        .map_err(|error| format!("capture completion marker: {error}"))?;
+    let mut command = runtime(config);
+    command
+        .args(["exec", container, "head", "-c", "96", COMPLETION_MARKER])
+        .stdin(Stdio::null())
+        .stdout(Stdio::from(OwnedFd::from(writer)))
+        .stderr(Stdio::null())
+        .process_group(0);
+    let spawned = command.spawn();
+    command.stdout(Stdio::null());
+    let mut child =
+        spawned.map_err(|error| format!("read disposable completion marker: {error}"))?;
+    let result = (|| {
+        let mut bytes = [0_u8; 97];
+        let mut length = 0;
+        let mut eof = false;
+        loop {
+            if Instant::now() >= deadline {
+                return Ok(None);
+            }
+            if !eof {
+                match reader.read(&mut bytes[length..]) {
+                    Ok(0) => eof = true,
+                    Ok(count) => {
+                        length += count;
+                        if length > 96 {
+                            return Ok(None);
+                        }
+                    }
+                    Err(error) if error.kind() == io::ErrorKind::WouldBlock => {}
+                    Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+                    Err(error) => return Err(format!("read completion marker: {error}")),
+                }
+            }
+            if let Some(status) = child
+                .try_wait()
+                .map_err(|error| format!("wait for completion marker: {error}"))?
+                && eof
+            {
+                return Ok(if status.success() {
+                    parse_completion_marker(&bytes[..length])
+                } else {
+                    None
+                });
+            }
+            thread::sleep(Duration::from_millis(1));
+        }
+    })();
+    // Kill local exec helpers too; container cleanup remains the guard's job.
+    unsafe { libc::kill(-(child.id() as i32), libc::SIGKILL) };
+    let _ = child.wait();
+    result
 }
 
 fn parse_completion_marker(bytes: &[u8]) -> Option<CompletionMarker> {
@@ -832,6 +936,7 @@ fn export_artifacts_if_stable(
     container: &str,
     destination: &Path,
     marker: &CompletionMarker,
+    deadline: Instant,
 ) -> Result<Option<ArtifactExport>> {
     if destination.exists() {
         fs::remove_dir_all(destination)
@@ -887,7 +992,7 @@ fn export_artifacts_if_stable(
         ),
         (true, Err(error)) => (false, Some(format!("artifact archive rejected: {error}"))),
     };
-    let stable = read_completion_marker(config, container)?.as_ref() == Some(marker);
+    let stable = read_completion_marker(config, container, deadline)?.as_ref() == Some(marker);
     if !stable || !available {
         fs::remove_dir_all(destination)
             .map_err(|error| format!("discard unstable artifact staging: {error}"))?;
@@ -896,6 +1001,30 @@ fn export_artifacts_if_stable(
         available,
         diagnostic,
     }))
+}
+
+fn create_artifact_directories(root: &Path, relative: &Path, entries_left: &mut u64) -> Result<()> {
+    let mut path = root.to_path_buf();
+    for (depth, component) in relative.components().enumerate() {
+        if depth >= MAX_TREE_DEPTH {
+            return Err("artifact directory depth exceeds ceiling".into());
+        }
+        path.push(component);
+        match fs::symlink_metadata(&path) {
+            Ok(metadata) if metadata.is_dir() => {}
+            Ok(_) => return Err("artifact parent is not a directory".into()),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                *entries_left = entries_left
+                    .checked_sub(1)
+                    .ok_or("artifact entry limit exceeded")?;
+                fs::create_dir(&path).map_err(|e| e.to_string())?;
+                fs::set_permissions(&path, fs::Permissions::from_mode(0o750))
+                    .map_err(|e| e.to_string())?;
+            }
+            Err(error) => return Err(error.to_string()),
+        }
+    }
+    Ok(())
 }
 
 fn import_artifact_tar<R: Read>(
@@ -910,6 +1039,7 @@ fn import_artifact_tar<R: Read>(
         .map_err(|error| format!("read archive entries: {error}"))?;
     let mut bytes_left = max_bytes;
     let mut entries_left = max_entries;
+    let mut tree_entries_left = max_entries;
     let mut imported = 0_u64;
 
     for entry in entries {
@@ -934,8 +1064,7 @@ fn import_artifact_tar<R: Read>(
         }
         let output_path = destination.join(&path);
         if entry_type.is_dir() {
-            fs::create_dir_all(&output_path)
-                .map_err(|error| format!("create artifact directory: {error}"))?;
+            create_artifact_directories(destination, &path, &mut tree_entries_left)?;
             fs::set_permissions(&output_path, fs::Permissions::from_mode(0o750))
                 .map_err(|error| format!("chmod artifact directory: {error}"))?;
             continue;
@@ -947,10 +1076,12 @@ fn import_artifact_tar<R: Read>(
         if size > bytes_left {
             return Err("artifact byte limit exceeded".into());
         }
-        if let Some(parent) = output_path.parent() {
-            fs::create_dir_all(parent)
-                .map_err(|error| format!("create artifact parent: {error}"))?;
+        if let Some(parent) = path.parent() {
+            create_artifact_directories(destination, parent, &mut tree_entries_left)?;
         }
+        tree_entries_left = tree_entries_left
+            .checked_sub(1)
+            .ok_or("artifact entry limit exceeded")?;
         let mut output = OpenOptions::new()
             .write(true)
             .create_new(true)
@@ -1173,6 +1304,7 @@ fn finish_without_run(
     status: &str,
     message: &str,
 ) -> Result<()> {
+    queue::reserve_result(config, &request.id)?;
     let staging = config
         .state_dir
         .join("results")
@@ -1190,7 +1322,7 @@ fn finish_without_run(
         artifacts_available: false,
         log_truncated: false,
         completed_unix_seconds: unix_seconds(),
-        message: message.into(),
+        message: message.chars().take(2048).collect(),
     };
     write_json(staging.join("result.json"), &result)?;
     queue::publish_result(&staging, &final_result)
@@ -1223,19 +1355,26 @@ fn audit(
         .mode(0o600)
         .open(&path)
         .map_err(|error| format!("open audit: {error}"))?;
-    serde_json::to_writer(
-        &mut file,
-        &AuditEvent {
-            timestamp_unix_seconds: unix_seconds(),
-            agent: &config.agent,
-            job,
-            event,
-            action_class,
-            detail,
-        },
-    )
+    let mut record = serde_json::to_vec(&AuditEvent {
+        timestamp_unix_seconds: unix_seconds(),
+        agent: &config.agent,
+        job,
+        event,
+        action_class,
+        detail,
+    })
     .map_err(|error| error.to_string())?;
-    file.write_all(b"\n").map_err(|error| error.to_string())
+    record.push(b'\n');
+    if file
+        .metadata()
+        .map_err(|e| e.to_string())?
+        .len()
+        .saturating_add(record.len() as u64)
+        > 1024 * 1024
+    {
+        return Err("worker audit capacity is full; operator archival required".into());
+    }
+    file.write_all(&record).map_err(|error| error.to_string())
 }
 
 fn unix_seconds() -> u64 {
@@ -1328,12 +1467,19 @@ fn copy_directory_fd(
     budget: &mut CopyBudget,
     top: bool,
 ) -> Result<()> {
-    let mut names = list_fd_dir(fd)?;
+    copy_directory_fd_at_depth(fd, destination, budget, top, 0)
+}
+
+fn copy_directory_fd_at_depth(
+    fd: RawFd,
+    destination: &Path,
+    budget: &mut CopyBudget,
+    top: bool,
+    depth: usize,
+) -> Result<()> {
+    let mut names = list_fd_dir(fd, budget.entries_left, top)?;
     names.sort();
     for name in names {
-        if top && name == OsStr::new(".tentaflake-worker") {
-            continue;
-        }
         if budget.entries_left == 0 {
             return Err("snapshot entry limit exceeded".into());
         }
@@ -1343,13 +1489,22 @@ fn copy_directory_fd(
         let kind = stat.st_mode & libc::S_IFMT;
         match kind {
             libc::S_IFDIR => {
+                if depth >= MAX_TREE_DEPTH {
+                    return Err("snapshot directory depth exceeds ceiling".into());
+                }
                 fs::create_dir(&destination_path)
                     .map_err(|error| format!("create snapshot directory: {error}"))?;
                 fs::set_permissions(&destination_path, fs::Permissions::from_mode(0o700))
                     .map_err(|error| error.to_string())?;
                 let child = open_dir_at(fd, &name)
                     .map_err(|error| format!("open snapshot directory: {error}"))?;
-                copy_directory_fd(child.as_raw_fd(), &destination_path, budget, false)?;
+                copy_directory_fd_at_depth(
+                    child.as_raw_fd(),
+                    &destination_path,
+                    budget,
+                    false,
+                    depth + 1,
+                )?;
                 set_snapshot_permissions(&destination_path, stat.st_mode as u32)?;
             }
             libc::S_IFREG => {
@@ -1501,16 +1656,22 @@ fn open_at(parent: RawFd, name: &OsStr, flags: i32) -> io::Result<OwnedFd> {
     }
 }
 
-fn list_fd_dir(fd: RawFd) -> Result<Vec<OsString>> {
+fn list_fd_dir(fd: RawFd, max_entries: u64, top: bool) -> Result<Vec<OsString>> {
     let path = PathBuf::from(format!("/proc/self/fd/{fd}"));
-    fs::read_dir(path)
-        .map_err(|error| format!("read directory fd: {error}"))?
-        .map(|entry| {
-            entry
-                .map(|value| value.file_name())
-                .map_err(|error| error.to_string())
-        })
-        .collect()
+    let entries = fs::read_dir(path).map_err(|error| format!("read directory fd: {error}"))?;
+    let mut names = Vec::new();
+    for entry in entries {
+        let name = entry.map_err(|error| error.to_string())?.file_name();
+        if top && name == OsStr::new(".tentaflake-worker") {
+            continue;
+        }
+        // Stop before storing or sorting the first over-budget entry.
+        if names.len() as u64 >= max_entries {
+            return Err("snapshot entry limit exceeded".into());
+        }
+        names.push(name);
+    }
+    Ok(names)
 }
 
 fn fstatat_nofollow(parent: RawFd, name: &OsStr) -> Result<libc::stat> {
@@ -1792,6 +1953,28 @@ mod tests {
         assert!(open_path_no_symlinks_fallback(Path::new("relative")).is_err());
         assert!(open_path_no_symlinks_fallback(&real.join("../real")).is_err());
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn oversized_snapshot_directory_is_rejected_before_copying_entries() {
+        let source = temp_dir("snapshot-entry-limit-source");
+        let destination = temp_dir("snapshot-entry-limit-destination");
+        for index in 0..128 {
+            fs::write(source.join(format!("entry-{index:03}")), b"data").unwrap();
+        }
+        let source_fd = open_path_no_symlinks(&source).unwrap();
+        let mut budget = CopyBudget {
+            bytes_left: 1024,
+            entries_left: 1,
+        };
+        let error =
+            copy_directory_fd(source_fd.as_raw_fd(), &destination, &mut budget, true).unwrap_err();
+        assert_eq!(error, "snapshot entry limit exceeded");
+        assert_eq!(fs::read_dir(&destination).unwrap().count(), 0);
+        assert_eq!(budget.entries_left, 1);
+        assert_eq!(budget.bytes_left, 1024);
+        fs::remove_dir_all(source).unwrap();
+        fs::remove_dir_all(destination).unwrap();
     }
 
     #[test]
