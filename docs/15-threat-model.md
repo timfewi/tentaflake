@@ -156,7 +156,7 @@ identity, tailnet grants, and alert receiver.
 
 Host-side Git auto-push is disabled: agent-owned Git configuration and hooks
 are executable input, and fetch-remote checks do not bind push destinations.
-The adapter rejects non-null `gitAutoPush` and emits no publication unit or
+The adapter has no `gitAutoPush` argument and emits no publication unit or
 credential import. Existing installations need the explicit
 [stop/revoke/migrate procedure](07-operations.md#git-auto-push).
 

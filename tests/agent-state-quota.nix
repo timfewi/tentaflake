@@ -11,63 +11,65 @@ let
       [
         (builders.mkAgent {
           adapter = "generic";
-          name = "quota";
+          name = "generic-quota";
           definition = {
             schemaVersion = 1;
-            image = builders.constants.hermesImage;
+            image = "registry.example.invalid/fixture@sha256:${lib.concatStrings (lib.replicate 64 "a")}";
             command = [ "fixture" ];
           };
         })
-        (builders.mkHermesAgent {
-          name = "quota";
+        (builders.mkAgent {
+          adapter = "hermes";
+          name = "hermes-quota";
           autoStart = false;
           seedDir = ./fixtures/adapter-seed;
         })
-        (builders.mkZeroClawAgent {
-          name = "quota";
+        (builders.mkAgent {
+          adapter = "zeroclaw";
+          name = "zero-quota";
           autoStart = false;
           seedDir = ./fixtures/adapter-seed;
         })
         {
           tentaflake = {
             workspaceQuota.agents = {
-              generic-quota = {
+              agent-generic-quota = {
                 enable = true;
-                workspace = "/var/lib/generic-quota/workspace";
+                workspace = "/var/lib/tentaflake/agents/generic-quota/workspace";
                 sizeMiB = 128;
                 state = {
-                  path = "/var/lib/generic-quota/state";
+                  path = "/var/lib/tentaflake/agents/generic-quota/state";
                   sizeMiB = 128;
                 };
               };
-              hermes-quota = {
+              agent-hermes-quota = {
                 enable = true;
-                workspace = "/var/lib/hermes-quota/workspace";
+                workspace = "/var/lib/tentaflake/agents/hermes-quota/workspace";
                 sizeMiB = 128;
                 state = {
-                  path = "/var/lib/hermes-quota";
+                  path = "/var/lib/tentaflake/agents/hermes-quota";
                   sizeMiB = 128;
                 };
               };
-              zeroclaw-quota = {
+              agent-zero-quota = {
                 enable = true;
-                workspace = "/var/lib/zeroclaw-quota/data";
+                workspace = "/var/lib/tentaflake/agents/zero-quota/data";
                 sizeMiB = 128;
                 ownerUid = 65534;
                 ownerGid = 65534;
                 state = {
-                  path = "/var/lib/zeroclaw-quota";
+                  path = "/var/lib/tentaflake/agents/zero-quota";
                   sizeMiB = 128;
                 };
               };
             };
-            worker.agents.hermes-quota = {
+            worker.agents.agent-hermes-quota = {
               enable = true;
-              workspace = "/var/lib/hermes-quota/workspace";
+              workspace = "/var/lib/tentaflake/agents/hermes-quota/workspace";
             };
             backup = {
               enable = true;
-              paths = [ "/var/lib/generic-quota" ];
+              paths = [ "/var/lib/tentaflake/agents/generic-quota" ];
               repositoryFile = "/run/fixture-repository";
               passwordFile = "/run/fixture-password";
             };
@@ -82,14 +84,16 @@ let
   failed = config: lib.filter (item: !item.assertion) config.assertions;
   refuses =
     text: change: lib.any (item: lib.hasInfix text item.message) (failed (fixture [ change ]));
-  legacy = fixture [ { tentaflake.workspaceQuota.agents.hermes-quota.state = lib.mkForce null; } ];
+  legacy = fixture [
+    { tentaflake.workspaceQuota.agents.agent-hermes-quota.state = lib.mkForce null; }
+  ];
   small = fixture [
-    { tentaflake.workspaceQuota.agents.generic-quota.state.sizeMiB = lib.mkForce 32; }
+    { tentaflake.workspaceQuota.agents.agent-generic-quota.state.sizeMiB = lib.mkForce 32; }
   ];
   backupPaths = [
-    "/var/lib/generic-quota"
-    "/var/lib/generic-quota/workspace"
-    "/var/lib/generic-quota/state"
+    "/var/lib/tentaflake/agents/generic-quota"
+    "/var/lib/tentaflake/agents/generic-quota/workspace"
+    "/var/lib/tentaflake/agents/generic-quota/state"
   ];
 in
 assert failed config == [ ];
@@ -100,44 +104,48 @@ assert
     ) config.systemd.mounts
   ) == 6;
 assert
-  config.tentaflake.agentInstances.generic-quota.stateStorage == "/var/lib/generic-quota/state";
-assert config.tentaflake.agentInstances.hermes-quota.stateStorage == "/var/lib/hermes-quota";
+  config.tentaflake.agentInstances.agent-generic-quota.stateStorage
+  == "/var/lib/tentaflake/agents/generic-quota/state";
 assert
-  config.tentaflake.agentInstances.zeroclaw-quota.stateDirectories == [
+  config.tentaflake.agentInstances.agent-hermes-quota.stateStorage
+  == "/var/lib/tentaflake/agents/hermes-quota";
+assert
+  config.tentaflake.agentInstances.agent-zero-quota.stateDirectories == [
     ".zeroclaw"
     ".zeroclaw/data"
     "data"
   ];
 assert
-  (mount "/var/lib/generic-quota/state").what
-  == "/var/lib/tentaflake-workspace-volumes/state/generic-quota.img";
-assert (mount "/var/lib/generic-quota/state").options == "loop,nodev,nosuid,noatime";
+  (mount "/var/lib/tentaflake/agents/generic-quota/state").what
+  == "/var/lib/tentaflake-workspace-volumes/state/agent-generic-quota.img";
 assert
-  (mount "/var/lib/generic-quota/workspace").what
-  == "/var/lib/tentaflake-workspace-volumes/generic-quota.img";
-assert lib.elem "tentaflake-state-quota-generic-quota.service"
-  services.tentaflake-workspace-quota-generic-quota.requires;
+  (mount "/var/lib/tentaflake/agents/generic-quota/state").options == "loop,nodev,nosuid,noatime";
 assert
-  !(lib.elem "tentaflake-state-quota-generic-quota.service" services.tentaflake-workspace-quota-prepare-generic-quota.requires);
-assert lib.elem "tentaflake-state-quota-hermes-quota.service"
-  services.tentaflake-workspace-quota-prepare-hermes-quota.requires;
-assert lib.elem "tentaflake-workspace-quota-hermes-quota.service"
-  services.hermes-quota-heal-uid.requires;
-assert lib.elem "tentaflake-workspace-quota-hermes-quota.service"
-  services.seed-hermes-quota.requires;
-assert lib.elem "tentaflake-workspace-quota-zeroclaw-quota.service"
-  services.seed-zeroclaw-quota.requires;
+  (mount "/var/lib/tentaflake/agents/generic-quota/workspace").what
+  == "/var/lib/tentaflake-workspace-volumes/agent-generic-quota.img";
+assert lib.elem "tentaflake-state-quota-agent-generic-quota.service"
+  services.tentaflake-workspace-quota-agent-generic-quota.requires;
+assert
+  !(lib.elem "tentaflake-state-quota-agent-generic-quota.service" services.tentaflake-workspace-quota-prepare-agent-generic-quota.requires);
+assert lib.elem "tentaflake-state-quota-agent-hermes-quota.service"
+  services.tentaflake-workspace-quota-prepare-agent-hermes-quota.requires;
+assert lib.elem "tentaflake-workspace-quota-agent-hermes-quota.service"
+  services.agent-hermes-quota-heal-uid.requires;
+assert lib.elem "tentaflake-workspace-quota-agent-hermes-quota.service"
+  services.agent-hermes-quota-seed.requires;
+assert lib.elem "tentaflake-workspace-quota-agent-zero-quota.service"
+  services.agent-zero-quota-seed.requires;
 assert
   !(lib.any (
-    rule: lib.hasInfix "/var/lib/hermes-quota/workspace " rule
+    rule: lib.hasInfix "/var/lib/tentaflake/agents/hermes-quota/workspace " rule
   ) config.systemd.tmpfiles.rules);
 assert
   !(lib.any (
-    rule: lib.hasInfix "/var/lib/hermes-quota/workspace/.tentaflake-worker" rule
+    rule: lib.hasInfix "/var/lib/tentaflake/agents/hermes-quota/workspace/.tentaflake-worker" rule
   ) config.systemd.tmpfiles.rules);
 assert
   !(lib.any (
-    rule: lib.hasInfix "/var/lib/zeroclaw-quota/.zeroclaw " rule
+    rule: lib.hasInfix "/var/lib/tentaflake/agents/zero-quota/.zeroclaw " rule
   ) config.systemd.tmpfiles.rules);
 assert config.services.restic.backups.tentaflake.paths == backupPaths;
 assert
@@ -146,38 +154,39 @@ assert
   config.systemd.services.restic-backups-tentaflake.unitConfig.AssertPathIsMountPoint
   == lib.tail backupPaths;
 assert failed legacy == [ ];
-assert !(legacy.systemd.services ? tentaflake-state-quota-hermes-quota);
+assert !(legacy.systemd.services ? tentaflake-state-quota-agent-hermes-quota);
 assert
-  !(lib.elem "tentaflake-state-quota-hermes-quota.service" legacy.systemd.services.tentaflake-workspace-quota-hermes-quota.requires);
-assert lib.elem "d /var/lib/hermes-quota/workspace 0700 10000 10000 -"
+  !(lib.elem "tentaflake-state-quota-agent-hermes-quota.service" legacy.systemd.services.tentaflake-workspace-quota-agent-hermes-quota.requires);
+assert lib.elem "d /var/lib/tentaflake/agents/hermes-quota/workspace 0700 10000 10000 -"
   legacy.systemd.tmpfiles.rules;
 assert
-  !(builtins.tryEval small.tentaflake.workspaceQuota.agents.generic-quota.state.sizeMiB).success;
+  !(builtins.tryEval small.tentaflake.workspaceQuota.agents.agent-generic-quota.state.sizeMiB)
+  .success;
 assert refuses "declared adapter state source" {
-  tentaflake.workspaceQuota.agents.generic-quota.state.path = lib.mkForce "/var/lib/other";
+  tentaflake.workspaceQuota.agents.agent-generic-quota.state.path = lib.mkForce "/var/lib/other";
 };
 assert refuses "declared adapter state source" {
-  tentaflake.workspaceQuota.agents.generic-quota.ownerUid = lib.mkForce 12000;
+  tentaflake.workspaceQuota.agents.agent-generic-quota.ownerUid = lib.mkForce 12000;
 };
 assert refuses "normalized private state" {
-  tentaflake.workspaceQuota.agents.generic-quota.state.path =
-    lib.mkForce "/var/lib/generic-quota/workspace/state";
+  tentaflake.workspaceQuota.agents.agent-generic-quota.state.path =
+    lib.mkForce "/var/lib/tentaflake/agents/generic-quota/workspace/state";
 };
 assert
   !(builtins.tryEval (
     builtins.deepSeq (failed (fixture [
       {
-        tentaflake.workspaceQuota.agents.generic-quota.state.path =
-          lib.mkForce "/var/lib/generic-quota/../state";
+        tentaflake.workspaceQuota.agents.agent-generic-quota.state.path =
+          lib.mkForce "/var/lib/tentaflake/agents/generic-quota/../state";
       }
     ])) true
   )).success;
 assert refuses "may not overlap" {
-  tentaflake.workspaceQuota.agents.generic-quota.state.path =
-    lib.mkForce "/var/lib/hermes-quota/other";
+  tentaflake.workspaceQuota.agents.agent-generic-quota.state.path =
+    lib.mkForce "/var/lib/tentaflake/agents/hermes-quota/other";
 };
 assert refuses "intended for balanced/strict" { tentaflake.security.profile = lib.mkForce "dev"; };
 {
-  prepareScript = services.tentaflake-state-quota-prepare-generic-quota.script;
-  ownerScript = services.tentaflake-state-quota-hermes-quota.script;
+  prepareScript = services.tentaflake-state-quota-prepare-agent-generic-quota.script;
+  ownerScript = services.tentaflake-state-quota-agent-hermes-quota.script;
 }

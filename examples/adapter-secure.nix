@@ -28,9 +28,9 @@
   ];
   tentaflake = {
     security.profile = "balanced";
-    broker.agents.hermes-assistant = {
+    broker.agents.agent-assistant = {
       enable = true;
-      networkName = "tf-hermes-assistant";
+      networkName = "tf-agent-assistant";
       subnet = "10.203.20.0/30";
       gateway = "10.203.20.1";
       llm = {
@@ -47,20 +47,20 @@
       };
       fetch.enable = false;
     };
-    worker.agents.hermes-assistant = {
+    worker.agents.agent-assistant = {
       enable = true;
-      workspace = "/var/lib/hermes-assistant/workspace";
+      workspace = "/var/lib/tentaflake/agents/assistant/workspace";
       containerUid = 10000;
       containerGid = 10000;
     };
-    workspaceQuota.agents.hermes-assistant = {
+    workspaceQuota.agents.agent-assistant = {
       enable = true;
-      workspace = "/var/lib/hermes-assistant/workspace";
+      workspace = "/var/lib/tentaflake/agents/assistant/workspace";
       sizeMiB = 8192;
       ownerUid = 10000;
       ownerGid = 10000;
     };
-    research.agents.hermes-assistant.uid = 62101;
+    research.agents.agent-assistant.uid = 62101;
   };
   services.secureResearch = researchPolicy // {
     enable = true;

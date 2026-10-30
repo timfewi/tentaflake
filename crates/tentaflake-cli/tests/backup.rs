@@ -66,7 +66,7 @@ exit "$FIXTURE_TAR_EXIT""#,
         fs::write(
             root.join("agents.tsv"),
             format!(
-                "hermes\tbackup-fixture\tbackup-fixture\tbackup-fixture.service\t{}\ttrue\n",
+                "generic\tbackup-fixture\tbackup-fixture\tbackup-fixture.service\t{}\ttrue\n",
                 root.join("state").display()
             ),
         )

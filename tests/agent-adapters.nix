@@ -38,8 +38,9 @@ let
       autoStart = false;
     };
   config = eval [
-    (builders.mkHermesAgent {
-      name = "legacy";
+    (builders.mkAgent {
+      adapter = "hermes";
+      name = "custom";
       autoStart = false;
       stateDir = "/var/lib/legacy-home";
       containerUid = 12000;
@@ -54,8 +55,9 @@ let
         email = "fixture@example.invalid";
       };
     })
-    (builders.mkZeroClawAgent {
-      name = "legacy";
+    (builders.mkAgent {
+      adapter = "zeroclaw";
+      name = "zero-seeded";
       autoStart = false;
       seedDir = ./fixtures/adapter-seed;
     })
@@ -87,6 +89,8 @@ let
     containers = {
       "misleading-volume".volumes = [ "/not-state:/other:ro" ];
       "unmanaged".volumes = [ "/legacy-fallback:/data:rw" ];
+      "hermes-unmanaged".volumes = [ "/prefix-is-not-metadata:/data:rw" ];
+      "zeroclaw-unmanaged".volumes = [ "/other-unmanaged:/data:rw" ];
     };
     instances."misleading-volume" = {
       adapter = "openclaw";
@@ -103,7 +107,7 @@ let
     file:
     builders.agentsFromData {
       inherit file;
-      inherit (builders) mkAgent mkHermesAgent mkZeroClawAgent;
+      inherit (builders) mkAgent;
     };
   genericJson = eval (json ./fixtures/adapter-input/generic.json);
   dataConfig = eval (
@@ -120,7 +124,7 @@ let
   runtimeContract = import ../lib/runtimeContract.nix { inherit lib; };
   definition = {
     schemaVersion = 1;
-    image = builders.constants.hermesImage;
+    image = "registry.example.invalid/fixture@sha256:${lib.concatStrings (lib.replicate 64 "a")}";
     command = [
       "/bin/sh"
       "-c"
@@ -140,7 +144,7 @@ let
       inherit definition;
     })
   ];
-  genericContainer = generic.virtualisation.oci-containers.containers.generic-coding;
+  genericContainer = generic.virtualisation.oci-containers.containers.agent-coding;
   nestedSources =
     access:
     (import ../lib/containerSecurity.nix { inherit lib; }).apply {
@@ -175,7 +179,7 @@ let
       name = "coding";
       inherit definition;
     })
-    { virtualisation.oci-containers.containers.generic-coding.autoStart = lib.mkForce true; }
+    { virtualisation.oci-containers.containers.agent-coding.autoStart = lib.mkForce true; }
   ];
   genericPodman = eval [
     (builders.mkAgent {
@@ -188,10 +192,11 @@ let
   single = eval [ (instance "hermes" "only") ];
   forcedStart = eval [
     (instance "hermes" "forced")
-    { virtualisation.oci-containers.containers.hermes-forced.autoStart = lib.mkForce true; }
+    { virtualisation.oci-containers.containers.agent-forced.autoStart = lib.mkForce true; }
   ];
   devRoot = eval [
-    (builders.mkHermesAgent {
+    (builders.mkAgent {
+      adapter = "hermes";
       name = "dev-root";
       autoStart = false;
       createUser = false;
@@ -201,6 +206,26 @@ let
     })
     { tentaflake.security.profile = lib.mkForce "dev"; }
   ];
+  defaults = eval (
+    map (
+      adapter:
+      builders.mkAgent (
+        {
+          inherit adapter;
+          name = "default-${adapter}";
+        }
+        // lib.optionalAttrs ((builtins.functionArgs builders.adapters.${adapter}.build) ? autoStart) {
+          autoStart = false;
+        }
+        // lib.optionalAttrs (adapter == "generic") { inherit definition; }
+      )
+    ) registryNames
+  );
+  scaffoldsOnly = eval [
+    (instance "openclaw" "refusal-openclaw")
+    (instance "pi" "refusal-pi")
+  ];
+  hasParentGuard = service: lib.hasInfix "refusing unsafe agent parent" service.preStart;
 in
 assert lib.all
   (
@@ -214,9 +239,9 @@ assert lib.all
     "ro"
   ];
 assert failures genericJson == [ ];
-assert genericJson.tentaflake.agentInstances.generic-from-json.adapter == "generic";
+assert genericJson.tentaflake.agentInstances.agent-from-json.adapter == "generic";
 assert
-  genericJson.virtualisation.oci-containers.containers.generic-from-json.cmd == [
+  genericJson.virtualisation.oci-containers.containers.agent-from-json.cmd == [
     "fixture"
     "--workspace"
     "/workspace"
@@ -231,17 +256,19 @@ assert lib.elem "--memory=512m" genericContainer.extraOptions;
 assert lib.elem "--pids-limit=64" genericContainer.extraOptions;
 assert
   genericContainer.volumes == [
-    "/var/lib/generic-coding/state:/state:rw"
-    "/var/lib/generic-coding/workspace:/workspace:rw"
+    "/var/lib/tentaflake/agents/coding/state:/state:rw"
+    "/var/lib/tentaflake/agents/coding/workspace:/workspace:rw"
   ];
-assert lib.elem "d /var/lib/generic-coding 0700 root root -" generic.systemd.tmpfiles.rules;
-assert lib.elem "d /var/lib/generic-coding/state 0700 10000 10000 -" generic.systemd.tmpfiles.rules;
+assert lib.elem "d /var/lib/tentaflake/agents/coding 0700 root root -"
+  generic.systemd.tmpfiles.rules;
+assert lib.elem "d /var/lib/tentaflake/agents/coding/state 0700 10000 10000 -"
+  generic.systemd.tmpfiles.rules;
 assert
-  generic.tentaflake.agentInstances.generic-coding.workspace == "/var/lib/generic-coding/workspace";
+  generic.tentaflake.agentInstances.agent-coding.workspace
+  == "/var/lib/tentaflake/agents/coding/workspace";
+assert genericPodman.tentaflake.agentInstances.agent-coding.unit == "podman-agent-coding.service";
 assert
-  genericPodman.tentaflake.agentInstances.generic-coding.unit == "podman-generic-coding.service";
-assert
-  genericPodman.virtualisation.oci-containers.containers.generic-coding.preRunExtraOptions == [
+  genericPodman.virtualisation.oci-containers.containers.agent-coding.preRunExtraOptions == [
     "--runtime"
     "runsc"
   ];
@@ -249,6 +276,9 @@ assert lib.any (lib.hasInfix "requires an enabled broker") (failures genericStar
 assert lib.any (lib.hasInfix "requires its isolated Research relay") (failures genericStarted);
 assert lib.all (bad: rejects (runtimeContract (definition // bad))) [
   { schemaVersion = 2; }
+  { schemaVersion = 1.0; }
+  { schemaVersion = "1"; }
+  { schemaVersion = true; }
   { image = "example.invalid/agent:latest"; }
   { image = "image;echo unsafe@sha256:${lib.concatStrings (lib.replicate 64 "a")}"; }
   { command = "sh -c echo unsafe"; }
@@ -287,17 +317,86 @@ assert lib.all (bad: rejects (runtimeContract (definition // bad))) [
   }
 ];
 assert lib.all (name: (contract name builders.adapters.${name}).identity.id == name) registryNames;
-assert devRoot.tentaflake.agentInstances.hermes-dev-root.uid == 0;
-assert devRoot.virtualisation.oci-containers.containers.hermes-dev-root.user == "0:0";
+assert devRoot.tentaflake.agentInstances.agent-dev-root.uid == 0;
+assert devRoot.virtualisation.oci-containers.containers.agent-dev-root.user == "0:0";
 assert failures devRoot == [ ];
 assert lib.any (lib.hasInfix "requires an enabled broker") (failures forcedStart);
-assert builtins.isFunction builders.mkHermesAgent && builtins.isFunction builders.mkZeroClawAgent;
+assert builtins.isFunction builders.mkAgent;
+assert lib.all (
+  adapter:
+  let
+    name = "default-${adapter}";
+    record = defaults.tentaflake.agentInstances."agent-${name}";
+  in
+  record.adapter == adapter
+  && record.name == name
+  && record.container == "agent-${name}"
+  && record.unit == "docker-agent-${name}.service"
+  && record.stateDir == "/var/lib/tentaflake/agents/${name}"
+  &&
+    record.workspace
+    == "/var/lib/tentaflake/agents/${name}/${builders.adapters.${adapter}.layout.workspace}"
+  && record.uid == builders.runtimeCatalog.presets.${adapter}.ownership.uid
+  && record.gid == builders.runtimeCatalog.presets.${adapter}.ownership.gid
+) registryNames;
+assert failures defaults == [ ];
+assert hasParentGuard defaults.systemd.services.systemd-tmpfiles-setup;
+assert hasParentGuard generic.systemd.services.systemd-tmpfiles-setup;
+assert lib.all
+  (
+    adapter:
+    let
+      unit = defaults.systemd.services."docker-agent-default-${adapter}";
+    in
+    hasParentGuard unit
+    && lib.elem "systemd-tmpfiles-setup.service" unit.requires
+    && lib.elem "systemd-tmpfiles-setup.service" unit.after
+  )
+  [
+    "generic"
+    "hermes"
+    "zeroclaw"
+  ];
+assert lib.all
+  (
+    name:
+    let
+      unit = config.systemd.services.${name};
+    in
+    lib.elem "systemd-tmpfiles-setup.service" unit.requires
+    && lib.elem "systemd-tmpfiles-setup.service" unit.after
+  )
+  [
+    "agent-custom-heal-uid"
+    "agent-custom-seed"
+    "agent-zero-seeded-seed"
+  ];
 assert
-  builtins.functionArgs builders.mkHermesAgent
-  == builtins.functionArgs builders.adapters.hermes.build;
-assert
-  builtins.functionArgs builders.mkZeroClawAgent
-  == builtins.functionArgs builders.adapters.zeroclaw.build;
+  !(scaffoldsOnly.systemd.services ? systemd-tmpfiles-setup)
+  || !(hasParentGuard scaffoldsOnly.systemd.services.systemd-tmpfiles-setup);
+assert lib.all
+  (
+    adapter:
+    let
+      unit = scaffoldsOnly.systemd.services."docker-agent-refusal-${adapter}";
+    in
+    !(hasParentGuard unit) && !(lib.elem "systemd-tmpfiles-setup.service" unit.requires)
+  )
+  [
+    "openclaw"
+    "pi"
+  ];
+assert containers.agent-custom.environment.HERMES_HOME == "/state";
+assert lib.elem "/var/lib/legacy-home:/state:rw" containers.agent-custom.volumes;
+assert lib.elem "/var/lib/tentaflake/agents/zeroclaw-named:/state:rw"
+  containers.agent-zeroclaw-named.volumes;
+assert lib.any (lib.hasSuffix ":/state/config.yaml:ro")
+  dataConfig.virtualisation.oci-containers.containers.agent-generic.volumes;
+assert lib.elem "/var/lib/tentaflake/agents/zero-seeded:/zeroclaw-data:rw"
+  containers.agent-zero-seeded.volumes;
+assert !(builders ? mkHermesAgent) && !(builders ? mkZeroClawAgent);
+assert !(builtins.pathExists ../lib/mkHermesAgent.nix);
+assert !(builtins.pathExists ../lib/mkZeroClawAgent.nix);
 assert lib.all (
   unit:
   !(lib.hasInfix "zeroclaw" unit)
@@ -307,6 +406,10 @@ assert lib.all (
     "podman"
   ])
 ) (builtins.attrNames single.systemd.services);
+assert lib.all (name: lib.hasInfix "agent\t${name}\t${name}\tpodman-${name}.service\t" inventory) [
+  "hermes-unmanaged"
+  "zeroclaw-unmanaged"
+];
 assert rejects (json ./fixtures/adapter-input/unknown-agent-field.json);
 assert rejects (json ./fixtures/adapter-input/invalid-auto-start.json);
 assert rejects (json ./fixtures/adapter-input/secret-setting.json);
@@ -343,51 +446,57 @@ assert lib.all
   ];
 assert
   builtins.attrNames records == [
-    "hermes-legacy"
-    "hermes-zeroclaw-named"
-    "openclaw-assistant"
-    "pi-pilot"
-    "zeroclaw-hermes-named"
-    "zeroclaw-legacy"
+    "agent-assistant"
+    "agent-custom"
+    "agent-hermes-named"
+    "agent-pilot"
+    "agent-zero-seeded"
+    "agent-zeroclaw-named"
   ];
 assert
   builtins.attrNames containers == [
-    "hermes-legacy"
-    "hermes-zeroclaw-named"
-    "zeroclaw-hermes-named"
-    "zeroclaw-legacy"
+    "agent-custom"
+    "agent-hermes-named"
+    "agent-zero-seeded"
+    "agent-zeroclaw-named"
   ];
-assert containers.hermes-legacy.user == "12000:12001";
-assert records.hermes-legacy.stateDir == "/var/lib/legacy-home";
-assert records.hermes-legacy.unit == "docker-hermes-legacy.service";
+assert containers.agent-custom.user == "12000:12001";
+assert records.agent-custom.stateDir == "/var/lib/legacy-home";
+assert records.agent-custom.unit == "docker-agent-custom.service";
 assert config.users.users.legacy-host.uid == 12002;
 assert config.users.groups.legacy-host.gid == 12003;
-assert lib.hasInfix "cp -rn" config.systemd.services.seed-hermes-legacy.script;
-assert lib.hasInfix "/var/lib/zeroclaw-legacy/.zeroclaw/data/"
-  config.systemd.services.seed-zeroclaw-legacy.script;
-assert config.systemd.services.hermes-legacy-git-identity.script != "";
+assert lib.hasInfix "cp -rn" config.systemd.services.agent-custom-seed.script;
+assert lib.hasInfix "/var/lib/tentaflake/agents/zero-seeded/.zeroclaw/data/"
+  config.systemd.services.agent-zero-seeded-seed.script;
+assert config.systemd.services.agent-custom-git-identity.script != "";
 assert
-  records.zeroclaw-legacy.uid == 65534
-  && records.zeroclaw-legacy.workspace == "/var/lib/zeroclaw-legacy/data";
-assert lib.hasInfix "opt-in streaming" config.systemd.services.docker-openclaw-assistant.script;
+  records.agent-zero-seeded.uid == 65534
+  && records.agent-zero-seeded.workspace == "/var/lib/tentaflake/agents/zero-seeded/data";
+assert lib.hasInfix "opt-in streaming" config.systemd.services.docker-agent-assistant.script;
 assert
-  !(lib.hasInfix "current LLM broker rejects" config.systemd.services.docker-openclaw-assistant.script);
+  !(lib.hasInfix "current LLM broker rejects" config.systemd.services.docker-agent-assistant.script);
 assert import ./stopped-scaffold.nix { inherit pkgs builders config; };
-assert lib.elem "--network=none" containers.hermes-zeroclaw-named.extraOptions;
+assert lib.elem "--network=none" containers.agent-zeroclaw-named.extraOptions;
 assert failures config == [ ];
 assert lib.hasInfix
   "openclaw\thermes-assistant\tmisleading-volume\tdeclared.service\t/declared-state\tfalse"
   inventory;
 assert lib.hasInfix "agent\tunmanaged\tunmanaged\tpodman-unmanaged.service\t/legacy-fallback\ttrue"
   inventory;
-assert dataConfig.tentaflake.agentInstances.hermes-generic.name == "generic";
-assert dataConfig.virtualisation.oci-containers.containers.hermes-from-data.autoStart;
+assert dataConfig.tentaflake.agentInstances.agent-generic.name == "generic";
+assert dataConfig.virtualisation.oci-containers.containers.agent-from-data.autoStart;
 assert rejects (json ./fixtures/adapter-input/missing-schema.json);
 assert rejects (json ./fixtures/adapter-input/unsupported-schema.json);
 assert rejects (json ./fixtures/adapter-input/unknown-root-field.json);
 assert rejects (json ./fixtures/adapter-input/incomplete-legacy.json);
 assert rejects (json ./fixtures/adapter-input/unknown-adapter.json);
 assert rejects (json ./fixtures/adapter-input/duplicate-identity.json);
+assert rejects (json ./fixtures/adapter-input/legacy-mixed.json);
+assert rejects
+  (eval [
+    (instance "hermes" "same")
+    (instance "zeroclaw" "same")
+  ]).tentaflake.agentInstances;
 assert rejects
   (eval [
     (instance "hermes" "same")
@@ -404,6 +513,13 @@ assert rejects (
     adapter = "hermes";
     name = "invalid";
     unknown = true;
+  }
+);
+assert rejects (
+  builders.mkAgent {
+    adapter = "hermes";
+    name = "obsolete-option";
+    gitAutoPush = null;
   }
 );
 assert rejects (
@@ -440,10 +556,11 @@ assert denies "requires an enabled broker" { autoStart = true; };
 assert denies "requires an enabled broker" { extraContainerConfig.autoStart = true; };
 assert rejects
   (eval [
-    (builders.mkHermesAgent {
+    (builders.mkAgent {
+      adapter = "hermes";
       name = "mutable";
       autoStart = false;
       image = "example.invalid/runtime:latest";
     })
-  ]).virtualisation.oci-containers.containers.hermes-mutable.image;
+  ]).virtualisation.oci-containers.containers.agent-mutable.image;
 import ./agent-state-quota.nix { inherit pkgs eval builders; }

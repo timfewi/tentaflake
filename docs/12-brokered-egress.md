@@ -20,14 +20,14 @@ Each enabled agent gets:
 - optional LLM and fetch broker processes with separate state and budgets.
 
 The OCI container key must exactly match the generated container name, for
-example `hermes-coding` or `zeroclaw-research`.
+example `agent-coding` or `agent-research`, independently of adapter.
 
 ## Declaration
 
 ```nix
-tentaflake.broker.agents.hermes-coding = {
+tentaflake.broker.agents.agent-coding = {
   enable = true;
-  networkName = "tf-hermes-coding";
+  networkName = "tf-agent-coding";
   subnet = "10.203.20.0/30";
   gateway = "10.203.20.1";
 
@@ -87,10 +87,9 @@ host-held provider credential. Session values are not written to audit logs.
 
 The client owns this opaque conversation-affinity value. The broker neither
 generates it nor verifies conversation ownership; it grants no authorization
-and must not contain secrets or personal data. Older Hermes images or clients
-configured against the local broker may need a client-side integration to emit
-it, including on auxiliary calls. Broker forwarding alone does not establish
-Hermes session propagation or provider acceptance.
+and must not contain secrets or personal data. Clients may need an integration
+to emit it, including on auxiliary calls. Broker forwarding alone establishes
+neither client session propagation nor provider acceptance.
 
 Use a unique `/30` per agent. The network address must end on a four-address
 boundary and `gateway` must be its first usable address. Evaluation rejects
@@ -292,7 +291,7 @@ outcome and usage of the held requests, for example in the provider's usage
 console. Then run the generated one-shot unit:
 
 ```sh
-systemctl start tentaflake-broker-llm-reconcile-hermes-coding.service
+systemctl start tentaflake-broker-llm-reconcile-agent-coding.service
 ```
 
 The underlying command is `tentaflake-broker --reconcile-strict-budget
@@ -323,7 +322,7 @@ For a new, unused budget only, an operator may separately authorize and run the
 generated one-shot unit, for example:
 
 ```sh
-systemctl start tentaflake-broker-llm-initialize-hermes-coding.service
+systemctl start tentaflake-broker-llm-initialize-agent-coding.service
 ```
 
 Stop the broker and its agent first and ensure no other broker uses that state.
@@ -360,7 +359,7 @@ Enable SSE explicitly for each exact agent broker; existing declarations keep
 streaming disabled:
 
 ```nix
-tentaflake.broker.agents.hermes-coding.llm.streaming = {
+tentaflake.broker.agents.agent-coding.llm.streaming = {
   enable = true;
   maxEventBytes = 64 * 1024;
   firstEventTimeoutSeconds = 30;

@@ -24,6 +24,19 @@
       "static"
     ]
   },
+  "runtime-catalog": {
+    "paths": [
+      "scripts/runtime-catalog-docs.py",
+      "scripts/test_runtime_catalog.py"
+    ],
+    "checks": [
+      "static",
+      "selection",
+      "evaluate",
+      "cli",
+      "rust"
+    ]
+  },
   "formatter-test": {
     "paths": [
       "scripts/test_format_check.py"
@@ -145,7 +158,8 @@
   "runtime": {
     "paths": [
       "installer/**",
-      "tests/integration.nix"
+      "tests/integration.nix",
+      "tests/parent-guard-boundary.py"
     ],
     "checks": [
       "runtime",

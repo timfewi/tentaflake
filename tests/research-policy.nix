@@ -20,7 +20,7 @@ let
       nixSettings.enable = false;
       packages.enable = false;
       shell.enable = false;
-      research.agents.hermes-policy.uid = 62101;
+      research.agents.agent-policy.uid = 62101;
     };
     services.secureResearch = {
       serviceUid = 4201;
@@ -36,8 +36,9 @@ let
       modules = [
         self.nixosModules.default
         host
-        (builders.mkHermesAgent (
+        (builders.mkAgent (
           {
+            adapter = "hermes";
             name = "policy";
             autoStart = false;
           }
@@ -54,7 +55,7 @@ let
   missingMounts = evaluate { extraContainerConfig.volumes = [ ]; } { };
   legacy = evaluate { } {
     tentaflake.networking.enable = lib.mkForce true;
-    tentaflake.broker.agents.hermes-policy = {
+    tentaflake.broker.agents.agent-policy = {
       enable = true;
       networkName = "tf-policy";
       subnet = "10.203.44.0/30";
@@ -74,7 +75,7 @@ let
   unregistered = evaluate { } {
     tentaflake.research.agents.hermes-unmanaged.uid = 62104;
     virtualisation.oci-containers.containers.hermes-unmanaged = {
-      image = builders.constants.hermesImage;
+      image = "registry.example.invalid/fixture@sha256:${lib.concatStrings (lib.replicate 64 "a")}";
       autoStart = false;
     };
   };
@@ -82,17 +83,17 @@ let
     imports = [
       (builders.mkAgent {
         adapter = "zeroclaw";
-        name = "policy";
+        name = "zero-policy";
         autoStart = false;
       })
     ];
-    tentaflake.research.agents.zeroclaw-policy.uid = 62105;
+    tentaflake.research.agents.agent-zero-policy.uid = 62105;
   };
   zeroRemote = evaluate { } {
     imports = [
       (builders.mkAgent {
         adapter = "zeroclaw";
-        name = "policy";
+        name = "zero-policy";
         autoStart = false;
         settings.mcp.servers = [
           {
@@ -102,7 +103,7 @@ let
         ];
       })
     ];
-    tentaflake.research.agents.zeroclaw-policy.uid = 62105;
+    tentaflake.research.agents.agent-zero-policy.uid = 62105;
   };
   secureExample = evaluate { } {
     imports = [
@@ -118,16 +119,16 @@ let
       })
     ];
     tentaflake.networking.enable = lib.mkForce true;
-    tentaflake.research.agents.hermes-policy.uid = lib.mkForce 62106;
+    tentaflake.research.agents.agent-policy.uid = lib.mkForce 62106;
   };
   client = import ../lib/researchClient.nix {
     inherit lib pkgs;
     config = valid;
-    containerName = "hermes-policy";
+    containerName = "agent-policy";
     settings.agent.disabled_toolsets = [ "terminal" ];
     adapter = "hermes";
   };
-  record = lib.findFirst (line: lib.hasPrefix "agent\thermes-policy\t" line) "" (
+  record = lib.findFirst (line: lib.hasPrefix "agent\tagent-policy\t" line) "" (
     lib.splitString "\n" valid.environment.etc."tentaflake/security.tsv".text
   );
 in
@@ -150,5 +151,5 @@ assert denies "declared registered adapter" unregistered;
 assert failures zeroValid == [ ];
 assert denies "only local stdio MCP" zeroRemote;
 assert lib.assertMsg (failures secureExample == [ ]) (builtins.toJSON (failures secureExample));
-assert secureExample.virtualisation.oci-containers.containers.hermes-assistant.autoStart;
+assert secureExample.virtualisation.oci-containers.containers.agent-assistant.autoStart;
 pkgs.runCommand "tentaflake-research-policy" { } "touch $out"

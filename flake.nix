@@ -1,5 +1,5 @@
 {
-  description = "Generic NixOS flake template for running isolated Hermes and ZeroClaw agents on one headless machine";
+  description = "Agent-agnostic NixOS flake template for isolated agents on one headless machine";
 
   inputs = {
     tentaflake-research.url = "github:timfewi/tentaflake-research";
@@ -8,12 +8,6 @@
     # The pinned revision provides the container and Rust toolchains used by the
     # host and the workspace CLI.
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
-
-    # Optional: use hermes-agent NixOS module for single-agent setups or container images
-    hermes-agent = {
-      url = "github:NousResearch/hermes-agent";
-      inputs.nixpkgs.follows = "nixpkgs";
-    };
 
     # Optional: uncomment for home-manager support
     # home-manager = {
@@ -62,8 +56,6 @@
 
       # ── Shared agent builders ──
       inherit ((import ./lib { inherit pkgs lib; })) mkAgent adapters runtimeCatalog;
-      inherit ((import ./lib { inherit pkgs lib; })) mkHermesAgent;
-      inherit ((import ./lib { inherit pkgs lib; })) mkZeroClawAgent;
       inherit ((import ./lib { inherit pkgs lib; })) agentsFromData;
 
       # Module set imported by external consumers and built-in hosts
@@ -130,8 +122,6 @@
         inherit
           inputs
           self
-          mkHermesAgent
-          mkZeroClawAgent
           agentsFromData
           mkAgent
           repoRoot
@@ -154,8 +144,6 @@
       # ── Exported helpers ──
       lib.${system} = {
         inherit
-          mkHermesAgent
-          mkZeroClawAgent
           agentsFromData
           mkAgent
           adapters
@@ -193,6 +181,7 @@
             {
               nativeBuildInputs = [
                 pkgs.python3
+                (lib.getBin pkgs.nix)
                 pkgs.bash
                 pkgs.coreutils
                 pkgs.findutils
@@ -204,7 +193,10 @@
               src = lib.fileset.toSource {
                 root = ./.;
                 fileset = lib.fileset.unions [
-                  ./adapters/catalog.json
+                  ./adapters
+                  ./lib/runtimeCatalog.nix
+                  ./lib/agentIdentity.nix
+                  ./lib/stoppedScaffold.nix
                   ./docs/agent-adapters.md
                   ./scripts/runtime-catalog-docs.py
                   ./scripts/state-quota-test.py
@@ -212,6 +204,8 @@
               };
             }
             ''
+              # Even read-only Nix startup needs writable local profile metadata.
+              export NIX_STATE_DIR="$TMPDIR/nix-state"
               python3 "$src/scripts/runtime-catalog-docs.py" --check --root "$src"
               python3 "$src/scripts/state-quota-test.py" "$quotaPrepare" "$quotaOwner"
               touch "$out"
@@ -224,7 +218,7 @@
         # VM integration test: boots the host and asserts the runtime path
         # (Rust CLI, status, and agent unit/user/state dir).
         vm-integration = pkgs.testers.runNixOSTest (
-          import ./tests/integration.nix { inherit self mkHermesAgent mkZeroClawAgent; }
+          import ./tests/integration.nix { inherit self mkAgent; }
         );
         research-integration = import ./tests/research-integration.nix { inherit self pkgs; };
         worker-drain-wakeup = import ./tests/worker-drain-wakeup.nix { inherit self pkgs; };

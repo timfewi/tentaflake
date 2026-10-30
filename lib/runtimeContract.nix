@@ -58,8 +58,8 @@ let
   workspace = raw.workspace or "/workspace";
   lifecycle = raw.lifecycle or "stopped";
 in
-if (raw.schemaVersion or null) != 1 then
-  fail "schemaVersion must be 1."
+if !builtins.isInt (raw.schemaVersion or null) || raw.schemaVersion != 1 then
+  fail "schemaVersion must be integer 1."
 else if !(raw ? image) || !builtins.isString raw.image then
   fail "image must be a digest-pinned OCI reference."
 else if

@@ -43,7 +43,7 @@ def main():
         run("agent", "import", path)
         combined = json.loads(destination.read_bytes())
         assert combined["agents"] == preset["agents"]
-        assert combined["hermes"] == [] and combined["zeroclaw"] == []
+        assert set(combined) == {"schemaVersion", "agents"}
 
         image = "example.invalid/coding@sha256:" + "a" * 64
         generic = json.loads(run("agent", "template", "generic", "new-coding", "--image", image,
@@ -60,12 +60,18 @@ def main():
         assert destination.read_bytes() == before
 
         # Source-only Nix instances are checked even if absent from active TSV.
-        existing = json.loads(run("agent", "template", "hermes", "generic-nix").stdout)
+        existing = json.loads(run("agent", "template", "zeroclaw", "generic-nix").stdout)
         denied = json.loads(run("agent", "plan", candidate(existing), "--json", success=False).stdout)
         assert not denied["valid"] and "already exists" in denied["errors"][0]
 
         invalid = [
             {**generic, "schemaVersion": 2},
+            {"hermes": []},
+            {**generic, "zeroclaw": []},
+            {**generic, "unknown": "refuse"},
+            {"schemaVersion": 1, "agents": [
+                {"adapter": "hermes", "name": "duplicate", "autoStart": False},
+                {"adapter": "zeroclaw", "name": "duplicate", "autoStart": False}]},
             {"schemaVersion": 1, "agents": [{"adapter": "hermes", "name": "unsafe", "autoStart": True}]},
             {"schemaVersion": 1, "agents": [{"adapter": "hermes", "name": "unsafe", "autoStart": False,
                                               "extraVolumes": ["/home:/host:rw"]}]},
@@ -82,6 +88,21 @@ def main():
             denied = run("agent", "import", candidate(item), success=False)
             assert "credential-private-sentinel" not in denied.stdout + denied.stderr
             assert destination.read_bytes() == before
+
+        # Invalid existing roots must remain byte-for-byte untouched.
+        for invalid_existing in ({"hermes": []}, {**generic, "unknown": True}):
+            original = json.dumps(invalid_existing).encode()
+            destination.write_bytes(original)
+            run("agent", "import", candidate(preset), success=False)
+            assert destination.read_bytes() == original
+        destination.write_bytes(before)
+
+        # Unknown adapters in active inventory still reserve their common identity.
+        inventory.write_text("future-runtime\treserved\tagent-reserved\tcustom.service\t/custom/state\ttrue\n")
+        collision = json.loads(run("agent", "template", "pi", "reserved").stdout)
+        run("agent", "import", candidate(collision), success=False)
+        assert destination.read_bytes() == before
+        inventory.write_text("")
 
         # Do not echo a malformed secret-like value in JSON/Nix diagnostics.
         bad = work / "bad.json"

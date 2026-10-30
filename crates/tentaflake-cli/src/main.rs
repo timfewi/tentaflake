@@ -173,8 +173,6 @@ fn main() -> ExitCode {
 
     if invoked_as == "tentaflake-status" {
         args.insert(0, "status".into());
-    } else if invoked_as == "hermes" {
-        eprintln!("warning: `hermes` is deprecated; use `tentaflake`");
     }
 
     match run(args) {
@@ -220,9 +218,6 @@ fn run(mut args: Vec<String>) -> Result<u8, String> {
         "rebuild" => rebuild(&config),
         "update" => update(&config),
         "agent" => onboarding::run(&config, &agents, &args[1..], mode),
-        "top" | "console" => Err(format!(
-            "`{command}` was removed with the auditd/SQLite web-console stack; use the observability profile"
-        )),
         other => Err(format!("unknown command `{other}`; run `tentaflake help`")),
     }
 }
@@ -2727,39 +2722,41 @@ mod tests {
     #[test]
     fn parses_agent_records() {
         let agents = parse_agents(
-            "hermes\tcoding\thermes-coding\tdocker-hermes-coding.service\t/var/lib/hermes-coding\ttrue\n",
+            "generic\tcoding\tagent-coding\tdocker-agent-coding.service\t/var/lib/tentaflake/agents/coding\ttrue\n",
         )
         .unwrap();
         assert_eq!(agents.len(), 1);
         assert_eq!(agents[0].name, "coding");
-        assert_eq!(agents[0].state_dir, PathBuf::from("/var/lib/hermes-coding"));
+        assert_eq!(
+            agents[0].state_dir,
+            PathBuf::from("/var/lib/tentaflake/agents/coding")
+        );
     }
 
     #[test]
     fn adapter_inventory_preserves_explicit_identity_and_unit() {
         let agents = parse_agents(
-            "openclaw\thermes-assistant\topenclaw-hermes-assistant\tpodman-openclaw-hermes-assistant.service\t/var/lib/custom-state\tfalse\n\
-             hermes\tzeroclaw-coding\thermes-zeroclaw-coding\tdocker-hermes-zeroclaw-coding.service\t/var/lib/existing-state\ttrue\n",
+            "future-runtime\tassistant\tagent-assistant\tpodman-agent-assistant.service\t/var/lib/custom-state\tfalse\n\
+             generic\tcoding\tagent-coding\tdocker-agent-coding.service\t/var/lib/existing-state\ttrue\n",
         )
         .unwrap();
-        let openclaw = find_agent(&agents, Some(&"hermes-assistant".into())).unwrap();
-        assert_eq!(openclaw.runtime, "openclaw");
-        assert_eq!(openclaw.container, "openclaw-hermes-assistant");
-        assert_eq!(openclaw.unit, "podman-openclaw-hermes-assistant.service");
-        assert_eq!(openclaw.state_dir, PathBuf::from("/var/lib/custom-state"));
+        let agent = find_agent(&agents, Some(&"assistant".into())).unwrap();
+        assert_eq!(agent.runtime, "future-runtime");
+        assert_eq!(agent.container, "agent-assistant");
+        assert_eq!(agent.unit, "podman-agent-assistant.service");
+        assert_eq!(agent.state_dir, PathBuf::from("/var/lib/custom-state"));
         assert_eq!(
-            find_agent(&agents, Some(&"hermes-zeroclaw-coding".into()))
+            find_agent(&agents, Some(&"agent-coding".into()))
                 .unwrap()
                 .name,
-            "zeroclaw-coding"
+            "coding"
         );
     }
 
     #[test]
     fn rejects_malformed_agent_records() {
-        assert!(parse_agents("hermes\tmissing\tfields\n").is_err());
-        let legacy =
-            "hermes\tcoding\thermes-coding\tdocker-hermes-coding.service\t/var/lib/hermes-coding";
+        assert!(parse_agents("generic\tmissing\tfields\n").is_err());
+        let legacy = "generic\tcoding\tagent-coding\tdocker-agent-coding.service\t/var/lib/tentaflake/agents/coding";
         assert!(parse_agents(legacy).is_err());
         assert!(parse_agents(&format!("{legacy}\tmaybe")).is_err());
         assert!(!parse_agents(&format!("{legacy}\tfalse")).unwrap()[0].runnable);
@@ -2768,7 +2765,7 @@ mod tests {
     #[test]
     fn finds_agent_by_name_or_container() {
         let agents = parse_agents(
-            "zeroclaw\tassistant\tzeroclaw-assistant\tdocker-zeroclaw-assistant.service\t/var/lib/zeroclaw-assistant\ttrue\n",
+            "generic\tassistant\tagent-assistant\tdocker-agent-assistant.service\t/var/lib/tentaflake/agents/assistant\ttrue\n",
         )
         .unwrap();
         assert_eq!(
@@ -2776,7 +2773,7 @@ mod tests {
             "assistant"
         );
         assert_eq!(
-            find_agent(&agents, Some(&"zeroclaw-assistant".into()))
+            find_agent(&agents, Some(&"agent-assistant".into()))
                 .unwrap()
                 .name,
             "assistant"
@@ -2786,23 +2783,23 @@ mod tests {
     #[test]
     fn exact_container_identity_wins_over_another_agents_display_name() {
         let agents = parse_agents(
-            "hermes\tzeroclaw-coding\thermes-zeroclaw-coding\tdocker-hermes-zeroclaw-coding.service\t/var/lib/hermes-zeroclaw-coding\ttrue\n\
-             zeroclaw\tcoding\tzeroclaw-coding\tdocker-zeroclaw-coding.service\t/var/lib/zeroclaw-coding\ttrue\n",
+            "generic\tagent-coding\tagent-agent-coding\tdocker-agent-agent-coding.service\t/var/lib/tentaflake/agents/agent-coding\ttrue\n\
+             future-runtime\tcoding\tagent-coding\tdocker-agent-coding.service\t/var/lib/tentaflake/agents/coding\ttrue\n",
         )
         .unwrap();
         assert_eq!(
-            find_agent(&agents, Some(&"zeroclaw-coding".into()))
+            find_agent(&agents, Some(&"agent-coding".into()))
                 .unwrap()
                 .runtime,
-            "zeroclaw"
+            "future-runtime"
         );
     }
 
     #[test]
     fn ambiguous_display_names_require_a_canonical_identity() {
         let agents = parse_agents(
-            "hermes\tassistant\thermes-assistant\tdocker-hermes-assistant.service\t/var/lib/hermes-assistant\ttrue\n\
-             zeroclaw\tassistant\tzeroclaw-assistant\tdocker-zeroclaw-assistant.service\t/var/lib/zeroclaw-assistant\ttrue\n",
+            "generic\tassistant\tagent-assistant\tdocker-agent-assistant.service\t/var/lib/tentaflake/agents/assistant\ttrue\n\
+             unmanaged\tassistant\texternal-assistant\tdocker-external-assistant.service\t/var/lib/external-assistant\ttrue\n",
         )
         .unwrap();
         assert!(
@@ -2811,10 +2808,10 @@ mod tests {
                 .contains("ambiguous")
         );
         assert_eq!(
-            find_agent(&agents, Some(&"hermes-assistant".into()))
+            find_agent(&agents, Some(&"agent-assistant".into()))
                 .unwrap()
                 .runtime,
-            "hermes"
+            "generic"
         );
     }
 
@@ -3266,12 +3263,12 @@ mod tests {
     fn security_inspection_targets_the_manifest_container_name() {
         let state = parse_security_state(
             "manifest\t2\nhost\tbalanced\tfalse\tfalse\ttrue\ttrue\ttrue\t36\nmanagement\ttailscale\ttrue\ttrue\ttailnet-policy\n\
-             agent\thermes-fixture\tbalanced\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\tfalse\tfalse\t-\tfalse\t-\n",
+             agent\tagent-fixture\tbalanced\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\tfalse\tfalse\t-\tfalse\t-\n",
         )
         .unwrap();
         let agent = &state.agents[0];
 
-        assert_eq!(agent.name, "hermes-fixture");
+        assert_eq!(agent.name, "agent-fixture");
         assert!(agent.declared_ports_absent.is_none());
         assert!(agent.declared_live_resources.is_none());
         assert_eq!(
@@ -3285,7 +3282,7 @@ mod tests {
         );
         assert_eq!(
             inspect_arguments_for_agent("docker", agent),
-            ["-n", "docker", "inspect", "hermes-fixture"]
+            ["-n", "docker", "inspect", "agent-fixture"]
         );
     }
 
@@ -3293,7 +3290,7 @@ mod tests {
     fn parses_current_live_evidence_manifest_fields() {
         let state = parse_security_state(concat!(
             "manifest\t2\nhost\tbalanced\tfalse\tfalse\ttrue\ttrue\ttrue\t36\nmanagement\ttailscale\ttrue\ttrue\ttailnet-policy\n",
-            "agent\thermes-fixture\tbalanced\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\tfalse\tfalse\t-\tfalse\t-",
+            "agent\tagent-fixture\tbalanced\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\tfalse\tfalse\t-\tfalse\t-",
             "\tnone\t[]\t",
             r#"{"/run":67108864,"/tmp":268435456,"/var/tmp":268435456}"#,
             "\ttrue\t",
@@ -3351,7 +3348,7 @@ mod tests {
     #[test]
     fn research_mount_requires_exact_readonly_declaration() {
         let declared = vec![DeclaredMount {
-            source: "/run/tentaflake-research/hermes-coding".into(),
+            source: "/run/tentaflake-research/agent-coding".into(),
             destination: "/run/tentaflake-research".into(),
             writable: false,
         }];
@@ -3367,11 +3364,11 @@ mod tests {
         for (field, value) in [
             (
                 "Source",
-                serde_json::json!("/run/tentaflake-research/hermes-other"),
+                serde_json::json!("/run/tentaflake-research/agent-other"),
             ),
             (
                 "Source",
-                serde_json::json!("/run/tentaflake-research/hermes-coding/.."),
+                serde_json::json!("/run/tentaflake-research/agent-coding/.."),
             ),
             ("Destination", serde_json::json!("/run/other")),
             ("RW", serde_json::json!(true)),
@@ -3389,7 +3386,7 @@ mod tests {
     fn declared_mount_manifest_is_closed_and_typed() {
         assert_eq!(
             parse_declared_mounts(
-                r#"["/var/lib/hermes-coding:/home/hermes:rw","/nix/store/config:/config:ro"]"#,
+                r#"["/var/lib/tentaflake/agents/coding:/state:rw","/nix/store/config:/config:ro"]"#,
                 2,
             )
             .unwrap(),
@@ -3400,8 +3397,8 @@ mod tests {
                     writable: false,
                 },
                 DeclaredMount {
-                    source: "/var/lib/hermes-coding".into(),
-                    destination: "/home/hermes".into(),
+                    source: "/var/lib/tentaflake/agents/coding".into(),
+                    destination: "/state".into(),
                     writable: true,
                 },
             ])
@@ -3479,8 +3476,8 @@ mod tests {
     #[test]
     fn rejects_insecure_live_container_inspect_state() {
         let declared_mounts = vec![DeclaredMount {
-            source: "/var/lib/hermes-coding".into(),
-            destination: "/home/hermes".into(),
+            source: "/var/lib/tentaflake/agents/coding".into(),
+            destination: "/state".into(),
             writable: true,
         }];
         let declared_tmpfs = test_declared_tmpfs();
@@ -3520,8 +3517,8 @@ mod tests {
             "Mounts": [
                 {
                     "Type": "bind",
-                    "Source": "/var/lib/hermes-coding",
-                    "Destination": "/home/hermes",
+                    "Source": "/var/lib/tentaflake/agents/coding",
+                    "Destination": "/state",
                     "RW": true
                 }
             ]
@@ -4060,7 +4057,7 @@ mod tests {
             ),
             LiveContainerState::Unsafe
         );
-        inspect[0]["Mounts"][0]["Destination"] = serde_json::json!("/home/hermes");
+        inspect[0]["Mounts"][0]["Destination"] = serde_json::json!("/state");
         inspect[0]["Mounts"][0]["RW"] = serde_json::json!(false);
         assert_eq!(
             live_container_security(
@@ -4092,8 +4089,8 @@ mod tests {
     #[test]
     fn parses_podman_live_container_security_state() {
         let declared_mounts = vec![DeclaredMount {
-            source: "/var/lib/zeroclaw-assistant".into(),
-            destination: "/zeroclaw-data".into(),
+            source: "/var/lib/tentaflake/agents/assistant".into(),
+            destination: "/state".into(),
             writable: true,
         }];
         let declared_tmpfs = test_declared_tmpfs();
@@ -4106,7 +4103,7 @@ mod tests {
             "State": { "Running": true },
             "Config": { "User": "65534:65534" },
             "NetworkSettings": {
-                "Networks": { "tf-zeroclaw-assistant": {} },
+                "Networks": { "tf-agent-assistant": {} },
                 "Ports": {}
             },
             "HostConfig": {
@@ -4137,8 +4134,8 @@ mod tests {
             "Mounts": [
                 {
                     "Type": "bind",
-                    "Source": "/var/lib/zeroclaw-assistant",
-                    "Destination": "/zeroclaw-data",
+                    "Source": "/var/lib/tentaflake/agents/assistant",
+                    "Destination": "/state",
                     "RW": true
                 }
             ]
@@ -4147,7 +4144,7 @@ mod tests {
             live_container_security(
                 &inspect,
                 "podman",
-                "tf-zeroclaw-assistant",
+                "tf-agent-assistant",
                 &declared_mounts,
                 &declared_tmpfs,
                 &declared_live_resources,
@@ -4161,7 +4158,7 @@ mod tests {
             live_container_security(
                 &missing_podman_propagation,
                 "podman",
-                "tf-zeroclaw-assistant",
+                "tf-agent-assistant",
                 &declared_mounts,
                 &declared_tmpfs,
                 &declared_live_resources,
@@ -4175,7 +4172,7 @@ mod tests {
             live_container_security(
                 &conflicting_podman_propagation,
                 "podman",
-                "tf-zeroclaw-assistant",
+                "tf-agent-assistant",
                 &declared_mounts,
                 &declared_tmpfs,
                 &declared_live_resources,
@@ -4192,7 +4189,7 @@ mod tests {
             live_container_security(
                 &missing_named_networks,
                 "podman",
-                "tf-zeroclaw-assistant",
+                "tf-agent-assistant",
                 &declared_mounts,
                 &declared_tmpfs,
                 &declared_live_resources,
@@ -4206,7 +4203,7 @@ mod tests {
             live_container_security(
                 &additional_named_network,
                 "podman",
-                "tf-zeroclaw-assistant",
+                "tf-agent-assistant",
                 &declared_mounts,
                 &declared_tmpfs,
                 &declared_live_resources,
@@ -4237,7 +4234,7 @@ mod tests {
             live_container_security(
                 &inconsistent_podman_cpu,
                 "podman",
-                "tf-zeroclaw-assistant",
+                "tf-agent-assistant",
                 &declared_mounts,
                 &declared_tmpfs,
                 &declared_live_resources,
@@ -4250,7 +4247,7 @@ mod tests {
             live_container_security(
                 &drifted_podman_nproc,
                 "podman",
-                "tf-zeroclaw-assistant",
+                "tf-agent-assistant",
                 &declared_mounts,
                 &declared_tmpfs,
                 &declared_live_resources,
@@ -4263,7 +4260,7 @@ mod tests {
             live_container_security(
                 &inspect,
                 "podman",
-                "tf-zeroclaw-assistant",
+                "tf-agent-assistant",
                 &declared_mounts,
                 &declared_tmpfs,
                 &declared_live_resources,
@@ -4279,7 +4276,7 @@ mod tests {
             live_container_security(
                 &inspect,
                 "podman",
-                "tf-zeroclaw-assistant",
+                "tf-agent-assistant",
                 &declared_mounts,
                 &declared_tmpfs,
                 &declared_live_resources,

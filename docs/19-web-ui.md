@@ -23,7 +23,7 @@ agents, activate configurations or provide arbitrary commands.
 
 The shipped host contract works with the Host view in a compatible operator UI.
 It is independent of native chat connections or the UI's optional HQ task model.
-ZeroClaw and Hermes use the same host inventory; stopped scaffold entries remain
+All adapters use the same host inventory; stopped scaffold entries remain
 visible but cannot be started or restarted through this interface.
 
 ## Enable the host API
@@ -85,11 +85,10 @@ group when `hostSocket` is configured. Its Python bridge checks the Unix peer
 UID before making requests; the default expected UID is root. Keep native
 application relays and host-control sockets separate.
 
-`taskAuthority = "none"` is a host-only mode. It opens no application database,
-does not migrate existing boards and requires no Pi runtime. Existing Hermes or
-HQ deployments can add `hostSocket` while retaining their current task authority
-and application connections. Their tasks and chat history remain in their
-existing systems.
+`taskAuthority = "none"` is host-only: it opens no application database, migrates
+no task state and requires no agent runtime. Existing frontends can add
+`hostSocket` while retaining their task authority and application connections;
+their tasks and chat history remain in their existing systems.
 
 Provision the operator token in a private runtime file containing at least 24
 random characters. Serve the loopback UI through the existing authorized
@@ -130,7 +129,7 @@ An action accepts exactly:
 {"action":"restart","request_id":"operator-action-unique-id"}
 ```
 
-The path identifies a canonical container ID such as `hermes-assistant`, not a
+The path identifies a canonical container ID such as `agent-assistant`, not a
 display name. Each receipt records `request_id`, `agent_id`, `action`,
 `state` (`succeeded`, `failed` or `unknown`) and `observed_state`. A successful
 command is not a model/provider readiness claim. Observe the resulting runtime
@@ -262,20 +261,11 @@ See [worker approval and containment](13-disposable-worker.md).
 
 ## What this interface does not claim
 
-`chat` is advertised as `false`. Starting a systemd unit does not create a
-native chat endpoint. The current Hermes and ZeroClaw declarations do not
-supply the UI's session/run protocol; their chat integrations require separate
-runtime adapters and acceptance evidence. The LLM broker is an outbound model
-policy boundary, not an operator conversation API.
-
-The pinned Hermes image already contains a native API at source revision
-[`e45d126`](https://github.com/NousResearch/hermes-agent/blob/e45d12642d5d0753e492d51be17cccf687aa8b06/gateway/platforms/api_server.py).
-Its TCP listener and required application bearer credential are not enabled or
-securely exposed by the current Tentaflake declarations. A future opt-in
-integration needs a dedicated runtime application credential, a fixed confined
-relay, and exact-image tests for sessions, streaming, cancellation and restart.
-Enabling this host API alone supplies none of those resources. ZeroClaw has a
-different gateway protocol and requires its own application adapter.
+`chat` is advertised as `false`. A started systemd unit is not a native chat
+endpoint. Runtime session/stream/cancellation protocols need their own reviewed
+application adapter, credential/relay boundary and exact-image acceptance.
+The LLM broker is outbound model policy, not an operator conversation API;
+enabling this host API grants none of those native application resources.
 
 The Host view does not expose shell/exec, provider keys, file writes, arbitrary
 unit control, upgrades or NixOS rebuilds. Native task-board ownership and HQ

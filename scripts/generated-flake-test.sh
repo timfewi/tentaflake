@@ -31,12 +31,10 @@ cp "$REPO_DIR/Cargo.toml" \
   "$TARGET_NIXOS/"
 cp "$REPO_DIR/configuration.nix" "$TARGET_NIXOS/configuration.nix"
 cat >"$TARGET_NIXOS/my-agents.nix" <<'EOF'
-{ mkAgent, mkHermesAgent }:
+{ mkAgent }:
 [
-  # Legacy JSON entries below explicitly exercise dev compatibility.
-  { tentaflake.security.profile = "dev"; }
   (mkAgent { adapter = "hermes"; name = "generic-nix"; autoStart = false; })
-  (mkHermesAgent { name = "legacy-nix"; autoStart = false; })
+  (mkAgent { adapter = "zeroclaw"; name = "second-nix"; autoStart = false; })
 ]
 EOF
 
@@ -65,16 +63,8 @@ cat >"$TARGET_NIXOS/agents.json" <<'EOF'
   "schemaVersion": 1,
   "agents": [
     { "adapter": "hermes", "name": "generic-json", "autoStart": false },
-    { "adapter": "openclaw", "name": "assistant", "autoStart": false }
-  ],
-  "hermes": [
-    { "name": "coding", "provider": "openrouter", "model": "anthropic/claude-opus-4",
-      "base_url": null, "envFile": "/etc/tentaflake/secrets/hermes-coding.env" }
-  ],
-  "zeroclaw": [
-    { "name": "ops", "provider": "openrouter", "model": "anthropic/claude-opus-4",
-      "base_url": null, "hostPort": 8080, "servePort": 8081,
-      "envFile": "/etc/tentaflake/secrets/zeroclaw-ops.env" }
+    { "adapter": "openclaw", "name": "assistant", "autoStart": false },
+    { "adapter": "zeroclaw", "name": "ops", "autoStart": false }
   ]
 }
 EOF
@@ -110,7 +100,7 @@ git -C "$TARGET_NIXOS" init -q
 git -C "$TARGET_NIXOS" add -A
 git -C "$TARGET_NIXOS" -c user.email=t@t -c user.name=t commit -q -m generated
 
-echo "Evaluating generated flake (dev compatibility agents.json present) ..."
+echo "Evaluating generated flake (versioned agents.json present) ..."
 if nix eval --no-write-lock-file \
   "$TARGET_NIXOS#nixosConfigurations.$HOSTNAME_T.config.system.build.toplevel.drvPath" \
   >"$WORK/out" 2>"$WORK/err"; then
@@ -123,8 +113,7 @@ fi
 
 # Exercise the real operator CLI against an installed, balanced source fixture.
 # No VM, host activation, OCI image or Research closure is involved.
-sed -i 's/security.profile = "dev"/security.profile = "balanced"/' "$TARGET_NIXOS/my-agents.nix"
-printf '%s\n' '{"schemaVersion":1,"agents":[],"hermes":[],"zeroclaw":[]}' >"$TARGET_NIXOS/agents.json"
+printf '%s\n' '{"schemaVersion":1,"agents":[]}' >"$TARGET_NIXOS/agents.json"
 nix eval --impure --json --no-write-lock-file --expr \
   '{ root }: let f = builtins.getFlake root; in { result = import (root + "/tests/agent-onboarding.nix") { pkgs = f.inputs.nixpkgs.legacyPackages.x86_64-linux; }; }' result \
   --argstr root "$REPO_DIR" \

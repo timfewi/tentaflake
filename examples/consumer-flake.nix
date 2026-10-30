@@ -10,7 +10,7 @@
 # ─────────────────────────────────────────────────────────────────────
 
 {
-  description = "My Hermes agent machine — powered by tentaflake";
+  description = "My agent machine — powered by tentaflake";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
@@ -45,20 +45,14 @@
       pkgs = nixpkgs.legacyPackages.${system};
 
       # ── Import tentaflake helpers ──
-      # ZeroClaw agents work the same way: pass definitions to
-      # mkZeroClawAgent.
-      mkHermesAgent = tentaflake.lib.${system}.mkHermesAgent;
       mkAgent = tentaflake.lib.${system}.mkAgent;
-      mkZeroClawAgent = tentaflake.lib.${system}.mkZeroClawAgent;
       constants = tentaflake.lib.${system}.constants;
 
       # ── Shared specialArgs for all hosts ──
       specialArgs = {
         inherit
           self
-          mkHermesAgent
           mkAgent
-          mkZeroClawAgent
           constants
           ;
       };

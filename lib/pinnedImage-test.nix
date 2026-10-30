@@ -3,11 +3,11 @@
 { pkgs }:
 let
   inherit (pkgs) lib;
-  constants = import ./constants.nix;
+  inherit (import ./runtimeCatalog.nix) presets;
   pinnedImage = import ./pinnedImage.nix { inherit lib; };
 
   # bare hex — call sites add the "sha256:" prefix themselves
-  digest = "4a2f23bd3ffaa6ee7b3be8a302a38be43ab0321a2988cd3fb16b7dd472dde812";
+  digest = lib.concatStrings (lib.replicate 64 "a");
 
   # returns true if pinnedImage threw
   rejects = image: !(builtins.tryEval (pinnedImage "test" false image)).success;
@@ -20,8 +20,8 @@ let
 
   cases = [
     # mutable tags are rejected
-    (rejects "nousresearch/hermes-agent:latest")
-    (rejects "ghcr.io/zeroclaw-labs/zeroclaw:v0.8.2")
+    (rejects "example/agent:latest")
+    (rejects "registry.example.invalid/team/agent:v1.2.3")
     (rejects "ubuntu")
     # near-misses must not sneak through
     (rejects "repo@sha256:deadbeef") # too short
@@ -29,7 +29,7 @@ let
     (rejects "repo@sha256:${lib.concatStrings (lib.genList (_: "g") 64)}") # non-hex
     (rejects "repo@sha256:${digest}-extra") # trailing junk
     # tag+digest parses for docker but NOT for podman/skopeo — reject it
-    (rejects "ghcr.io/zeroclaw-labs/zeroclaw:v0.8.2@sha256:${digest}")
+    (rejects "registry.example.invalid/team/agent:v1.2.3@sha256:${digest}")
     # shell-injection: nixpkgs splices `image` into the unit's shell command
     # unquoted, so anything that word-splits must never look "pinned"
     (rejects "evil/backdoor x@sha256:${digest}")
@@ -42,15 +42,16 @@ let
     (!(builtins.tryEval (pinnedImage "test" true "$(id) evil/img")).success)
     (!(builtins.tryEval (pinnedImage "test" true "--privileged evil/img")).success)
     # plain digests are accepted
-    (accepts "nousresearch/hermes-agent@sha256:${digest}")
-    (accepts "ghcr.io/zeroclaw-labs/zeroclaw@sha256:${digest}")
+    (accepts "example/agent@sha256:${digest}")
+    (accepts "registry.example.invalid/team/agent@sha256:${digest}")
     # a registry port is a colon that is NOT a tag
     (accepts "localhost:5000/my-agent@sha256:${digest}")
     # the opt-out works for a legitimate locally-built tag
     (builtins.tryEval (pinnedImage "test" true "my-agent:local")).success
     # the shipped defaults are pinned
-    (accepts constants.hermesImage)
-    (accepts constants.zeroclawImage)
+    (lib.all (preset: preset.artifact.kind != "oci" || accepts preset.artifact.reference) (
+      builtins.attrValues presets
+    ))
   ];
 
   failed = lib.length (lib.filter (ok: !ok) cases);

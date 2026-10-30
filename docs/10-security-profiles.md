@@ -2,8 +2,8 @@
 
 ## Result
 
-Installed hosts default to `balanced`. The common adapter builder and compatible
-Hermes/ZeroClaw wrappers apply one policy to final merged OCI configurations.
+Installed hosts default to `balanced`. `mkAgent` and the shared containment
+builder apply one policy to final merged OCI configurations.
 OpenClaw and Pi remain stopped scaffolds without containers or operational support.
 The policy rejects unsafe configurations during NixOS evaluation instead of
 silently weakening them. `strict` also fails because no tested separate-kernel boundary
@@ -102,7 +102,7 @@ signing identity (or reviewed public key) per generated container name:
 ```nix
 tentaflake.imageProvenance = {
   requireForSecureAgents = true;
-  agents.hermes-assistant = {
+  agents.agent-assistant = {
     mode = "keyless";
     certificateIdentity =
       "https://github.com/example/project/"
@@ -139,10 +139,10 @@ Choose one of two explicit paths:
    tentaflake.security.profile = "dev";
    ```
 
-The second path restores compatibility; it is not recommended for untrusted
-24/7 agents. Legacy `agents.json` entries with direct environment files or
-service ports require dev. The schema-v1 generic `agents` array accepts stopped
-balanced adapter declarations; see [agent adapters](agent-adapters.md).
+The second path is not recommended for untrusted 24/7 agents. Direct credential
+files and published service ports remain dev-only adapter arguments. The required
+schema-v1 `agents` form accepts stopped balanced declarations; removed runtime
+arrays stay rejected in every profile. See [agent adapters](agent-adapters.md).
 
 The former `tentaflake.networking.egress` option is renamed to
 `tentaflake.networking.legacyPortEgress`. It is permitted only in `dev`. It
@@ -151,10 +151,8 @@ allowlist, container `FORWARD` policy, DNS control, or secure egress broker.
 
 ## Git auto-push
 
-Host-side `gitAutoPush` is disabled in all profiles. Every non-null setting is
-rejected at evaluation; the adapter emits no push service or timer and imports
-no publication credential. Existing consumers must remove the setting or use
-`gitAutoPush = null`.
+Host-side Git auto-push is removed. The adapter accepts no `gitAutoPush`
+argument and emits no publication service, timer or credential import.
 
 Agent-owned Git metadata is executable input: hooks, included configuration and
 helpers can run with the host process's authority. A checked fetch URL does not
@@ -233,26 +231,7 @@ registry, or a production-host activation/reboot drill.
 
 ## Threat model and residual risk
 
-The complete asset, adversary, trust-boundary, control/evidence, non-goal, and
-deployment-acceptance analysis is maintained in the
-[threat model](15-threat-model.md). The summary below is intentionally brief.
-
-Assets are the NixOS host, other agents, operator access, persistent state,
-provider/Git/backup credentials, and external accounts. Attackers include a
-compromised agent runtime, malicious web/document content, dependencies, image
-content, and hostile model output. The model assumes the host kernel, NixOS
-closure, gVisor package, OCI daemon, and operator identity are trusted.
-
-Phase A narrows filesystem and kernel authority. Phase B prevents direct
-egress, substitutes host-held provider credentials, and constrains external
-web retrieval. The disposable worker additionally bounds offline untrusted
-execution and requires host approval for non-local action classes, but cannot
-prove every controller tool actually routed work through it. It does not prove
-that an image digest is trustworthy, make
-Docker/gVisor immune to vulnerabilities, prevent malicious writes inside the
-agent's own workspace, bound runtime-specific state outside the workspace,
-prove a host UID remap, enforce tailnet policy, or make untrusted web content
-safe. Cosign verification
-proves only that the configured signer authorized the pinned artifact; it does
-not prove that the software is benign. Those are explicit residual risks and
-dependencies, not hidden fallbacks.
+The [threat model](15-threat-model.md) owns assets, adversaries, trust boundaries,
+residual risks and deployment acceptance. Digest/signature identity is not
+software trust, gVisor shares the trusted host kernel, and a worker declaration
+does not prove native tool mediation. No profile claims those gaps are closed.

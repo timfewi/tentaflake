@@ -13,7 +13,7 @@ pkgs.testers.runNixOSTest {
         memorySize = 1536;
         oci-containers = {
           backend = "podman";
-          containers.hermes-wakeup = {
+          containers.agent-wakeup = {
             image = "unused-worker-fixture:latest";
             autoStart = false;
           };
@@ -32,7 +32,7 @@ pkgs.testers.runNixOSTest {
         };
         worker = {
           imageReference = "unused-worker-fixture:latest";
-          agents.hermes-wakeup = {
+          agents.agent-wakeup = {
             enable = true;
             workspace = "/var/lib/worker-wakeup/workspace";
           };
@@ -49,12 +49,12 @@ pkgs.testers.runNixOSTest {
           };
         };
         # Any accidental controller execution is a fixture failure, not a pull.
-        podman-hermes-wakeup.serviceConfig.ExecStart = lib.mkForce "${pkgs.coreutils}/bin/false";
-        tentaflake-worker-hermes-wakeup.serviceConfig = {
+        podman-agent-wakeup.serviceConfig.ExecStart = lib.mkForce "${pkgs.coreutils}/bin/false";
+        tentaflake-worker-agent-wakeup.serviceConfig = {
           TimeoutStartSec = "120s";
           ExecStartPost = pkgs.writeShellScript "hold-worker-after-drain" ''
             set -eu
-            state=/var/lib/tentaflake-worker-hermes-wakeup
+            state=/var/lib/tentaflake-worker-agent-wakeup
             count=0
             if test -f "$state/test-drains"; then
               count=$(cat "$state/test-drains")
@@ -78,12 +78,12 @@ pkgs.testers.runNixOSTest {
 
     # The persistence subtest reboots; omit QEMU's default -no-reboot.
     machine.start(allow_reboot=True)
-    unit = "tentaflake-worker-hermes-wakeup.service"
-    watcher = "tentaflake-worker-hermes-wakeup.path"
-    state = "/var/lib/tentaflake-worker-hermes-wakeup"
+    unit = "tentaflake-worker-agent-wakeup.service"
+    watcher = "tentaflake-worker-agent-wakeup.path"
+    state = "/var/lib/tentaflake-worker-agent-wakeup"
     inbox = "/var/lib/worker-wakeup/workspace/.tentaflake-worker/inbox"
     marker = state + "/.drain-request"
-    endpoint = "http://localhost/v1/agents/hermes-wakeup/"
+    endpoint = "http://localhost/v1/agents/agent-wakeup/"
 
     def api(method, resource, body=None, status=200):
         command = "curl --silent --show-error --unix-socket /run/tentaflake-api/host.sock"
@@ -209,6 +209,6 @@ pkgs.testers.runNixOSTest {
         machine.succeed("sleep 2")
         assert count() == before + 1
 
-    machine.succeed("test $(systemctl show -p ActiveState --value podman-hermes-wakeup.service) = inactive")
+    machine.succeed("test $(systemctl show -p ActiveState --value podman-agent-wakeup.service) = inactive")
   '';
 }

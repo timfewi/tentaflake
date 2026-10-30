@@ -1,4 +1,4 @@
-{ mkAgent, mkHermesAgent, mkZeroClawAgent }:
+{ mkAgent }:
 
 # Installed systems use the balanced security profile by default. These
 # examples create fail-closed capsules and do not inject provider credentials
@@ -11,19 +11,18 @@
     name = "preview";
     autoStart = false;
   })
-  (mkHermesAgent {
+  (mkAgent {
+    adapter = "hermes";
     name = "coding";
     autoStart = false;
     gitIdentity = {
       name = "coding-bot";
       email = "coding@example.invalid";
     };
-
-    # Host-side gitAutoPush is disabled: agent-owned Git metadata cannot safely
-    # execute with host credentials. Leave null; see docs/07-operations.md.
   })
 
-  (mkZeroClawAgent {
+  (mkAgent {
+    adapter = "zeroclaw";
     name = "assistant";
     autoStart = false;
     settings.schema_version = 3;
@@ -33,13 +32,13 @@
   # numeric user are checked against each builder during evaluation.
   {
     tentaflake.worker.agents = {
-      hermes-coding = {
+      agent-coding = {
         enable = true;
-        workspace = "/var/lib/hermes-coding/workspace";
+        workspace = "/var/lib/tentaflake/agents/coding/workspace";
       };
-      zeroclaw-assistant = {
+      agent-assistant = {
         enable = true;
-        workspace = "/var/lib/zeroclaw-assistant/data";
+        workspace = "/var/lib/tentaflake/agents/assistant/data";
         containerUid = 65534;
         containerGid = 65534;
       };
@@ -48,14 +47,14 @@
     # Fixed-size persistent Btrfs workspaces. Enabling these on a non-empty
     # existing workspace fails closed; follow the migration guide first.
     tentaflake.workspaceQuota.agents = {
-      hermes-coding = {
+      agent-coding = {
         enable = true;
-        workspace = "/var/lib/hermes-coding/workspace";
+        workspace = "/var/lib/tentaflake/agents/coding/workspace";
         sizeMiB = 8192;
       };
-      zeroclaw-assistant = {
+      agent-assistant = {
         enable = true;
-        workspace = "/var/lib/zeroclaw-assistant/data";
+        workspace = "/var/lib/tentaflake/agents/assistant/data";
         sizeMiB = 8192;
         ownerUid = 65534;
         ownerGid = 65534;
@@ -63,11 +62,3 @@
     };
   }
 ]
-
-# Compatibility migration for a trusted development host:
-#
-#   tentaflake.security.profile = "dev";
-#
-# Only under that explicit host profile may builders accept envFile,
-# agenixFile, host networking, published loopback ports, dashboards, or
-# mutable local image tags. Do not use dev for untrusted 24/7 agents.

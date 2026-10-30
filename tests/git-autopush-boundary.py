@@ -2,7 +2,9 @@
 
 Run: python3 tests/git-autopush-boundary.py /path/to/git
 Only temporary local repositories and a deliberately fake token are used.
-The module-evaluation fixture separately enforces rejection of gitAutoPush.
+The module-evaluation fixture rejects the removed gitAutoPush option and proves
+ordinary capsules have no host autopush service or timer. This fixture retains
+the underlying exploit evidence; it does not execute a production host helper.
 """
 
 import os

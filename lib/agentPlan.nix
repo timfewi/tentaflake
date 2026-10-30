@@ -23,11 +23,9 @@ let
   ];
   importable =
     builtins.isAttrs data
-    &&
-      builtins.attrNames data == [
-        "agents"
-        "schemaVersion"
-      ]
+    && data ? schemaVersion
+    && data ? agents
+    && lib.subtractLists [ "schemaVersion" "agents" "_securityNote" ] (builtins.attrNames data) == [ ]
     && builtins.isList data.agents
     && data.agents != [ ]
     && lib.all (
@@ -36,7 +34,7 @@ let
   builders = import ./default.nix { inherit pkgs lib; };
   modules = builders.agentsFromData {
     inherit data;
-    inherit (builders) mkAgent mkHermesAgent mkZeroClawAgent;
+    inherit (builders) mkAgent;
   };
   evaluated =
     (import (pkgs.path + "/nixos/lib/eval-config.nix") {

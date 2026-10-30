@@ -68,7 +68,7 @@ esac
         "printf 'Filesystem 1024-blocks Used Available Capacity Mounted on\nfixture 100 1 99 1%% /\n'",
     );
     fs::write(root.join("agents.tsv"), "").unwrap();
-    let mut fields = vec!["agent", "hermes-inspect-fixture", "balanced"];
+    let mut fields = vec!["agent", "agent-inspect-fixture", "balanced"];
     fields.extend(std::iter::repeat_n("true", 18));
     fields.extend(["false", "-", "true", "-", "tf-inspect"]);
     fs::write(
@@ -113,14 +113,14 @@ esac
                 assert!(value["findings"].is_array());
             }
             if flags.contains(&"--hide") {
-                assert!(!stdout.contains("hermes-inspect-fixture"), "{stdout}");
+                assert!(!stdout.contains("agent-inspect-fixture"), "{stdout}");
                 assert!(stdout.contains("redacted"), "{stdout}");
             }
             let calls = fs::read_to_string(&calls).unwrap();
             assert_eq!(
                 calls,
                 format!(
-                    "-n {backend} inspect hermes-inspect-fixture\n-n {backend} network inspect tf-inspect\n"
+                    "-n {backend} inspect agent-inspect-fixture\n-n {backend} network inspect tf-inspect\n"
                 )
             );
         }

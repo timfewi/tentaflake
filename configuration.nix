@@ -1,36 +1,28 @@
 {
   config,
   lib,
-  mkHermesAgent,
-  mkZeroClawAgent,
+  mkAgent,
   agentsFromData,
-  specialArgs,
   profile ? "installed",
   ...
 }:
 let
   cfg = config.tentaflake;
-  mkAgent = specialArgs.mkAgent or null;
   # ── Agent modules ──
   # Define agents in my-agents.nix (see my-agents.nix.example). Auto-imported when
   # present; git-track it (`git add my-agents.nix`) so the flake can evaluate it.
-  # intersectAttrs passes each builder only if the function asks for it, so older
-  # my-agents.nix files that take just `{ mkHermesAgent }` keep working.
   myAgents = lib.optionals (builtins.pathExists ./my-agents.nix) (
     let
       f = import ./my-agents.nix;
     in
-    if (lib.functionArgs f) ? mkAgent && mkAgent == null then
-      throw "tentaflake: my-agents.nix requests mkAgent; pass the exported helper in specialArgs."
-    else
-      f (lib.intersectAttrs (lib.functionArgs f) { inherit mkAgent mkHermesAgent mkZeroClawAgent; })
+    f { inherit mkAgent; }
   );
 
   # agents.json — declarative non-Nix input. Additive to my-agents.nix (both may
   # coexist); git-tracked and intentionally secret-free.
   dataAgents = lib.optionals (builtins.pathExists ./agents.json) (agentsFromData {
     file = ./agents.json;
-    inherit mkAgent mkHermesAgent mkZeroClawAgent;
+    inherit mkAgent;
   });
 in
 {

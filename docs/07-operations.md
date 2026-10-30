@@ -45,9 +45,8 @@ resolving the target. Source changes and successful builds do not authorize
 
 ## Git auto-push
 
-`gitAutoPush` is disabled in every profile. The default remains `null`;
-any non-null value now fails evaluation with a migration error. No auto-push
-service, timer, or credential import is generated.
+Host-side Git auto-push has been removed; `gitAutoPush` is not an accepted
+adapter argument. No publication service, timer or credential is generated.
 
 The former root service ran Git against agent-owned repository metadata with a
 host token. Git hooks, included configuration and helpers can execute programs
@@ -63,7 +62,7 @@ an installed service.** For each previously enabled agent:
 2. Revoke the old publication credential and review repository/account audit
    logs for unexpected access. Rotate any other credentials reachable by the
    former root service if compromise is suspected.
-3. Remove `gitAutoPush` or set it to `null`, then rebuild and activate the host
+3. Remove `gitAutoPush`, then rebuild and activate the host
    configuration through your normal operator workflow. Confirm the old timer
    and service are no longer installed or running.
 4. Remove the unused token-file provisioning if no other integration needs it.
@@ -132,7 +131,7 @@ before relying on it.
 ## Backup and restore
 
 Back up declarative configuration separately from mutable state. Per-agent
-state defaults to `/var/lib/<runtime>-<name>`. Provider/Git/backup credentials
+state defaults to `/var/lib/tentaflake/agents/<name>`. Provider/Git/backup credentials
 must remain outside the agent and outside backup logs.
 
 The core module provides an opt-in Restic policy while keeping repository and
@@ -142,8 +141,8 @@ password values in runtime files owned by the deployment fork:
 tentaflake.backup = {
   enable = true;
   paths = [
-    "/var/lib/hermes-coding"
-    "/var/lib/tentaflake-broker-llm-hermes-coding"
+    "/var/lib/tentaflake/agents/coding"
+    "/var/lib/tentaflake-broker-llm-agent-coding"
   ];
   repositoryFile =
     "/run/agenix/restic-repository";
@@ -218,20 +217,9 @@ delivery remains an explicit deployment-fork integration.
 
 ## Continuous-runtime follow-ups (2026-10-03)
 
-The source review for a modular 24/7 host identified these remaining issue
-candidates. Restart backoff, broker health, quota-aware backups and optional
-metrics already exist; the gaps below should not be described as missing all
-supervision or backup support.
-
-| Priority / proposed issue | Current limitation | Acceptance criteria |
-| --- | --- | --- |
-| [P1: Application readiness and bounded hang recovery](https://github.com/timfewi/tentaflake/issues/112) | `on-failure` recovers crashes, but a running hung agent remains running. Broker `/healthz` is not an end-to-end agent or Research probe. | Add adapter-defined, non-billable readiness/liveness checks with bounded timeouts, cooldown and explicit restart authority. Exercise hung processes, dependency recovery and operator stop without replaying operations. |
-| [P1: Actual vendor-agent acceptance](https://github.com/timfewi/tentaflake/issues/111) | The Research integration VM uses a synthetic probe, not the pinned Hermes/ZeroClaw applications. Worker automatic routing and state survival also need real runtime evidence. | Run each reviewed image through model, Research discovery, isolated execution, restart/reboot and persistence scenarios with synthetic upstreams. Keep unsupported adapters stopped. See `16-research.md` and `agent-adapters.md`. |
-| [P1: Worker queue crash recovery and capacity](https://github.com/timfewi/tentaflake/issues/113) | The selective archive review already identifies atomic claims, abandoned-work recovery and bounded pending/inbox capacity as follow-ups. | Implement queue lifecycle and negative crash/overload tests together, define migration, and retain quota-aware backup/restore. See `archive-comparison.md`. |
-| [P2: Research/management metrics and tested alert delivery](https://github.com/timfewi/tentaflake/issues/114) | Optional observability covers host and broker metrics; notification destinations are deployment-owned. No source proof of end-to-end paging or shared Research/VPN readiness metrics was found. | Export categorical readiness/staleness/renewal/restart and usage metrics without queries, credentials or source text. Test a configured generic notification route in a deployment fixture. |
-
-Private management and Headscale issue candidates are recorded in
+Crash recovery is not [application hang/readiness acceptance](https://github.com/timfewi/tentaflake/issues/112).
+[Real vendor acceptance](https://github.com/timfewi/tentaflake/issues/111) and
+[tested alert delivery](https://github.com/timfewi/tentaflake/issues/114) remain
+separate from source fixtures. Follow current [worker recovery](13-disposable-worker.md),
+not historical queue proposals. Management/Headscale evidence limits are in
 [the management review](11-tailscale-management.md#modular-management-review-2026-10-03).
-The linked tracking issues record scope, acceptance criteria and dependencies.
-The reviewed Research input update is tracked in
-[issue #110](https://github.com/timfewi/tentaflake/issues/110).

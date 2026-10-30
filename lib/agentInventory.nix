@@ -9,16 +9,9 @@ lib.concatStringsSep "\n" (
     container:
     let
       def = containers.${container} or { volumes = [ ]; };
-      runtime =
-        if lib.hasPrefix "zeroclaw-" container then
-          "zeroclaw"
-        else if lib.hasPrefix "hermes-" container then
-          "hermes"
-        else
-          "agent";
       fallback = {
-        adapter = runtime;
-        name = lib.removePrefix "${runtime}-" container;
+        adapter = "agent";
+        name = container;
         inherit container;
         unit = "${backend}-${container}.service";
         # Unmanaged OCI containers exist, so container commands may target them.

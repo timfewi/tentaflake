@@ -1,81 +1,34 @@
 ---
 name: handle-the-host
-description: Inspect or maintain a deployed Tentaflake host through its authorized Tailscale SSH management path.
-version: 1.2.0
+description: Inspect or maintain a resolved Tentaflake host through its authorized private management path.
+version: 2.0.0
 ---
 
 # Handle the host
 
-## Resolve and inspect
+1. Resolve the operator-supplied host/account and existing authorization before
+   mutations. Preserve authentication/recovery access. Local management flags
+   do not prove enrollment or remote grants; follow
+   [management policy](../../../docs/11-tailscale-management.md).
+2. Connect through the approved private path (for Tailscale, `tailscale ssh
+   <admin>@<host>`; an interactive sudo session may need `ssh -t`). Do not add
+   passwordless sudo, Serve/Funnel or firewall holes to repair a connection.
+3. Read `tentaflake status`, `health` and `doctor --security`. Resolve canonical
+   IDs, units and state from `/etc/tentaflake/agents.tsv`, backend/flake from
+   `/etc/tentaflake/cli.conf`. Never assume runtime prefixes or `/etc/nixos`.
+4. Bound logs with `journalctl -u <exact-unit> --since '1 hour ago' -n 100
+   --no-pager`. Never dump OCI environments or credentials. `--hide` redacts
+   diagnostic names; other logs still need privacy review.
+5. Perform only the authorized operation. Prefer `tentaflake start|stop|restart
+   <id>`; stop includes loaded brokers. Scaffolds refuse execution. Build/review
+   updates before authorized activation; quota migration, rollback, publication
+   and credential rotation require authority covering their target/action.
+6. Check affected services/application behavior afterward and report evidence
+   gaps. Host readiness is not provider/vendor acceptance or Research VPN
+   readiness. See [operations](../../../docs/07-operations.md).
 
-Use the operator-supplied host and account. Confirm the target before mutations;
-a local Tailscale flag does not prove enrollment or remote grants. Read
-[management policy](../../../docs/11-tailscale-management.md) and
-[operations](../../../docs/07-operations.md) for the relevant procedure.
-
-SSH/hostname preferences use `tailscale set`; `--advertise-tags` belongs to
-`tailscale up`. NixOS supplies `--advertise-tags=tag:agent-host` through
-`extraUpFlags` during auth-key enrollment; request it explicitly for manual
-enrollment as described in the management guide.
-
-```sh
-tailscale ssh <admin>@<host>
-```
-
-For interactive sudo use `ssh -t <admin>@<host>` through the authorized tailnet
-path. Preserve existing authentication and recovery access. On the target:
-
-```sh
-hostname
-tailscale status
-tentaflake status
-tentaflake health
-tentaflake doctor --security
-```
-
-Resolve container, unit and state path from `/etc/tentaflake/agents.tsv`;
-backend and flake target come from `/etc/tentaflake/cli.conf`. Do not assume
-Docker, `/etc/nixos` or a runtime prefix for a consumer deployment. Bound logs:
-
-```sh
-sudo journalctl -u <exact-unit> --since '1 hour ago' -n 100 --no-pager
-```
-
-`tentaflake logs <agent>` follows until interrupted. Never dump OCI environment
-data or credentials. Diagnostic `--hide` redacts host/agent names; other logs
-still need review before sharing.
-
-An operator may instead choose the optional [web interface](../../../docs/19-web-ui.md).
-Its local host API is disabled by default, with separate action/log permissions.
-Use canonical container IDs, inspect current state after an unknown action,
-and retry an uncertain HTTP response with the original request ID. Never treat
-host readiness as native chat or provider acceptance, or assign the API socket
-group to an agent. Nix remains authoritative for agent definitions.
-
-Agent policy details describe declarations, not successful connections. A Host
-configuration proposal is a downloadable draft: review its diff and evaluate
-the complete consumer before any authorized activation. For a worker decision,
-inspect the complete captured argument vector, class and digest; approve or
-deny that exact request only. Retain its API request ID after lost responses.
-The private drain marker keeps new decisions scheduled across worker exit;
-never restart or kill a worker to force a drain. Approval preserves the offline
-boundary; a saved decision or queued drain is not proof of execution. See
-`docs/19-web-ui.md` for the separate grants.
-
-## Perform the authorized operation
-
-Prefer `tentaflake start|stop|restart <exact-container>`. `stop` also stops the
-controller's loaded LLM/fetch brokers. Stopped scaffolds are valid inventory
-entries; OpenClaw refuses a start.
-
-For updates, review input/image changes, run checks and build the exact candidate
-before activation. `tentaflake rebuild` activates the configured host;
-`tentaflake update` changes its lockfile and offers activation. Rollback,
-credential rotation, disk work and publishing services need authorization
-covering that action and target. Reuse existing authorization without asking
-again. Do not add passwordless sudo, Serve/Funnel or firewall openings as a
-routine connection fix.
-
-After a mutation, repeat health/posture and affected application checks.
-Report results and unknown evidence. Management connectivity is separate from
-Research VPN readiness and provider/vendor acceptance.
+For the optional [host API](../../../docs/19-web-ui.md), use canonical IDs,
+separate action/log/worker grants and original request IDs after lost replies.
+Draft configuration never applies itself. Review complete worker argv/digest;
+first decision wins, approval preserves offline authority, and queued drain is
+not execution success. Never kill/restart a worker just to force a drain.

@@ -7,13 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 ### Direction
-- Resume the declarative v0.4.37 architecture: Hermes and ZeroClaw builders,
-  Nix/JSON agent definitions, CLI onboarding, installer, broker, Research,
-  workers, quotas and backups. The later admission/host-API expansion and 0.5
-  control-service runtime remain historical development, not this line's base.
-- Preserve that development in Git history; this is not a new published tag.
+- Keep declarative Nix/JSON onboarding, installation and shared host policy
+  runtime-agnostic, with no mandatory runtime or control service.
+- Preserve earlier development in Git history; this is not a new published tag.
 - Keep release tagging explicit, as on the preceding main branch; restoring
   the declarative product does not resume automatic patch releases.
+### Breaking changes
+- Make `mkAgent` the sole builder and require schema-v1 `agents` JSON. Remove
+  runtime-specific wrappers, legacy arrays, the host `hermes` CLI alias,
+  runtime-specific skills, unused Hermes flake input and `gitAutoPush` argument.
+- Give every managed instance the globally unique `agent-<name>` ID and default
+  host state `/var/lib/tentaflake/agents/<name>`. Existing state, quota images,
+  broker budgets and worker queues require explicit operator preservation and
+  service rekeying; no automatic move/reset occurs. See
+  [migration](docs/agent-adapters.md#breaking-migration).
+- Make each adapter Nix file the runtime implementation/preset owner; generate
+  CLI catalog JSON and docs from those presets. Vendor acceptance stays pending.
 ### Added
 - Extend optional host management with per-agent declared access/tool policy,
   revision-bound Nix change proposals, and separately enabled captured worker
@@ -58,8 +67,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   shell-quote correction and matching cache pin. Keep security scans bounded.
 - Prevent CLI fixture collisions and avoid rereading deliberately disconnected
   broker test clients.
-- Refresh the locked nixos-unstable and optional Hermes flake inputs while
-  retaining Research's independent package set and digest-pinned runtime images.
+- Refresh the locked nixos-unstable input while retaining Research's independent
+  package set and digest-pinned runtime images.
 - Synchronize Research with published canonical `main` revision `babdca5`,
   including its project-check pin; no feature-branch input or runtime acceptance
   is implied by the dependency refresh.

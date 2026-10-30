@@ -86,6 +86,10 @@ jobs:
         # Use the installed CI Nix, as the explicit evaluation job does.
         run: python3 scripts/test_eval_flake_nix.py
 
+      - name: Adapter catalog and documentation drift
+        if: needs.changes.outputs.static == 'true'
+        run: nix develop --command just catalog-check
+
       - name: Nix lint
         if: needs.changes.outputs.static == 'true'
         run: |
@@ -156,10 +160,10 @@ jobs:
       # Read-only flake evaluation cannot instantiate an uncached closureInfo
       # derivation. Build the non-VM policy gates first; they materialize the
       # exact research closures without widening any sandbox mount.
-      - name: prepare research evaluation closures
+      - name: Prepare exact evaluation closures and source filesets
         if: needs.changes.outputs.evaluate == 'true'
         run: |
-          for check in research-policy module-evaluation; do
+          for check in research-policy module-evaluation rust-package-sources; do
             nix build --no-link ".#checks.x86_64-linux.$check"
           done
 

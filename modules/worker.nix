@@ -5,7 +5,7 @@
   ...
 }:
 let
-  constants = import ../lib/constants.nix;
+  defaultOwnership = (import ../lib/runtimeCatalog.nix).presets.generic.ownership;
   cfg = config.tentaflake.worker;
   backend = config.virtualisation.oci-containers.backend;
   runtime = lib.getExe pkgs.${backend};
@@ -20,7 +20,7 @@ let
     agent:
     if agent.hostGroup != null then
       agent.hostGroup
-    else if agent.containerGid == constants.nobodyGid then
+    else if agent.containerGid == config.ids.gids.nogroup then
       "nogroup"
     else
       "tfw-gid-${toString agent.containerGid}";
@@ -29,7 +29,7 @@ let
     let
       group = workerGroup agent;
     in
-    if agent.hostGroup == null && agent.containerGid != constants.nobodyGid then
+    if agent.hostGroup == null && agent.containerGid != config.ids.gids.nogroup then
       groups // { ${group}.gid = agent.containerGid; }
     else
       groups
@@ -43,16 +43,16 @@ let
         workspace = lib.mkOption {
           type = lib.types.str;
           default = "";
-          example = "/var/lib/hermes-coding/workspace";
+          example = "/var/lib/tentaflake/agents/coding/workspace";
           description = "Exact persistent controller workspace copied into bounded worker snapshots.";
         };
         containerUid = lib.mkOption {
           type = lib.types.ints.unsigned;
-          default = constants.containerUid;
+          default = config.tentaflake.agentInstances.${name}.uid or defaultOwnership.uid;
         };
         containerGid = lib.mkOption {
           type = lib.types.ints.unsigned;
-          default = constants.containerGid;
+          default = config.tentaflake.agentInstances.${name}.gid or defaultOwnership.gid;
         };
         hostGroup = lib.mkOption {
           type = lib.types.nullOr (lib.types.strMatching "^[a-z_][a-z0-9_-]{0,30}$");

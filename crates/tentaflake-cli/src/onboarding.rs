@@ -95,16 +95,25 @@ fn parse(bytes: &[u8]) -> Result<Value, String> {
     })
 }
 
-fn additions(value: &Value) -> Result<&Vec<Value>, String> {
-    let object = value
-        .as_object()
-        .ok_or("onboarding input must be an object")?;
-    if object.len() != 2 || value["schemaVersion"] != 1 || !object.contains_key("agents") {
-        return Err("onboarding requires schemaVersion 1 and an agents array only".into());
+fn schema_entries(value: &Value) -> Result<&Vec<Value>, String> {
+    let object = value.as_object().ok_or("agent input must be an object")?;
+    if value["schemaVersion"] != 1
+        || object
+            .keys()
+            .any(|key| !["schemaVersion", "agents", "_securityNote"].contains(&key.as_str()))
+    {
+        return Err(
+            "agent input requires schemaVersion 1 and agents; unknown or legacy fields are refused"
+                .into(),
+        );
     }
-    let entries = value["agents"]
+    value["agents"]
         .as_array()
-        .ok_or("agents must be an array")?;
+        .ok_or("agents must be an array".into())
+}
+
+fn additions(value: &Value) -> Result<&Vec<Value>, String> {
+    let entries = schema_entries(value)?;
     if entries.is_empty() || entries.len() > MAX_AGENTS {
         return Err("onboarding requires between 1 and 128 agent additions".into());
     }
@@ -114,23 +123,9 @@ fn additions(value: &Value) -> Result<&Vec<Value>, String> {
 // Conflict projection only: the shared Nix parser validates workload semantics.
 fn identities(value: &Value) -> Result<Vec<String>, String> {
     let mut result = Vec::new();
-    for (field, preset) in [
-        ("agents", None),
-        ("hermes", Some("hermes")),
-        ("zeroclaw", Some("zeroclaw")),
-    ] {
-        if let Some(entries) = value.get(field) {
-            for entry in entries
-                .as_array()
-                .ok_or("existing agent arrays are malformed")?
-            {
-                let adapter = preset
-                    .or_else(|| entry["adapter"].as_str())
-                    .ok_or("missing adapter identity")?;
-                let name = entry["name"].as_str().ok_or("missing agent identity")?;
-                result.push(format!("{adapter}-{name}"));
-            }
-        }
+    for entry in schema_entries(value)? {
+        let name = entry["name"].as_str().ok_or("missing agent identity")?;
+        result.push(format!("agent-{name}"));
     }
     Ok(result)
 }
@@ -140,24 +135,6 @@ fn merge(existing: Option<&[u8]>, incoming: &Value, agents: &[Agent]) -> Result<
         Some(bytes) => parse(bytes)?,
         None => json!({"schemaVersion": 1, "agents": []}),
     };
-    let object = combined
-        .as_object()
-        .ok_or("existing agents.json must be an object")?;
-    if object.keys().any(|key| {
-        ![
-            "schemaVersion",
-            "agents",
-            "hermes",
-            "zeroclaw",
-            "_securityNote",
-        ]
-        .contains(&key.as_str())
-    }) || object
-        .get("schemaVersion")
-        .is_some_and(|version| version != &json!(1))
-    {
-        return Err("existing agents.json has unknown fields or an unsupported version".into());
-    }
     let mut known = identities(&combined)?;
     known.extend(agents.iter().map(|agent| agent.container.clone()));
     for identity in identities(incoming)? {
@@ -165,10 +142,6 @@ fn merge(existing: Option<&[u8]>, incoming: &Value, agents: &[Agent]) -> Result<
             return Err("agent identity conflicts with existing configuration or active inventory; no files changed".into());
         }
         known.push(identity);
-    }
-    combined["schemaVersion"] = json!(1);
-    if combined.get("agents").is_none() {
-        combined["agents"] = json!([]);
     }
     combined["agents"]
         .as_array_mut()
@@ -389,23 +362,39 @@ mod tests {
     use super::*;
 
     #[test]
-    fn additions_preserve_legacy_configuration_and_detect_cross_schema_collisions() {
-        let existing = br#"{"hermes":[{"name":"original","provider":"fixture","model":"fixture","envFile":null}],"_securityNote":"keep operator note"}"#;
+    fn additions_preserve_metadata_and_detect_cross_adapter_collisions() {
+        let existing = br#"{"schemaVersion":1,"agents":[{"adapter":"hermes","name":"original","autoStart":false}],"_securityNote":"keep operator note"}"#;
         let incoming = json!({"schemaVersion":1,"agents":[{"adapter":"zeroclaw","name":"new","autoStart":false}]});
         let result = merge(Some(existing), &incoming, &[]).unwrap();
-        let previous = parse(existing).unwrap();
-        assert_eq!(result["hermes"], previous["hermes"]);
-        assert_eq!(result["_securityNote"], previous["_securityNote"]);
-        assert_eq!(result["agents"], incoming["agents"]);
-        let collision = json!({"schemaVersion":1,"agents":[{"adapter":"hermes","name":"original","autoStart":false}]});
+        assert_eq!(result["_securityNote"], "keep operator note");
+        assert_eq!(result["agents"][1], incoming["agents"][0]);
+        let collision = json!({"schemaVersion":1,"agents":[{"adapter":"zeroclaw","name":"original","autoStart":false}]});
         assert!(
             merge(Some(existing), &collision, &[])
                 .unwrap_err()
                 .contains("conflicts")
         );
-        let duplicate =
-            json!({"schemaVersion":1,"agents":[incoming["agents"][0], incoming["agents"][0]]});
-        assert!(merge(Some(existing), &duplicate, &[]).is_err());
+        let duplicate = json!({"schemaVersion":1,"agents":[
+            {"adapter":"hermes","name":"duplicate","autoStart":false},
+            {"adapter":"zeroclaw","name":"duplicate","autoStart":false}
+        ]});
+        assert!(merge(None, &duplicate, &[]).is_err());
+    }
+
+    #[test]
+    fn imports_refuse_legacy_and_unknown_root_fields() {
+        let incoming =
+            json!({"schemaVersion":1,"agents":[{"adapter":"pi","name":"new","autoStart":false}]});
+        for invalid in [
+            json!({"hermes":[]}),
+            json!({"schemaVersion":1,"agents":[],"zeroclaw":[]}),
+            json!({"schemaVersion":1,"agents":[],"unknown":true}),
+            json!({"agents":[]}),
+        ] {
+            let bytes = serde_json::to_vec(&invalid).unwrap();
+            assert!(merge(Some(&bytes), &incoming, &[]).is_err());
+            assert!(merge(None, &invalid, &[]).is_err());
+        }
     }
 
     #[test]

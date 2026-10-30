@@ -75,6 +75,24 @@ class CiSelection(unittest.TestCase):
         self.assertTrue(execution(affected, "full")["evaluate"])
         self.assertTrue(execution(affected, "full")["builds"])
 
+    def test_catalog_generator_changes_preserve_metadata_gates_without_automatic_builds(self):
+        for name in ("scripts/runtime-catalog-docs.py", "scripts/test_runtime_catalog.py"):
+            with self.subTest(name=name):
+                base = self.git("rev-parse", "HEAD")
+                self.write(name)
+                affected = select(base, self.commit(), self.repository)
+                self.assertEqual(affected, {"static", "selection", "evaluate", "cli", "rust"})
+                automatic = execution(affected, "fast")
+                self.assertTrue(automatic["static"])
+                self.assertTrue(automatic["cli"])
+                self.assertFalse(automatic["builds"])
+                self.assertFalse(automatic["evaluate"])
+                explicit = execution(affected, "full")
+                self.assertTrue(explicit["evaluate"])
+                self.assertTrue(explicit["builds"])
+                self.assertFalse(explicit["runtime"])
+                self.assertFalse(explicit["research"])
+
 
     def test_runtime_and_research_changes_select_only_their_suite(self):
         for name, expected in (("crates/tentaflake-worker/src/main.rs", {"runtime"}),

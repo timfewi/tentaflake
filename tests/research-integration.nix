@@ -81,15 +81,17 @@ pkgs.testers.runNixOSTest {
   nodes.machine = { config, ... }: {
     imports = [
       self.nixosModules.default
-      (builders.mkHermesAgent {
-        name = "research";
+      (builders.mkAgent {
+        adapter = "hermes";
+        name = "hermes-research";
         autoStart = false;
         settings = {
           agent.disabled_toolsets = [ ];
         };
       })
-      (builders.mkZeroClawAgent {
-        name = "research";
+      (builders.mkAgent {
+        adapter = "zeroclaw";
+        name = "zero-research";
         autoStart = false;
         settings = {
           browser.enabled = true;
@@ -110,8 +112,8 @@ pkgs.testers.runNixOSTest {
       modernConsole.enable = false;
       nixSettings.enable = false;
       research.agents = {
-        hermes-research.uid = 62101;
-        zeroclaw-research.uid = 62102;
+        agent-hermes-research.uid = 62101;
+        agent-zero-research.uid = 62102;
       };
     };
     services.secureResearch = {
@@ -125,8 +127,13 @@ pkgs.testers.runNixOSTest {
       systemPackages = [ (pkgs.python3.withPackages (packages: [ packages.pyyaml ])) ];
       etc = {
         "research-fixture-image".source = image;
+        "research-fixture-instances.json".text = builtins.toJSON (
+          lib.mapAttrs (_: instance: {
+            inherit (instance) adapter uid gid;
+          }) config.tentaflake.agentInstances
+        );
         "research-fixture-mounts.json".text = builtins.toJSON (
-          lib.genAttrs [ "hermes-research" "zeroclaw-research" ] (
+          lib.genAttrs [ "agent-hermes-research" "agent-zero-research" ] (
             name:
             (import ../lib/researchClient.nix {
               inherit config lib pkgs;
@@ -136,10 +143,14 @@ pkgs.testers.runNixOSTest {
           )
         );
         "research-fixture-configs.json".text = builtins.toJSON (
-          lib.genAttrs [ "hermes-research" "zeroclaw-research" ] (
+          lib.genAttrs [ "agent-hermes-research" "agent-zero-research" ] (
             name:
             let
-              suffix = if lib.hasPrefix "hermes-" name then "/config.yaml:ro" else "/config.toml:ro";
+              suffix =
+                if config.tentaflake.agentInstances.${name}.adapter == "hermes" then
+                  "/config.yaml:ro"
+                else
+                  "/config.toml:ro";
               mounts = config.virtualisation.oci-containers.containers.${name}.volumes;
               mount = lib.findFirst (
                 volume: lib.hasSuffix suffix volume
@@ -160,20 +171,22 @@ pkgs.testers.runNixOSTest {
     machine.succeed("docker load < /etc/research-fixture-image")
     mounts = json.loads(machine.succeed("cat /etc/research-fixture-mounts.json"))
     sources = json.loads(machine.succeed("cat /etc/research-fixture-configs.json"))
+    instances = json.loads(machine.succeed("cat /etc/research-fixture-instances.json"))
     policies = {}
     for name, path in sources.items():
-        parser = "yaml.safe_load" if name.startswith("hermes-") else "tomllib.loads"
+        parser = "yaml.safe_load" if instances[name]["adapter"] == "hermes" else "tomllib.loads"
         script = f"import json, yaml, tomllib; print(json.dumps({parser}(open({path!r}).read())))"
         policies[name] = json.loads(machine.succeed("python3 -c " + shlex.quote(script)))
-    assert {"web", "browser"}.issubset(policies["hermes-research"]["agent"]["disabled_toolsets"])
-    assert set(policies["hermes-research"]["mcp_servers"]) == {"secure-research-tool"}
+    assert {"web", "browser"}.issubset(policies["agent-hermes-research"]["agent"]["disabled_toolsets"])
+    assert set(policies["agent-hermes-research"]["mcp_servers"]) == {"secure-research-tool"}
     for tool in ["browser", "web_search", "web_fetch", "http_request"]:
-        assert policies["zeroclaw-research"][tool]["enabled"] is False
-    assert policies["zeroclaw-research"]["mcp"]["servers"][0]["name"] == "secure-research-tool"
-    for name, uid in [("hermes-research", 10000), ("zeroclaw-research", 65534)]:
+        assert policies["agent-zero-research"][tool]["enabled"] is False
+    assert policies["agent-zero-research"]["mcp"]["servers"][0]["name"] == "secure-research-tool"
+    for name, instance in instances.items():
+        uid, gid = instance["uid"], instance["gid"]
         machine.wait_for_unit(f"tentaflake-research-{name}.socket")
-        client = policies[name]["mcp_servers"]["secure-research-tool"]["command"] if name.startswith("hermes-") else policies[name]["mcp"]["servers"][0]["command"]
-        argv = ["docker", "run", "--rm", "--runtime=runsc", "--network=none", "--read-only", "--user", f"{uid}:{uid}",
+        client = policies[name]["mcp_servers"]["secure-research-tool"]["command"] if instance["adapter"] == "hermes" else policies[name]["mcp"]["servers"][0]["command"]
+        argv = ["docker", "run", "--rm", "--runtime=runsc", "--network=none", "--read-only", "--user", f"{uid}:{gid}",
                 "--cap-drop=ALL", "--security-opt=no-new-privileges:true", "--security-opt=apparmor=docker-default",
                 "--pids-limit=128", "--memory=256m", "--tmpfs=/run:rw,nosuid,nodev,noexec,size=16m"]
         for mount in mounts[name] + ["${probe}:/research-probe.py:ro"]:

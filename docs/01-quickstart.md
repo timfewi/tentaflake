@@ -1,126 +1,47 @@
 # Secure installed-host quickstart
 
-Installed hosts default to the fail-closed `balanced` profile. This guide
-verifies that baseline. An agent remains offline unless its exact container
-name has an explicit broker policy. Model access uses the LLM broker; web
-access uses the separate [research relay](16-research.md), never general
-internet access.
+Installed hosts default to fail-closed `balanced`. This quickstart establishes
+a stopped declaration, not vendor-runtime acceptance.
 
-## 1. Install the external management policy
+1. **Secure management first.** Review the
+   [private management policy](11-tailscale-management.md) and replace identities
+   in [the policy example](tailscale-policy.example.json). Install restricted
+   network/SSH grants before relying on the tailnet alone. No allow-all policy,
+   Funnel or public agent API; protect identity and recovery access.
+2. **Declare or import a stopped agent.** Follow [configuration](08-agent-cli.md)
+   with `mkAgent` plus adapter selection or schema-v1 JSON. Names are globally
+   unique; use `agent-<name>` for all host services. For a custom reviewed OCI
+   image use the [generic definition](agent-adapters.md#generic-isolated-workload).
+   OpenClaw/Pi are refusal scaffolds, not containers.
+3. **Review storage before activation.** Default state is
+   `/var/lib/tentaflake/agents/<name>`; effective workspace/owner come from
+   adapter metadata. `autoStart = false` does not stop activation from creating
+   declared quota filesystems or worker services. Existing data requires the
+   explicit [quota migration](14-workspace-quota.md), never automatic hiding or
+   conversion. Existing deployments also need [identity migration](agent-adapters.md#breaking-migration).
+4. **Evaluate and build without activation.** From the resolved flake directory,
+   build `.#nixosConfigurations.<hostname>.config.system.build.toplevel` with
+   `nix build --no-link`. Review assertions and changes. A closure is not live
+   host evidence. [Build guidance](17-builds.md) describes the separate gates.
+5. **Activate deliberately.** Only after target/build review and operator
+   authorization, use `sudo nixos-rebuild switch --flake <directory>#<hostname>`.
+   Import, evaluation and builds never imply permission to activate.
+6. **Inspect the active host.** Run `tentaflake status` and `tentaflake doctor
+   --security`; inspect the exact inventory unit, such as
+   `docker-agent-assistant.service` (Podman uses `podman-`). Verify non-root,
+   gVisor, read-only root, cap-drop-all, no-new-privileges, hardened tmpfs and
+   resource bounds. Missing evidence stays unknown, not green.
 
-Replace the placeholder identity in `docs/tailscale-policy.example.json`,
-validate it in the Tailscale admin console, and install it before relying on
-Tailscale as the only management path. The policy must restrict both network
-grants and Tailscale SSH to the operator and `tag:agent-host`.
+Keep agents stopped until the exact ID has its enabled [LLM broker](12-brokered-egress.md),
+[worker](13-disposable-worker.md), [workspace quota](14-workspace-quota.md) and
+[Research relay](16-research.md). Balanced automatic start requires all four;
+a declaration still does not prove native model/tool routing. The
+[secure consumer example](../examples/adapter-secure.nix) combines these policies.
+Generic model/Research integration is not accepted.
 
-The default tailnet allow-all policy is not acceptable. Do not enable Funnel
-or publish an agent API with Serve. Protect the identity provider with
-hardware-backed MFA; plan Tailnet Lock with at least two signing nodes.
-
-## 2. Declare a stopped capsule
-
-Copy the current example:
-
-```bash
-sudo cp \
-  /etc/nixos/my-agents.nix.example \
-  /etc/nixos/my-agents.nix
-```
-
-The example contains stopped Hermes and ZeroClaw capsules, a stopped OpenClaw
-scaffold, and matching workers and Btrfs workspace quotas for Hermes/ZeroClaw.
-Remove the builder, worker, and quota entries for any runtime you do not need.
-OpenClaw creates no OCI container and refuses an explicit start; see
-[adapter support limits](agent-adapters.md).
-
-`autoStart = false` stops automatic controller startup, but activation still
-creates enabled workspace filesystems and worker services. On an existing host,
-follow [workspace migration](14-workspace-quota.md) before enabling quotas.
-Do not add `envFile`,
-`agenixFile`, `hostPort`, `servePort`, host networking, or literal secret
-values under balanced; evaluation rejects them.
-
-## 3. Evaluate and build without activation
-
-From `/etc/nixos`, resolve the installed hostname and build its toplevel:
-
-```bash
-hostname
-nix build \
-  .#nixosConfigurations.<hostname>.config.\
-system.build.toplevel \
-  --no-link
-```
-
-Review any assertion and the source diff. A successful build proves the
-candidate closure, not the live host.
-
-## 4. Activate only in an approved window
-
-Activation is an explicit host mutation. Once the exact host and build result
-are reviewed, the operator may run:
-
-```bash
-sudo nixos-rebuild switch \
-  --flake /etc/nixos#<hostname>
-```
-
-Tentaflake never performs this step merely because evaluation succeeded.
-
-## 5. Verify the activated posture
-
-```text
-tentaflake status
-tentaflake doctor --security
-tentaflake doctor --security --json
-sudo systemctl cat \
-  docker-hermes-coding.service
-```
-
-For Podman, the unit prefix is `podman-`. A balanced capsule should show
-`runsc`, non-root user, cap-drop-all, read-only root, no-new-privileges,
-hardened tmpfs, and resource flags. Without a broker it also shows
-`network=none`, and the security doctor reports `TFSEC-013`. With a broker it
-shows one internal network, runtime virtual credentials, and no direct route.
-It should not report `TFSEC-020`; that finding means the corresponding
-disposable worker boundary is absent. `TFSEC-021` means its persistent
-workspace has no managed hard size ceiling.
-
-`autoStart = true` is intentionally rejected under `balanced` until the same
-container key has an enabled LLM broker, worker, workspace quota, and research
-relay. Keep the controller stopped while those policies are incomplete or while
-migrating an existing workspace.
-
-## 6. Keep the agent stopped
-
-Do not place real OpenAI, Anthropic, OpenRouter, GitHub, Firecrawl, or
-infrastructure credentials in the capsule. Without a scoped broker
-declaration, a balanced agent cannot perform external model calls. Web calls
-additionally require its research relay and the operator-configured Research
-service and VPN. To grant narrow access, follow
-[brokered egress](12-brokered-egress.md) and [web research](16-research.md),
-build, review the generated units and firewall rules, then activate deliberately.
-The [secure adapter example](../examples/adapter-secure.nix) combines the required
-declarations; actual vendor tool discovery and execution still need runtime evidence.
-
-For a trusted development-only compatibility host, the intentional escape is:
-
-```nix
-tentaflake.security.profile = "dev";
-```
-
-That permits legacy direct credentials and networking but is explicitly not a
-security boundary for untrusted 24/7 agents. There is no silent fallback from
-balanced or strict.
-
-## Next reading
-
-- [Security profiles and migration](10-security-profiles.md)
-- [Tailscale management policy](11-tailscale-management.md)
-- [Operations and recovery](07-operations.md)
-- [Agenix boundaries](04-agenix-secrets.md)
-- [Brokered egress](12-brokered-egress.md)
-- [Disposable worker and approval](13-disposable-worker.md)
-- [Persistent workspace quota](14-workspace-quota.md)
-- [Threat model](15-threat-model.md)
-- [Agent adapters and support limits](agent-adapters.md)
+Never put provider keys, host networking, exposed ports or literal secrets in
+a balanced capsule. Real keys remain in host runtime files. `dev` is an explicit
+trusted compatibility profile, not an untrusted 24/7 boundary; `strict` fails
+closed. Read [security profiles](10-security-profiles.md),
+[secrets](04-agenix-secrets.md) and [operations](07-operations.md) before enabling
+external access or planning recovery.

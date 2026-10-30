@@ -20,7 +20,7 @@ let
     }:
     let
       adapter = builders.adapters.${id};
-      container = "${id}-${name}";
+      container = "agent-${name}";
       instance =
         args: backend:
         let
@@ -68,8 +68,8 @@ let
     assert docker.record.container == container;
     assert docker.record.unit == "docker-${container}.service";
     assert docker.record.uid == uid && docker.record.gid == uid;
-    assert docker.record.stateDir == "/var/lib/${container}";
-    assert docker.record.workspace == "/var/lib/${container}/workspace";
+    assert docker.record.stateDir == "/var/lib/tentaflake/agents/${name}";
+    assert docker.record.workspace == "/var/lib/tentaflake/agents/${name}/workspace";
     assert podman.record.unit == "podman-${container}.service";
     assert
       builtins.attrNames docker.module == [
@@ -88,11 +88,13 @@ let
     assert config.tentaflake.agentInstances.${container}.runnable == false;
     assert !(config.virtualisation.oci-containers.containers ? ${container});
     assert config.systemd.services."docker-${container}".wantedBy == [ ];
-    assert lib.all (rule: !(lib.hasInfix "/var/lib/${container}" rule)) config.systemd.tmpfiles.rules;
+    assert lib.all (
+      rule: !(lib.hasInfix "/var/lib/tentaflake/agents/${name}" rule)
+    ) config.systemd.tmpfiles.rules;
     assert lib.all (args: rejects (instance args "docker")) [
       { autoStart = true; }
       { settings.debug = true; }
-      { stateDir = "/var/lib/${container}/../outside"; }
+      { stateDir = "/var/lib/tentaflake/agents/${name}/../outside"; }
       {
         image = "example.invalid/image@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
       }
@@ -118,7 +120,7 @@ assert scaffold {
   id = "pi";
   name = "pilot";
   version = "1.4.0";
-  uid = 10100;
+  uid = presets.pi.ownership.uid;
   command = [ ];
   capabilities = [ ];
 };
@@ -126,7 +128,7 @@ assert scaffold {
   id = "openclaw";
   name = "assistant";
   version = "2026.9.7";
-  uid = 1000;
+  uid = presets.openclaw.ownership.uid;
   command = [
     "node"
     "openclaw.mjs"

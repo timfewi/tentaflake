@@ -84,9 +84,9 @@ sys.exit(int(failed))
         cli.chmod(0o700)
         inventory = self.root / "agents.tsv"
         inventory.write_text(
-            "hermes\tcoding\thermes-coding\tdocker-hermes-coding.service\t/var/lib/hermes-coding\ttrue\n"
-            "zeroclaw\tcoding\tzeroclaw-coding\tdocker-zeroclaw-coding.service\t/var/lib/zeroclaw-coding\ttrue\n"
-            "pi\twaiting\tpi-waiting\ttentaflake-refusal-pi-waiting.service\t/var/lib/unused\tfalse\n"
+            "fixture\tcoding\tagent-coding\tdocker-agent-coding.service\t/var/lib/tentaflake/agents/coding\ttrue\n"
+            "fixture\tassistant\tagent-assistant\tdocker-agent-assistant.service\t/var/lib/tentaflake/agents/assistant\ttrue\n"
+            "pi\twaiting\tagent-waiting\tdocker-agent-waiting.service\t/var/lib/unused\tfalse\n"
         )
         self.config = {
             "systemctl": str(systemctl),
@@ -101,7 +101,7 @@ sys.exit(int(failed))
             "allow_actions": False,
             "allow_logs": False,
             "stop_units": {
-                "hermes-coding": ["tentaflake-broker-llm-hermes-coding.service"]
+                "agent-coding": ["tentaflake-broker-llm-agent-coding.service"]
             },
         }
         policy = api.unknown_policy()
@@ -135,9 +135,9 @@ sys.exit(int(failed))
                 "max_log_bytes": 1024**2,
             },
         )
-        self.config["policies"] = {"hermes-coding": policy}
+        self.config["policies"] = {"agent-coding": policy}
         self.config["worker_configs"] = {
-            "hermes-coding": str(self.root / "worker.json")
+            "agent-coding": str(self.root / "worker.json")
         }
         worker = self.root / "worker"
         worker.write_text(
@@ -160,7 +160,7 @@ if (root / 'worker-fail').exists():
 if args[2] == 'requests':
     print((root / 'requests.json').read_text())
 elif args[2] == 'decide':
-    response = {'schema_version':1,'agent':'hermes-coding','job_id':args[3],
+    response = {'schema_version':1,'agent':'agent-coding','job_id':args[3],
         'request_digest':args[6], 'decision':args[4], 'state':'recorded', 'drain_required':True}
     if (root / 'worker-invalid').exists():
         response['agent'] = 'another-agent'
@@ -187,7 +187,7 @@ else:
             json.dumps(
                 {
                     "schema_version": 1,
-                    "agent": "hermes-coding",
+                    "agent": "agent-coding",
                     "initialized": True,
                     "requests": [self.worker_request],
                     "truncated": False,
@@ -262,7 +262,7 @@ else:
         self.assertEqual(status, 200)
         self.assertEqual(
             [row["id"] for row in result["agents"]],
-            ["hermes-coding", "zeroclaw-coding", "pi-waiting"],
+            ["agent-coding", "agent-assistant", "agent-waiting"],
         )
         self.assertTrue(all(row["state"] == "inactive" for row in result["agents"]))
         self.assertTrue(
@@ -273,19 +273,19 @@ else:
         self.assertEqual(
             self.request(
                 "POST",
-                "/v1/agents/hermes-coding/actions",
+                "/v1/agents/agent-coding/actions",
                 {"action": "start", "request_id": "r1"},
             )[0],
             403,
         )
-        self.assertEqual(self.request("GET", "/v1/agents/hermes-coding/logs")[0], 403)
+        self.assertEqual(self.request("GET", "/v1/agents/agent-coding/logs")[0], 403)
         self.assertEqual(self.mutations(), [])
         self.assertEqual(Path(self.socket).stat().st_mode & 0o777, 0o660)
         self.assertEqual(Path(self.config["state"]).stat().st_mode & 0o777, 0o700)
 
     def test_details_separate_declaration_from_observation_and_exclude_host_paths(self):
         self.start()
-        status, details = self.request("GET", "/v1/agents/hermes-coding/details")
+        status, details = self.request("GET", "/v1/agents/agent-coding/details")
         self.assertEqual(status, 200)
         self.assertEqual(len(details["policy_revision"]), 64)
         self.assertEqual(details["policy"]["research"]["readiness"], "unverified")
@@ -294,14 +294,14 @@ else:
         self.assertFalse(details["capabilities"]["tool_decisions"])
         self.assertNotIn(str(self.root), json.dumps(details))
         self.assertNotIn("credential", json.dumps(details))
-        _, unmanaged = self.request("GET", "/v1/agents/zeroclaw-coding/details")
+        _, unmanaged = self.request("GET", "/v1/agents/agent-assistant/details")
         self.assertFalse(unmanaged["policy"]["managed"])
         self.assertEqual(unmanaged["editable_fields"], [])
         self.assertNotEqual(unmanaged["policy_revision"], details["policy_revision"])
 
     def test_proposals_are_revision_bound_downloads_without_mutation(self):
         self.start()
-        _, details = self.request("GET", "/v1/agents/hermes-coding/details")
+        _, details = self.request("GET", "/v1/agents/agent-coding/details")
         changes = {
             "llm.allowed_models": [
                 {
@@ -315,7 +315,7 @@ else:
         }
         status, result = self.request(
             "POST",
-            "/v1/agents/hermes-coding/config-proposals",
+            "/v1/agents/agent-coding/config-proposals",
             {
                 "policy_revision": details["policy_revision"],
                 "changes": changes,
@@ -326,7 +326,7 @@ else:
         self.assertEqual(result["validation"], "structure-only")
         self.assertEqual(result["activation"], "explicit-host-update-required")
         self.assertIn(
-            'agents."hermes-coding".llm.allowedModels = lib.mkForce', result["nix"]
+            'agents."agent-coding".llm.allowedModels = lib.mkForce', result["nix"]
         )
         self.assertIn("maxTimeoutSeconds = lib.mkForce 120;", result["nix"])
         self.assertEqual(self.mutations(), [])
@@ -335,7 +335,7 @@ else:
         self.assertEqual(
             self.request(
                 "POST",
-                "/v1/agents/hermes-coding/config-proposals",
+                "/v1/agents/agent-coding/config-proposals",
                 {
                     "policy_revision": "0" * 64,
                     "changes": changes,
@@ -346,7 +346,7 @@ else:
 
     def test_proposals_reject_policy_bypass_and_literal_injection(self):
         self.start()
-        _, details = self.request("GET", "/v1/agents/hermes-coding/details")
+        _, details = self.request("GET", "/v1/agents/agent-coding/details")
         for changes in (
             {"worker.enable": False},
             {"llm.providerCredentialFile": "/secret"},
@@ -380,7 +380,7 @@ else:
                 self.assertEqual(
                     self.request(
                         "POST",
-                        "/v1/agents/hermes-coding/config-proposals",
+                        "/v1/agents/agent-coding/config-proposals",
                         {
                             "policy_revision": details["policy_revision"],
                             "changes": changes,
@@ -389,11 +389,11 @@ else:
                     400,
                 )
         self.assertEqual(api.nix_string('a"\\${x}'), '"a\\"\\\\\\${x}"')
-        _, unmanaged = self.request("GET", "/v1/agents/zeroclaw-coding/details")
+        _, unmanaged = self.request("GET", "/v1/agents/agent-assistant/details")
         self.assertEqual(
             self.request(
                 "POST",
-                "/v1/agents/zeroclaw-coding/config-proposals",
+                "/v1/agents/agent-assistant/config-proposals",
                 {
                     "policy_revision": unmanaged["policy_revision"],
                     "changes": {"worker.max_queue_entries": 2},
@@ -407,30 +407,30 @@ else:
     ):
         self.start()
         self.assertEqual(
-            self.request("GET", "/v1/agents/hermes-coding/tool-requests")[0], 403
+            self.request("GET", "/v1/agents/agent-coding/tool-requests")[0], 403
         )
         self.close()
         self.start(allow_tool_requests=True)
-        status, result = self.request("GET", "/v1/agents/hermes-coding/tool-requests")
+        status, result = self.request("GET", "/v1/agents/agent-coding/tool-requests")
         self.assertEqual(status, 200)
         self.assertEqual(result["requests"], [self.worker_request])
         self.assertFalse(result["truncated"])
         self.assertEqual(
-            self.request("GET", "/v1/agents/zeroclaw-coding/tool-requests")[0], 403
+            self.request("GET", "/v1/agents/agent-assistant/tool-requests")[0], 403
         )
         bad = dict(self.worker_request, argv=["x" * 4097])
         (self.root / "requests.json").write_text(
             json.dumps(
                 {
                     "schema_version": 1,
-                    "agent": "hermes-coding",
+                    "agent": "agent-coding",
                     "requests": [bad],
                     "truncated": False,
                 }
             )
         )
         self.assertEqual(
-            self.request("GET", "/v1/agents/hermes-coding/tool-requests")[0], 502
+            self.request("GET", "/v1/agents/agent-coding/tool-requests")[0], 502
         )
         self.assertEqual(self.mutations(), [])
 
@@ -446,7 +446,7 @@ else:
         self,
     ):
         self.start(allow_tool_requests=True, allow_tool_decisions=True)
-        path = "/v1/agents/hermes-coding/tool-decisions"
+        path = "/v1/agents/agent-coding/tool-decisions"
         status, receipt = self.request("POST", path, self.decision_body())
         self.assertEqual(status, 200)
         self.assertEqual(receipt["state"], "recorded")
@@ -459,7 +459,7 @@ else:
                     "--no-block",
                     "--no-ask-password",
                     "--",
-                    "tentaflake-worker-hermes-coding.service",
+                    "tentaflake-worker-agent-coding.service",
                 ]
             ],
         )
@@ -482,7 +482,7 @@ else:
     def test_worker_scheduling_failure_preserves_recorded_authorization(self):
         self.start(allow_tool_requests=True, allow_tool_decisions=True)
         (self.root / "fail").touch()
-        path = "/v1/agents/hermes-coding/tool-decisions"
+        path = "/v1/agents/agent-coding/tool-decisions"
         _, receipt = self.request("POST", path, self.decision_body(decision="deny"))
         self.assertEqual(receipt["state"], "recorded")
         self.assertEqual(receipt["drain_state"], "unknown")
@@ -496,7 +496,7 @@ else:
     def test_uncertain_worker_dispatch_never_replays_and_known_conflicts_are_safe(self):
         self.start(allow_tool_requests=True, allow_tool_decisions=True)
         (self.root / "worker-invalid").touch()
-        path = "/v1/agents/hermes-coding/tool-decisions"
+        path = "/v1/agents/agent-coding/tool-decisions"
         _, receipt = self.request("POST", path, self.decision_body())
         self.assertEqual(receipt["state"], "unknown")
         self.assertEqual(receipt["drain_state"], "not-requested")
@@ -528,7 +528,7 @@ else:
         self.start(allow_tool_requests=True)
         self.assertEqual(
             self.request(
-                "POST", "/v1/agents/hermes-coding/tool-decisions", self.decision_body()
+                "POST", "/v1/agents/agent-coding/tool-decisions", self.decision_body()
             )[0],
             403,
         )
@@ -536,7 +536,7 @@ else:
     def test_post_publication_worker_error_stays_unknown_without_replay(self):
         self.start(allow_tool_requests=True, allow_tool_decisions=True)
         (self.root / "worker-uncertain").touch()
-        path = "/v1/agents/hermes-coding/tool-decisions"
+        path = "/v1/agents/agent-coding/tool-decisions"
         status, receipt = self.request("POST", path, self.decision_body())
         self.assertEqual(status, 200)
         self.assertEqual(receipt["state"], "unknown")
@@ -565,10 +565,10 @@ else:
         self.start(allow_actions=True)
         for aid in (
             "coding",
-            "docker-hermes-coding.service",
+            "docker-agent-coding.service",
             "missing",
             "--all",
-            "..%2Fhermes-coding",
+            "..%2Fagent-coding",
         ):
             with self.subTest(aid=aid):
                 self.assertEqual(
@@ -586,26 +586,26 @@ else:
             {"action": ["stop"], "request_id": "r1"},
         ):
             self.assertEqual(
-                self.request("POST", "/v1/agents/hermes-coding/actions", body)[0], 400
+                self.request("POST", "/v1/agents/agent-coding/actions", body)[0], 400
             )
         self.assertEqual(self.mutations(), [])
         status, result = self.request(
             "POST",
-            "/v1/agents/zeroclaw-coding/actions",
+            "/v1/agents/agent-assistant/actions",
             {"action": "restart", "request_id": "r1"},
         )
         self.assertEqual(status, 200)
         self.assertEqual(result["state"], "succeeded")
         self.assertEqual(
             self.mutations(),
-            [["restart", "--no-ask-password", "--", "docker-zeroclaw-coding.service"]],
+            [["restart", "--no-ask-password", "--", "docker-agent-assistant.service"]],
         )
 
     def test_stop_includes_only_configured_brokers(self):
         self.start(allow_actions=True)
         self.request(
             "POST",
-            "/v1/agents/hermes-coding/actions",
+            "/v1/agents/agent-coding/actions",
             {"action": "stop", "request_id": "r1"},
         )
         self.assertEqual(
@@ -615,8 +615,8 @@ else:
                     "stop",
                     "--no-ask-password",
                     "--",
-                    "docker-hermes-coding.service",
-                    "tentaflake-broker-llm-hermes-coding.service",
+                    "docker-agent-coding.service",
+                    "tentaflake-broker-llm-agent-coding.service",
                 ]
             ],
         )
@@ -627,7 +627,7 @@ else:
             self.assertEqual(
                 self.request(
                     "POST",
-                    "/v1/agents/pi-waiting/actions",
+                    "/v1/agents/agent-waiting/actions",
                     {"action": action, "request_id": action},
                 )[0],
                 409,
@@ -637,26 +637,26 @@ else:
     def test_receipts_survive_restart_and_conflicting_intent_is_rejected(self):
         self.start(allow_actions=True)
         request = {"action": "restart", "request_id": "durable"}
-        first = self.request("POST", "/v1/agents/hermes-coding/actions", request)
+        first = self.request("POST", "/v1/agents/agent-coding/actions", request)
         self.assertEqual(
-            self.request("POST", "/v1/agents/hermes-coding/actions", request), first
+            self.request("POST", "/v1/agents/agent-coding/actions", request), first
         )
         self.close()
         self.start()
         self.assertEqual(
-            self.request("POST", "/v1/agents/hermes-coding/actions", request), first
+            self.request("POST", "/v1/agents/agent-coding/actions", request), first
         )
         self.assertEqual(len(self.mutations()), 1)
         self.assertEqual(
             self.request(
                 "POST",
-                "/v1/agents/hermes-coding/actions",
+                "/v1/agents/agent-coding/actions",
                 {"action": "stop", "request_id": "durable"},
             )[0],
             409,
         )
         self.assertEqual(
-            self.request("POST", "/v1/agents/zeroclaw-coding/actions", request)[0], 409
+            self.request("POST", "/v1/agents/agent-assistant/actions", request)[0], 409
         )
 
     def test_unknown_receipt_is_never_replayed_after_failure_or_restart(self):
@@ -671,7 +671,7 @@ else:
         with patch.object(self.service, "run", side_effect=fail_action):
             status, result = self.request(
                 "POST",
-                "/v1/agents/hermes-coding/actions",
+                "/v1/agents/agent-coding/actions",
                 {"action": "restart", "request_id": "uncertain"},
             )
         self.assertEqual(status, 200)
@@ -681,7 +681,7 @@ else:
         self.assertEqual(
             self.request(
                 "POST",
-                "/v1/agents/hermes-coding/actions",
+                "/v1/agents/agent-coding/actions",
                 {"action": "restart", "request_id": "uncertain"},
             )[1],
             result,
@@ -703,12 +703,12 @@ else:
             patch.object(self.service, "run", side_effect=crash_after_dispatch),
             self.assertRaises(SystemExit),
         ):
-            self.service.action(self.service.agents["hermes-coding"], request)
+            self.service.action(self.service.agents["agent-coding"], request)
         self.assertEqual(len(self.mutations()), 1)
         self.close()
         self.start()
         status, response = self.request(
-            "POST", "/v1/agents/hermes-coding/actions", request
+            "POST", "/v1/agents/agent-coding/actions", request
         )
         self.assertEqual(status, 200)
         self.assertEqual(response["state"], "unknown")
@@ -732,21 +732,21 @@ else:
         with patch.object(self.service, "run", side_effect=hold_action):
             thread = threading.Thread(
                 target=lambda: responses.append(
-                    self.request("POST", "/v1/agents/hermes-coding/actions", request)
+                    self.request("POST", "/v1/agents/agent-coding/actions", request)
                 )
             )
             thread.start()
             try:
                 self.assertTrue(entered.wait(1))
                 same_status, same = self.request(
-                    "POST", "/v1/agents/hermes-coding/actions", request
+                    "POST", "/v1/agents/agent-coding/actions", request
                 )
                 self.assertEqual(same_status, 200)
                 self.assertEqual(same["state"], "unknown")
                 self.assertEqual(
                     self.request(
                         "POST",
-                        "/v1/agents/hermes-coding/actions",
+                        "/v1/agents/agent-coding/actions",
                         {"action": "stop", "request_id": "second"},
                     )[0],
                     409,
@@ -762,12 +762,12 @@ else:
         self.start(allow_actions=True)
         request = {"action": "restart", "request_id": "previous-permission"}
         self.assertEqual(
-            self.request("POST", "/v1/agents/hermes-coding/actions", request)[0], 200
+            self.request("POST", "/v1/agents/agent-coding/actions", request)[0], 200
         )
         self.close()
         self.start(allow_actions=False)
         self.assertEqual(
-            self.request("POST", "/v1/agents/hermes-coding/actions", request)[0], 403
+            self.request("POST", "/v1/agents/agent-coding/actions", request)[0], 403
         )
         self.assertEqual(len(self.mutations()), 1)
 
@@ -776,7 +776,7 @@ else:
         (self.root / "fail").touch()
         status, result = self.request(
             "POST",
-            "/v1/agents/hermes-coding/actions",
+            "/v1/agents/agent-coding/actions",
             {"action": "restart", "request_id": "failed"},
         )
         self.assertEqual(status, 200)
@@ -789,7 +789,7 @@ else:
             self.assertEqual(
                 self.request(
                     "POST",
-                    "/v1/agents/hermes-coding/actions",
+                    "/v1/agents/agent-coding/actions",
                     {"action": "start", "request_id": "r1"},
                 )[0],
                 503,
@@ -798,7 +798,7 @@ else:
 
     def test_log_pagination_is_bounded_and_does_not_select_other_units(self):
         self.start(allow_logs=True)
-        status, result = self.request("GET", "/v1/agents/hermes-coding/logs?lines=2")
+        status, result = self.request("GET", "/v1/agents/agent-coding/logs?lines=2")
         self.assertEqual(status, 200)
         self.assertEqual(len(result["entries"]), 2)
         self.assertEqual(result["entries"][0]["message"], "fixture 1")
@@ -813,14 +813,14 @@ else:
             "lines=",
         ):
             self.assertEqual(
-                self.request("GET", "/v1/agents/hermes-coding/logs?" + query)[0], 400
+                self.request("GET", "/v1/agents/agent-coding/logs?" + query)[0], 400
             )
 
     def test_duplicate_json_fields_and_http_headers_are_rejected(self):
         self.start(allow_actions=True)
         for raw in (
             b"GET /v1/info HTTP/1.1\r\nHost: a\r\nHost: b\r\n\r\n",
-            b"POST /v1/agents/hermes-coding/actions HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n",
+            b"POST /v1/agents/agent-coding/actions HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n",
         ):
             with socket.socket(socket.AF_UNIX) as connection:
                 connection.connect(self.socket)
@@ -829,7 +829,7 @@ else:
         connection = UnixConnection(self.socket)
         connection.request(
             "POST",
-            "/v1/agents/hermes-coding/actions",
+            "/v1/agents/agent-coding/actions",
             '{"action":"start","action":"stop","request_id":"r"}',
             headers={"Content-Type": "application/json"},
         )
@@ -846,7 +846,7 @@ else:
         self.start(allow_logs=True)
         connection = UnixConnection(self.socket)
         try:
-            connection.request("GET", "/v1/agents/hermes-coding/logs?lines=32")
+            connection.request("GET", "/v1/agents/agent-coding/logs?lines=32")
             response = connection.getresponse()
             payload = response.read()
             self.assertEqual(response.status, 200)
@@ -861,7 +861,7 @@ else:
             api.Service(self.config)
         self.close()
         Path(self.config["inventory"]).write_text(
-            "hermes\tcoding\thermes-coding\t--all\t/tmp\ttrue\n"
+            "fixture\tcoding\tagent-coding\t--all\t/tmp\ttrue\n"
         )
         with self.assertRaisesRegex(ValueError, "identity"):
             api.Service(self.config)

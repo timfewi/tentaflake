@@ -18,10 +18,6 @@ in
       [ "tentaflake" "management" "enable" ]
     )
     (lib.mkRenamedOptionModule
-      [ "tentaflake" "shell" "hermesCli" "enable" ]
-      [ "tentaflake" "shell" "tentaflakeCli" "enable" ]
-    )
-    (lib.mkRenamedOptionModule
       [ "tentaflake" "networking" "egress" ]
       [ "tentaflake" "networking" "legacyPortEgress" ]
     )

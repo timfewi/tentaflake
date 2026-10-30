@@ -1,34 +1,33 @@
 #!/usr/bin/env bash
-# Re-resolve the agent image digests pinned in adapters/catalog.json.
-#
-# Prints the current multi-arch index digest for each upstream tag. Pinning is
-# only useful if bumping it is easy — but the bump stays MANUAL on purpose: a
-# script that rewrites the pin automatically is just a mutable tag with extra
-# steps. Review the new digest, then edit adapters/catalog.json by hand.
+# Report candidate image pins; adapter sources own metadata, never update it here.
 set -euo pipefail
 
-# tag references to track; keep in sync with adapters/catalog.json
-IMAGES=(
-  "docker://docker.io/nousresearch/hermes-agent:latest"
-  "docker://ghcr.io/zeroclaw-labs/zeroclaw:v0.8.2"
-)
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+CATALOG="$ROOT/adapters/catalog.json"
+# Validate all pins and source tags before contacting any registry. The generated
+# catalog projects adapter-owned facts; scaffold and caller-provided artifacts skip.
+records=$(jq -er '
+  [.presets | to_entries[] | select(.value.artifact.kind == "oci") |
+    .key as $id | .value.artifact |
+    if (.reference | test("^[^[:space:]@]+@sha256:[0-9a-f]{64}$"))
+       and (.source | type == "string")
+       and (.source | test("^[^[:space:]@]+:[^/:[:space:]@]+$"))
+       and ((.source | sub(":[^/:]+$"; "")) == (.reference | split("@")[0]))
+    then [$id, .source, .reference] | @tsv
+    else error("invalid adapter image pin/source: " + $id) end
+  ] | if length > 0 then .[] else error("no OCI adapter images") end
+' "$CATALOG")
 
-if command -v skopeo >/dev/null 2>&1; then
-  SKOPEO=(skopeo)
-else
-  SKOPEO=(nix run nixpkgs#skopeo --)
+if ! command -v skopeo >/dev/null 2>&1; then
+  echo "skopeo is required; provide an installed or repository-pinned executable on PATH." >&2
+  exit 1
 fi
 
-for ref in "${IMAGES[@]}"; do
-  # capture first, then match the "Digest" field — piping into `head` trips
-  # SIGPIPE under `set -o pipefail`, and a bare digest grep could match a layer
-  out=$("${SKOPEO[@]}" inspect --no-tags "$ref")
-  digest=$(grep -m1 '"Digest"' <<<"$out" | grep -o 'sha256:[0-9a-f]\{64\}')
-  # strip scheme, then the tag — podman/skopeo reject `repo:tag@digest`, so the
-  # pinned reference must carry the digest alone
-  repo="${ref#docker://}"
-  repo="${repo%:*}"
-  printf '%s\n  %s@%s\n\n' "$ref" "$repo" "$digest"
-done
+while IFS=$'\t' read -r adapter source current; do
+  out=$(skopeo inspect --no-tags "docker://$source")
+  digest=$(jq -er '.Digest | select(test("^sha256:[0-9a-f]{64}$"))' <<<"$out")
+  repo="${current%@*}"
+  printf '%s (%s)\n  current:   %s\n  candidate: %s@%s\n\n' "$adapter" "$source" "$current" "$repo" "$digest"
+done <<<"$records"
 
-echo "Compare against adapters/catalog.json and update by hand if these differ."
+echo "Review candidates, update the owning adapters/<id>.nix, then regenerate adapters/catalog.json."

@@ -1,6 +1,8 @@
 {
   "schemaVersion": 1,
-  "agents": [{"adapter": "hermes", "name": "generic", "autoStart": false, "settings": {"model": {"default": "fixture-model"}}}],
-  "hermes": [{"name": "from-data", "model": "fixture-model", "provider": "fixture-provider", "envFile": null, "base_url": "http://fixture.invalid/v1"}],
-  "zeroclaw": [{"name": "from-data", "model": "fixture-model", "provider": "fixture-provider", "envFile": null, "hostPort": null, "servePort": null}]
+  "agents": [
+    {"adapter": "hermes", "name": "generic", "autoStart": false, "settings": {"model": {"default": "fixture-model"}}},
+    {"adapter": "hermes", "name": "from-data", "autoStart": true, "settings": {"model": {"default": "fixture-model", "provider": "fixture-provider", "base_url": "http://fixture.invalid/v1"}}},
+    {"adapter": "zeroclaw", "name": "zero-from-data", "autoStart": false, "settings": {"default_model": "fixture-model", "default_provider": "fixture-provider"}}
+  ]
 }

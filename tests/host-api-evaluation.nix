@@ -48,7 +48,8 @@ let
     decisions:
     evaluate {
       imports = [
-        (builders.mkHermesAgent {
+        (builders.mkAgent {
+          adapter = "hermes";
           name = "operator";
           autoStart = false;
         })
@@ -58,9 +59,9 @@ let
         allowToolRequests = true;
         allowToolDecisions = decisions;
       };
-      tentaflake.worker.agents.hermes-operator = {
+      tentaflake.worker.agents.agent-operator = {
         enable = true;
-        workspace = "/var/lib/hermes-operator/workspace";
+        workspace = "/var/lib/tentaflake/agents/operator/workspace";
       };
     };
   inspectedWorker = workerHost false;
@@ -116,19 +117,19 @@ assert service.ReadWritePaths == [ ];
 assert inspectedWorker.systemd.services.tentaflake-api.serviceConfig.ReadWritePaths == [ ];
 assert
   controlledWorker.systemd.services.tentaflake-api.serviceConfig.ReadWritePaths
-  == [ "-/var/lib/tentaflake-worker-hermes-operator" ];
+  == [ "-/var/lib/tentaflake-worker-agent-operator" ];
 assert
-  controlledWorker.systemd.paths.tentaflake-worker-hermes-operator.pathConfig.PathExists
-  == "/var/lib/tentaflake-worker-hermes-operator/.drain-request";
+  controlledWorker.systemd.paths.tentaflake-worker-agent-operator.pathConfig.PathExists
+  == "/var/lib/tentaflake-worker-agent-operator/.drain-request";
 assert controlledWorker.systemd.services.tentaflake-api.serviceConfig.CapabilityBoundingSet == "";
 assert pkgs.lib.hasInfix "tentaflake-host-api --config /nix/store/"
   controlledWorker.systemd.services.tentaflake-api.serviceConfig.ExecStart;
-assert policies.hermes-operator.managed;
-assert !policies.hermes-operator.research.enabled;
-assert policies.hermes-operator.research.readiness == "unverified";
-assert policies.hermes-operator.worker.enabled;
-assert policies.hermes-operator.worker.limits.max_timeout_seconds == 900;
-assert policies.hermes-operator.auto_start == false;
+assert policies.agent-operator.managed;
+assert !policies.agent-operator.research.enabled;
+assert policies.agent-operator.research.readiness == "unverified";
+assert policies.agent-operator.worker.enabled;
+assert policies.agent-operator.worker.limits.max_timeout_seconds == 900;
+assert policies.agent-operator.auto_start == false;
 assert !(pkgs.lib.hasInfix "/var/lib" (builtins.toJSON policies));
 assert !(pkgs.lib.hasInfix "Credential" (builtins.toJSON policies));
 assert service.StateDirectoryMode == "0700";

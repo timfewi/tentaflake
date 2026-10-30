@@ -10,7 +10,6 @@ agents.json.pending
 # and flakes only see git-tracked files (run `git add my-agents.nix`).
 home.nix
 secrets/*.env
-!secrets/hermes.env.example
 
 # Personal local agent rules — private, never committed
 CLAUDE.local.md

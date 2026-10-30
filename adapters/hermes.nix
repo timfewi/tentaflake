@@ -1,22 +1,23 @@
 { pkgs, lib }:
 
 # ────────────────────────────────────────────────────────────
-# mkHermesAgent — create one isolated Hermes agent as a NixOS module
+# mkAgent — create one isolated Hermes agent as a NixOS module
 #
 # Usage in my-agents.nix:
 #
-#   { mkHermesAgent }:
+#   { mkAgent }:
 #   [
-#     (mkHermesAgent {
-#       name    = "coding";
+#     (mkAgent {
+#       adapter = "hermes";
+#       name = "coding";
 #       autoStart = false;
 #     })
 #   ]
 #
 # Each agent gets:
-#   - System user  hermes-<name>
-#   - State dir    /var/lib/hermes-<name>  (0700, owned by the container uid)
-#   - OCI container hermes-<name> (balanced: network=none + gVisor)
+#   - System user  agent-<name>
+#   - State dir    /var/lib/tentaflake/agents/<name>  (0700, owned by the container uid)
+#   - OCI container agent-<name> (balanced: network=none + gVisor)
 #   - HERMES_HOME pointing to its isolated state dir
 #   - Shared security-profile policy applied after caller overrides
 #
@@ -27,28 +28,91 @@
 # ────────────────────────────────────────────────────────────
 
 let
-  preset = (import ../lib/runtimeCatalog.nix).presets.hermes;
-  constants = import ../lib/constants.nix;
+  preset = {
+    schemaVersion = 1;
+    identity = {
+      id = "hermes";
+      version = "image-snapshot-2026-07-18";
+      status = "compatibility";
+    };
+    artifact = {
+      kind = "oci";
+      reference = "docker.io/nousresearch/hermes-agent@sha256:4a2f23bd3ffaa6ee7b3be8a302a38be43ab0321a2988cd3fb16b7dd472dde812";
+      reviewed = true;
+      source = "docker.io/nousresearch/hermes-agent:latest";
+    };
+    command = [
+      "gateway"
+      "run"
+      "--replace"
+    ];
+    configuration = {
+      format = "yaml";
+      readOnly = true;
+    };
+    ownership = {
+      uid = 10000;
+      gid = 10000;
+    };
+    layout = {
+      state = "/var/lib/tentaflake/agents/<name>";
+      workspace = "workspace";
+      writable = [
+        "state"
+        "workspace"
+      ];
+      directories = [
+        "workspace"
+        "skills"
+        "cron"
+      ];
+    };
+    lifecycle = "service";
+    model = {
+      protocols = [ "openai-chat-completions" ];
+      streaming = "unknown";
+    };
+    research = {
+      supported = true;
+    };
+    execution = {
+      interface = "worker-queue-v1";
+      automatic = false;
+    };
+    capabilities = [
+      "files"
+      "shell"
+      "terminal"
+      "worker"
+      "model"
+      "research"
+    ];
+    evidence = {
+      fixture = "source-regression";
+      vendorAcceptance = "pending";
+    };
+  };
+  hostIdentity = import ../lib/agentIdentity.nix;
   containerSecurity = import ../lib/containerSecurity.nix { inherit lib; };
   generateConfiguration =
     name: settings: (pkgs.formats.yaml { }).generate "${name}-config.yaml" settings;
   build =
     {
       name,
-      stateDir ? "/var/lib/hermes-${name}",
+      stateDir ? hostIdentity.stateDir name,
 
       # User / group
-      user ? "hermes-${name}",
-      group ? "hermes-${name}",
+      user ? "agent-${name}",
+      group ? "agent-${name}",
       uid ? null,
       gid ? null,
 
       # Container image. Default is the official hermes-agent image, digest-pinned
-      # in lib/constants.nix. Overrides MUST also be digest-pinned — a bare tag is
+      # in this adapter. Overrides MUST also be digest-pinned — a bare tag is
       # rejected at eval time, because the registry can repoint a tag at different
       # bytes between rebuilds. Example:
       #   image = "ubuntu@sha256:<64 hex digest>";
-      image ? constants.hermesImage,
+      image ? preset.artifact.reference,
 
       # Dev-only escape hatch for locally-built images without a registry digest.
       allowMutableImage ? false,
@@ -113,8 +177,8 @@ let
 
       # UID/GID the container process runs as (the image's internal `hermes` user).
       # State dirs + mounted data are owned by this so the container can write them.
-      containerUid ? constants.containerUid,
-      containerGid ? constants.containerGid,
+      containerUid ? preset.ownership.uid,
+      containerGid ? preset.ownership.gid,
 
       # Extra host directories (e.g. mounted data slices) to chown to the container
       # uid on every boot, so rebuilds *heal* ownership instead of breaking writes.
@@ -125,11 +189,6 @@ let
       # null = skip. Example:
       #   gitIdentity = { name = "myagent"; email = "myagent@example.com"; };
       gitIdentity ? null,
-
-      # Retained only to provide a migration error for existing consumers.
-      # Non-null values are rejected: agent-owned Git metadata must never run
-      # on the host with root privileges or publication credentials.
-      gitAutoPush ? null,
 
       # Expose the agent's web dashboard. Launches `hermes dashboard` inside the
       # container and (optionally) publishes it on the tailnet via `tailscale serve`.
@@ -168,7 +227,7 @@ let
       backend = config.virtualisation.oci-containers.backend;
       securityProfile = config.tentaflake.security.profile;
       secure = containerSecurity.isSecure securityProfile;
-      containerName = "hermes-${name}";
+      containerName = hostIdentity.container name;
       brokerCfg = lib.attrByPath [ containerName ] null config.tentaflake.broker.agents;
       brokerEnabled = brokerCfg != null && brokerCfg.enable;
       workerCfg = lib.attrByPath [ containerName ] null config.tentaflake.worker.agents;
@@ -212,7 +271,7 @@ let
       # Always exec as the agent uid so in-container writes stay agent-owned.
       ctrExec = "${ctrBin} exec -u ${ownUid}:${ownGid}";
 
-      ctrService = "${backend}-hermes-${name}.service";
+      ctrService = "${backend}-agent-${name}.service";
       ctrServiceAttr = lib.removeSuffix ".service" ctrService;
 
       # Generate config.yaml derivation when settings are provided
@@ -233,12 +292,17 @@ let
       # ── Optional service fragments (merged into systemd.services below) ──────────
 
       seedSvc = lib.optionalAttrs (seedDir != null) {
-        "seed-hermes-${name}" = {
+        "agent-${name}-seed" = {
           description = "Seed base files for Hermes agent ${name}";
-          requires = [ "local-fs.target" ] ++ lib.optional quotaEnabled quotaUnit;
+          requires = [
+            "local-fs.target"
+            "systemd-tmpfiles-setup.service"
+            "agent-${name}-heal-uid.service"
+          ]
+          ++ lib.optional quotaEnabled quotaUnit;
           after = [
             "systemd-tmpfiles-setup.service"
-            "hermes-${name}-heal-uid.service"
+            "agent-${name}-heal-uid.service"
           ]
           ++ lib.optional quotaEnabled quotaUnit;
           before = [ ctrService ];
@@ -262,9 +326,9 @@ let
       # container starts, so a rebuild that re-creates dirs (or a uid drift) heals
       # rather than breaking $HERMES_HOME writes.
       healSvc = {
-        "hermes-${name}-heal-uid" = {
+        "agent-${name}-heal-uid" = {
           description = "Align Hermes ${name} state + data dirs to the container uid (${ownUid})";
-          requires = lib.optional quotaEnabled quotaUnit;
+          requires = [ "systemd-tmpfiles-setup.service" ] ++ lib.optional quotaEnabled quotaUnit;
           after = [ "systemd-tmpfiles-setup.service" ] ++ lib.optional quotaEnabled quotaUnit;
           before = [ ctrService ];
           wantedBy = [ ctrService ];
@@ -282,7 +346,7 @@ let
       };
 
       gitIdentitySvc = lib.optionalAttrs (gitIdentity != null) {
-        "hermes-${name}-git-identity" = {
+        "agent-${name}-git-identity" = {
           description = "Configure git identity inside Hermes ${name}";
           after = [ ctrService ];
           requires = [ ctrService ];
@@ -292,10 +356,10 @@ let
             RemainAfterExit = true;
           };
           script = ''
-            ${ctrExec} hermes-${name} git config --global user.name ${lib.escapeShellArg gitIdentity.name}
-            ${ctrExec} hermes-${name} git config --global user.email ${lib.escapeShellArg gitIdentity.email}
-            ${ctrExec} hermes-${name} git config --global init.defaultBranch main
-            ${ctrExec} hermes-${name} git config --global push.autoSetupRemote true
+            ${ctrExec} agent-${name} git config --global user.name ${lib.escapeShellArg gitIdentity.name}
+            ${ctrExec} agent-${name} git config --global user.email ${lib.escapeShellArg gitIdentity.email}
+            ${ctrExec} agent-${name} git config --global init.defaultBranch main
+            ${ctrExec} agent-${name} git config --global push.autoSetupRemote true
           '';
         };
       };
@@ -304,7 +368,7 @@ let
       # docker exec under Type=simple dies when the container restarts → systemd
       # restarts it once the container is back).
       dashboardSvc = lib.optionalAttrs (dashboard != null) {
-        "hermes-${name}-dashboard" = {
+        "agent-${name}-dashboard" = {
           description = "Hermes ${name} web dashboard (port ${toString dashboard.port})";
           after = [ ctrService ];
           requires = [ ctrService ];
@@ -313,7 +377,7 @@ let
             Type = "simple";
             Restart = "always";
             RestartSec = 10;
-            ExecStart = "${ctrExec} hermes-${name} sh -c 'exec hermes dashboard --host 0.0.0.0 --port ${toString dashboard.port} --no-open --skip-build'";
+            ExecStart = "${ctrExec} agent-${name} sh -c 'exec hermes dashboard --host 0.0.0.0 --port ${toString dashboard.port} --no-open --skip-build'";
           };
         };
       };
@@ -321,7 +385,7 @@ let
       # Durable agent-built services (e.g. a knowledge-base web app the agent built).
       agentServicesSvc = lib.mapAttrs' (
         svcName: def:
-        lib.nameValuePair "hermes-${name}-svc-${svcName}" {
+        lib.nameValuePair "agent-${name}-svc-${svcName}" {
           description = "Hermes ${name} service: ${svcName}";
           after = [ ctrService ];
           requires = [ ctrService ];
@@ -330,13 +394,13 @@ let
             Type = "simple";
             Restart = "always";
             RestartSec = 10;
-            ExecStart = "${ctrExec} hermes-${name} sh -c ${lib.escapeShellArg def.startCommand}";
+            ExecStart = "${ctrExec} agent-${name} sh -c ${lib.escapeShellArg def.startCommand}";
           };
         }
       ) services;
 
       providerHealthcheckSvc = lib.optionalAttrs (providerHealthcheck != null) {
-        "hermes-${name}-provider-healthcheck" = {
+        "agent-${name}-provider-healthcheck" = {
           description = "Provider preflight for Hermes ${name} (fail-loud auth/endpoint check)";
           after = [ ctrService ];
           requires = [ ctrService ];
@@ -346,7 +410,7 @@ let
             RemainAfterExit = true;
           };
           script = ''
-            ${ctrExec} hermes-${name} sh -c '
+            ${ctrExec} agent-${name} sh -c '
               code=$(curl -s -o /dev/null -w "%{http_code}" \
                 -X POST "${providerHealthcheck.url}/chat/completions" \
                 -H "Authorization: Bearer ''$${providerHealthcheck.apiKeyEnv}" \
@@ -384,7 +448,7 @@ let
 
       dashboardServe =
         if (dashboard != null && (dashboard.tailnetPort or null) != null) then
-          serveUnit "hermes-${name}-dashboard-serve" dashboard.tailnetPort dashboard.port
+          serveUnit "agent-${name}-dashboard-serve" dashboard.tailnetPort dashboard.port
         else
           { };
 
@@ -396,26 +460,28 @@ let
             def = services.${svcName};
           in
           if (def.tailnetPort or null) != null then
-            serveUnit "hermes-${name}-svc-${svcName}-serve" def.tailnetPort (def.port or def.tailnetPort)
+            serveUnit "agent-${name}-svc-${svcName}-serve" def.tailnetPort (def.port or def.tailnetPort)
           else
             { }
         )
       ) { } (lib.attrNames services);
 
+      # The configurable native home is independent of the host storage layout.
+      nativeStateDir = "/state";
       baseContainer = {
         inherit autoStart;
         networks = lib.optional brokerEnabled brokerCfg.networkName;
         inherit image;
         cmd = resolvedCmd;
         volumes = [
-          "${stateDir}:${stateDir}:rw"
+          "${stateDir}:${nativeStateDir}:rw"
         ]
         ++ lib.optional workerEnabled "${workerResultsDir}:${workerResultsMount}:ro"
-        ++ lib.optional (configYaml != null) "${configYaml}:${stateDir}/config.yaml:ro"
+        ++ lib.optional (configYaml != null) "${configYaml}:${nativeStateDir}/config.yaml:ro"
         ++ research.volumes
         ++ extraVolumes;
         environment = {
-          HERMES_HOME = stateDir;
+          HERMES_HOME = nativeStateDir;
           HERMES_AGENT_NAME = name;
         }
         // extraEnvironment;
@@ -431,12 +497,12 @@ let
       securityResult = containerSecurity.apply {
         profile = securityProfile;
         inherit backend pidsLimit allowMutableImage;
-        name = "hermes-${name}";
+        name = "agent-${name}";
         owner = "${ownUid}:${ownGid}";
         baseConfig = baseContainer;
         overrides = extraContainerConfig;
         allowedWritableSources = [ stateDir ];
-        allowedWritableDestinations = [ stateDir ];
+        allowedWritableDestinations = [ nativeStateDir ];
         resources = securityResources;
         brokerNetwork = if brokerEnabled then brokerCfg.networkName else null;
         approvedEnvironmentFiles = lib.optional brokerEnabled brokerEnvironmentFile;
@@ -455,12 +521,6 @@ let
       assertions =
         securityResult.assertions
         ++ research.assertions
-        ++ lib.optionals (gitAutoPush != null) [
-          {
-            assertion = false;
-            message = "tentaflake: Hermes agent ${name} gitAutoPush is disabled because agent-owned Git metadata can execute host programs and redirect credentials. Set gitAutoPush = null, stop the old autopush timer/service, and revoke its token; see docs/07-operations.md.";
-          }
-        ]
         ++ lib.optionals secure [
           {
             assertion = !allowMutableImage;
@@ -568,7 +628,7 @@ let
         ];
       };
 
-      virtualisation.oci-containers.containers."hermes-${name}" = securityResult.container;
+      virtualisation.oci-containers.containers."agent-${name}" = securityResult.container;
     };
 in
 {
@@ -607,12 +667,12 @@ in
       );
     };
   };
-  inherit build;
+  inherit build preset;
   metadata =
     args: backend:
     let
-      stateDir = args.stateDir or "/var/lib/hermes-${args.name}";
-      container = "hermes-${args.name}";
+      stateDir = args.stateDir or (hostIdentity.stateDir args.name);
+      container = hostIdentity.container args.name;
     in
     {
       adapter = "hermes";
@@ -622,8 +682,8 @@ in
       stateDirectories = preset.layout.directories;
       unit = "${backend}-${container}.service";
       workspace = "${stateDir}/workspace";
-      uid = args.containerUid or constants.containerUid;
-      gid = args.containerGid or constants.containerGid;
+      uid = args.containerUid or preset.ownership.uid;
+      gid = args.containerGid or preset.ownership.gid;
       runnable = true;
     };
 }
