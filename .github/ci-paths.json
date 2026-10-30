@@ -1,4 +1,17 @@
 {
+  "host-api": {
+    "paths": [
+      "host-api/**",
+      "lib/hostApiPolicy.nix",
+      "modules/host-api.nix",
+      "pkgs/tentaflake-host-api/**",
+      "tests/host-api*.nix"
+    ],
+    "checks": [
+      "evaluate",
+      "static"
+    ]
+  },
   "flake-evaluation": {
     "paths": [
       "scripts/eval_flake.py",
@@ -9,6 +22,19 @@
       "evaluate",
       "selection",
       "static"
+    ]
+  },
+  "runtime-catalog": {
+    "paths": [
+      "scripts/runtime-catalog-docs.py",
+      "scripts/test_runtime_catalog.py"
+    ],
+    "checks": [
+      "static",
+      "selection",
+      "evaluate",
+      "cli",
+      "rust"
     ]
   },
   "formatter-test": {
@@ -93,7 +119,8 @@
     "paths": [
       "modules/worker.nix",
       "crates/tentaflake-worker/**",
-      "pkgs/tentaflake-worker/**"
+      "pkgs/tentaflake-worker/**",
+      "tests/worker-drain-wakeup.nix"
     ],
     "checks": [
       "runtime",
@@ -131,7 +158,8 @@
   "runtime": {
     "paths": [
       "installer/**",
-      "tests/integration.nix"
+      "tests/integration.nix",
+      "tests/parent-guard-boundary.py"
     ],
     "checks": [
       "runtime",

@@ -7,12 +7,28 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+import tomllib
+
+
+def toml_value(value):
+    """Encode the JSON-compatible fixture subset as TOML inline values."""
+    if isinstance(value, dict):
+        return "{ " + ", ".join(f"{json.dumps(key)} = {toml_value(item)}"
+                               for key, item in value.items()) + " }"
+    if isinstance(value, list):
+        return "[" + ", ".join(toml_value(item) for item in value) + "]"
+    return json.dumps(value, ensure_ascii=False)
+
+
+def toml_document(value):
+    return "".join(f"{json.dumps(key)} = {toml_value(item)}\n"
+                   for key, item in value.items())
 
 
 def main():
     binary, flake_dir, hostname = sys.argv[1:]
     flake = Path(flake_dir)
-    destination = flake / "agents.json"
+    destination = flake / "agents.toml"
     with tempfile.TemporaryDirectory() as temporary:
         work = Path(temporary)
         config = work / "cli.conf"
@@ -28,11 +44,11 @@ def main():
             return result
 
         def candidate(value):
-            path = work / "incoming.json"
-            path.write_text(json.dumps(value))
+            path = work / "incoming.toml"
+            path.write_text(toml_document(value))
             return str(path)
 
-        preset = json.loads(run("agent", "template", "hermes", "new-preset").stdout)
+        preset = tomllib.loads(run("agent", "template", "hermes", "new-preset").stdout)
         path = candidate(preset)
         before = destination.read_bytes()
         plan = json.loads(run("agent", "plan", path, "--json").stdout)
@@ -41,12 +57,12 @@ def main():
         assert destination.read_bytes() == before
         run("agent", "validate", path)
         run("agent", "import", path)
-        combined = json.loads(destination.read_bytes())
+        combined = tomllib.loads(destination.read_text())
         assert combined["agents"] == preset["agents"]
-        assert combined["hermes"] == [] and combined["zeroclaw"] == []
+        assert set(combined) == {"schemaVersion", "agents"}
 
         image = "example.invalid/coding@sha256:" + "a" * 64
-        generic = json.loads(run("agent", "template", "generic", "new-coding", "--image", image,
+        generic = tomllib.loads(run("agent", "template", "generic", "new-coding", "--image", image,
                                  "--", "fixture", "--json", "--hide").stdout)
         assert generic["agents"][0]["definition"]["command"] == ["fixture", "--json", "--hide"]
         path = candidate(generic)
@@ -54,18 +70,80 @@ def main():
         assert "new-coding" not in hidden and hostname not in hidden and str(flake) not in hidden
         assert json.loads(hidden)["valid"]
         run("agent", "import", path)
-        assert json.loads(destination.read_bytes())["agents"] == preset["agents"] + generic["agents"]
+        assert tomllib.loads(destination.read_text())["agents"] == preset["agents"] + generic["agents"]
         before = destination.read_bytes()
         run("agent", "import", path, success=False)
         assert destination.read_bytes() == before
 
-        # Source-only Nix instances are checked even if absent from active TSV.
-        existing = json.loads(run("agent", "template", "hermes", "generic-nix").stdout)
-        denied = json.loads(run("agent", "plan", candidate(existing), "--json", success=False).stdout)
+        # Tracked TOML declarations reserve names even when active TSV is empty.
+        assert inventory.read_text() == ""
+        existing = tomllib.loads(run("agent", "template", "zeroclaw", "new-preset").stdout)
+        denied = run("agent", "plan", candidate(existing), "--json", success=False)
+        assert "agent identity conflicts with existing configuration or active inventory" in denied.stderr
+        assert destination.read_bytes() == before
+
+        # Host-owned unmanaged OCI containers also reserve identities, even
+        # without any matching declaration in TOML or the active TSV inventory.
+        unmanaged = tomllib.loads(run("agent", "template", "pi", "unmanaged-fixture").stdout)
+        denied = json.loads(run("agent", "plan", candidate(unmanaged), "--json", success=False).stdout)
         assert not denied["valid"] and "already exists" in denied["errors"][0]
+        assert destination.read_bytes() == before
+
+        # A removed Nix inventory must refuse without evaluating its contents
+        # or publishing any change to the sole supported TOML inventory.
+        obsolete = flake / "my-agents.nix"
+        obsolete.write_text('throw "obsolete-evaluation-private-sentinel"\n')
+        subprocess.run(["git", "-C", str(flake), "add", "my-agents.nix"], check=True)
+        try:
+            evaluation = subprocess.run(
+                ["nix", "eval", "--no-write-lock-file",
+                 f"{flake}#nixosConfigurations.{hostname}.config.tentaflake.agentInstances",
+                 "--json"], capture_output=True, text=True, timeout=75)
+            assert evaluation.returncode != 0
+            assert "Manually migrate declarations to agents.toml" in evaluation.stderr
+            assert "obsolete-evaluation-private-sentinel" not in evaluation.stdout + evaluation.stderr
+            fresh_legacy = tomllib.loads(run("agent", "template", "hermes", "legacy-refusal").stdout)
+            result = run("agent", "import", candidate(fresh_legacy), success=False)
+            assert "obsolete-evaluation-private-sentinel" not in result.stdout + result.stderr
+            assert destination.read_bytes() == before
+            assert obsolete.read_text() == 'throw "obsolete-evaluation-private-sentinel"\n'
+        finally:
+            obsolete.unlink()
+            subprocess.run(["git", "-C", str(flake), "add", "-u", "my-agents.nix"], check=True)
+
+        # JSON inventories are obsolete, including when a TOML inventory exists.
+        legacy_json = flake / "agents.json"
+        legacy_bytes = b'{"schemaVersion":1,"agents":[]}'
+        legacy_json.write_bytes(legacy_bytes)
+        try:
+            result = run("agent", "import", candidate(fresh_legacy), success=False)
+            assert "agents.json" in result.stderr and "agents.toml" in result.stderr
+            assert legacy_json.read_bytes() == legacy_bytes
+            assert destination.read_bytes() == before
+            destination.unlink()
+            result = run("agent", "import", candidate(fresh_legacy), success=False)
+            assert "agents.json" in result.stderr and "agents.toml" in result.stderr
+            assert legacy_json.read_bytes() == legacy_bytes
+            assert not destination.exists()
+        finally:
+            legacy_json.unlink()
+            destination.write_bytes(before)
+
+        # The old public input format must refuse, not silently convert.
+        old_input = work / "incoming.json"
+        old_input.write_text(json.dumps(fresh_legacy))
+        run("agent", "validate", str(old_input), success=False)
+        run("agent", "import", str(old_input), success=False)
+        assert destination.read_bytes() == before
 
         invalid = [
             {**generic, "schemaVersion": 2},
+            {"hermes": []},
+            {**generic, "zeroclaw": []},
+            {**generic, "unknown": "refuse"},
+            {"schemaVersion": 1, "agents": [
+                {"adapter": "hermes", "name": "duplicate", "autoStart": False},
+                {"adapter": "zeroclaw", "name": "duplicate", "autoStart": False}]},
             {"schemaVersion": 1, "agents": [{"adapter": "hermes", "name": "unsafe", "autoStart": True}]},
             {"schemaVersion": 1, "agents": [{"adapter": "hermes", "name": "unsafe", "autoStart": False,
                                               "extraVolumes": ["/home:/host:rw"]}]},
@@ -83,15 +161,30 @@ def main():
             assert "credential-private-sentinel" not in denied.stdout + denied.stderr
             assert destination.read_bytes() == before
 
-        # Do not echo a malformed secret-like value in JSON/Nix diagnostics.
-        bad = work / "bad.json"
-        bad.write_text('{"credential-private-sentinel": invalid}')
+        # Invalid existing roots must remain byte-for-byte untouched.
+        for invalid_existing in ({"hermes": []}, {**generic, "unknown": True}):
+            original = toml_document(invalid_existing).encode()
+            destination.write_bytes(original)
+            run("agent", "import", candidate(preset), success=False)
+            assert destination.read_bytes() == original
+        destination.write_bytes(before)
+
+        # Unknown adapters in active inventory still reserve their common identity.
+        inventory.write_text("future-runtime\treserved\tagent-reserved\tcustom.service\t/custom/state\ttrue\n")
+        collision = tomllib.loads(run("agent", "template", "pi", "reserved").stdout)
+        run("agent", "import", candidate(collision), success=False)
+        assert destination.read_bytes() == before
+        inventory.write_text("")
+
+        # Do not echo a malformed secret-like value in TOML/Nix diagnostics.
+        bad = work / "bad.toml"
+        bad.write_text('credential-private-sentinel = invalid')
         result = run("agent", "validate", str(bad), success=False)
         assert "credential-private-sentinel" not in result.stdout + result.stderr
 
-        with (flake / ".agents.json.lock").open("r+") as lock:
+        with (flake / ".agents.toml.lock").open("r+") as lock:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            fresh = json.loads(run("agent", "template", "zeroclaw", "after-lock").stdout)
+            fresh = tomllib.loads(run("agent", "template", "zeroclaw", "after-lock").stdout)
             result = run("agent", "import", candidate(fresh), success=False)
             assert "another agent import" in result.stderr
             assert destination.read_bytes() == before
@@ -101,7 +194,7 @@ def main():
         tool_dir = work / "tools"
         tool_dir.mkdir()
         validator = tool_dir / "nix"
-        manual = b'{"schemaVersion":1,"agents":[],"_securityNote":"operator edit"}'
+        manual = b'schemaVersion = 1\nagents = []\n_securityNote = "operator edit"\n'
         validator.write_text(f"#!{sys.executable}\nfrom pathlib import Path\nimport json\n"
                              f"Path({str(destination)!r}).write_bytes({manual!r})\n"
                              "print(json.dumps({'schemaVersion':1,'valid':True,'instances':[],'errors':[]}))\n")
@@ -110,7 +203,7 @@ def main():
                      env={**environment, "PATH": f"{tool_dir}:{environment['PATH']}"})
         assert "changed during validation" in result.stderr
         assert destination.read_bytes() == manual
-        assert not (flake / "agents.json.pending").exists()
+        assert not (flake / "agents.toml.pending").exists()
         print("PASS: installed preset/generic plan, import, redaction, refusals, lock and conflict recovery")
 
 

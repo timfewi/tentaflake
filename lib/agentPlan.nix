@@ -7,6 +7,7 @@
 data:
 let
   inherit (pkgs) lib;
+  runtimeCatalog = import ./runtimeCatalog.nix;
   # Import adds ordinary stopped workloads. Operational host services, alternate
   # mounts/users and credential files stay in the administrator's configuration.
   allowed = [
@@ -23,21 +24,15 @@ let
   ];
   importable =
     builtins.isAttrs data
-    &&
-      builtins.attrNames data == [
-        "agents"
-        "schemaVersion"
-      ]
+    && data ? schemaVersion
+    && data ? agents
+    && lib.subtractLists [ "schemaVersion" "agents" "_securityNote" ] (builtins.attrNames data) == [ ]
     && builtins.isList data.agents
     && data.agents != [ ]
     && lib.all (
       entry: builtins.isAttrs entry && lib.subtractLists allowed (builtins.attrNames entry) == [ ]
     ) data.agents;
-  builders = import ./default.nix { inherit pkgs lib; };
-  modules = builders.agentsFromData {
-    inherit data;
-    inherit (builders) mkAgent mkHermesAgent mkZeroClawAgent;
-  };
+  modules = (import ./agentsFromData.nix { inherit pkgs lib; }) { inherit data; };
   evaluated =
     (import (pkgs.path + "/nixos/lib/eval-config.nix") {
       system = pkgs.stdenv.hostPlatform.system;
@@ -100,6 +95,6 @@ else
           container = name;
           image = if builtins.hasAttr name containers then containers.${name}.image else null;
           requiresHostUpdate = true;
-          vendorAcceptance = builders.runtimeCatalog.presets.${instance.adapter}.evidence.vendorAcceptance;
+          vendorAcceptance = runtimeCatalog.presets.${instance.adapter}.evidence.vendorAcceptance;
         }) evaluated.tentaflake.agentInstances;
   }

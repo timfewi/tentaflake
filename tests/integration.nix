@@ -13,18 +13,13 @@
 #
 # Run just this check:
 #   nix build .#checks.x86_64-linux.vm-integration -L
-{
-  self,
-  mkHermesAgent,
-  mkZeroClawAgent,
-  ...
-}:
+{ self, agentsFromData }:
 {
   name = "tentaflake-integration";
 
   nodes = {
     machine =
-      { pkgs, ... }:
+      { config, pkgs, ... }:
       let
         brokerPackage = pkgs.callPackage ../pkgs/tentaflake-broker { };
         networkTestImage = pkgs.dockerTools.buildLayeredImage {
@@ -51,21 +46,11 @@
       {
         imports = [
           self.nixosModules.default
-          # One declarative Hermes agent, kept stopped so no image pull happens.
-          (mkHermesAgent {
-            name = "test";
-            autoStart = false;
-          })
-          # One ZeroClaw agent (second runtime), also stopped — exercises the
-          # mkZeroClawAgent builder and multi-runtime discovery.
-          (mkZeroClawAgent {
-            name = "assistant";
-            autoStart = false;
-          })
-        ];
+        ]
+        ++ agentsFromData { file = ./fixtures/adapter-input/integration-docker.toml; };
 
         # OCI backend + docker are wired in the template's configuration.nix, which
-        # we don't import here (it pulls in hardware config / my-agents.nix); set
+        # we don't import here (it pulls in hardware config / agents.toml); set
         # the pieces the agent unit needs directly.
         virtualisation = {
           oci-containers.backend = "docker";
@@ -83,13 +68,13 @@
         systemd = {
           services = {
             quota-controller-probe = {
-              requires = [ "tentaflake-workspace-quota-hermes-test.service" ];
-              after = [ "tentaflake-workspace-quota-hermes-test.service" ];
+              requires = [ "tentaflake-workspace-quota-agent-test.service" ];
+              after = [ "tentaflake-workspace-quota-agent-test.service" ];
               serviceConfig.ExecStart = "${pkgs.coreutils}/bin/sleep infinity";
             };
-            "tentaflake-broker-fetch-zeroclaw-assistant".wantedBy = [ "multi-user.target" ];
+            "tentaflake-broker-fetch-agent-assistant".wantedBy = [ "multi-user.target" ];
             # Exercise the actual credential unit's mount namespace.
-            "tentaflake-broker-credentials-zeroclaw-assistant".serviceConfig.ExecStartPost =
+            "tentaflake-broker-credentials-agent-assistant".serviceConfig.ExecStartPost =
               pkgs.writeShellScript "check-credential-write-boundary" ''
                 set -eu
                 test -w "$RUNTIME_DIRECTORY"
@@ -110,6 +95,16 @@
             "tentaflake/network-test-image".source = networkTestImage;
             "tentaflake/llm-upstream.py".source = ./fixtures/llm-upstream.py;
             "tentaflake/installer-disk-library".source = ../installer/disk.sh;
+            "tentaflake/parent-guard-boundary.py".source = ./parent-guard-boundary.py;
+            "tentaflake/parent-guard-probe".source = pkgs.writeShellScript "parent-guard-probe" (
+              ''
+                set -eu
+                : "''${TENTAFLAKE_PARENT_TEST_ROOT:?isolated test root required}"
+              ''
+              +
+                builtins.replaceStrings [ "/var" ] [ "\"$TENTAFLAKE_PARENT_TEST_ROOT\"/var" ]
+                  config.systemd.services.systemd-tmpfiles-setup.preStart
+            );
           };
           systemPackages = [
             pkgs.btrfs-progs
@@ -139,7 +134,7 @@
           # would redefine allowUnfree and break evaluation.
           nixSettings.enable = false;
           shell.enable = true;
-          broker.agents.zeroclaw-assistant = {
+          broker.agents.agent-assistant = {
             enable = true;
             subnet = "10.203.30.0/30";
             gateway = "10.203.30.1";
@@ -153,7 +148,7 @@
           };
           backup = {
             enable = true;
-            paths = [ "/var/lib/hermes-test" ];
+            paths = [ "/var/lib/tentaflake/agents/test" ];
             repositoryFile = "/run/tentaflake-backup/repository";
             passwordFile = "/run/tentaflake-backup/password";
             initialize = true;
@@ -164,9 +159,9 @@
           worker = {
             image = networkTestImage;
             imageReference = "tentaflake-network-test:latest";
-            agents.hermes-test = {
+            agents.agent-test = {
               enable = true;
-              workspace = "/var/lib/hermes-test/workspace";
+              workspace = "/var/lib/tentaflake/agents/test/workspace";
               maxInboxEntries = 4;
               maxQueueEntries = 2;
               maxQueueBytes = 1024 * 1024;
@@ -177,9 +172,9 @@
               workspaceTmpfsSize = "8m";
               tmpTmpfsSize = "4m";
             };
-            agents.zeroclaw-assistant = {
+            agents.agent-assistant = {
               enable = true;
-              workspace = "/var/lib/zeroclaw-assistant/data";
+              workspace = "/var/lib/tentaflake/agents/assistant/data";
               containerUid = 65534;
               containerGid = 65534;
               maxSnapshotBytes = 16 * 1024 * 1024;
@@ -191,23 +186,23 @@
             };
           };
           workspaceQuota.agents = {
-            hermes-test = {
+            agent-test = {
               enable = true;
-              workspace = "/var/lib/hermes-test/workspace";
+              workspace = "/var/lib/tentaflake/agents/test/workspace";
               sizeMiB = 128;
               state = {
-                path = "/var/lib/hermes-test";
+                path = "/var/lib/tentaflake/agents/test";
                 sizeMiB = 128;
               };
             };
-            zeroclaw-assistant = {
+            agent-assistant = {
               enable = true;
-              workspace = "/var/lib/zeroclaw-assistant/data";
+              workspace = "/var/lib/tentaflake/agents/assistant/data";
               sizeMiB = 128;
               ownerUid = 65534;
               ownerGid = 65534;
               state = {
-                path = "/var/lib/zeroclaw-assistant";
+                path = "/var/lib/tentaflake/agents/assistant";
                 sizeMiB = 128;
               };
             };
@@ -249,11 +244,8 @@
       {
         imports = [
           self.nixosModules.default
-          (mkZeroClawAgent {
-            name = "podman";
-            autoStart = false;
-          })
-        ];
+        ]
+        ++ agentsFromData { file = ./fixtures/adapter-input/integration-podman.toml; };
 
         virtualisation.oci-containers.backend = "podman";
         virtualisation.podman.enable = true;
@@ -266,9 +258,9 @@
           modernConsole.enable = false;
           nixSettings.enable = false;
           shell.enable = true;
-          broker.agents.zeroclaw-podman = {
+          broker.agents.agent-podman = {
             enable = true;
-            networkName = "tf-zeroclaw-podman";
+            networkName = "tf-agent-podman";
             subnet = "10.203.50.0/30";
             gateway = "10.203.50.1";
             fetch = {
@@ -420,6 +412,12 @@
     ).strip()
     assert failed_units == "", f"failed boot units:\n{failed_units}"
 
+    with subtest("generated parent guard refuses unsafe isolated parents before mutation"):
+        machine.succeed(
+            "timeout 60s python3 /etc/tentaflake/parent-guard-boundary.py "
+            "/etc/tentaflake/parent-guard-probe"
+        )
+
     with subtest("tentaflake CLI is installed and runs"):
         machine.succeed("command -v tentaflake")
         # `help` needs no daemon; `ps` shells out to the docker backend.
@@ -487,8 +485,8 @@
 
     with subtest("declared agent produced its systemd unit"):
         # oci-containers names the unit docker-<container>.service.
-        unit = machine.succeed("systemctl cat docker-hermes-test.service")
-        rendered = unit_with_start_script(machine, "docker-hermes-test.service")
+        unit = machine.succeed("systemctl cat docker-agent-test.service")
+        rendered = unit_with_start_script(machine, "docker-agent-test.service")
         for flag in [
             "--runtime=runsc",
             "--network=none",
@@ -512,20 +510,20 @@
         assert "RestartMaxDelaySec=1min" in unit, unit
 
     with subtest("declared agent produced its system user and state dir"):
-        machine.succeed("id hermes-test")
-        machine.succeed("test -d /var/lib/hermes-test")
+        machine.succeed("id agent-test")
+        machine.succeed("test -d /var/lib/tentaflake/agents/test")
         # State dir must be private (0700) per the template's isolation contract.
-        perms = machine.succeed("stat -c '%a' /var/lib/hermes-test").strip()
+        perms = machine.succeed("stat -c '%a' /var/lib/tentaflake/agents/test").strip()
         assert perms == "700", f"expected 0700 state dir, got {perms}"
 
     with subtest("second-runtime (ZeroClaw) agent produced its unit and 0700 state dir"):
-        # mkZeroClawAgent runs as an anonymous uid (65534) — no NixOS system
+        # ZeroClaw runs as an anonymous uid (65534) — no NixOS system
         # user — so we assert the unit, the private state dir, and the workspace.
-        machine.succeed("systemctl cat docker-zeroclaw-assistant.service")
-        machine.succeed("test -d /var/lib/zeroclaw-assistant")
-        zero_perms = machine.succeed("stat -c '%a' /var/lib/zeroclaw-assistant").strip()
+        machine.succeed("systemctl cat docker-agent-assistant.service")
+        machine.succeed("test -d /var/lib/tentaflake/agents/assistant")
+        zero_perms = machine.succeed("stat -c '%a' /var/lib/tentaflake/agents/assistant").strip()
         assert zero_perms == "700", f"expected 0700 zeroclaw state dir, got {zero_perms}"
-        machine.succeed("test -d /var/lib/zeroclaw-assistant/data")
+        machine.succeed("test -d /var/lib/tentaflake/agents/assistant/data")
 
     with subtest("installer formats Btrfs root and records the boot filesystems"):
         script = (
@@ -598,8 +596,8 @@
 
     with subtest("persistent state and workspaces have independent fixed-size filesystems"):
         for name, state, workspace, uid in [
-            ("hermes-test", "/var/lib/hermes-test", "/var/lib/hermes-test/workspace", 10000),
-            ("zeroclaw-assistant", "/var/lib/zeroclaw-assistant", "/var/lib/zeroclaw-assistant/data", 65534),
+            ("agent-test", "/var/lib/tentaflake/agents/test", "/var/lib/tentaflake/agents/test/workspace", 10000),
+            ("agent-assistant", "/var/lib/tentaflake/agents/assistant", "/var/lib/tentaflake/agents/assistant/data", 65534),
         ]:
             for kind, path, image in [
                 ("state", state, f"state/{name}.img"),
@@ -612,44 +610,44 @@
                 machine.succeed(f"test $(stat -c %u:%g {path}) = {uid}:{uid}")
                 machine.fail(f"fallocate -l 160M {path}/over-quota")
                 machine.succeed(f"rm -f {path}/over-quota")
-        machine.succeed("test -d /var/lib/hermes-test/skills; test -d /var/lib/hermes-test/cron")
-        machine.succeed("test -d /var/lib/zeroclaw-assistant/.zeroclaw/data")
+        machine.succeed("test -d /var/lib/tentaflake/agents/test/skills; test -d /var/lib/tentaflake/agents/test/cron")
+        machine.succeed("test -d /var/lib/tentaflake/agents/assistant/.zeroclaw/data")
 
     with subtest("stopping private state ownership stops its dependent controller"):
         machine.succeed("systemctl start quota-controller-probe.service")
         machine.wait_for_unit("quota-controller-probe.service")
-        machine.succeed("systemctl stop tentaflake-state-quota-hermes-test.service")
+        machine.succeed("systemctl stop tentaflake-state-quota-agent-test.service")
         machine.fail("systemctl is-active --quiet quota-controller-probe.service")
-        machine.fail("systemctl is-active --quiet tentaflake-workspace-quota-hermes-test.service")
-        machine.succeed("systemctl start tentaflake-workspace-quota-hermes-test.service")
+        machine.fail("systemctl is-active --quiet tentaflake-workspace-quota-agent-test.service")
+        machine.succeed("systemctl start tentaflake-workspace-quota-agent-test.service")
         machine.fail("systemctl is-active --quiet quota-controller-probe.service")
-        machine.succeed("systemctl start tentaflake-worker-hermes-test.path")
+        machine.succeed("systemctl start tentaflake-worker-agent-test.path")
 
     with subtest("state initialization refuses an agent-owned directory symlink"):
         machine.succeed(
             "install -d -m 0755 /var/lib/quota-unrelated; "
             "printf '%s' preserve > /var/lib/quota-unrelated/marker; "
-            "mv /var/lib/hermes-test/skills /var/lib/hermes-test/skills-saved; "
-            "ln -s /var/lib/quota-unrelated /var/lib/hermes-test/skills"
+            "mv /var/lib/tentaflake/agents/test/skills /var/lib/tentaflake/agents/test/skills-saved; "
+            "ln -s /var/lib/quota-unrelated /var/lib/tentaflake/agents/test/skills"
         )
-        machine.fail("systemctl restart tentaflake-state-quota-hermes-test.service")
+        machine.fail("systemctl restart tentaflake-state-quota-agent-test.service")
         machine.succeed(
             "test $(stat -c %a /var/lib/quota-unrelated) = 755; "
             "test $(cat /var/lib/quota-unrelated/marker) = preserve; "
-            "journalctl -u tentaflake-state-quota-hermes-test.service --no-pager "
+            "journalctl -u tentaflake-state-quota-agent-test.service --no-pager "
             "| grep -F 'refusing symlink or non-directory quota source'"
         )
-        machine.fail("systemctl is-active --quiet tentaflake-workspace-quota-hermes-test.service")
+        machine.fail("systemctl is-active --quiet tentaflake-workspace-quota-agent-test.service")
         machine.succeed(
-            "rm /var/lib/hermes-test/skills; "
-            "mv /var/lib/hermes-test/skills-saved /var/lib/hermes-test/skills; "
-            "systemctl reset-failed tentaflake-state-quota-hermes-test.service; "
-            "systemctl start tentaflake-workspace-quota-hermes-test.service; "
-            "systemctl start tentaflake-worker-hermes-test.path"
+            "rm /var/lib/tentaflake/agents/test/skills; "
+            "mv /var/lib/tentaflake/agents/test/skills-saved /var/lib/tentaflake/agents/test/skills; "
+            "systemctl reset-failed tentaflake-state-quota-agent-test.service; "
+            "systemctl start tentaflake-workspace-quota-agent-test.service; "
+            "systemctl start tentaflake-worker-agent-test.path"
         )
 
     with subtest("git remote policy rejects a repository remote changed by the agent"):
-        repository = "/var/lib/hermes-test/workspace/remote-fixture"
+        repository = "/var/lib/tentaflake/agents/test/workspace/remote-fixture"
         machine.succeed(f"git init -q {repository}")
         machine.succeed(
             f"git -C {repository} remote add origin "
@@ -671,9 +669,9 @@
         )
 
     with subtest("credentials stay private and stable across service restarts"):
-        credentials = "tentaflake-broker-credentials-zeroclaw-assistant.service"
-        runtime_dir = "/run/tentaflake-broker/zeroclaw-assistant"
-        broker = "tentaflake-broker-fetch-zeroclaw-assistant.service"
+        credentials = "tentaflake-broker-credentials-agent-assistant.service"
+        runtime_dir = "/run/tentaflake-broker/agent-assistant"
+        broker = "tentaflake-broker-fetch-agent-assistant.service"
         machine.wait_for_unit(credentials)
         machine.succeed(f"test $(stat -c %a {runtime_dir}) = 700")
         for filename in ("agent-token", "agent.env"):
@@ -699,18 +697,18 @@
     with subtest("fetch broker rejects unauthenticated and SSRF requests"):
         machine.succeed(
             "systemctl start "
-            "tentaflake-broker-fetch-zeroclaw-assistant"
+            "tentaflake-broker-fetch-agent-assistant"
         )
         machine.wait_for_unit(
-            "tentaflake-broker-fetch-zeroclaw-assistant.service"
+            "tentaflake-broker-fetch-agent-assistant.service"
         )
         wait_for_broker_health(
             machine,
             "10.203.30.1:7811",
             "systemctl --no-pager --full status "
-            "tentaflake-broker-fetch-zeroclaw-assistant.service; "
+            "tentaflake-broker-fetch-agent-assistant.service; "
             "journalctl --no-pager -b -u "
-            "tentaflake-broker-fetch-zeroclaw-assistant.service -n 100",
+            "tentaflake-broker-fetch-agent-assistant.service -n 100",
         )
         broker_report = machine.succeed(
             "tentaflake doctor --security --json"
@@ -718,7 +716,7 @@
         assert "TFSEC-035" not in broker_report, broker_report
         assert "TFSEC-036" not in broker_report, broker_report
         machine.succeed(
-            "docker network inspect tf-zeroclaw-assistant | "
+            "docker network inspect tf-agent-assistant | "
             "jq -e '.[0].Internal == true and "
             "(.[0].Options[\"com.docker.network.bridge.name\"] "
             "| startswith(\"tfb-\"))'"
@@ -736,7 +734,7 @@
         assert unauth == "401", unauth
         token = machine.succeed(
             "cat /run/tentaflake-broker/"
-            "zeroclaw-assistant/agent-token"
+            "agent-assistant/agent-token"
         ).strip()
         ssrf = machine.succeed(
             "curl -sS -o /tmp/ssrf -w '%{http_code}' "
@@ -755,7 +753,7 @@
         )
         machine.succeed(
             "systemctl stop "
-            "tentaflake-broker-fetch-zeroclaw-assistant.service"
+            "tentaflake-broker-fetch-agent-assistant.service"
         )
         machine.succeed(
             "printf '%s\\n' 'virtual-fixture-key' > "
@@ -809,7 +807,7 @@
         )
         scoped_client = (
             "docker run --rm --runtime=runsc "
-            "--network=tf-zeroclaw-assistant --dns=127.0.0.1 "
+            "--network=tf-agent-assistant --dns=127.0.0.1 "
             "--read-only --user=65534:65534 --cap-drop=ALL "
             "--security-opt=no-new-privileges:true "
             "--security-opt=apparmor=docker-default "
@@ -856,18 +854,18 @@
         )
         machine.succeed(
             "systemctl start "
-            "tentaflake-broker-fetch-zeroclaw-assistant.service"
+            "tentaflake-broker-fetch-agent-assistant.service"
         )
         machine.wait_for_unit(
-            "tentaflake-broker-fetch-zeroclaw-assistant.service"
+            "tentaflake-broker-fetch-agent-assistant.service"
         )
         wait_for_broker_health(
             machine,
             "10.203.30.1:7811",
             "systemctl --no-pager --full status "
-            "tentaflake-broker-fetch-zeroclaw-assistant.service; "
+            "tentaflake-broker-fetch-agent-assistant.service; "
             "journalctl --no-pager -b -u "
-            "tentaflake-broker-fetch-zeroclaw-assistant.service -n 100",
+            "tentaflake-broker-fetch-agent-assistant.service -n 100",
         )
 
     with subtest("an external node cannot reach agent or broker listeners"):
@@ -880,7 +878,7 @@
     with subtest("podman uses runsc and the exact internal bridge"):
         unit = unit_with_start_script(
             podman,
-            "podman-zeroclaw-podman.service",
+            "podman-agent-podman.service",
         )
         normalized_unit = " ".join(
             unit.replace(chr(92) + "\n", " ").split()
@@ -898,10 +896,10 @@
             assert flag in normalized_unit, f"missing {flag}:\n{unit}"
         podman.succeed(
             "systemctl start "
-            "tentaflake-broker-network-zeroclaw-podman"
+            "tentaflake-broker-network-agent-podman"
         )
         podman.succeed(
-            "podman network inspect tf-zeroclaw-podman | "
+            "podman network inspect tf-agent-podman | "
             "jq -e '.[0].internal == true and "
             "(.[0].network_interface | startswith(\"tfb-\"))'"
         )
@@ -909,7 +907,7 @@
             "podman load < /etc/tentaflake/podman-test-image"
         )
         check_live_doctor(podman, "podman", "tentaflake-podman-test:latest",
-                          "tf-zeroclaw-podman", "10.203.50.1:7811")
+                          "tf-agent-podman", "10.203.50.1:7811")
         podman_base = (
             "podman run --rm --runtime runsc "
             "--network none --read-only "
@@ -925,7 +923,7 @@
         )
         podman.succeed(
             podman_base
-            + "sh -c \"grep -q '^CapEff:[[:space:]]*0*' "
+            + "sh -c \"grep -Eq '^CapEff:[[:space:]]*0+$' "
             + "/proc/self/status\""
         )
         podman.fail(podman_base + "sh -c 'touch /etc/deny'")
@@ -937,7 +935,7 @@
         )
 
     with subtest("broker recovery preserves dependents and respects an explicit stop"):
-        unit = "tentaflake-broker-fetch-zeroclaw-assistant.service"
+        unit = "tentaflake-broker-fetch-agent-assistant.service"
         dependent = "tentaflake-broker-dependent-fixture.service"
         machine.succeed(
             f"systemd-run --unit={dependent} "
@@ -1012,7 +1010,7 @@
         base = (
             "docker run --rm "
             "--runtime=runsc "
-            "--network=tf-zeroclaw-assistant "
+            "--network=tf-agent-assistant "
             "--dns=127.0.0.1 "
             "--read-only "
             "--user=65534:65534 "
@@ -1045,11 +1043,11 @@
         )
         machine.succeed("docker rm --force tf-resource-limits")
         check_live_doctor(machine, "docker", "tentaflake-network-test:latest",
-                          "tf-zeroclaw-assistant", "10.203.30.1:7811")
+                          "tf-agent-assistant", "10.203.30.1:7811")
         machine.succeed(base + "sh -c 'test $(id -u) = 65534'")
         machine.succeed(
             base
-            + "sh -c \"grep -q '^CapEff:[[:space:]]*0*' "
+            + "sh -c \"grep -Eq '^CapEff:[[:space:]]*0+$' "
             + "/proc/self/status\""
         )
         machine.succeed(
@@ -1124,8 +1122,8 @@
         assert "DOCKER_HOST=" not in environment
         machine.succeed(
             base
-            + "sh -c 'test ! -e /var/lib/hermes-test "
-            + "-a ! -e /var/lib/zeroclaw-assistant "
+            + "sh -c 'test ! -e /var/lib/tentaflake/agents/test "
+            + "-a ! -e /var/lib/tentaflake/agents/assistant "
             + "-a ! -e /run/docker.sock'"
         )
         machine.succeed(
@@ -1134,18 +1132,18 @@
         )
 
     with subtest("disposable worker enforces policy and approval outside the agent"):
-        inbox = "/var/lib/hermes-test/workspace/.tentaflake-worker/inbox"
-        results = "/var/lib/tentaflake-worker-hermes-test/results"
-        machine.succeed("systemctl is-active tentaflake-worker-hermes-test.path")
+        inbox = "/var/lib/tentaflake/agents/test/workspace/.tentaflake-worker/inbox"
+        results = "/var/lib/tentaflake-worker-agent-test/results"
+        machine.succeed("systemctl is-active tentaflake-worker-agent-test.path")
         machine.succeed("systemctl is-active tentaflake-worker-image.service")
         machine.succeed("getent group tfw-gid-10000 | grep -F ':x:10000:'")
         machine.succeed(
             "test $(systemctl show -P Group "
-            "tentaflake-worker-hermes-test.service) = tfw-gid-10000"
+            "tentaflake-worker-agent-test.service) = tfw-gid-10000"
         )
         worker_policy = machine.succeed(
             "systemctl cat "
-            "tentaflake-worker-hermes-test.service"
+            "tentaflake-worker-agent-test.service"
         )
         assert "CAP_DAC_READ_SEARCH" in worker_policy, worker_policy
         assert "CAP_CHOWN" not in worker_policy, worker_policy
@@ -1153,7 +1151,7 @@
         assert "StartLimitBurst=" not in worker_policy, worker_policy
         machine.succeed(
             "test $(systemctl show -P Group "
-            "tentaflake-worker-zeroclaw-assistant.service) = nogroup"
+            "tentaflake-worker-agent-assistant.service) = nogroup"
         )
         machine.succeed("test $(stat -c %a " + inbox + ") = 770")
         machine.succeed(
@@ -1167,7 +1165,7 @@
             '"timeout_seconds":5}\nEOF'
         )
         result_file = results + "/local_1/result.json"
-        worker_unit = "tentaflake-worker-hermes-test.service"
+        worker_unit = "tentaflake-worker-agent-test.service"
         wait_for_worker_file(machine, worker_unit, result_file)
         machine.succeed(
             "jq -e '.status == \"succeeded\" and "
@@ -1180,8 +1178,8 @@
             + "/local_1/job.log; exit 1; }"
         )
         machine.succeed("test $(cat " + results + "/local_1/artifacts/uid) = 10000")
-        machine.fail("docker inspect tfw-hermes-test-local_1")
-        machine.fail("test -e /var/lib/tentaflake-worker-hermes-test/jobs/local_1")
+        machine.fail("docker inspect tfw-agent-test-local_1")
+        machine.fail("test -e /var/lib/tentaflake-worker-agent-test/jobs/local_1")
 
         machine.succeed(
             "cat > " + inbox + "/timeout_1.json <<'EOF'\n"
@@ -1200,7 +1198,7 @@
             ".timed_out == true' "
             + results + "/timeout_1/result.json"
         )
-        machine.fail("docker inspect tfw-hermes-test-timeout_1")
+        machine.fail("docker inspect tfw-agent-test-timeout_1")
 
         machine.succeed(
             "cat > " + inbox + "/message_1.json <<'EOF'\n"
@@ -1212,12 +1210,12 @@
         wait_for_worker_file(
             machine,
             worker_unit,
-            "/var/lib/tentaflake-worker-hermes-test/pending/message_1.json",
+            "/var/lib/tentaflake-worker-agent-test/pending/message_1.json",
         )
         machine.fail("test -e " + results + "/message_1")
         machine.succeed(
             "tentaflake-worker --config "
-            "/etc/tentaflake/workers/hermes-test.json approve message_1"
+            "/etc/tentaflake/workers/agent-test.json approve message_1"
         )
         machine.succeed(
             "jq -e '.status == \"succeeded\"' "
@@ -1245,13 +1243,13 @@
         wait_for_worker_file(
             machine,
             worker_unit,
-            "/var/lib/tentaflake-worker-hermes-test/"
+            "/var/lib/tentaflake-worker-agent-test/"
             "pending/prompt_injection_1.json",
         )
         machine.fail("test -e /var/lib/tentaflake-prompt-owned")
         machine.succeed(
             "tentaflake-worker --config "
-            "/etc/tentaflake/workers/hermes-test.json "
+            "/etc/tentaflake/workers/agent-test.json "
             "deny prompt_injection_1"
         )
         machine.succeed(
@@ -1274,16 +1272,16 @@
         )
         machine.succeed("jq -e '.status == \"rejected\"' " + results + "/forbidden_1/result.json")
 
-        audit = machine.succeed("cat /var/lib/tentaflake-worker-hermes-test/audit.jsonl")
+        audit = machine.succeed("cat /var/lib/tentaflake-worker-agent-test/audit.jsonl")
         assert "approval-required" in audit, audit
         assert '"event":"approved"' in audit, audit
 
     with subtest("worker crash recovery never replays claimed or completed jobs"):
-        state = "/var/lib/tentaflake-worker-hermes-test"
-        inbox = "/var/lib/hermes-test/workspace/.tentaflake-worker/inbox"
-        worker = "tentaflake-worker-hermes-test.service"
-        watcher = "tentaflake-worker-hermes-test.path"
-        command = "tentaflake-worker --config /etc/tentaflake/workers/hermes-test.json drain"
+        state = "/var/lib/tentaflake-worker-agent-test"
+        inbox = "/var/lib/tentaflake/agents/test/workspace/.tentaflake-worker/inbox"
+        worker = "tentaflake-worker-agent-test.service"
+        watcher = "tentaflake-worker-agent-test.path"
+        command = "tentaflake-worker --config /etc/tentaflake/workers/agent-test.json drain"
         machine.succeed("systemctl stop " + watcher + " " + worker)
         original = machine.succeed("sha256sum " + state + "/results/local_1/result.json")
         machine.succeed(
@@ -1302,7 +1300,7 @@
         )
         machine.wait_until_succeeds(
             "test -f " + state + "/running/crash_1.json && "
-            "test $(docker inspect --format='{{.State.Running}}' tfw-hermes-test-crash_1) = true",
+            "test $(docker inspect --format='{{.State.Running}}' tfw-agent-test-crash_1) = true",
             timeout=45,
         )
         machine.succeed("systemctl stop " + watcher)
@@ -1311,14 +1309,16 @@
         machine.succeed("test -f " + state + "/running/crash_1.json")
         machine.succeed(command)
         machine.succeed("jq -e '.status == \"interrupted\" and .artifacts_available == false' " + state + "/results/crash_1/result.json")
-        machine.fail("docker inspect tfw-hermes-test-crash_1")
+        machine.fail("docker inspect tfw-agent-test-crash_1")
         machine.fail("test -e " + state + "/running/crash_1.json")
         machine.fail("test -e " + state + "/jobs/crash_1")
         machine.succeed(command)
         machine.succeed("systemctl reset-failed " + worker)
         machine.succeed(
             "jq -e '.max_inbox_entries == 4 and .max_queue_entries == 2 and "
-            ".max_queue_bytes == 1048576' /etc/tentaflake/workers/hermes-test.json"
+            ".max_queue_bytes == 1048576 and .max_retained_results == 1024 and "
+            ".max_retained_result_bytes == 4294967296 and .max_retained_entries == 1000000' "
+            "/etc/tentaflake/workers/agent-test.json"
         )
         for number in (1, 2, 3):
             machine.succeed(
@@ -1331,7 +1331,7 @@
         machine.succeed("test -f " + state + "/pending/capacity_2.json")
         machine.succeed("test -f " + inbox + "/capacity_3.json")
         machine.fail("test -e " + state + "/pending/capacity_3.json")
-        operator = "tentaflake-worker --config /etc/tentaflake/workers/hermes-test.json "
+        operator = "tentaflake-worker --config /etc/tentaflake/workers/agent-test.json "
         machine.succeed(operator + "deny capacity_1")
         machine.succeed(operator + "deny capacity_2")
         machine.succeed(command)
@@ -1360,11 +1360,11 @@
         )
         machine.succeed(
             "printf '%s\\n' 'restore-fixture' > "
-            "/var/lib/hermes-test/restore-fixture"
+            "/var/lib/tentaflake/agents/test/restore-fixture"
         )
         machine.succeed(
             "printf '%s\\n' 'workspace-restore-fixture' > "
-            "/var/lib/hermes-test/workspace/restore-fixture"
+            "/var/lib/tentaflake/agents/test/workspace/restore-fixture"
         )
         machine.succeed(
             "systemctl start "
@@ -1403,12 +1403,12 @@
             "restore latest --target /tmp/restore"
         )
         restored = machine.succeed(
-            "cat /tmp/restore/var/lib/hermes-test/"
+            "cat /tmp/restore/var/lib/tentaflake/agents/test/"
             "restore-fixture"
         ).strip()
         assert restored == "restore-fixture", restored
         restored_workspace = machine.succeed(
-            "cat /tmp/restore/var/lib/hermes-test/workspace/restore-fixture"
+            "cat /tmp/restore/var/lib/tentaflake/agents/test/workspace/restore-fixture"
         ).strip()
         assert restored_workspace == "workspace-restore-fixture", restored_workspace
 
@@ -1416,13 +1416,13 @@
         machine.succeed(
             "cp -p /var/lib/tentaflake-backup/last-success /tmp/backup-last-success; "
             "mount_unit=$(systemd-escape --path --suffix=mount "
-            "/var/lib/hermes-test/workspace); "
+            "/var/lib/tentaflake/agents/test/workspace); "
             "systemctl stop \"$mount_unit\"; "
-            "mv /var/lib/tentaflake-workspace-volumes/hermes-test.img "
-            "/tmp/hermes-test.img; "
-            "mkdir /var/lib/tentaflake-workspace-volumes/hermes-test.img"
+            "mv /var/lib/tentaflake-workspace-volumes/agent-test.img "
+            "/tmp/agent-test.img; "
+            "mkdir /var/lib/tentaflake-workspace-volumes/agent-test.img"
         )
-        machine.fail("findmnt --mountpoint /var/lib/hermes-test/workspace")
+        machine.fail("findmnt --mountpoint /var/lib/tentaflake/agents/test/workspace")
         machine.fail("systemctl start restic-backups-tentaflake.service")
         machine.succeed(
             "test \"$(stat -c %y /var/lib/tentaflake-backup/last-success)\" = "
@@ -1434,11 +1434,11 @@
             "snapshots --json | jq -e 'length == 1'"
         )
         machine.succeed(
-            "rmdir /var/lib/tentaflake-workspace-volumes/hermes-test.img; "
-            "mv /tmp/hermes-test.img "
-            "/var/lib/tentaflake-workspace-volumes/hermes-test.img; "
+            "rmdir /var/lib/tentaflake-workspace-volumes/agent-test.img; "
+            "mv /tmp/agent-test.img "
+            "/var/lib/tentaflake-workspace-volumes/agent-test.img; "
             "systemctl start restic-backups-tentaflake.service; "
-            "systemctl start tentaflake-workspace-quota-hermes-test.service"
+            "systemctl start tentaflake-workspace-quota-agent-test.service"
         )
         machine.succeed(
             "restic -r /var/lib/tentaflake-test-restic "
@@ -1498,48 +1498,48 @@
             "cat /proc/sys/kernel/random/boot_id"
         ).strip()
         machine.wait_for_unit(
-            "tentaflake-workspace-quota-hermes-test.service"
+            "tentaflake-workspace-quota-agent-test.service"
         )
-        machine.wait_for_unit("tentaflake-state-quota-hermes-test.service")
-        assert machine.succeed("cat /var/lib/hermes-test/restore-fixture").strip() == "restore-fixture"
-        assert machine.succeed("cat /var/lib/hermes-test/workspace/restore-fixture").strip() == "workspace-restore-fixture"
+        machine.wait_for_unit("tentaflake-state-quota-agent-test.service")
+        assert machine.succeed("cat /var/lib/tentaflake/agents/test/restore-fixture").strip() == "restore-fixture"
+        assert machine.succeed("cat /var/lib/tentaflake/agents/test/workspace/restore-fixture").strip() == "workspace-restore-fixture"
         machine.wait_for_unit(
-            "tentaflake-worker-hermes-test.path"
+            "tentaflake-worker-agent-test.path"
         )
         machine.wait_for_unit(
-            "tentaflake-broker-fetch-zeroclaw-assistant.service"
+            "tentaflake-broker-fetch-agent-assistant.service"
         )
         wait_for_broker_health(
             machine,
             "10.203.30.1:7811",
             "systemctl --no-pager --full status "
-            "tentaflake-broker-fetch-zeroclaw-assistant.service; "
+            "tentaflake-broker-fetch-agent-assistant.service; "
             "journalctl --no-pager -b -u "
-            "tentaflake-broker-fetch-zeroclaw-assistant.service -n 100",
+            "tentaflake-broker-fetch-agent-assistant.service -n 100",
         )
         assert "--network=none" in unit_with_start_script(
-            machine, "docker-hermes-test.service"
+            machine, "docker-agent-test.service"
         )
         assert "--runtime=runsc" in unit_with_start_script(
-            machine, "docker-zeroclaw-assistant.service"
+            machine, "docker-agent-assistant.service"
         )
         machine.succeed(
-            "docker network inspect tf-zeroclaw-assistant | "
+            "docker network inspect tf-agent-assistant | "
             "jq -e '.[0].Internal == true'"
         )
 
     with subtest("legacy ext4 state and workspace images fail without being reformatted"):
         for kind, image in [
-            ("workspace", "/var/lib/tentaflake-workspace-volumes/hermes-test.img"),
-            ("state", "/var/lib/tentaflake-workspace-volumes/state/hermes-test.img"),
+            ("workspace", "/var/lib/tentaflake-workspace-volumes/agent-test.img"),
+            ("state", "/var/lib/tentaflake-workspace-volumes/state/agent-test.img"),
         ]:
             machine.succeed(
-                "mount_unit=$(systemd-escape --path --suffix=mount /var/lib/hermes-test/workspace); "
+                "mount_unit=$(systemd-escape --path --suffix=mount /var/lib/tentaflake/agents/test/workspace); "
                 "systemctl stop \"$mount_unit\""
             )
             if kind == "state":
                 machine.succeed(
-                    "mount_unit=$(systemd-escape --path --suffix=mount /var/lib/hermes-test); "
+                    "mount_unit=$(systemd-escape --path --suffix=mount /var/lib/tentaflake/agents/test); "
                     "systemctl stop \"$mount_unit\""
                 )
             machine.succeed(
@@ -1547,7 +1547,7 @@
                 f"truncate -s 128M {image}; mkfs.ext4 -F -q {image}"
             )
             before = machine.succeed(f"sha256sum {image}").split()[0]
-            prepare = f"tentaflake-{kind}-quota-prepare-hermes-test.service"
+            prepare = f"tentaflake-{kind}-quota-prepare-agent-test.service"
             machine.fail(f"systemctl start {prepare}")
             assert machine.succeed(f"sha256sum {image}").split()[0] == before
             machine.succeed(f"blkid -p -s TYPE -o value {image} | grep -Fx ext4")
@@ -1558,40 +1558,40 @@
             machine.succeed(
                 f"rm {image}; mv {image}.btrfs-saved {image}; "
                 f"systemctl reset-failed {prepare}; "
-                "systemctl start tentaflake-workspace-quota-hermes-test.service"
+                "systemctl start tentaflake-workspace-quota-agent-test.service"
             )
-            machine.succeed("findmnt --mountpoint /var/lib/hermes-test -n -o FSTYPE | grep -Fx btrfs")
-            machine.succeed("findmnt --mountpoint /var/lib/hermes-test/workspace -n -o FSTYPE | grep -Fx btrfs")
-            assert machine.succeed("cat /var/lib/hermes-test/restore-fixture").strip() == "restore-fixture"
-            assert machine.succeed("cat /var/lib/hermes-test/workspace/restore-fixture").strip() == "workspace-restore-fixture"
+            machine.succeed("findmnt --mountpoint /var/lib/tentaflake/agents/test -n -o FSTYPE | grep -Fx btrfs")
+            machine.succeed("findmnt --mountpoint /var/lib/tentaflake/agents/test/workspace -n -o FSTYPE | grep -Fx btrfs")
+            assert machine.succeed("cat /var/lib/tentaflake/agents/test/restore-fixture").strip() == "restore-fixture"
+            assert machine.succeed("cat /var/lib/tentaflake/agents/test/workspace/restore-fixture").strip() == "workspace-restore-fixture"
 
     with subtest("quota preparation refuses a source symlink without changing its target"):
         machine.succeed(
-            "systemctl stop $(systemd-escape --path --suffix=mount /var/lib/hermes-test/workspace); "
-            "systemctl stop $(systemd-escape --path --suffix=mount /var/lib/hermes-test); "
-            "mv /var/lib/hermes-test /var/lib/hermes-test-offline; "
-            "ln -s /var/lib/quota-unrelated /var/lib/hermes-test"
+            "systemctl stop $(systemd-escape --path --suffix=mount /var/lib/tentaflake/agents/test/workspace); "
+            "systemctl stop $(systemd-escape --path --suffix=mount /var/lib/tentaflake/agents/test); "
+            "mv /var/lib/tentaflake/agents/test /var/lib/tentaflake/agents/test-offline; "
+            "ln -s /var/lib/quota-unrelated /var/lib/tentaflake/agents/test"
         )
-        machine.fail("systemctl start tentaflake-state-quota-prepare-hermes-test.service")
+        machine.fail("systemctl start tentaflake-state-quota-prepare-agent-test.service")
         machine.succeed(
             "test $(stat -c %a /var/lib/quota-unrelated) = 755; "
             "test $(cat /var/lib/quota-unrelated/marker) = preserve; "
-            "journalctl -u tentaflake-state-quota-prepare-hermes-test.service --no-pager "
+            "journalctl -u tentaflake-state-quota-prepare-agent-test.service --no-pager "
             "| grep -F 'refusing symlink or non-directory quota source'"
         )
         machine.succeed(
-            "rm /var/lib/hermes-test; mv /var/lib/hermes-test-offline /var/lib/hermes-test; "
-            "printf '%s' preserve-unmounted > /var/lib/hermes-test/unmounted-state-note; "
-            "systemctl reset-failed tentaflake-state-quota-prepare-hermes-test.service"
+            "rm /var/lib/tentaflake/agents/test; mv /var/lib/tentaflake/agents/test-offline /var/lib/tentaflake/agents/test; "
+            "printf '%s' preserve-unmounted > /var/lib/tentaflake/agents/test/unmounted-state-note; "
+            "systemctl reset-failed tentaflake-state-quota-prepare-agent-test.service"
         )
-        machine.fail("systemctl start tentaflake-state-quota-prepare-hermes-test.service")
+        machine.fail("systemctl start tentaflake-state-quota-prepare-agent-test.service")
         machine.succeed(
-            "test $(cat /var/lib/hermes-test/unmounted-state-note) = preserve-unmounted; "
-            "rm /var/lib/hermes-test/unmounted-state-note; "
-            "systemctl reset-failed tentaflake-state-quota-prepare-hermes-test.service; "
-            "systemctl start tentaflake-workspace-quota-hermes-test.service"
+            "test $(cat /var/lib/tentaflake/agents/test/unmounted-state-note) = preserve-unmounted; "
+            "rm /var/lib/tentaflake/agents/test/unmounted-state-note; "
+            "systemctl reset-failed tentaflake-state-quota-prepare-agent-test.service; "
+            "systemctl start tentaflake-workspace-quota-agent-test.service"
         )
-        assert machine.succeed("cat /var/lib/hermes-test/restore-fixture").strip() == "restore-fixture"
+        assert machine.succeed("cat /var/lib/tentaflake/agents/test/restore-fixture").strip() == "restore-fixture"
 
   '';
 }

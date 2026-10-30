@@ -76,7 +76,7 @@ and persistence across reboot. Balanced disables OpenSSH, so do not assume an
 SSH host key exists automatically.
 
 Encrypted `.age` files can enter the store. Plaintext must never enter Nix
-settings, JSON, `extraEnvironment`, seed directories or derivations; do not
+settings, TOML/JSON, `extraEnvironment`, seed directories or derivations; do not
 use `builtins.readFile` to load a runtime secret.
 
 ## Connect only the host broker
@@ -84,7 +84,7 @@ use `builtins.readFile` to load a runtime secret.
 In a module with `config` available:
 
 ```nix
-tentaflake.broker.agents.hermes-coding = {
+tentaflake.broker.agents.agent-coding = {
   enable = true;
   subnet = "10.203.20.0/30";
   gateway = "10.203.20.1";
@@ -120,7 +120,7 @@ On the activated host, check the exact path and intended reader:
 
 ```sh
 sudo stat -Lc '%U %G %a %n' /run/agenix/llm-provider
-sudo systemctl status tentaflake-broker-llm-hermes-coding.service --no-pager
+sudo systemctl status tentaflake-broker-llm-agent-coding.service --no-pager
 tentaflake doctor --security
 ```
 
@@ -132,7 +132,7 @@ data for verification.
 ## Dev-only direct environment files
 
 A trusted host may explicitly choose `tentaflake.security.profile = "dev"`
-and use `agenixFile` on Hermes/ZeroClaw. Declare a separate encrypted environment
+and use `agenixFile` where the selected adapter supports it. Declare an encrypted environment
 file containing the pinned runtime's supported variables; use the same
 recipient/module separation and restrict its host reader.
 

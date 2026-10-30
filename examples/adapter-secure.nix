@@ -1,8 +1,11 @@
-# Import with the exported mkAgent helper and operator-reviewed non-secret policy.
+# Load instances once from JSON; attach separate operator-reviewed host policy.
 # The operator supplies VPN configuration/readiness and runtime credentials.
-# This example uses the compatible Hermes runtime. OpenClaw cannot run yet.
+# Select a runnable adapter with model/Research hooks and matching broker settings.
 {
-  mkAgent,
+  agentsFromData,
+  agentsFile,
+  agentName ? "coding",
+  # Must match the selected TOML instance's native model configuration.
   model,
   inputMicrousdPerMillion,
   outputMicrousdPerMillion,
@@ -11,62 +14,66 @@
   vpnInterface,
   researchPolicy,
 }:
-{ lib, ... }:
-{
-  imports = [
-    (mkAgent {
-      adapter = "hermes";
-      name = "assistant";
-      autoStart = true;
-      # Only the host-generated virtual broker key enters the container.
-      settings.model = {
-        default = model;
-        provider = "custom";
-        base_url = "http://10.203.20.1:7810/v1";
+let
+  agentModules = agentsFromData { file = agentsFile; };
+  hostPolicy =
+    { config, lib, ... }:
+    let
+      agentId = "agent-${agentName}";
+      instance = config.tentaflake.agentInstances.${agentId};
+    in
+    {
+      assertions = [
+        {
+          assertion = instance.runnable;
+          message = "The secure example requires a runnable JSON instance named ${agentName}, not a refusal scaffold.";
+        }
+      ];
+      tentaflake = {
+        security.profile = "balanced";
+        broker.agents.${agentId} = {
+          enable = true;
+          networkName = "tf-${agentId}";
+          subnet = "10.203.20.0/30";
+          gateway = "10.203.20.1";
+          llm = {
+            enable = true;
+            inherit providerCredentialFile upstreamBaseUrl;
+            port = 7810;
+            maxCompletionTokens = 4096;
+            allowedModels = [
+              {
+                name = model;
+                inherit inputMicrousdPerMillion outputMicrousdPerMillion;
+              }
+            ];
+          };
+          fetch.enable = false;
+        };
+        worker.agents.${agentId} = {
+          enable = true;
+          inherit (instance) workspace;
+          containerUid = instance.uid;
+          containerGid = instance.gid;
+        };
+        workspaceQuota.agents.${agentId} = {
+          enable = true;
+          inherit (instance) workspace;
+          sizeMiB = 8192;
+          ownerUid = instance.uid;
+          ownerGid = instance.gid;
+        };
+        research.agents.${agentId}.uid = 62101;
       };
-    })
-  ];
-  tentaflake = {
-    security.profile = "balanced";
-    broker.agents.hermes-assistant = {
-      enable = true;
-      networkName = "tf-hermes-assistant";
-      subnet = "10.203.20.0/30";
-      gateway = "10.203.20.1";
-      llm = {
+      services.secureResearch = researchPolicy // {
         enable = true;
-        inherit providerCredentialFile upstreamBaseUrl;
-        port = 7810;
-        maxCompletionTokens = 4096;
-        allowedModels = [
-          {
-            name = model;
-            inherit inputMicrousdPerMillion outputMicrousdPerMillion;
-          }
-        ];
+        inherit vpnInterface;
+        serviceUid = 4201;
+        egressUid = 4202;
+        summarizeOrder = lib.mkForce [ ];
       };
-      fetch.enable = false;
     };
-    worker.agents.hermes-assistant = {
-      enable = true;
-      workspace = "/var/lib/hermes-assistant/workspace";
-      containerUid = 10000;
-      containerGid = 10000;
-    };
-    workspaceQuota.agents.hermes-assistant = {
-      enable = true;
-      workspace = "/var/lib/hermes-assistant/workspace";
-      sizeMiB = 8192;
-      ownerUid = 10000;
-      ownerGid = 10000;
-    };
-    research.agents.hermes-assistant.uid = 62101;
-  };
-  services.secureResearch = researchPolicy // {
-    enable = true;
-    inherit vpnInterface;
-    serviceUid = 4201;
-    egressUid = 4202;
-    summarizeOrder = lib.mkForce [ ];
-  };
+in
+{
+  imports = agentModules ++ [ hostPolicy ];
 }

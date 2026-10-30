@@ -1,143 +1,106 @@
 # Build boundaries and contributor checks
 
-Start with `just fast`. It runs formatting, Nix lint, ShellCheck, Rust
-formatting/Clippy/unit tests, CI routing, small no-build evaluator fixtures and actionlint.
-It does not prepare Research closures, evaluate configurations/generated flakes,
-or build Nix packages, images, systems or VMs. Loading the pinned development
-environment can still realize contributor tools.
+`just` loads pinned contributor tools; direct Cargo/lint commands need
+`nix develop`. Tool realization may download/build dependencies even for a
+source check. Evaluation, builds, activation and live acceptance are separate.
+No check or successful build authorizes host activation.
 
-CI and the fast gate run `just formatter-test`: `just fmt-check` uses pinned
-`nixfmt --check` on Git-selected regular Nix files, then real tracked/untracked
-fixtures verify refusal leaves their bytes unchanged. `just fmt` remains
-the formatting command; treefmt's `--ci` writes changes before reporting failure.
+## Choose the gate
 
-Use `just eval` explicitly for read-only flake evaluation, including focused
-adapter evaluation and the required non-VM Research closure preparation.
+| Gate | Evidence |
+|---|---|
+| `just fast` | Formatting/lint, ShellCheck, Rust format/Clippy/unit checks, optional Unix host API tests, routing/workflow checks, small no-build fixtures and catalog drift |
+| `just catalog-check` | Pure adapter presets agree with generated CLI JSON/docs, using read-only `nix-instantiate --eval --strict --json --readonly-mode`; no nixpkgs/host build |
+| `just fmt-check` | Pinned `nixfmt --check` over Git-selected regular Nix files, no writes |
+| `just eval` | Sequential complete flake projections after exact non-VM Research closure and Rust source-fileset preparation |
+| `just generated-flake` | Installer-generated consumer evaluation |
+| `just host-api-test` | Unix API protocol with temporary state/fake host commands |
+| `just security` | Current OSV dependency advisories plus pinned offline Semgrep rules |
+| `just ci` / `just e2e` | Complete local gate including VM suites and installer ISO |
+| `just e2e-devcontainer` | Locked Dev Container rebuild and lint smoke test |
+| `just e2e-installer` / `just e2e-run-vm` | Install/boot an isolated QCOW2 VM, never a host block device |
 
-CI and `just eval` use `scripts/eval_flake.py` after that preparation. It discovers
-the full output/check inventory without evaluating derivations, then runs
-`nix flake check --no-build` in sequential projections: at most four checks,
-one host with its matching check/package aliases, or one remaining output group.
-The installed-host check and installer ISO package stay with their host, avoiding
-duplicate host evaluation. Source inputs retain Git filtering and existing pins;
-only the temporary wrapper writes a lock. Each evaluator exits before the next.
-The local Git input explicitly allows shallow history (`shallow=1`), because CI's
-depth-one checkout has no complete revision count. `just ci-policy` and the
-Nix-enabled static CI job exercise a real shallow local clone: clean and dirty
-tracked files, ignored/untracked exclusion, preserved input pins and lock bytes,
-and upstream rejection of malformed outputs. This fixture requires no downloads
-or builds; planning tests still run separately in the job without Nix.
-This bounds the amount of evaluation retained together, not an individual
-fixture's memory or duration. CI run `38463440894` spent over 19 minutes in the
-previous whole-flake evaluation after Research closure preparation; this was
-observed elapsed time, without evidence of a hang or failure.
+Fast checks do not evaluate host configurations/generated flakes, prepare
+Research closures or build runtime images/packages/systems/VMs. `just fmt`
+rewrites; treefmt's `--ci` can write before failing. `just formatter-test` uses
+real tracked/untracked fixtures to verify read-only refusal preserves bytes.
+Dev Container updates also need their package build to catch offline-cache drift.
 
-`just generated-flake` validates the installer-generated flake separately.
-`checks.*.agent-adapters` covers compatible mappings, JSON, inventory, lazy
-selection, stopped OpenClaw and Pi scaffolds, quota declarations and generated
-quota-helper refusal regressions without mounts. `checks.*.hardening-journald`
-separately covers the hardening journald defaults, host overrides and the legacy
-`extraConfig` refusal. `just ci`/`just e2e` run the
-complete gate, both VM suites and the installer ISO. Run an affected VM suite
-when changing runtime or security behavior; use the ISO gate when changing
-installation.
+## Configuration and runtime fixtures
 
-## Rust cache boundaries
+CI and `just eval` use `scripts/eval_flake.py`. It discovers the complete output
+inventory, then runs sequential `nix flake check --no-build` projections: at
+most four checks, one host with matching check/package aliases, or a remaining
+output group. Each evaluator exits before the next. Keep all outputs/checks,
+existing pins and ordinary Git source filtering; only the temporary wrapper
+writes a lock. `shallow=1` supports CI's depth-one source. The real-Git fixture
+checks clean/dirty tracked sources, ignored/untracked exclusion, preserved
+input/lock bytes and upstream rejection of malformed outputs without builds.
+This bounds retained evaluation, not each fixture's memory or duration.
 
-Cargo remains the Rust build definition. `[workspace.package]` in `Cargo.toml`
-supplies the shared version; each crate supplies its package description.
-Nix packages and the worker image read those manifests. A replaced worker
-image supplies its default local reference through `imageName`/`imageTag`;
-images without those attributes require an explicit `worker.imageReference`.
+Research evaluation needs exact closure derivations prepared first. The Rust
+source-isolation check also reads generated filesets, which must exist in a cold
+store before read-only evaluation. `just eval` and CI prepare these non-VM
+checks without compiling Rust packages. Do not expose the whole Nix store or
+remove source checks to make evaluation pass. The normal full flake check
+permits required builds.
 
-Each Rust Nix source contains root Cargo files, all member manifests, and the
-selected crate's complete source. Cargo can resolve the workspace while an
-unrelated crate source edit leaves the other package derivations unchanged.
-Shared manifests, dependencies or toolchain changes still invalidate affected
-builds. Declare additional root build inputs explicitly; add shared/path
-dependencies to the fileset when introducing them.
+Focused adapter checks cover common IDs, TOML rejection/validation, lazy
+selection, metadata, scaffold refusal and quota-helper negative cases.
+`checks.*.hardening-journald` covers defaults/overrides and legacy configuration
+refusal. `checks.*.worker-drain-wakeup` uses a synthetic host and real API sandbox
+to cover queue-unlock/oneshot-completion races without executing containers.
+Host and Research VM suites exercise policy integrations, not real vendor
+startup/model/tool acceptance. Keep pending acceptance explicit in the catalog.
 
-A comparison of actual Nix derivation paths with a temporary CLI source edit
-invalidated all three packages before this boundary and only the CLI after it.
-All three focused-source packages built successfully. This establishes cache
-isolation, not a fixed wall-clock speedup. `checks.*.rust-package-sources`
-guards manifest availability, source isolation and the worker image version.
+For explicitly authorized focused builds, select the actual exported check:
 
-## GitHub check selection
+```bash
+nix build --no-link -L .#checks.x86_64-linux.vm-integration
+nix build --no-link -L .#checks.x86_64-linux.research-integration
+nix build .#installer-iso
+```
 
-The imported policy is `.github/ci-paths.json`; its consumer is
-`scripts/ci_changes.py`. Both modes use this ordered policy. Component paths
-take precedence over Markdown suffixes, and the selector reads NUL-delimited
-Git paths, including deletions and both sides of renames.
+## GitHub routing
 
-Automatic PR/push runs always check real-Git routing regressions and whitespace.
-Affected paths add formatting/lint, including actionlint, and Rust crate
-Clippy/unit tests with workspace formatting. Unknown paths, invalid lock data or
-unavailable comparison history select all fast checks. No automatic path selects Research
-closure preparation, configuration/generated-flake evaluation, Nix package/image/
-system builds or VM suites. DCO and secret scanning remain separate checks.
+`.github/ci-paths.json` and `scripts/ci_changes.py` own the ordered routing policy.
+Component paths take precedence over Markdown suffixes. Include deleted paths
+and both rename sides from NUL-delimited Git output.
 
-Use the check workflow's **Run workflow** action (`workflow_dispatch`) when a
-change needs build or runtime evidence. Select the revision to verify and set
-optional `base_sha` to the full 40-character SHA to compare against that revision.
-An empty, malformed or unavailable comparison SHA selects the full inventory;
-unknown paths and invalid lock data do the same. A dispatch with a usable
-comparison adds the affected expensive gates below to its fast checks.
+Automatic PR/push checks always cover routing/whitespace, then affected static
+and Rust checks. Unknown paths, invalid lock data or missing history select all
+fast checks. They do not select host evaluation, closure preparation, runtime
+builds or VMs. DCO and secret scanning are separate.
 
-| Change | Automatic checks beyond routing/whitespace | Additional explicit gates | VM suite |
-| --- | --- | --- | --- |
-| Docs and listed presentation metadata | None | None | None |
-| CI routing/workflow/test definition or contributor tooling | Static | None | None |
-| One Rust crate/package | Static and affected crate | Affected package and source-boundary check; worker includes its image | Runtime |
-| Worker module | Static and worker crate | Worker package/image and source-boundary check | Runtime |
-| Shared Cargo inputs | Static and all Rust crates | All Rust packages/image and source-boundary check | Runtime |
-| Installer scripts or host VM fixture | Static | Generated installed flake | Runtime |
-| Installer Nix | Static | Configuration evaluation, generated installed flake and host build | Runtime |
-| Research module/client/fixture or research-only input pin | Static | Research closures, configuration evaluation and generated installed flake | Research |
-| Dev Container inputs | Static | Dev Container package | None |
-| Generated-flake script or module-evaluation fixture | Static | Corresponding generated-flake or configuration gate | None |
-| Onboarding validator/fixture | Static | Installed preset/generic CLI fixture | None |
-| Operator onboarding CLI module | Static and CLI crate | CLI package, source-boundary and installed fixture | None |
-| Shared JSON agent parser | Static | Installed fixture | Runtime |
-| Adapters, shared modules/helpers, other lock updates, unknown paths/history | All fast checks | Full inventory | Both |
+Use `workflow_dispatch` for required build/runtime evidence, selecting the
+revision and optional full 40-character comparison `base_sha`. Empty, malformed
+or unavailable comparison history selects the full inventory. With usable
+history, affected package/worker-image, installed-onboarding, generated-flake,
+configuration and VM gates are added according to that same policy. Shared
+security paths select their combined gates; a Rust-only change need not build
+Research. Non-VM package builds run in groups of at most four; Research closure
+preparation and configuration projections remain sequential.
 
-The routing regression runs directly on every runner without Nix setup;
-`checks.*.ci-vm-selection` also packages it for the full local flake gate.
-Documentation starts no Nix installation. Fast checks use the pinned binary
-cache for contributor tools; only explicit builds upload a GitHub Nix cache.
-Optional cache setup has a three-minute timeout; setup failure does not skip
-or fail the subsequent build and runtime checks.
-A Rust-only dispatch
-does not build the separate Research service. Worker-module dispatch uses the
-same focused package/runtime gates; the Research fixture enables no workers.
-Mixing these changes with shared security paths selects their combined gates.
-Non-VM package builds run in groups of at most four. Configuration evaluation
-prepares the same exact Research closure checks sequentially before validating
-the full flake/module inventory. Evaluation-helper changes select this explicit
-gate; automatic checks exercise its coverage and failure handling without Nix.
-Onboarding validation uses the installed fixture and a selected CLI package or
-an explicitly supplied local binary. The standalone host build is selected when
-both configuration evaluation and runtime checks are affected.
+Docs-only routing requires no Nix installation. Fast checks consume contributor
+tool caches; explicit builds may upload build cache. Optional cache setup has a
+three-minute timeout and its failure never skips the checks. Dispatch has a
+separate concurrency group so a push does not cancel requested verification.
+Before merge, obtain the required evidence for this revision; a green fast run
+or skipped expensive gate is not runtime acceptance.
 
-Before merging, record which build/runtime evidence the change needs and obtain
-it for the current revision. Green fast checks and skipped builds do not prove
-runtime acceptance. Full VM/ISO/system workloads remain separate from local
-fast checks and require their own scope. Automatic runs cancel superseded runs
-for the same PR or branch; dispatch has a separate concurrency group so a push
-does not cancel explicitly requested verification.
+## Packaging and larger workloads
 
-## Nix and Bazel
+`lib/mkRustPackage.nix` includes root Cargo manifests/lock, all workspace
+manifests and only selected crate source. Root workspace versions and crate
+descriptions feed Nix packages; worker image metadata supplies its default
+reference. Add required root/path inputs explicitly. Unrelated source changes
+should preserve other package derivations; shared manifests/toolchain changes
+still invalidate caches. `checks.*.rust-package-sources` guards these boundaries.
 
-[Nix + Bazel](https://nix-bazel.build/) and the linked
-[rules_nixpkgs guide](https://github.com/tweag/rules_nixpkgs/blob/master/guide.md)
-describe providing Nix toolchains/dependencies to Bazel's finer build actions.
-That approach can help a large code graph with reusable remote actions.
+Full system/ISO/VM work needs explicit workload scope. Installer VM state lives
+below `/var/tmp/tentaflake-e2e-<user>/`; no host block device is passed through.
+Keep builds and restore fixtures separate from production deployment.
 
-Tentaflake currently has three independent Rust binaries, plus NixOS modules
-and VM tests. Cargo already provides incremental development builds. Narrower
-Nix sources retain the other binaries' cached packages, and VM selection avoids
-irrelevant guest boots. Bazel would require another target/dependency graph and
-cache configuration while the NixOS/VM work remains. No Bazel speedup has been
-measured here. Keep Cargo/Nix as the build definition for now; reconsider a
-bounded Bazel prototype if measurements show compilation dominates after these
-changes or the workspace grows into a larger shared code graph.
+Cargo/Nix remain the build definition. Bazel would add another target/dependency
+graph without replacing NixOS/VM work; no measured speedup justifies that here.
+Reconsider only with a bounded measurement demonstrating a relevant bottleneck.

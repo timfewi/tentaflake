@@ -1,5 +1,5 @@
 {
-  description = "Generic NixOS flake template for running isolated Hermes and ZeroClaw agents on one headless machine";
+  description = "Agent-agnostic NixOS flake template for isolated agents on one headless machine";
 
   inputs = {
     tentaflake-research.url = "github:timfewi/tentaflake-research";
@@ -8,12 +8,6 @@
     # The pinned revision provides the container and Rust toolchains used by the
     # host and the workspace CLI.
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
-
-    # Optional: use hermes-agent NixOS module for single-agent setups or container images
-    hermes-agent = {
-      url = "github:NousResearch/hermes-agent";
-      inputs.nixpkgs.follows = "nixpkgs";
-    };
 
     # Optional: uncomment for home-manager support
     # home-manager = {
@@ -60,11 +54,8 @@
       # ── Template constants ──
       constants = import ./lib/constants.nix;
 
-      # ── Shared agent builders ──
-      inherit ((import ./lib { inherit pkgs lib; })) mkAgent adapters runtimeCatalog;
-      inherit ((import ./lib { inherit pkgs lib; })) mkHermesAgent;
-      inherit ((import ./lib { inherit pkgs lib; })) mkZeroClawAgent;
-      inherit ((import ./lib { inherit pkgs lib; })) agentsFromData;
+      # ── Public JSON loading and runtime facts ──
+      inherit ((import ./lib { inherit pkgs lib; })) agentsFromData runtimeCatalog;
 
       # Module set imported by external consumers and built-in hosts
       tentaflakeModules = import ./modules/default.nix { researchFlake = inputs.tentaflake-research; };
@@ -73,13 +64,49 @@
       # remaining source- and dependency-hash pinned.
       devcontainerCli = import ./lib/devcontainer-cli.nix { inherit pkgs; };
 
+      # patchelf 0.19.2 cannot safely rewrite the locked upstream wheel's ELF
+      # layout. Invoke the unmodified binary through the Nix dynamic loader
+      # with an explicit library path instead; do not change dependency pins.
+      semgrep =
+        (pkgs.semgrep.override {
+          # Semgrep 1.180 imports FastMCP, removed from the default MCP 2.x.
+          mcp = pkgs.python3Packages.mcp_1;
+          semgrep-core = pkgs.semgrep-core.overrideAttrs {
+            postFixup = ''
+              mkdir -p "$out/libexec"
+              mv "$out/bin/semgrep-core" "$out/libexec/semgrep-core"
+              loader=$(cat ${pkgs.stdenv.cc}/nix-support/dynamic-linker)
+              "$CC" -O2 -Wall -Wextra -Werror \
+                -DLOADER="\"$loader\"" \
+                -DCORE="\"$out/libexec/semgrep-core\"" \
+                -DLIBRARIES="\"$out/bin/libs:${lib.makeLibraryPath [ pkgs.stdenv.cc.libc ]}\"" \
+                ${./lib/semgrep-loader.c} -o "$out/bin/semgrep-core"
+            '';
+            doInstallCheck = true;
+            installCheckPhase = ''
+              runHook preInstallCheck
+              "$out/bin/semgrep-core" -version
+              runHook postInstallCheck
+            '';
+          };
+        }).overrideAttrs
+          (old: {
+            doInstallCheck = true;
+            postInstallCheck = (old.postInstallCheck or "") + ''
+              export SSL_CERT_FILE=${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt
+              export PATH="$out/bin:$PATH"
+              "$out/bin/semgrep" --version
+              # Leave installCheckPhase unset so pytestCheckHook retains its suite.
+            '';
+          });
+
       # Security tools use the locked nixpkgs revisions; rule updates are
       # separate, reviewable hash bumps instead of live registry downloads.
       securityTools = pkgs.symlinkJoin {
         name = "tentaflake-security-tools";
         paths = [
           pkgs.osv-scanner
-          pkgs.semgrep
+          semgrep
         ];
       };
       semgrepRules = pkgs.fetchFromGitHub {
@@ -94,10 +121,7 @@
         inherit
           inputs
           self
-          mkHermesAgent
-          mkZeroClawAgent
           agentsFromData
-          mkAgent
           repoRoot
           constants
           ;
@@ -118,11 +142,7 @@
       # ── Exported helpers ──
       lib.${system} = {
         inherit
-          mkHermesAgent
-          mkZeroClawAgent
           agentsFromData
-          mkAgent
-          adapters
           runtimeCatalog
           constants
           ;
@@ -142,6 +162,8 @@
         tentaflake-broker = self.packages.${system}.tentaflake-broker;
         tentaflake-worker = self.packages.${system}.tentaflake-worker;
         tentaflake-worker-image = self.packages.${system}.tentaflake-worker-image;
+        host-api = self.packages.${system}.tentaflake-host-api;
+        host-api-evaluation = import ./tests/host-api-evaluation.nix { inherit pkgs; };
         devcontainer-cli = self.packages.${system}.devcontainer-cli;
         ci-vm-selection = import ./tests/ci-vm-selection.nix { inherit pkgs; };
         rust-package-sources = import ./tests/rust-package-sources.nix { inherit self pkgs; };
@@ -155,6 +177,7 @@
             {
               nativeBuildInputs = [
                 pkgs.python3
+                (lib.getBin pkgs.nix)
                 pkgs.bash
                 pkgs.coreutils
                 pkgs.findutils
@@ -166,7 +189,10 @@
               src = lib.fileset.toSource {
                 root = ./.;
                 fileset = lib.fileset.unions [
-                  ./adapters/catalog.json
+                  ./adapters
+                  ./lib/runtimeCatalog.nix
+                  ./lib/agentIdentity.nix
+                  ./lib/stoppedScaffold.nix
                   ./docs/agent-adapters.md
                   ./scripts/runtime-catalog-docs.py
                   ./scripts/state-quota-test.py
@@ -174,6 +200,8 @@
               };
             }
             ''
+              # Even read-only Nix startup needs writable local profile metadata.
+              export NIX_STATE_DIR="$TMPDIR/nix-state"
               python3 "$src/scripts/runtime-catalog-docs.py" --check --root "$src"
               python3 "$src/scripts/state-quota-test.py" "$quotaPrepare" "$quotaOwner"
               touch "$out"
@@ -186,13 +214,14 @@
         # VM integration test: boots the host and asserts the runtime path
         # (Rust CLI, status, and agent unit/user/state dir).
         vm-integration = pkgs.testers.runNixOSTest (
-          import ./tests/integration.nix { inherit self mkHermesAgent mkZeroClawAgent; }
+          import ./tests/integration.nix { inherit self agentsFromData; }
         );
         research-integration = import ./tests/research-integration.nix { inherit self pkgs; };
+        worker-drain-wakeup = import ./tests/worker-drain-wakeup.nix { inherit self pkgs; };
         research-policy = import ./tests/research-policy.nix { inherit self pkgs; };
       };
 
-      # ── tentaflake: Installed system, consumes my-agents.nix ──
+      # ── tentaflake: Installed system, consumes agents.toml ──
       # Attr name is `hostName` so it always matches what `tentaflake rebuild`
       # passes to `nixos-rebuild --flake .#<host>`.
       nixosConfigurations.${hostName} = nixpkgs.lib.nixosSystem {
@@ -263,6 +292,7 @@
         tentaflake-cli = pkgs.callPackage ./pkgs/tentaflake-cli { };
         tentaflake-broker = pkgs.callPackage ./pkgs/tentaflake-broker { };
         tentaflake-worker = pkgs.callPackage ./pkgs/tentaflake-worker { };
+        tentaflake-host-api = pkgs.callPackage ./pkgs/tentaflake-host-api { };
         tentaflake-worker-image = pkgs.callPackage ./pkgs/tentaflake-worker/image.nix { };
         installer-iso = self.nixosConfigurations.installer-iso.config.system.build.isoImage;
       };

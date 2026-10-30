@@ -47,6 +47,12 @@ tentaflake update
 `--hide` redacts the host and agent names. `tentaflake-status` invokes the same
 status renderer and is used by the login banner.
 
+JSON status entries include a canonical container `id` and `runnable` flag.
+Use that ID for automation: exact container IDs take precedence over display
+names, and ambiguous short names are rejected. `--hide` redacts both the name
+and ID. The optional [local host API](19-web-ui.md) uses canonical IDs only and
+can expose this inventory to an independently installed web interface.
+
 `runtimes` lists the pinned preset catalog and its support/evidence levels;
 `--json` emits the complete schema-v1 catalog. It performs no host reads or
 image downloads. See [generic workloads](agent-adapters.md#generic-isolated-workload).
@@ -66,42 +72,32 @@ and `unknown_agents`; `--hide` redacts names in both text and JSON. A
 successful diagnosis is host evidence only; it does not prove external
 provider access.
 
-`doctor --security` reads the Nix-generated desired-state security manifest.
-It emits stable `TFSEC-*` findings with severity and remediation; critical or
-high findings return non-zero. JSON output is CI-friendly. The desired-state check
-covers the declared profile, capsule flags, mounts, images, credential files,
-OpenSSH, AppArmor, Docker-group membership, backup declaration, workspace
-quota, missing broker, and the declared private management/SSH capabilities.
-Manifest v2 carries a separate typed management record; unversioned legacy or
-incomplete records report `TFSEC-038` unknown management evidence. Configured
-capabilities do not prove enrollment or effective remote grants. It also
-inspects root-disk pressure, the last
-successful Restic timestamp, and live Tailscale Serve/Funnel JSON. If a live
-command is unavailable or blocked, the result is an explicit warning rather
-than green. A non-interactive backend inspect also compares a running Docker or
-Podman container's privilege, user, root filesystem, runtime, network,
-capabilities, AppArmor, security options, resource limits, and mounts with the
-exact manifest values, including every bind mount, hardened tmpfs size, and
-CPU/memory/PID/ulimit setting. Brokered networks are separately inspected for
-the exact internal bridge. Each OCI inspection captures both output streams
-and has a five-second deadline and an 8 MiB combined stdout/stderr limit;
-raw Inspect environment data never reaches
-the report. A stopped/missing container, incomplete backend schema, or
-unavailable approved sudo path is reported as unknown. Configured broker
-`/healthz` endpoints are probed directly: connection failures stay unknown,
-while an explicit non-ready response is high severity because broker health
-checks credentials and audit persistence. Complete controller-tool audit
-coverage and cross-agent network denial remain separate runtime evidence.
+`doctor --security` compares the generated desired-state manifest with narrow,
+bounded live probes. Stable `TFSEC-*` findings include remediation; critical/high
+findings return non-zero. Missing/legacy evidence remains unknown, never green,
+and raw OCI environments never enter reports. See
+[posture checks](10-security-profiles.md#posture-check) for exact fields, probe
+limits and evidence gaps. Provider access, native-tool mediation and remote
+management grants are not implied by a healthy declaration.
 
-`backup` creates a mode-`0600`, caller-owned archive of one state directory in
-the current directory. It does not back up secret-provider identities.
+`backup` exclusively creates a mode-`0600`, caller-owned archive of one state
+directory in the current directory before starting privileged reads. Existing
+files and symlinks at the timestamped archive name are refused; retry in a later
+second or use another directory. Privileged `tar` writes to the already-open
+file descriptor, never reopening or changing ownership of an output pathname.
+The source remains the state directory in the trusted host inventory; this
+command does not back up secret-provider identities.
+
+On failure, a private empty or partial archive is retained and reported. Inspect
+and remove it manually before retrying with the same name. The CLI deliberately
+does not unlink the output pathname: another process could have replaced it
+while the backup was running. Use an operator-controlled current directory so
+other users cannot rename or replace the archive; descriptor-based writes do
+not prevent such directory-entry changes.
 
 `rebuild` and the apply step offered by `update` activate NixOS. Invoke them
 only when the target is resolved and activation is intended.
 
-The deprecated `hermes` shim remains for command-name compatibility. The old
-`top`, `console`, and interactive agent wizard commands were removed with the
-Auditd, SQLite, and custom web-console stack.
 
 ## Shell options
 

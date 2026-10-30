@@ -75,6 +75,24 @@ class CiSelection(unittest.TestCase):
         self.assertTrue(execution(affected, "full")["evaluate"])
         self.assertTrue(execution(affected, "full")["builds"])
 
+    def test_catalog_generator_changes_preserve_metadata_gates_without_automatic_builds(self):
+        for name in ("scripts/runtime-catalog-docs.py", "scripts/test_runtime_catalog.py"):
+            with self.subTest(name=name):
+                base = self.git("rev-parse", "HEAD")
+                self.write(name)
+                affected = select(base, self.commit(), self.repository)
+                self.assertEqual(affected, {"static", "selection", "evaluate", "cli", "rust"})
+                automatic = execution(affected, "fast")
+                self.assertTrue(automatic["static"])
+                self.assertTrue(automatic["cli"])
+                self.assertFalse(automatic["builds"])
+                self.assertFalse(automatic["evaluate"])
+                explicit = execution(affected, "full")
+                self.assertTrue(explicit["evaluate"])
+                self.assertTrue(explicit["builds"])
+                self.assertFalse(explicit["runtime"])
+                self.assertFalse(explicit["research"])
+
 
     def test_runtime_and_research_changes_select_only_their_suite(self):
         for name, expected in (("crates/tentaflake-worker/src/main.rs", {"runtime"}),
@@ -151,6 +169,11 @@ class CiSelection(unittest.TestCase):
         self.assertEqual(select(head, self.commit(), self.repository), CHECKS)
         self.assertEqual(select(self.base, self.git("rev-parse", "HEAD"), self.repository), CHECKS)
 
+    def test_worker_wakeup_fixture_selects_worker_runtime_gates(self):
+        self.write("tests/worker-drain-wakeup.nix", "changed\n")
+        self.assertEqual(select(self.base, self.commit(), self.repository),
+                         {"runtime", "worker", "rust", "static"})
+
     def test_ci_control_changes_use_regressions_without_vms_or_research(self):
         for name in (".github/ci-paths.json", ".github/vm-paths.json", ".github/workflows/check.yml",
                      "scripts/ci_changes.py", "scripts/ci_vm_changes.py",
@@ -185,6 +208,18 @@ class CiSelection(unittest.TestCase):
     def test_devcontainer_changes_do_not_build_agents_or_research(self):
         self.write(".devcontainer/devcontainer.json")
         self.assertEqual(select(self.base, self.commit(), self.repository), {"devcontainer", "static"})
+
+    def test_host_api_changes_select_protocol_and_configuration_checks(self):
+        for name in ("host-api/tentaflake_host_api/server.py", "lib/hostApiPolicy.nix", "modules/host-api.nix",
+                     "pkgs/tentaflake-host-api/default.nix", "tests/host-api-evaluation.nix"):
+            with self.subTest(name=name):
+                base = self.git("rev-parse", "HEAD")
+                self.write(name)
+                affected = select(base, self.commit(), self.repository)
+                self.assertEqual(affected, {"evaluate", "static"})
+                self.assertTrue(execution(affected, "fast")["static"])
+                self.assertFalse(execution(affected, "fast")["builds"])
+                self.assertTrue(execution(affected, "full")["builds"])
 
     def test_research_only_changes_do_not_build_rust_packages(self):
         self.lock["nodes"]["tentaflake-research"]["locked"]["rev"] = "new"

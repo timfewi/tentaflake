@@ -1,15 +1,13 @@
 use crate::config::{Config, ModelPolicy};
 use crate::http::{Request, Response};
 use crate::policy::{ResolvedTarget, resolve_public_target};
-use crate::state::{Audit, Limits, UsageGuard, read_secret, unix_seconds};
+use crate::state::{Audit, Limits, Quarantine, UsageGuard, read_secret, unix_seconds};
 use crate::streaming::StreamingResponse;
 use reqwest::blocking::{Client, Response as UpstreamResponse};
 use reqwest::header::{CONTENT_TYPE, LOCATION};
 use serde::Deserialize;
 use serde_json::{Value, json};
-use std::fs::OpenOptions;
-use std::io::{Read, Write};
-use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+use std::io::Read;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
@@ -18,6 +16,7 @@ pub struct Broker {
     config: Config,
     limits: Arc<Limits>,
     audit: Arc<Audit>,
+    quarantine: Option<Quarantine>,
 }
 
 impl Broker {
@@ -40,6 +39,17 @@ impl Broker {
             config.max_audit_bytes,
         ));
         audit.check_ready()?;
+        let quarantine = config
+            .fetch
+            .as_ref()
+            .map(|policy| {
+                Quarantine::open(
+                    &policy.quarantine_dir,
+                    policy.max_quarantine_bytes,
+                    policy.max_quarantine_entries,
+                )
+            })
+            .transpose()?;
         audit.record(
             &config.agent,
             "startup",
@@ -50,6 +60,7 @@ impl Broker {
             config,
             limits,
             audit,
+            quarantine,
         })
     }
 
@@ -130,7 +141,7 @@ impl Broker {
         if streaming && !policy.streaming.enable {
             return Err(Failure::new(400, "llm", "streaming is disabled"));
         }
-        if streaming
+        if (streaming || route == "/v1/chat/completions")
             && object
                 .get("n")
                 .is_some_and(|value| value.as_u64() != Some(1))
@@ -138,7 +149,7 @@ impl Broker {
             return Err(Failure::new(
                 400,
                 "llm",
-                "streaming requires one completion choice",
+                "request requires one completion choice",
             ));
         }
         if streaming
@@ -438,22 +449,11 @@ impl Broker {
                 })
                 .collect();
             let quarantine_id = quarantine_id();
-            let quarantine_path = policy.quarantine_dir.join(&quarantine_id);
-            std::fs::create_dir_all(&policy.quarantine_dir)
-                .map_err(|_| Failure::new(503, "fetch", "quarantine is unavailable"))?;
-            std::fs::set_permissions(
-                &policy.quarantine_dir,
-                std::fs::Permissions::from_mode(0o700),
-            )
-            .map_err(|_| Failure::new(503, "fetch", "cannot protect quarantine"))?;
-            let mut file = OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .mode(0o600)
-                .open(&quarantine_path)
-                .map_err(|_| Failure::new(503, "fetch", "cannot create quarantine object"))?;
-            file.write_all(&bytes)
-                .map_err(|_| Failure::new(503, "fetch", "cannot write quarantine object"))?;
+            self.quarantine
+                .as_ref()
+                .expect("fetch quarantine initialized")
+                .store(&quarantine_id, &bytes)
+                .map_err(|_| Failure::new(503, "fetch", "quarantine is unavailable or full"))?;
             self.audit
                 .record(
                     &self.config.agent,
@@ -972,6 +972,8 @@ mod tests {
     use crate::http::read_request;
     use std::collections::HashMap;
     use std::fs;
+    use std::fs::OpenOptions;
+    use std::io::Write;
     use std::net::TcpListener;
     use std::os::unix::fs::OpenOptionsExt;
     use std::path::{Path, PathBuf};
@@ -1012,7 +1014,13 @@ mod tests {
                     stream
                         .set_read_timeout(Some(Duration::from_secs(5)))
                         .unwrap();
-                    let request = read_request(&mut stream, 32 * 1024, 1024 * 1024).unwrap();
+                    let request = read_request(
+                        &mut stream,
+                        32 * 1024,
+                        1024 * 1024,
+                        Instant::now() + Duration::from_secs(5),
+                    )
+                    .unwrap();
                     assert_eq!(request.path, route);
                     assert_eq!(request.headers["authorization"], "Bearer real-provider-key");
                     assert_eq!(

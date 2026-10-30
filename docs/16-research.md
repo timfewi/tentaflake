@@ -12,13 +12,13 @@ The template does not create an Internet route or obtain provider credentials.
 
 ## Configuration
 
-Declare a registered Research-capable adapter with `mkAgent` or either
-compatible runtime builder, then use its complete OCI container name:
+Declare a registered Research-capable adapter in `agents.toml`, then configure
+Nix host policy for its common container ID and globally unique instance name:
 
 ```nix
 tentaflake.research.agents = {
-  hermes-assistant.uid = 62101;
-  zeroclaw-assistant.uid = 62102;
+  agent-assistant.uid = 62101;
+  agent-research.uid = 62102;
 };
 services.secureResearch = {
   serviceUid = 4201;
@@ -198,11 +198,9 @@ into Research; validation checks explicit registered instance metadata and the
 adapter's accepted capability. The OpenClaw and Pi scaffolds have no accepted
 Research discovery integration. See [agent adapters](agent-adapters.md).
 
-Hermes settings disable the `web` and `browser` toolsets and register
-`mcp_servers.secure-research-tool`. Additional MCP entries must be local stdio
-commands. ZeroClaw settings disable `browser`, `http_request`, `web_fetch` and
-`web_search`, and replace the MCP server list with this stdio service. These
-settings are applied after caller settings. The LLM broker permits local
+Native tool disabling and stdio settings are owned by the
+[adapter hooks](agent-adapters.md#native-configuration-and-state), applied after
+caller settings. The LLM broker permits local
 function/custom tool definitions but rejects provider-hosted tools, including
 web search and remote MCP, and known provider extension fields. Operators must
 select inference-only models; this does not constrain a provider's internal
@@ -213,7 +211,7 @@ can remain idle between tool calls. Stop one relay socket to revoke accepted
 connections immediately:
 
 ```sh
-sudo systemctl stop tentaflake-research-hermes-assistant.socket
+sudo systemctl stop tentaflake-research-agent-assistant.socket
 ```
 
 Stopping `agent-research.socket` also stops all relay sockets. Restart the
@@ -244,7 +242,7 @@ nix build --no-link -L .#checks.x86_64-linux.research-integration
 The policy check exercises remote MCP rejection, missing capability mounts,
 duplicate relay UIDs, legacy fetch rejection and disabled summarization. The VM
 runs the real stdio client and service inside real Docker/gVisor capsules with
-Hermes and ZeroClaw UID values, verifies the generated settings, performs MCP
+the selected adapters' numeric owners, verifies generated settings, performs MCP
 initialization and job creation, and checks direct IP and offline-fetch denial.
 Its container image is a synthetic Python probe. It does not run the actual
 vendor agent images or prove their MCP discovery behavior.
@@ -263,7 +261,7 @@ The upstream synthetic VM suite separately checks encrypted WireGuard egress,
 direct-path denial, parser credentials, rendering, resources, cross-agent
 ownership, idle sessions and socket revocation. See its
 [verification evidence](https://github.com/timfewi/tentaflake-research/blob/main/docs/verification.md).
-Actual Hermes/ZeroClaw sessions, Podman socket transport, paid-provider billing,
+Actual vendor-agent sessions, Podman socket transport, paid-provider billing,
 production VPN policy, ARM and arbitrary kernel escapes still require deployment
 acceptance. No production host is activated by these checks. Retrieved content
 remains untrusted; the network boundary does not prevent prompt injection or

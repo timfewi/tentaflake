@@ -9,6 +9,5 @@ import ../../lib/mkRustPackage.nix { inherit lib rustPlatform; } {
 
   postInstall = ''
     ln -s tentaflake $out/bin/tentaflake-status
-    ln -s tentaflake $out/bin/hermes
   '';
 }

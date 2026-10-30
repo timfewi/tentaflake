@@ -21,31 +21,31 @@ relax startup admission or establish acceptance of a new agent runtime.
 
 ## Declaration
 
-The key, path, and owner must match the runtime builder:
+Use effective instance metadata rather than assuming a runtime's native layout.
+Numeric ownership defaults to the declared instance; mismatches fail evaluation:
 
 ```nix
-tentaflake.workspaceQuota.agents.hermes-coding = {
-  enable = true;
-  workspace =
-    "/var/lib/hermes-coding/workspace";
-  sizeMiB = 8192;
-  ownerUid = 10000;
-  ownerGid = 10000;
-  state = {
-    path = "/var/lib/hermes-coding";
-    sizeMiB = 1024;
+{ config, ... }:
+let agent = config.tentaflake.agentInstances.agent-coding;
+in {
+  tentaflake.workspaceQuota.agents.agent-coding = {
+    enable = true;
+    workspace = agent.workspace;
+    sizeMiB = 8192;
+    state = {
+      path = agent.stateStorage;
+      sizeMiB = 1024;
+    };
   };
-};
+}
 ```
 
-ZeroClaw uses numeric UID/GID 65534 by default. Builder assertions
-reject a path or owner mismatch. The agent unit requires the mount/ownership
-unit, so a missing image, failed filesystem check, mount failure, or ownership
-failure prevents the controller from starting.
+The controller requires mount/ownership units. A missing image, failed check,
+mount failure or ownership failure prevents startup.
 
 `state.path` must exactly match the adapter's declared `stateStorage`, with the
-same numeric ownership as the agent. Hermes and ZeroClaw use their existing
-state directory; generic workloads use `/var/lib/generic-NAME/state` beneath
+same numeric ownership as the agent. Native adapters use their declared state
+directory; generic workloads use `/var/lib/tentaflake/agents/<name>/state` beneath
 the unmounted root-owned instance parent. State sizes default to 1024 MiB and
 must be at least 128 MiB. Paths must be normalized, outside backing images,
 and outside the workspace. Mounts may not overlap another agent's filesystems.
@@ -56,8 +56,8 @@ Enabling the option and activating the resulting NixOS generation creates:
 
 ```text
 /var/lib/tentaflake-workspace-volumes/
-  hermes-coding.img
-  state/hermes-coding.img
+  agent-coding.img
+  state/agent-coding.img
 ```
 
 The prepare unit creates the exact-size sparse file, formats it as Btrfs, and

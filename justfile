@@ -14,11 +14,20 @@ alias list := default
 # ── The gates ────────────────────────────────────────────────
 
 # Full local gate: source checks, all flake checks and the installer ISO
-ci: formatter-test lint shellcheck rust ci-policy check generated-flake iso-installer
+ci: formatter-test catalog-check lint shellcheck rust host-api-test ci-policy check generated-flake iso-installer
     @echo "==> all green"
 
 # Fast source checks; evaluation and all Nix package/runtime builds are explicit
-fast: formatter-test lint shellcheck rust ci-policy
+fast: formatter-test catalog-check lint shellcheck rust host-api-test ci-policy
+
+# Exercise the optional local host API with isolated Unix sockets and fake host tools
+host-api-test:
+    python3 -m unittest discover -s host-api/tests -p 'test_*.py'
+
+# Pure adapter facts, generated CLI catalog and documentation must agree
+catalog-check:
+    python3 scripts/test_runtime_catalog.py
+    python3 scripts/runtime-catalog-docs.py --check
 
 # Test routing with real Git histories and validate workflow syntax
 ci-policy:
@@ -27,9 +36,9 @@ ci-policy:
     python3 scripts/test_eval_flake_nix.py
     actionlint .github/workflows/*.yml
 
-# Materialize exact research closures before read-only flake evaluation
+# Materialize exact Research closures and checked Rust filesets before read-only evaluation
 eval:
-    for check in research-policy module-evaluation agent-adapters; do nix build --no-link ".#checks.x86_64-linux.$check"; done
+    for check in research-policy module-evaluation agent-adapters rust-package-sources; do nix build --no-link ".#checks.x86_64-linux.$check"; done
     python3 scripts/eval_flake.py
 
 # Automated end-to-end gate (alias for the complete local CI path)

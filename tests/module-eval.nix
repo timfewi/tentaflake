@@ -10,7 +10,7 @@ let
       inherit system modules;
       specialArgs = { inherit researchFlake; };
     };
-  builders = import ../lib { inherit pkgs lib; };
+  mkAgent = import ../lib/mkAgent.nix { inherit pkgs lib; };
   containerSecurity = import ../lib/containerSecurity.nix { inherit lib; };
   hostModule = profile: {
     system.stateVersion = "26.05";
@@ -69,18 +69,19 @@ let
   capsule = eval [
     ../modules/default.nix
     (hostModule "balanced")
-    (builders.mkHermesAgent {
+    (mkAgent {
+      adapter = "hermes";
       name = "hermes-fixture";
       autoStart = false;
     })
-    (builders.mkZeroClawAgent {
+    (mkAgent {
+      adapter = "zeroclaw";
       name = "zeroclaw-fixture";
       autoStart = false;
     })
   ];
-  hermesCapsule = capsule.config.virtualisation.oci-containers.containers."hermes-hermes-fixture";
-  zeroclawCapsule =
-    capsule.config.virtualisation.oci-containers.containers."zeroclaw-zeroclaw-fixture";
+  hermesCapsule = capsule.config.virtualisation.oci-containers.containers."agent-hermes-fixture";
+  zeroclawCapsule = capsule.config.virtualisation.oci-containers.containers."agent-zeroclaw-fixture";
   capsuleFlags = container: container.extraOptions;
   capsuleManifest = capsule.config.environment.etc."tentaflake/security.tsv".text;
   capsuleAttempt = builtins.tryEval capsule.config.system.build.toplevel.drvPath;
@@ -94,14 +95,15 @@ let
   provenanceCapsule = eval [
     ../modules/default.nix
     (hostModule "balanced")
-    (builders.mkHermesAgent {
+    (mkAgent {
+      adapter = "hermes";
       name = "signed";
       autoStart = false;
     })
     {
       tentaflake.imageProvenance = {
         requireForSecureAgents = true;
-        agents.hermes-signed = {
+        agents.agent-signed = {
           mode = "keyless";
           certificateIdentity = "https://github.com/example/project/.github/workflows/release.yml@refs/tags/v1.2.3";
           certificateOidcIssuer = "https://token.actions.githubusercontent.com";
@@ -111,12 +113,13 @@ let
   ];
   provenanceAttempt = builtins.tryEval provenanceCapsule.config.system.build.toplevel.drvPath;
   provenanceService =
-    provenanceCapsule.config.systemd.services."tentaflake-image-verify-hermes-signed";
+    provenanceCapsule.config.systemd.services."tentaflake-image-verify-agent-signed";
 
   missingProvenanceCapsule = eval [
     ../modules/default.nix
     (hostModule "balanced")
-    (builders.mkHermesAgent {
+    (mkAgent {
+      adapter = "hermes";
       name = "unsigned";
       autoStart = false;
     })
@@ -130,7 +133,7 @@ let
     {
       virtualisation.oci-containers.backend = lib.mkForce "podman";
       tentaflake.networking.enable = lib.mkForce true;
-      tentaflake.broker.agents.hermes-podman-fixture = {
+      tentaflake.broker.agents.agent-podman-fixture = {
         enable = true;
         networkName = "tf-hermes-podman";
         subnet = "10.203.40.0/30";
@@ -141,13 +144,14 @@ let
         };
       };
     }
-    (builders.mkHermesAgent {
+    (mkAgent {
+      adapter = "hermes";
       name = "podman-fixture";
       autoStart = false;
     })
   ];
   podmanContainer =
-    podmanCapsule.config.virtualisation.oci-containers.containers."hermes-podman-fixture";
+    podmanCapsule.config.virtualisation.oci-containers.containers."agent-podman-fixture";
   podmanAttempt = builtins.tryEval podmanCapsule.config.system.build.toplevel.drvPath;
 
   strict = eval [
@@ -222,10 +226,22 @@ let
   ];
   publicSshAttempt = builtins.tryEval publicSshFixture.config.system.build.toplevel.drvPath;
 
+  disabledGitFixture = eval [
+    ../modules/default.nix
+    (hostModule "balanced")
+    (mkAgent {
+      adapter = "hermes";
+      name = "disabled-git";
+      autoStart = false;
+    })
+  ];
+  disabledGitAttempt = builtins.tryEval disabledGitFixture.config.system.build.toplevel.drvPath;
+
   gitFixture = eval [
     ../modules/default.nix
     (hostModule "balanced")
-    (builders.mkHermesAgent {
+    (mkAgent {
+      adapter = "hermes";
       name = "git";
       autoStart = false;
       gitAutoPush = {
@@ -235,13 +251,13 @@ let
       };
     })
   ];
-  gitScript = gitFixture.config.systemd.services."hermes-git-autopush".script;
   gitAttempt = builtins.tryEval gitFixture.config.system.build.toplevel.drvPath;
 
   unsafeGitFixture = eval [
     ../modules/default.nix
     (hostModule "balanced")
-    (builders.mkHermesAgent {
+    (mkAgent {
+      adapter = "hermes";
       name = "unsafe-git";
       autoStart = false;
       gitAutoPush.tokenEnvFile = "/run/agenix/github-agent";
@@ -252,7 +268,8 @@ let
   unsafeGitRootFixture = eval [
     ../modules/default.nix
     (hostModule "balanced")
-    (builders.mkHermesAgent {
+    (mkAgent {
+      adapter = "hermes";
       name = "unsafe-git-root";
       autoStart = false;
       gitAutoPush = {
@@ -350,7 +367,8 @@ let
   mutableImageFixture = eval [
     ../modules/default.nix
     (hostModule "balanced")
-    (builders.mkHermesAgent {
+    (mkAgent {
+      adapter = "hermes";
       name = "mutable";
       autoStart = false;
       image = "example.invalid/hermes:latest";
@@ -362,7 +380,8 @@ let
   publishedPortFixture = eval [
     ../modules/default.nix
     (hostModule "balanced")
-    (builders.mkZeroClawAgent {
+    (mkAgent {
+      adapter = "zeroclaw";
       name = "published";
       autoStart = false;
       hostPort = 4096;
@@ -373,7 +392,8 @@ let
   rootHermesFixture = eval [
     ../modules/default.nix
     (hostModule "balanced")
-    (builders.mkHermesAgent {
+    (mkAgent {
+      adapter = "hermes";
       name = "root-hermes";
       autoStart = false;
       containerUid = 0;
@@ -385,7 +405,8 @@ let
   unsafeHealFixture = eval [
     ../modules/default.nix
     (hostModule "balanced")
-    (builders.mkHermesAgent {
+    (mkAgent {
+      adapter = "hermes";
       name = "unsafe-heal";
       autoStart = false;
       healDataDirs = [ "/etc" ];
@@ -397,12 +418,14 @@ let
   seededCapsule = eval [
     ../modules/default.nix
     (hostModule "balanced")
-    (builders.mkHermesAgent {
+    (mkAgent {
+      adapter = "hermes";
       name = "seeded-hermes";
       autoStart = false;
       seedDir = seedFixture;
     })
-    (builders.mkZeroClawAgent {
+    (mkAgent {
+      adapter = "zeroclaw";
       name = "seeded-zero";
       autoStart = false;
       seedDir = seedFixture;
@@ -413,27 +436,29 @@ let
   devFixture = eval [
     ../modules/default.nix
     (hostModule "dev")
-    (builders.mkHermesAgent {
+    (mkAgent {
+      adapter = "hermes";
       name = "dev";
       autoStart = false;
       envFile = "/run/tentaflake/dev.env";
       networkMode = "host";
     })
   ];
-  devContainer = devFixture.config.virtualisation.oci-containers.containers."hermes-dev";
+  devContainer = devFixture.config.virtualisation.oci-containers.containers."agent-dev";
 
   brokerCapsule = eval [
     ../modules/default.nix
     (hostModule "balanced")
-    (builders.mkHermesAgent {
+    (mkAgent {
+      adapter = "hermes";
       name = "brokered";
       autoStart = false;
     })
     {
       tentaflake.networking.enable = lib.mkForce true;
-      tentaflake.broker.agents.hermes-brokered = {
+      tentaflake.broker.agents.agent-brokered = {
         enable = true;
-        networkName = "tf-hermes-brokered";
+        networkName = "tf-agent-brokered";
         subnet = "10.203.20.0/30";
         gateway = "10.203.20.1";
         llm = {
@@ -455,15 +480,15 @@ let
       };
     }
   ];
-  brokerContainer = brokerCapsule.config.virtualisation.oci-containers.containers."hermes-brokered";
-  brokerBridge = "tfb-${builtins.substring 0 8 (builtins.hashString "sha256" "hermes-brokered")}";
+  brokerContainer = brokerCapsule.config.virtualisation.oci-containers.containers."agent-brokered";
+  brokerBridge = "tfb-${builtins.substring 0 8 (builtins.hashString "sha256" "agent-brokered")}";
   brokerManifest = brokerCapsule.config.environment.etc."tentaflake/security.tsv".text;
   brokerAttempt = builtins.tryEval brokerCapsule.config.system.build.toplevel.drvPath;
 
   streamingCapsule = brokerCapsule.extendModules {
     modules = [
       {
-        tentaflake.broker.agents.hermes-brokered.llm.streaming = {
+        tentaflake.broker.agents.agent-brokered.llm.streaming = {
           enable = true;
           maxEventBytes = 8192;
           firstEventTimeoutSeconds = 5;
@@ -476,7 +501,7 @@ let
 
   strictBrokerCapsule = streamingCapsule.extendModules {
     modules = [
-      { tentaflake.broker.agents.hermes-brokered.llm.strictCostEnvelope = true; }
+      { tentaflake.broker.agents.agent-brokered.llm.strictCostEnvelope = true; }
     ];
   };
   strictBrokerIdentityCollision = strictBrokerCapsule.extendModules {
@@ -493,7 +518,7 @@ let
     limits:
     let
       fixture = streamingCapsule.extendModules {
-        modules = [ { tentaflake.broker.agents.hermes-brokered.llm.streaming = lib.mkForce limits; } ];
+        modules = [ { tentaflake.broker.agents.agent-brokered.llm.streaming = lib.mkForce limits; } ];
       };
     in
     lib.all (item: item.assertion) fixture.config.assertions;
@@ -528,14 +553,14 @@ let
                 builtins.listToAttrs (
                   lib.imap0 (index: mode: {
                     name = "mode-${toString index}";
-                    value = brokerCapsule.config.tentaflake.broker.agents.hermes-brokered // {
+                    value = brokerCapsule.config.tentaflake.broker.agents.agent-brokered // {
                       inherit (mode) enable;
                       maxConcurrency = 4;
                       maxRequestsPerMinute = 30;
-                      llm = brokerCapsule.config.tentaflake.broker.agents.hermes-brokered.llm // {
+                      llm = brokerCapsule.config.tentaflake.broker.agents.agent-brokered.llm // {
                         enable = mode.llm;
                       };
-                      fetch = brokerCapsule.config.tentaflake.broker.agents.hermes-brokered.fetch // {
+                      fetch = brokerCapsule.config.tentaflake.broker.agents.agent-brokered.fetch // {
                         enable = mode.fetch;
                       };
                     };
@@ -574,7 +599,8 @@ let
   brokerAggregateBudgetFixture = eval [
     ../modules/default.nix
     (hostModule "balanced")
-    (builders.mkHermesAgent {
+    (mkAgent {
+      adapter = "hermes";
       name = "broker-overbudget";
       autoStart = false;
     })
@@ -583,7 +609,7 @@ let
         networking.enable = lib.mkForce true;
         broker = {
           maxTotalConcurrency = 3;
-          agents.hermes-broker-overbudget = {
+          agents.agent-broker-overbudget = {
             enable = true;
             subnet = "10.203.24.0/30";
             gateway = "10.203.24.1";
@@ -601,12 +627,14 @@ let
   workerCapsule = eval [
     ../modules/default.nix
     (hostModule "balanced")
-    (builders.mkHermesAgent {
+    (mkAgent {
+      adapter = "hermes";
       name = "worker";
       autoStart = true;
     })
-    (builders.mkZeroClawAgent {
-      name = "worker";
+    (mkAgent {
+      adapter = "zeroclaw";
+      name = "zero-worker";
       autoStart = false;
     })
     {
@@ -617,11 +645,11 @@ let
         resolvers = [ "9.9.9.9" ];
       };
       tentaflake = {
-        research.agents.hermes-worker.uid = 62101;
+        research.agents.agent-worker.uid = 62101;
         networking.enable = lib.mkForce true;
-        broker.agents.hermes-worker = {
+        broker.agents.agent-worker = {
           enable = true;
-          networkName = "tf-hermes-worker";
+          networkName = "tf-agent-worker";
           subnet = "10.203.22.0/30";
           gateway = "10.203.22.1";
           llm = {
@@ -638,47 +666,48 @@ let
           };
         };
         worker.agents = {
-          hermes-worker = {
+          agent-worker = {
             enable = true;
-            workspace = "/var/lib/hermes-worker/workspace";
+            workspace = "/var/lib/tentaflake/agents/worker/workspace";
           };
-          zeroclaw-worker = {
+          agent-zero-worker = {
             enable = true;
-            workspace = "/var/lib/zeroclaw-worker/data";
+            workspace = "/var/lib/tentaflake/agents/zero-worker/data";
             containerUid = 65534;
             containerGid = 65534;
           };
         };
-        workspaceQuota.agents.hermes-worker = {
+        workspaceQuota.agents.agent-worker = {
           enable = true;
-          workspace = "/var/lib/hermes-worker/workspace";
+          workspace = "/var/lib/tentaflake/agents/worker/workspace";
           sizeMiB = 128;
         };
       };
     }
   ];
-  workerContainer = workerCapsule.config.virtualisation.oci-containers.containers.hermes-worker;
-  workerService = workerCapsule.config.systemd.services.tentaflake-worker-hermes-worker;
-  numericWorkerService = workerCapsule.config.systemd.services.tentaflake-worker-zeroclaw-worker;
-  workerPath = workerCapsule.config.systemd.paths.tentaflake-worker-hermes-worker;
-  workerOwnerService = workerCapsule.config.systemd.services.tentaflake-workspace-quota-hermes-worker;
+  workerContainer = workerCapsule.config.virtualisation.oci-containers.containers.agent-worker;
+  workerService = workerCapsule.config.systemd.services.tentaflake-worker-agent-worker;
+  numericWorkerService = workerCapsule.config.systemd.services.tentaflake-worker-agent-zero-worker;
+  workerPath = workerCapsule.config.systemd.paths.tentaflake-worker-agent-worker;
+  workerOwnerService = workerCapsule.config.systemd.services.tentaflake-workspace-quota-agent-worker;
   workerAttempt = builtins.tryEval workerCapsule.config.system.build.toplevel.drvPath;
   tooSmallQuota = workerCapsule.extendModules {
-    modules = [ { tentaflake.workspaceQuota.agents.hermes-worker.sizeMiB = lib.mkForce 32; } ];
+    modules = [ { tentaflake.workspaceQuota.agents.agent-worker.sizeMiB = lib.mkForce 32; } ];
   };
   workerMount = lib.findFirst (
-    mount: mount.where == "/var/lib/hermes-worker/workspace"
+    mount: mount.where == "/var/lib/tentaflake/agents/worker/workspace"
   ) null workerCapsule.config.systemd.mounts;
 
   unsafeWorkerFixture = eval [
     ../modules/default.nix
     (hostModule "balanced")
-    (builders.mkHermesAgent {
+    (mkAgent {
+      adapter = "hermes";
       name = "unsafe-worker";
       autoStart = false;
     })
     {
-      tentaflake.worker.agents.hermes-unsafe-worker = {
+      tentaflake.worker.agents.agent-unsafe-worker = {
         enable = true;
         workspace = "/var/lib/a-different-workspace";
       };
@@ -689,7 +718,8 @@ let
   incompleteAutostartFixture = eval [
     ../modules/default.nix
     (hostModule "balanced")
-    (builders.mkHermesAgent {
+    (mkAgent {
+      adapter = "hermes";
       name = "incomplete-autostart";
       autoStart = true;
     })
@@ -699,12 +729,13 @@ let
   unsafeQuotaFixture = eval [
     ../modules/default.nix
     (hostModule "balanced")
-    (builders.mkZeroClawAgent {
+    (mkAgent {
+      adapter = "zeroclaw";
       name = "unsafe-quota";
       autoStart = false;
     })
     {
-      tentaflake.workspaceQuota.agents.zeroclaw-unsafe-quota = {
+      tentaflake.workspaceQuota.agents.agent-unsafe-quota = {
         enable = true;
         workspace = "/var/lib/not-zeroclaw-data";
         ownerUid = 65534;
@@ -717,13 +748,14 @@ let
   unsafeBrokerFixture = eval [
     ../modules/default.nix
     (hostModule "balanced")
-    (builders.mkHermesAgent {
+    (mkAgent {
+      adapter = "hermes";
       name = "unsafe-broker";
       autoStart = false;
     })
     {
       tentaflake.networking.enable = lib.mkForce true;
-      tentaflake.broker.agents.hermes-unsafe-broker = {
+      tentaflake.broker.agents.agent-unsafe-broker = {
         enable = true;
         subnet = "10.203.21.0/30";
         gateway = "10.203.99.1";
@@ -739,25 +771,27 @@ let
     eval [
       ../modules/default.nix
       (hostModule "balanced")
-      (builders.mkHermesAgent {
+      (mkAgent {
+        adapter = "hermes";
         name = "fixture";
         autoStart = false;
       })
-      (builders.mkHermesAgent {
+      (mkAgent {
+        adapter = "hermes";
         name = "fixture-other";
         autoStart = false;
       })
       {
         tentaflake.workspaceQuota.agents = {
-          hermes-fixture = {
+          agent-fixture = {
             enable = true;
-            workspace = "/var/lib/hermes-fixture/workspace";
+            workspace = "/var/lib/tentaflake/agents/fixture/workspace";
           };
-          hermes-fixture-other = {
+          agent-fixture-other = {
             enable = true;
-            workspace = "/var/lib/hermes-fixture-other/workspace";
+            workspace = "/var/lib/tentaflake/agents/fixture-other/workspace";
           };
-          disabled.workspace = "/var/lib/hermes-fixture/disabled";
+          disabled.workspace = "/var/lib/tentaflake/agents/fixture/disabled";
         };
         tentaflake.backup = {
           inherit paths;
@@ -767,8 +801,8 @@ let
         };
       }
     ];
-  backup = backupWithPaths [ "/var/lib/hermes-fixture/" ];
-  explicitWorkspaceBackup = backupWithPaths [ "/var/lib/hermes-fixture/workspace" ];
+  backup = backupWithPaths [ "/var/lib/tentaflake/agents/fixture/" ];
+  explicitWorkspaceBackup = backupWithPaths [ "/var/lib/tentaflake/agents/fixture/workspace" ];
   unrelatedBackup = backupWithPaths [ "/var/lib/unrelated" ];
   backupAttempt = builtins.tryEval backup.config.system.build.toplevel.drvPath;
 
@@ -790,7 +824,8 @@ let
     ../modules/default.nix
     ../modules/profiles/observability.nix
     (hostModule "balanced")
-    (builders.mkHermesAgent {
+    (mkAgent {
+      adapter = "hermes";
       name = "observed";
       autoStart = false;
     })
@@ -802,9 +837,9 @@ let
           grafanaAdminPasswordFile = "/run/credentials/grafana-admin-password";
         };
         networking.enable = lib.mkForce true;
-        broker.agents.hermes-observed = {
+        broker.agents.agent-observed = {
           enable = true;
-          networkName = "tf-hermes-observed";
+          networkName = "tf-agent-observed";
           subnet = "10.203.30.0/30";
           gateway = "10.203.30.1";
           llm = {
@@ -844,7 +879,8 @@ let
     eval [
       ../modules/default.nix
       (hostModule "balanced")
-      (builders.mkHermesAgent {
+      (mkAgent {
+        adapter = "hermes";
         name = "escaped-reference";
         autoStart = false;
         extraVolumes = [ volume ];
@@ -880,10 +916,10 @@ assert lib.all
     && unit.serviceConfig.RestartMaxDelaySec == "1min"
   )
   [
-    capsule.config.systemd.services.docker-hermes-hermes-fixture
-    capsule.config.systemd.services.docker-zeroclaw-zeroclaw-fixture
-    brokerCapsule.config.systemd.services.tentaflake-broker-llm-hermes-brokered
-    brokerCapsule.config.systemd.services.tentaflake-broker-fetch-hermes-brokered
+    capsule.config.systemd.services.docker-agent-hermes-fixture
+    capsule.config.systemd.services.docker-agent-zeroclaw-fixture
+    brokerCapsule.config.systemd.services.tentaflake-broker-llm-agent-brokered
+    brokerCapsule.config.systemd.services.tentaflake-broker-fetch-agent-brokered
   ];
 
 assert lib.all
@@ -894,21 +930,21 @@ assert lib.all
     && unit.serviceConfig.LimitNOFILE == 4096
   )
   [
-    brokerCapsule.config.systemd.services.tentaflake-broker-llm-hermes-brokered
-    brokerCapsule.config.systemd.services.tentaflake-broker-fetch-hermes-brokered
+    brokerCapsule.config.systemd.services.tentaflake-broker-llm-agent-brokered
+    brokerCapsule.config.systemd.services.tentaflake-broker-fetch-agent-brokered
   ];
 assert
   let
     credentials =
-      brokerCapsule.config.systemd.services.tentaflake-broker-credentials-hermes-brokered.serviceConfig;
+      brokerCapsule.config.systemd.services.tentaflake-broker-credentials-agent-brokered.serviceConfig;
   in
-  credentials.RuntimeDirectory == "tentaflake-broker/hermes-brokered"
+  credentials.RuntimeDirectory == "tentaflake-broker/agent-brokered"
   && credentials.RuntimeDirectoryMode == "0700"
   && credentials.RuntimeDirectoryPreserve == "yes"
   && credentials.ProtectSystem == "strict"
   && credentials.CapabilityBoundingSet == ""
   && credentials.ReadOnlyPaths == [ "/run/tentaflake-broker" ]
-  && credentials.ReadWritePaths == [ "/run/tentaflake-broker/hermes-brokered" ];
+  && credentials.ReadWritePaths == [ "/run/tentaflake-broker/agent-brokered" ];
 assert
   let
     agentLines = lib.filter (lib.hasPrefix "agent\t") (lib.splitString "\n" capsuleManifest);
@@ -934,8 +970,8 @@ assert provenanceAttempt.success;
 assert !missingProvenanceAttempt.success;
 assert lib.hasInfix "cosign verify --certificate-identity"
   provenanceService.serviceConfig.ExecStart;
-assert lib.elem "tentaflake-image-verify-hermes-signed.service"
-  provenanceCapsule.config.systemd.services.docker-hermes-signed.requires;
+assert lib.elem "tentaflake-image-verify-agent-signed.service"
+  provenanceCapsule.config.systemd.services.docker-agent-signed.requires;
 assert podmanAttempt.success;
 assert !strictAttempt.success;
 assert !unlimitedResourceAttempt.success;
@@ -945,19 +981,24 @@ assert !oversizedControllerCpuAttempt.success;
 assert !overpreciseControllerCpuAttempt.success;
 assert !missingManagementAttempt.success;
 assert !publicSshAttempt.success;
-assert gitAttempt.success;
+assert disabledGitAttempt.success;
+assert !(disabledGitFixture.config.systemd.services ? agent-disabled-git-autopush);
+assert !(disabledGitFixture.config.systemd.timers ? agent-disabled-git-autopush);
+assert !gitAttempt.success;
 assert !unsafeGitAttempt.success;
 assert !unsafeGitRootAttempt.success;
-assert lib.hasInfix "remote-check" gitScript;
-assert lib.hasInfix "safe.directory=\"$repo\"" gitScript;
-assert !(lib.hasInfix "safe.directory='*'" gitScript);
-assert !(lib.hasInfix "case \"$url\" in *github.com*" gitScript);
+assert lib.all (name: !(lib.hasSuffix "-autopush" name)) (
+  builtins.attrNames disabledGitFixture.config.systemd.services
+);
+assert lib.all (name: !(lib.hasSuffix "-autopush" name)) (
+  builtins.attrNames disabledGitFixture.config.systemd.timers
+);
 assert capsule.config.tentaflake.security.profile == "balanced";
 assert import ./management-policy.nix { inherit pkgs; };
 assert lib.hasPrefix "manifest\t2\n" capsuleManifest;
 assert lib.hasInfix "host\tbalanced\tfalse\tfalse\ttrue\ttrue\tfalse\t36\n" capsuleManifest;
 assert lib.hasInfix "management\ttailscale\ttrue\ttrue\ttailnet-policy" capsuleManifest;
-assert lib.hasInfix "agent\thermes-hermes-fixture\tbalanced" capsuleManifest;
+assert lib.hasInfix "agent\tagent-hermes-fixture\tbalanced" capsuleManifest;
 assert
   lib.getExe' pkgs.gvisor "runsc"
   == capsule.config.virtualisation.docker.daemon.settings.runtimes.runsc.path;
@@ -969,7 +1010,7 @@ assert
 assert lib.elem pkgs.gvisor podmanCapsule.config.virtualisation.podman.extraRuntimes;
 assert podmanContainer.networks == [ "tf-hermes-podman" ];
 assert lib.hasInfix "--interface-name \"$bridge\""
-  podmanCapsule.config.systemd.services.tentaflake-broker-network-hermes-podman-fixture.script;
+  podmanCapsule.config.systemd.services.tentaflake-broker-network-agent-podman-fixture.script;
 assert !(lib.all (item: item.assertion) unsafePolicy.assertions);
 assert !(lib.all (item: item.assertion) unsafeEnvironmentPolicy.assertions);
 assert !(lib.all (item: item.assertion) unsafeOptionPolicy.assertions);
@@ -984,52 +1025,51 @@ assert !rootHermesAttempt.success;
 assert !unsafeHealAttempt.success;
 assert seededAttempt.success;
 assert
-  seededCapsule.config.systemd.services."seed-hermes-seeded-hermes".serviceConfig.User == "10000";
-assert
-  seededCapsule.config.systemd.services."seed-zeroclaw-seeded-zero".serviceConfig.User == "65534";
+  seededCapsule.config.systemd.services."agent-seeded-hermes-seed".serviceConfig.User == "10000";
+assert seededCapsule.config.systemd.services."agent-seeded-zero-seed".serviceConfig.User == "65534";
 assert containerSecurity.containsSensitiveValue { OPENAI_API_KEY = "fixture"; };
 assert !(containerSecurity.containsSensitiveValue { MONKEY = "fixture"; });
 assert lib.elem "--network=host" devContainer.extraOptions;
 assert lib.elem "--env-file=/run/tentaflake/dev.env" devContainer.extraOptions;
 assert !(lib.elem "--runtime=runsc" devContainer.extraOptions);
 assert brokerAttempt.success;
-assert !brokerCapsule.config.tentaflake.broker.agents.hermes-brokered.llm.streaming.enable;
-assert !brokerCapsule.config.tentaflake.broker.agents.hermes-brokered.llm.strictCostEnvelope;
+assert !brokerCapsule.config.tentaflake.broker.agents.agent-brokered.llm.streaming.enable;
+assert !brokerCapsule.config.tentaflake.broker.agents.agent-brokered.llm.strictCostEnvelope;
 assert
-  !(builtins.hasAttr "tentaflake-broker-llm-initialize-hermes-brokered" brokerCapsule.config.systemd.services);
+  !(builtins.hasAttr "tentaflake-broker-llm-initialize-agent-brokered" brokerCapsule.config.systemd.services);
 assert lib.all (item: item.assertion) strictBrokerCapsule.config.assertions;
-assert strictBrokerCapsule.config.tentaflake.broker.agents.hermes-brokered.llm.strictCostEnvelope;
+assert strictBrokerCapsule.config.tentaflake.broker.agents.agent-brokered.llm.strictCostEnvelope;
 assert
-  strictBrokerCapsule.config.systemd.services."tentaflake-broker-llm-hermes-brokered".serviceConfig.User
+  strictBrokerCapsule.config.systemd.services."tentaflake-broker-llm-agent-brokered".serviceConfig.User
   == brokerBridge;
 assert
-  strictBrokerCapsule.config.systemd.services."tentaflake-broker-llm-initialize-hermes-brokered".serviceConfig.User
+  strictBrokerCapsule.config.systemd.services."tentaflake-broker-llm-initialize-agent-brokered".serviceConfig.User
   == brokerBridge;
 assert
-  strictBrokerCapsule.config.systemd.services."tentaflake-broker-llm-initialize-hermes-brokered".serviceConfig.StateDirectory
-  == "tentaflake-broker-llm-hermes-brokered";
+  strictBrokerCapsule.config.systemd.services."tentaflake-broker-llm-initialize-agent-brokered".serviceConfig.StateDirectory
+  == "tentaflake-broker-llm-agent-brokered";
 assert lib.hasInfix "--initialize-strict-budget"
-  strictBrokerCapsule.config.systemd.services."tentaflake-broker-llm-initialize-hermes-brokered".serviceConfig.ExecStart;
+  strictBrokerCapsule.config.systemd.services."tentaflake-broker-llm-initialize-agent-brokered".serviceConfig.ExecStart;
 assert
-  strictBrokerCapsule.config.systemd.services."tentaflake-broker-llm-initialize-hermes-brokered".wantedBy
+  strictBrokerCapsule.config.systemd.services."tentaflake-broker-llm-initialize-agent-brokered".wantedBy
   == [ ];
 assert
-  !(builtins.hasAttr "tentaflake-broker-llm-reconcile-hermes-brokered" brokerCapsule.config.systemd.services);
+  !(builtins.hasAttr "tentaflake-broker-llm-reconcile-agent-brokered" brokerCapsule.config.systemd.services);
 assert
-  strictBrokerCapsule.config.systemd.services."tentaflake-broker-llm-reconcile-hermes-brokered".serviceConfig.User
+  strictBrokerCapsule.config.systemd.services."tentaflake-broker-llm-reconcile-agent-brokered".serviceConfig.User
   == brokerBridge;
 assert lib.hasInfix
-  "--reconcile-strict-budget /var/lib/tentaflake-broker-llm-hermes-brokered/budget.json"
-  strictBrokerCapsule.config.systemd.services."tentaflake-broker-llm-reconcile-hermes-brokered".serviceConfig.ExecStart;
+  "--reconcile-strict-budget /var/lib/tentaflake-broker-llm-agent-brokered/budget.json"
+  strictBrokerCapsule.config.systemd.services."tentaflake-broker-llm-reconcile-agent-brokered".serviceConfig.ExecStart;
 assert
-  strictBrokerCapsule.config.systemd.services."tentaflake-broker-llm-reconcile-hermes-brokered".wantedBy
+  strictBrokerCapsule.config.systemd.services."tentaflake-broker-llm-reconcile-agent-brokered".wantedBy
   == [ ];
 assert !(lib.all (item: item.assertion) strictBrokerIdentityCollision.config.assertions);
 assert lib.hasInfix "OPENAI_API_KEY=%s"
-  strictBrokerCapsule.config.systemd.services."tentaflake-broker-credentials-hermes-brokered".script;
+  strictBrokerCapsule.config.systemd.services."tentaflake-broker-credentials-agent-brokered".script;
 assert
   !(lib.hasInfix "/run/agenix/example-provider"
-    strictBrokerCapsule.config.systemd.services."tentaflake-broker-credentials-hermes-brokered".script
+    strictBrokerCapsule.config.systemd.services."tentaflake-broker-credentials-agent-brokered".script
   );
 assert lib.all (item: item.assertion) streamingCapsule.config.assertions;
 assert streamingAssertions {
@@ -1088,7 +1128,7 @@ assert !(brokerModeBudgetsAccepted [ llmMode fetchMode dualMode ] 16 119);
 
 assert workerAttempt.success;
 assert
-  !(builtins.tryEval tooSmallQuota.config.tentaflake.workspaceQuota.agents.hermes-worker.sizeMiB)
+  !(builtins.tryEval tooSmallQuota.config.tentaflake.workspaceQuota.agents.agent-worker.sizeMiB)
   .success;
 assert !incompleteAutostartAttempt.success;
 assert !unsafeWorkerAttempt.success;
@@ -1100,23 +1140,23 @@ assert backup.config.services.restic.backups.tentaflake.runCheck;
 assert backup.config.services.restic.backups.tentaflake.inhibitsSleep;
 assert
   backup.config.services.restic.backups.tentaflake.paths == [
-    "/var/lib/hermes-fixture/"
-    "/var/lib/hermes-fixture/workspace"
+    "/var/lib/tentaflake/agents/fixture/"
+    "/var/lib/tentaflake/agents/fixture/workspace"
   ];
 assert
   explicitWorkspaceBackup.config.services.restic.backups.tentaflake.paths == [
-    "/var/lib/hermes-fixture/workspace"
+    "/var/lib/tentaflake/agents/fixture/workspace"
   ];
 assert unrelatedBackup.config.services.restic.backups.tentaflake.paths == [ "/var/lib/unrelated" ];
 assert backup.config.services.restic.backups.tentaflake.extraBackupArgs == [ "--one-file-system" ];
 assert
   backup.config.systemd.services.restic-backups-tentaflake.unitConfig.RequiresMountsFor == [
-    "/var/lib/hermes-fixture/"
-    "/var/lib/hermes-fixture/workspace"
+    "/var/lib/tentaflake/agents/fixture/"
+    "/var/lib/tentaflake/agents/fixture/workspace"
   ];
 assert
   backup.config.systemd.services.restic-backups-tentaflake.unitConfig.AssertPathIsMountPoint == [
-    "/var/lib/hermes-fixture/workspace"
+    "/var/lib/tentaflake/agents/fixture/workspace"
   ];
 assert
   unrelatedBackup.config.systemd.services.restic-backups-tentaflake.unitConfig.AssertPathIsMountPoint
@@ -1132,16 +1172,16 @@ assert
   backup.config.systemd.services.tentaflake-backup-success.serviceConfig.StateDirectoryMode == "0750";
 assert lib.hasInfix "$STATE_DIRECTORY/last-success"
   backup.config.systemd.services.tentaflake-backup-success.script;
-assert brokerContainer.networks == [ "tf-hermes-brokered" ];
+assert brokerContainer.networks == [ "tf-agent-brokered" ];
 assert
   brokerContainer.environmentFiles == [
-    "/run/tentaflake-broker/hermes-brokered/agent.env"
+    "/run/tentaflake-broker/agent-brokered/agent.env"
   ];
 assert !(lib.elem "--network=none" brokerContainer.extraOptions);
 assert lib.elem "--dns=127.0.0.1" brokerContainer.extraOptions;
 assert lib.elem "--sysctl=net.ipv6.conf.all.disable_ipv6=1" brokerContainer.extraOptions;
 assert brokerContainer.labels."io.tentaflake.brokered-egress" == "true";
-assert lib.elem "/var/lib/tentaflake-worker-hermes-worker/results:/run/tentaflake-worker/results:ro"
+assert lib.elem "/var/lib/tentaflake-worker-agent-worker/results:/run/tentaflake-worker/results:ro"
   workerContainer.volumes;
 assert workerService.serviceConfig.RestrictAddressFamilies == [ "AF_UNIX" ];
 assert workerService.serviceConfig.CapabilityBoundingSet == [ "CAP_DAC_READ_SEARCH" ];
@@ -1151,11 +1191,11 @@ assert workerCapsule.config.users.groups.tfw-gid-10000.gid == 10000;
 assert numericWorkerService.serviceConfig.Group == "nogroup";
 assert
   workerPath.pathConfig.DirectoryNotEmpty
-  == "/var/lib/hermes-worker/workspace/.tentaflake-worker/inbox";
+  == "/var/lib/tentaflake/agents/worker/workspace/.tentaflake-worker/inbox";
 assert workerPath.unitConfig.DefaultDependencies == false;
-assert lib.elem "tentaflake-workspace-quota-hermes-worker.service" workerPath.after;
+assert lib.elem "tentaflake-workspace-quota-agent-worker.service" workerPath.after;
 assert workerMount != null;
-assert workerMount.what == "/var/lib/tentaflake-workspace-volumes/hermes-worker.img";
+assert workerMount.what == "/var/lib/tentaflake-workspace-volumes/agent-worker.img";
 assert workerMount.options == "loop,nodev,nosuid,noatime";
 assert workerMount.unitConfig.DefaultDependencies == false;
 assert workerMount.wantedBy == [ "multi-user.target" ];
@@ -1168,31 +1208,31 @@ assert
     "CAP_FOWNER"
   ];
 assert lib.elem
-  "d /var/lib/hermes-worker/workspace/.tentaflake-worker/inbox 0770 10000 tfw-gid-10000 -"
+  "d /var/lib/tentaflake/agents/worker/workspace/.tentaflake-worker/inbox 0770 10000 tfw-gid-10000 -"
   workerCapsule.config.systemd.tmpfiles.rules;
-assert lib.elem "tentaflake-workspace-quota-hermes-worker.service"
-  workerCapsule.config.systemd.services.docker-hermes-worker.requires;
+assert lib.elem "tentaflake-workspace-quota-agent-worker.service"
+  workerCapsule.config.systemd.services.docker-agent-worker.requires;
 assert lib.hasInfix "refusing to hide non-empty workspace"
-  workerCapsule.config.systemd.services.tentaflake-workspace-quota-prepare-hermes-worker.script;
+  workerCapsule.config.systemd.services.tentaflake-workspace-quota-prepare-agent-worker.script;
 assert lib.hasInfix " load --input "
   workerCapsule.config.systemd.services.tentaflake-worker-image.serviceConfig.ExecStart;
 assert lib.hasInfix "host\tbalanced\tfalse\ttrue\ttrue\ttrue\tfalse\t36\n" brokerManifest;
 assert lib.hasInfix "management\ttailscale\ttrue\ttrue\ttailnet-policy" brokerManifest;
 assert
-  brokerCapsule.config.systemd.services."tentaflake-broker-llm-hermes-brokered".serviceConfig.LoadCredential
+  brokerCapsule.config.systemd.services."tentaflake-broker-llm-agent-brokered".serviceConfig.LoadCredential
   == [
-    "agent-token:/run/tentaflake-broker/hermes-brokered/agent-token"
+    "agent-token:/run/tentaflake-broker/agent-brokered/agent-token"
     "provider:/run/agenix/example-provider"
   ];
 assert
-  brokerCapsule.config.systemd.services."tentaflake-broker-fetch-hermes-brokered".serviceConfig.CapabilityBoundingSet
+  brokerCapsule.config.systemd.services."tentaflake-broker-fetch-agent-brokered".serviceConfig.CapabilityBoundingSet
   == "";
 assert lib.hasInfix "ip saddr 10.203.20.0/30 counter drop"
   brokerCapsule.config.networking.firewall.extraForwardRules;
 assert lib.hasInfix "iifname \"${brokerBridge}\" ip saddr 10.203.20.0/30"
   brokerCapsule.config.networking.firewall.extraInputRules;
 assert lib.hasInfix "com.docker.network.bridge.name=\"$bridge\""
-  brokerCapsule.config.systemd.services.tentaflake-broker-network-hermes-brokered.script;
+  brokerCapsule.config.systemd.services.tentaflake-broker-network-agent-brokered.script;
 assert lib.all
   (
     container:
@@ -1224,7 +1264,7 @@ assert lib.elem "textfile"
   observability.config.services.prometheus.exporters.node.enabledCollectors;
 assert lib.any (lib.hasInfix "TentaflakePolicyDenials")
   observability.config.services.prometheus.rules;
-assert lib.hasInfix "/var/lib/tentaflake-broker-llm-hermes-observed/audit.jsonl"
+assert lib.hasInfix "/var/lib/tentaflake-broker-llm-agent-observed/audit.jsonl"
   observability.config.systemd.services.tentaflake-observability-metrics.script;
 assert
   observability.config.systemd.services.tentaflake-observability-metrics.serviceConfig.RestrictAddressFamilies
@@ -1286,6 +1326,7 @@ assert (builtins.head tailscalePolicy.ssh).action == "check";
 # Parse the configured flags with the pinned CLI. --help avoids contacting a
 # daemon, while an unsupported flag before it still fails during parsing.
 pkgs.runCommand "tentaflake-module-evaluation" { } ''
+  ${pkgs.python3}/bin/python3 ${./git-autopush-boundary.py} ${pkgs.git}/bin/git ${pkgs.runtimeShell}
   ${lib.getExe capsule.config.services.tailscale.package} set ${lib.escapeShellArgs capsule.config.services.tailscale.extraSetFlags} --help >/dev/null
   ${lib.getExe capsule.config.services.tailscale.package} up ${lib.escapeShellArgs capsule.config.services.tailscale.extraUpFlags} --help >/dev/null
   touch $out

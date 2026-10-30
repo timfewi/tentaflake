@@ -1,16 +1,4 @@
-# ────────────────────────────────────────────────────────────
-# agentsFromData — turn versioned adapter input and legacy agent arrays
-# into the same list of NixOS modules my-agents.nix produces by hand.
-#
-# agents.json is declarative and NON-SECRET (git-tracked): instance arguments,
-# model ids, providers, ports, and paths to runtime env files holding API keys.
-# The keys themselves never appear here — only the `envFile` path that
-# points at them.
-#
-# Usage (see configuration.nix):
-#   agentsFromData { file = ./agents.json; inherit mkHermesAgent mkZeroClawAgent; }
-# ────────────────────────────────────────────────────────────
-
+# Internal versioned, non-secret parser shared by file loading and onboarding.
 {
   lib,
   pkgs ? null,
@@ -19,26 +7,21 @@
 {
   file ? null,
   data ? null,
-  mkHermesAgent,
-  mkZeroClawAgent,
-  mkAgent ? null,
 }:
 let
+  mkAgent = import ./mkAgent.nix { inherit pkgs lib; };
+  fail = message: throw "tentaflake agentsFromData: ${message}";
   rawData =
     if (file == null) == (data == null) then
       fail "provide exactly one file or data object."
     else if data != null then
       data
+    else if !lib.hasSuffix ".toml" (toString file) then
+      fail "public inventories must be TOML files; manually migrate legacy JSON to agents.toml before loading."
+    else if builtins.pathExists (builtins.dirOf (toString file) + "/agents.json") then
+      fail "legacy agents.json conflicts with the TOML inventory; manually migrate it and remove agents.json before loading."
     else
-      builtins.fromJSON (builtins.readFile file);
-  checkedData =
-    if builtins.isAttrs rawData then
-      checkFields "root" [ "schemaVersion" "agents" "hermes" "zeroclaw" "_securityNote" ] rawData
-    else
-      fail "root must be an object.";
-  registry = import ../adapters { inherit pkgs lib; };
-  inherit (import ./containerSecurity.nix { inherit lib; }) containsSensitiveValue;
-  fail = message: throw "tentaflake agentsFromData: ${message}";
+      builtins.fromTOML (builtins.readFile file);
   checkFields =
     location: allowed: value:
     let
@@ -48,132 +31,103 @@ let
       value
     else
       fail "${location} has unknown field(s): ${lib.concatStringsSep ", " unknown}.";
+  finiteNumbers =
+    value:
+    if builtins.isFloat value then
+      # Only finite floats subtract from themselves to zero (NaN != 0).
+      value - value == 0
+    else if builtins.isList value then
+      lib.all finiteNumbers value
+    else if builtins.isAttrs value then
+      lib.all finiteNumbers (builtins.attrValues value)
+    else
+      true;
+  checkedData =
+    if !builtins.isAttrs rawData then
+      fail "root must be an object."
+    else if !finiteNumbers rawData then
+      fail "inventory values must not contain non-finite numbers."
+    else
+      checkFields "root" [ "schemaVersion" "agents" "_securityNote" ] rawData;
+  registry = import ../adapters { inherit pkgs lib; };
+  inherit (import ./containerSecurity.nix { inherit lib; }) containsSensitiveValue;
+  nullable = predicate: value: value == null || predicate value;
+  strings = value: builtins.isList value && lib.all builtins.isString value;
+  unsigned = value: builtins.isInt value && value >= 0;
+  # Types describe builder arguments, never select a runtime or translate settings.
+  types = {
+    autoStart = builtins.isBool;
+    allowMutableImage = builtins.isBool;
+    createUser = builtins.isBool;
+    stateDir = builtins.isString;
+    image = builtins.isString;
+    user = builtins.isString;
+    group = builtins.isString;
+    envFile = nullable builtins.isString;
+    agenixFile = nullable builtins.isString;
+    seedDir = nullable builtins.isString;
+    networkMode = nullable builtins.isString;
+    uid = nullable unsigned;
+    gid = nullable unsigned;
+    containerUid = unsigned;
+    containerGid = unsigned;
+    pidsLimit = nullable unsigned;
+    gatewayPort = unsigned;
+    hostPort = nullable unsigned;
+    servePort = nullable unsigned;
+    cmd = nullable strings;
+    extraVolumes = strings;
+    healDataDirs = strings;
+    extraEnvironment =
+      value: builtins.isAttrs value && lib.all builtins.isString (builtins.attrValues value);
+    extraContainerConfig = builtins.isAttrs;
+    settings = nullable builtins.isAttrs;
+    definition = builtins.isAttrs;
+    gitIdentity = nullable builtins.isAttrs;
+    dashboard = nullable builtins.isAttrs;
+    services = builtins.isAttrs;
+    providerHealthcheck = nullable builtins.isAttrs;
+  };
   checkEntry =
-    kind: index: entry:
+    index: entry:
     let
-      location = "${kind}[${toString index}]";
-      generic = kind == "agents";
-      allowed = [
-        "name"
-        "model"
-        "provider"
-        "base_url"
-        "envFile"
-      ]
-      ++ lib.optionals (kind == "zeroclaw") [
-        "hostPort"
-        "servePort"
-      ];
-      checked =
-        if generic then
-          checkFields location (
-            [ "adapter" ] ++ builtins.attrNames (builtins.functionArgs registry.${entry.adapter}.build)
-          ) entry
-        else
-          checkFields location allowed entry;
-      required =
-        if generic then
-          [
-            "name"
-            "adapter"
-          ]
-        else
-          [
-            "name"
-            "model"
-            "provider"
-            "envFile"
-          ]
-          ++ lib.optionals (kind == "zeroclaw") [
-            "hostPort"
-            "servePort"
-          ];
-      missing = lib.filter (field: !(builtins.hasAttr field entry)) required;
-      adapter = if generic then entry.adapter else kind;
+      location = "agents[${toString index}]";
+      args = builtins.functionArgs registry.${entry.adapter}.build;
+      missing = lib.filter (field: !(builtins.hasAttr field entry)) (
+        [ "adapter" ] ++ builtins.attrNames (lib.filterAttrs (_: optional: !optional) args)
+      );
+      invalid = lib.filter (field: builtins.hasAttr field types && !(types.${field} entry.${field})) (
+        builtins.attrNames entry
+      );
+      checked = checkFields location ([ "adapter" ] ++ builtins.attrNames args) entry;
     in
     if !builtins.isAttrs entry then
       fail "${location} must be an object."
-    else if missing != [ ] then
-      fail "${location} is missing: ${lib.concatStringsSep ", " missing}."
+    else if !(entry ? name) || !(entry ? adapter) then
+      fail "${location} requires name and adapter."
     else if !builtins.isString entry.name || builtins.match "[a-z0-9][a-z0-9-]*" entry.name == null then
       fail "${location}.name must contain lowercase ASCII letters, digits, and hyphens."
-    else if !builtins.isString adapter || !(builtins.hasAttr adapter registry) then
+    else if !builtins.isString entry.adapter || !(builtins.hasAttr entry.adapter registry) then
       fail "${location} has unknown adapter; select ${lib.concatStringsSep ", " (builtins.attrNames registry)}."
+    else if missing != [ ] then
+      fail "${location} is missing: ${lib.concatStringsSep ", " missing}."
     else if containsSensitiveValue entry then
       fail "${location} contains a secret-like field; use operator-provisioned runtime credential paths."
-    else if entry ? autoStart && !builtins.isBool entry.autoStart then
-      fail "${location}.autoStart must be a boolean."
-    else if !generic && (!builtins.isString entry.model || !builtins.isString entry.provider) then
-      fail "${location}.model and .provider must be strings."
-    else if !generic && entry.envFile != null && !builtins.isString entry.envFile then
-      fail "${location}.envFile must be a path string or null."
+    else if invalid != [ ] then
+      fail "${location} has invalid argument type(s): ${lib.concatStringsSep ", " invalid}."
     else
       checked;
-  entries =
-    kind:
-    let
-      value = checkedData.${kind} or [ ];
-    in
-    if !builtins.isList value then
-      fail "${kind} must be an array."
-    else
-      lib.imap0 (checkEntry kind) value;
-  hermes = entries "hermes";
-  zeroclaw = entries "zeroclaw";
-  agents = entries "agents";
-  identities =
-    map (e: "hermes-${e.name}") hermes
-    ++ map (e: "zeroclaw-${e.name}") zeroclaw
-    ++ map (e: "${e.adapter}-${e.name}") agents;
+  agents = lib.imap0 checkEntry checkedData.agents;
+  identities = map (entry: (import ./agentIdentity.nix).container entry.name) agents;
   validate =
-    if (checkedData.schemaVersion or 1) != 1 then
-      fail "unsupported schemaVersion; expected 1."
-    else if checkedData ? agents && !(checkedData ? schemaVersion) then
-      fail "generic agents requires schemaVersion = 1."
-    else if agents != [ ] && mkAgent == null then
-      fail "generic agents requires the mkAgent helper."
+    if !builtins.isInt (checkedData.schemaVersion or null) || checkedData.schemaVersion != 1 then
+      fail "schemaVersion is required and must be integer 1."
+    else if !(checkedData ? agents) || !builtins.isList checkedData.agents then
+      fail "agents must be an array."
     else if builtins.length identities != builtins.length (lib.unique identities) then
-      fail "duplicate adapter instance/container identity: ${lib.concatStringsSep ", " identities}."
+      fail "duplicate global instance/container identity: ${lib.concatStringsSep ", " identities}."
     else
       true;
-
-  hermesModule =
-    e:
-    mkHermesAgent {
-      inherit (e) name;
-      inherit (e) envFile;
-      settings.model = {
-        default = e.model;
-        inherit (e) provider;
-      }
-      // lib.optionalAttrs ((e.base_url or null) != null) { inherit (e) base_url; };
-    };
-
-  zeroclawModule =
-    e:
-    mkZeroClawAgent {
-      inherit (e) name;
-      agenixFile = e.envFile;
-      inherit (e) hostPort;
-      inherit (e) servePort;
-      settings = {
-        schema_version = 3;
-        providers.models.${e.provider}.default = {
-          inherit (e) model;
-        }
-        // lib.optionalAttrs ((e.base_url or null) != null) { uri = e.base_url; };
-        runtime_profiles.default = {
-          agentic = true;
-          max_tool_iterations = 25;
-        };
-        agents.main = {
-          model_provider = "${e.provider}.default";
-          risk_profile = "default";
-          runtime_profile = "default";
-        };
-        risk_profiles.default.level = "supervised";
-      };
-    };
 in
 assert validate;
-map hermesModule hermes ++ map zeroclawModule zeroclaw ++ map mkAgent agents
+map mkAgent agents

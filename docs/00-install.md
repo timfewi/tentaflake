@@ -108,6 +108,13 @@ or fresh installation. Agent workspace images also use Btrfs; see the
 [workspace migration guide](14-workspace-quota.md) before updating existing
 quota-enabled deployments.
 
+The installer initializes `agents.toml` with `schemaVersion = 1` and `agents = []`
+if absent. No example inventory is bundled and no sample agent is enabled
+automatically; declare or import reviewed stopped instances into the live TOML
+file, then configure matching Nix host policy. Existing `agents.json` requires
+deliberate [migration](agent-adapters.md#breaking-migration), not a silent empty
+replacement, including when both inventory files exist.
+
 After installation and reboot, continue with
 [the quick start](01-quickstart.md).
 

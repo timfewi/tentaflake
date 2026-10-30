@@ -52,8 +52,8 @@ exit "$FIXTURE_DISK_EXIT""#,
         }
         fs::write(
             root.join("agents.tsv"),
-            "hermes\tcoding-private-fixture\tcoding-fixture\tcoding-fixture.service\t/tmp/coding-fixture\ttrue\n\
-             hermes\tstopped-private-fixture\tstopped-fixture\tstopped-fixture.service\t/tmp/stopped-fixture\ttrue\n",
+            "generic\tcoding-private-fixture\tcoding-fixture\tcoding-fixture.service\t/tmp/coding-fixture\ttrue\n\
+             generic\tstopped-private-fixture\tstopped-fixture\tstopped-fixture.service\t/tmp/stopped-fixture\ttrue\n",
         )
         .unwrap();
         fs::write(
@@ -150,6 +150,23 @@ fn hidden_diagnostics_redact_names_in_both_formats() {
             }
         }
     }
+}
+
+#[test]
+fn status_exposes_stable_ids_and_redacts_them_when_hidden() {
+    let fixture = Fixture::new();
+    let output = fixture.run("status", true, false, &[]);
+    assert!(output.status.success());
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(value["agents"][0]["id"], "coding-fixture");
+    assert_eq!(value["agents"][0]["runnable"], true);
+
+    let hidden = fixture.run("status", true, true, &[]);
+    assert!(hidden.status.success());
+    let value: serde_json::Value = serde_json::from_slice(&hidden.stdout).unwrap();
+    assert_eq!(value["agents"][0]["id"], "agent-1");
+    assert_eq!(value["agents"][0]["name"], "agent-1");
+    assert!(!String::from_utf8_lossy(&hidden.stdout).contains("fixture"));
 }
 
 #[test]
@@ -261,10 +278,10 @@ fn stats_omit_stopped_scaffolds_but_keep_real_and_unmanaged_agents() {
     fake_backend(&fixture);
     fs::write(
         fixture.0.join("agents.tsv"),
-        "pi\tpilot\tpi-pilot\tdocker-pi-pilot.service\t/var/lib/pi-pilot\tfalse\n\
-         openclaw\tchat\topenclaw-chat\tdocker-openclaw-chat.service\t/var/lib/openclaw-chat\tfalse\n\
-         hermes\tworker\thermes-worker\tdocker-hermes-worker.service\t/var/lib/hermes-worker\ttrue\n\
-         hermes\tparked\thermes-parked\tdocker-hermes-parked.service\t/var/lib/hermes-parked\tfalse\n\
+        "pi\tpilot\tagent-pilot\tdocker-agent-pilot.service\t/var/lib/tentaflake/agents/pilot\tfalse\n\
+         future-runtime\tchat\tagent-chat\tdocker-agent-chat.service\t/var/lib/tentaflake/agents/chat\tfalse\n\
+         generic\tworker\tagent-worker\tdocker-agent-worker.service\t/var/lib/tentaflake/agents/worker\ttrue\n\
+         generic\tparked\tagent-parked\tdocker-agent-parked.service\t/var/lib/tentaflake/agents/parked\tfalse\n\
          agent\tlegacy\tunmanaged\tdocker-unmanaged.service\t/var/lib/unmanaged\ttrue\n",
     )
     .unwrap();
@@ -279,7 +296,7 @@ fn stats_omit_stopped_scaffolds_but_keep_real_and_unmanaged_agents() {
             "backend-invoked",
             "stats",
             "--no-stream",
-            "hermes-worker",
+            "agent-worker",
             "unmanaged"
         ]
     );

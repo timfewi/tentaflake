@@ -10,7 +10,7 @@
 # ─────────────────────────────────────────────────────────────────────
 
 {
-  description = "My Hermes agent machine — powered by tentaflake";
+  description = "My agent machine — powered by tentaflake";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
@@ -45,20 +45,14 @@
       pkgs = nixpkgs.legacyPackages.${system};
 
       # ── Import tentaflake helpers ──
-      # ZeroClaw agents work the same way: pass definitions to
-      # mkZeroClawAgent.
-      mkHermesAgent = tentaflake.lib.${system}.mkHermesAgent;
-      mkAgent = tentaflake.lib.${system}.mkAgent;
-      mkZeroClawAgent = tentaflake.lib.${system}.mkZeroClawAgent;
+      agentsFromData = tentaflake.lib.${system}.agentsFromData;
       constants = tentaflake.lib.${system}.constants;
 
       # ── Shared specialArgs for all hosts ──
       specialArgs = {
         inherit
           self
-          mkHermesAgent
-          mkAgent
-          mkZeroClawAgent
+          agentsFromData
           constants
           ;
       };
@@ -119,9 +113,11 @@
           modules = [
             ./machines/agent-box/default.nix
             ./machines/agent-box/hardware-configuration.nix
-            ./machines/agent-box/agents.nix
+            # Host broker, Research, worker and quota policy stays in Nix.
+            ./machines/agent-box/host-policy.nix
             ./secrets/secrets.nix
-          ];
+          ]
+          ++ agentsFromData { file = ./agents.toml; };
         };
 
         # ── Future machines: just add a new mkHost call ──

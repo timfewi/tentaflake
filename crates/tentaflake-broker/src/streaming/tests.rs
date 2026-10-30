@@ -72,6 +72,59 @@ fn config(directory: &Directory, upstream: std::net::SocketAddr) -> Config {
         }
     })).unwrap()
 }
+#[test]
+fn slow_unauthenticated_body_releases_connection_slot() {
+    let directory = Directory::new();
+    let broker = Arc::new(Broker::new(config(&directory, "127.0.0.1:9".parse().unwrap())).unwrap());
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let active = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let settings = crate::ConnectionSettings {
+        timeout: Duration::from_millis(300),
+        max_concurrency: 1,
+        header_limit: 32768,
+        body_limit: 1048576,
+    };
+    let mut client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+    client
+        .write_all(b"POST /v1/chat/completions HTTP/1.1\r\nContent-Length: 100\r\n\r\n")
+        .unwrap();
+    let (socket, _) = listener.accept().unwrap();
+    let handler =
+        crate::dispatch_connection(socket, Arc::clone(&broker), Arc::clone(&active), settings)
+            .unwrap();
+    let (stop, stopped) = mpsc::channel();
+    let writer = thread::spawn(move || {
+        loop {
+            if client.write_all(b"x").is_err()
+                || stopped.recv_timeout(Duration::from_millis(40)).is_ok()
+            {
+                break;
+            }
+        }
+    });
+    let started = std::time::Instant::now();
+    handler.join().unwrap();
+    let _ = stop.send(());
+    writer.join().unwrap();
+    assert!(started.elapsed() < Duration::from_secs(1));
+    assert_eq!(active.load(Ordering::Acquire), 0);
+
+    let mut client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+    client
+        .set_read_timeout(Some(Duration::from_secs(2)))
+        .unwrap();
+    client
+        .write_all(b"GET /healthz HTTP/1.1\r\nHost: broker\r\n\r\n")
+        .unwrap();
+    let (socket, _) = listener.accept().unwrap();
+    let handler =
+        crate::dispatch_connection(socket, broker, Arc::clone(&active), settings).unwrap();
+    let mut response = String::new();
+    client.read_to_string(&mut response).unwrap();
+    handler.join().unwrap();
+    assert!(response.starts_with("HTTP/1.1 200 "));
+    assert_eq!(active.load(Ordering::Acquire), 0);
+}
 
 fn chat(delta: Value, finish: Value) -> Vec<u8> {
     format!(
@@ -136,7 +189,13 @@ impl Exchange {
             socket
                 .set_write_timeout(Some(Duration::from_secs(5)))
                 .unwrap();
-            let request = read_request(&mut socket, 32768, 1048576).unwrap();
+            let request = read_request(
+                &mut socket,
+                32768,
+                1048576,
+                std::time::Instant::now() + Duration::from_secs(5),
+            )
+            .unwrap();
             assert_eq!(request.headers["authorization"], "Bearer real-provider-key");
             assert_eq!(
                 request.headers.get("x-opencode-session"),
@@ -162,7 +221,14 @@ impl Exchange {
         let address = listener.local_addr().unwrap();
         let broker = thread::spawn(move || {
             let (mut socket, _) = listener.accept().unwrap();
-            crate::handle_connection(&mut socket, broker, 32768, 1048576, Duration::from_secs(5));
+            crate::handle_connection(
+                &mut socket,
+                broker,
+                32768,
+                1048576,
+                Duration::from_secs(5),
+                std::time::Instant::now() + Duration::from_secs(5),
+            );
         });
         let mut client = TcpStream::connect(address).unwrap();
         client
@@ -680,7 +746,13 @@ fn strict_nonstream_settles_only_verified_audited_delivered_outcomes() {
             socket
                 .set_read_timeout(Some(Duration::from_secs(5)))
                 .unwrap();
-            let req = read_request(&mut socket, 32768, 1048576).unwrap();
+            let req = read_request(
+                &mut socket,
+                32768,
+                1048576,
+                std::time::Instant::now() + Duration::from_secs(5),
+            )
+            .unwrap();
             assert_eq!(req.headers["authorization"], "Bearer real-provider-key");
             if fail_audit {
                 fs::remove_file(&audit_path).unwrap();
@@ -704,6 +776,7 @@ fn strict_nonstream_settles_only_verified_audited_delivered_outcomes() {
                     32768,
                     1048576,
                     Duration::from_secs(5),
+                    std::time::Instant::now() + Duration::from_secs(5),
                 );
             });
             let mut client = TcpStream::connect(address).unwrap();
@@ -820,7 +893,13 @@ fn strict_nonstream_usage_overages_block_admission_and_survive_restart() {
             let response_body = serde_json::to_vec(&answer).unwrap();
             let provider = thread::spawn(move || {
                 let (mut socket, _) = upstream.accept().unwrap();
-                read_request(&mut socket, 32768, 1048576).unwrap();
+                read_request(
+                    &mut socket,
+                    32768,
+                    1048576,
+                    std::time::Instant::now() + Duration::from_secs(5),
+                )
+                .unwrap();
                 write!(
                     socket,
                     "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
@@ -988,7 +1067,13 @@ fn strict_request_with_lost_upstream_response_stays_unsettled() {
     let broker = Broker::new(cfg.clone()).unwrap();
     let provider = thread::spawn(move || {
         let (mut socket, _) = upstream.accept().unwrap();
-        let _ = read_request(&mut socket, 32768, 1048576).unwrap();
+        let _ = read_request(
+            &mut socket,
+            32768,
+            1048576,
+            std::time::Instant::now() + Duration::from_secs(5),
+        )
+        .unwrap();
         // Drop the connection after receiving the request, without a response.
     });
     let mut payload = request(false);
@@ -1007,6 +1092,125 @@ fn strict_request_with_lost_upstream_response_stays_unsettled() {
     let state: Value = serde_json::from_slice(&fs::read(&cfg.budget_state_file).unwrap()).unwrap();
     assert_eq!(state["requests"], 1);
     assert_eq!(state["unsettled"], 1);
+}
+
+#[test]
+fn chat_rejects_multiple_or_malformed_choices_before_reservation_or_dispatch() {
+    use crate::http::Request;
+    use std::collections::HashMap;
+
+    for strict in [false, true] {
+        let directory = Directory::new();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let mut cfg = config(&directory, listener.local_addr().unwrap());
+        cfg.timeout_seconds = 1;
+        cfg.connect_timeout_seconds = 1;
+        cfg.llm.as_mut().unwrap().strict_cost_envelope = strict;
+        if strict {
+            crate::state::Limits::initialize_strict(&cfg.budget_state_file).unwrap();
+        }
+        let broker = Broker::new(cfg.clone()).unwrap();
+        let saved = fs::read(&cfg.budget_state_file).ok();
+        for streaming in [None, Some(false), Some(true)] {
+            for count in [
+                json!(2),
+                json!(0),
+                json!(-1),
+                json!(1.0),
+                json!(1.5),
+                json!("1"),
+                json!(true),
+                Value::Null,
+                json!([]),
+                json!({}),
+                json!(u64::MAX),
+            ] {
+                let mut payload = request(false);
+                payload.as_object_mut().unwrap().remove("stream");
+                if let Some(streaming) = streaming {
+                    payload["stream"] = json!(streaming);
+                }
+                payload["n"] = count.clone();
+                let response = broker.handle(Request {
+                    method: "POST".into(),
+                    path: "/v1/chat/completions".into(),
+                    headers: HashMap::from([
+                        ("authorization".into(), "Bearer virtual-agent-key".into()),
+                        ("content-type".into(), "application/json".into()),
+                    ]),
+                    body: serde_json::to_vec(&payload).unwrap(),
+                });
+                assert_eq!(response.status, 400, "strict={strict}, n={count}");
+                assert_eq!(
+                    serde_json::from_slice::<Value>(&response.body).unwrap(),
+                    json!({"error": if strict {
+                        "request is outside the strict cost envelope"
+                    } else {
+                        "request requires one completion choice"
+                    }})
+                );
+                assert!(response.streaming.is_none());
+                assert_eq!(fs::read(&cfg.budget_state_file).ok(), saved);
+            }
+        }
+        listener.set_nonblocking(true).unwrap();
+        assert_eq!(
+            listener.accept().unwrap_err().kind(),
+            std::io::ErrorKind::WouldBlock
+        );
+        directory.audit();
+    }
+}
+
+#[test]
+fn ordinary_nonstream_chat_forwards_absent_or_single_choice() {
+    use crate::http::Request;
+    use std::collections::HashMap;
+
+    let directory = Directory::new();
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let broker = Broker::new(config(&directory, listener.local_addr().unwrap())).unwrap();
+    let provider = thread::spawn(move || {
+        for count in [None, Some(json!(1))] {
+            let (mut socket, _) = listener.accept().unwrap();
+            socket
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            let received = read_request(
+                &mut socket,
+                32768,
+                1048576,
+                std::time::Instant::now() + Duration::from_secs(5),
+            )
+            .unwrap();
+            assert_eq!(received.path, "/v1/chat/completions");
+            let payload: Value = serde_json::from_slice(&received.body).unwrap();
+            assert_eq!(payload.get("n"), count.as_ref());
+            assert_eq!(payload["max_completion_tokens"], 8);
+            socket.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}").unwrap();
+        }
+    });
+    for count in [None, Some(json!(1))] {
+        let mut payload = request(false);
+        payload.as_object_mut().unwrap().remove("stream");
+        if let Some(count) = count {
+            payload["n"] = count;
+            payload["stream"] = json!(false);
+        }
+        let response = broker.handle(Request {
+            method: "POST".into(),
+            path: "/v1/chat/completions".into(),
+            headers: HashMap::from([
+                ("authorization".into(), "Bearer virtual-agent-key".into()),
+                ("content-type".into(), "application/json".into()),
+            ]),
+            body: serde_json::to_vec(&payload).unwrap(),
+        });
+        assert_eq!(response.status, 200);
+        assert!(response.streaming.is_none());
+    }
+    provider.join().unwrap();
+    directory.audit();
 }
 
 #[test]
@@ -1721,7 +1925,13 @@ fn concurrency_slot_survives_partial_output_and_is_released_on_disconnect() {
         socket
             .set_read_timeout(Some(Duration::from_secs(3)))
             .unwrap();
-        read_request(&mut socket, 32768, 1048576).unwrap();
+        read_request(
+            &mut socket,
+            32768,
+            1048576,
+            std::time::Instant::now() + Duration::from_secs(3),
+        )
+        .unwrap();
         headers(&mut socket);
         socket
             .write_all(&chat(

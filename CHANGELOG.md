@@ -7,14 +7,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 ### Direction
-- Resume the declarative v0.4.37 architecture: Hermes and ZeroClaw builders,
-  Nix/JSON agent definitions, CLI onboarding, installer, broker, Research,
-  workers, quotas and backups. The later admission/host-API expansion and 0.5
-  control-service runtime remain historical development, not this line's base.
-- Preserve that development in Git history; this is not a new published tag.
+- Keep declarative TOML onboarding, installation and Nix host policy
+  runtime-agnostic, with no mandatory runtime or control service.
+- Preserve earlier development in Git history; this is not a new published tag.
 - Keep release tagging explicit, as on the preceding main branch; restoring
   the declarative product does not resume automatic patch releases.
+### Breaking changes
+- Make schema-v1 `agents.toml` the only public instance-definition path.
+  Replace the JSON inventory with a safely empty TOML default and remove the
+  separate example file. Existing `agents.json` requires deliberate migration;
+  it is refused rather than silently ignored, even when TOML also exists.
+  Remove `my-agents.nix` and its example; a remaining legacy file requires
+  manual migration and is refused without evaluation. Expose only file-based
+  `agentsFromData`, runtime catalog and constants; builders and adapter builds
+  are internal. Remove runtime-specific wrappers, legacy arrays, the host
+  `hermes` CLI alias, runtime-specific skills, unused Hermes flake input and
+  `gitAutoPush` argument.
+- Give every managed instance the globally unique `agent-<name>` ID and default
+  host state `/var/lib/tentaflake/agents/<name>`. Existing state, quota images,
+  broker budgets and worker queues require explicit operator preservation and
+  service rekeying; no automatic move/reset occurs. See
+  [migration](docs/agent-adapters.md#breaking-migration).
+- Make each adapter Nix file the runtime implementation/preset owner; generate
+  CLI catalog JSON and docs from those presets. Vendor acceptance stays pending.
 ### Added
+- Document stopped TOML examples in the guides; ship and initialize only an
+  empty live inventory (`schemaVersion = 1`, `agents = []`). Model and network
+  allowlists, pricing, worker, quota and Research remain Nix host policy;
+  samples do not establish vendor acceptance or automatically start agents.
+- Extend optional host management with per-agent declared access/tool policy,
+  revision-bound Nix change proposals, and separately enabled captured worker
+  request review and digest-bound decisions. Worker decisions are durable and
+  do not synchronously run queued jobs; scheduling and execution remain distinct.
+- Add an opt-in Unix host API with canonical agent inventory, host health,
+  separately enabled bounded logs and fixed lifecycle actions. Durable request
+  receipts prevent automatic replay after uncertain action outcomes. A separate
+  compatible web UI can use host-only mode without task migration or Pi.
 - Add an opt-in strict local-text LLM cost envelope with explicit one-time
   budget provisioning, exclusive state ownership, checksum-protected durable
   reservations, uncertain-hold rollover blocking and clock-rollback refusal.
@@ -27,6 +55,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `tentaflake-broker-llm-reconcile-NAME` unit. With the broker stopped, it
   resolves held strict reservations and orphaned usage holds without refunds.
 ### Maintenance
+- Preserve worker decision wakeups across the retiring-oneshot window with a
+  durable queue-locked drain marker and a level-triggered systemd path watch.
+- Expose canonical IDs and runnable flags in CLI JSON status, prefer exact
+  container IDs over display-name aliases, and reject ambiguous short names.
 - Settle strict reservations on complete provider error responses, finished
   choices with empty or filtered content, and dated snapshots of the allowed
   model; malformed outputs, partial streams and lost responses stay held.
@@ -46,8 +78,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   shell-quote correction and matching cache pin. Keep security scans bounded.
 - Prevent CLI fixture collisions and avoid rereading deliberately disconnected
   broker test clients.
-- Refresh the locked nixos-unstable and optional Hermes flake inputs while
-  retaining Research's independent package set and digest-pinned runtime images.
+- Refresh the locked nixos-unstable input while retaining Research's independent
+  package set and digest-pinned runtime images.
 - Synchronize Research with published canonical `main` revision `babdca5`,
   including its project-check pin; no feature-branch input or runtime acceptance
   is implied by the dependency refresh.

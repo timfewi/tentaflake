@@ -5,7 +5,7 @@
   ...
 }:
 let
-  constants = import ../lib/constants.nix;
+  defaultOwnership = (import ../lib/runtimeCatalog.nix).presets.generic.ownership;
   cfg = config.tentaflake.worker;
   backend = config.virtualisation.oci-containers.backend;
   runtime = lib.getExe pkgs.${backend};
@@ -20,7 +20,7 @@ let
     agent:
     if agent.hostGroup != null then
       agent.hostGroup
-    else if agent.containerGid == constants.nobodyGid then
+    else if agent.containerGid == config.ids.gids.nogroup then
       "nogroup"
     else
       "tfw-gid-${toString agent.containerGid}";
@@ -29,7 +29,7 @@ let
     let
       group = workerGroup agent;
     in
-    if agent.hostGroup == null && agent.containerGid != constants.nobodyGid then
+    if agent.hostGroup == null && agent.containerGid != config.ids.gids.nogroup then
       groups // { ${group}.gid = agent.containerGid; }
     else
       groups
@@ -43,16 +43,16 @@ let
         workspace = lib.mkOption {
           type = lib.types.str;
           default = "";
-          example = "/var/lib/hermes-coding/workspace";
+          example = "/var/lib/tentaflake/agents/coding/workspace";
           description = "Exact persistent controller workspace copied into bounded worker snapshots.";
         };
         containerUid = lib.mkOption {
           type = lib.types.ints.unsigned;
-          default = constants.containerUid;
+          default = config.tentaflake.agentInstances.${name}.uid or defaultOwnership.uid;
         };
         containerGid = lib.mkOption {
           type = lib.types.ints.unsigned;
-          default = constants.containerGid;
+          default = config.tentaflake.agentInstances.${name}.gid or defaultOwnership.gid;
         };
         hostGroup = lib.mkOption {
           type = lib.types.nullOr (lib.types.strMatching "^[a-z_][a-z0-9_-]{0,30}$");
@@ -85,6 +85,21 @@ let
           type = lib.types.ints.positive;
           default = 8 * 1024 * 1024;
           description = "Combined private pending and running request byte ceiling.";
+        };
+        maxRetainedResults = lib.mkOption {
+          type = lib.types.ints.positive;
+          default = 1024;
+          description = "Combined retained result and in-flight job count ceiling; completed receipts are never deleted to admit work.";
+        };
+        maxRetainedResultBytes = lib.mkOption {
+          type = lib.types.ints.positive;
+          default = 4 * 1024 * 1024 * 1024;
+          description = "Aggregate retained payload byte ceiling. Admission reserves two full snapshots, a bounded log and 16 KiB metadata for every running job.";
+        };
+        maxRetainedEntries = lib.mkOption {
+          type = lib.types.ints.positive;
+          default = 1000000;
+          description = "Aggregate retained tree-entry ceiling, including worst-case running reservations.";
         };
         maxSnapshotBytes = lib.mkOption {
           type = lib.types.ints.positive;
@@ -146,6 +161,9 @@ let
       max_inbox_bytes = agent.maxInboxBytes;
       max_queue_entries = agent.maxQueueEntries;
       max_queue_bytes = agent.maxQueueBytes;
+      max_retained_results = agent.maxRetainedResults;
+      max_retained_result_bytes = agent.maxRetainedResultBytes;
+      max_retained_entries = agent.maxRetainedEntries;
       max_snapshot_bytes = agent.maxSnapshotBytes;
       max_snapshot_entries = agent.maxSnapshotEntries;
       max_log_bytes = agent.maxLogBytes;
@@ -237,6 +255,9 @@ let
       unitConfig.DefaultDependencies = false;
       pathConfig = {
         DirectoryNotEmpty = "${agent.workspace}/.tentaflake-worker/inbox";
+        # Rechecked when the service exits: unlike another start job, this
+        # survives a decision recorded after drain unlocks but before exit.
+        PathExists = "${stateDir name}/.drain-request";
         Unit = "tentaflake-worker-${name}.service";
       };
     }
@@ -310,6 +331,14 @@ in
             message = "tentaflake worker ${name} snapshot limit may not exceed 16 GiB.";
           }
           {
+            assertion = agent.maxRetainedResultBytes >= 2 * agent.maxSnapshotBytes + agent.maxLogBytes + 16384;
+            message = "tentaflake worker ${name} retained byte capacity must fit two snapshots, a log and 16 KiB metadata.";
+          }
+          {
+            assertion = agent.maxRetainedEntries >= 2 * agent.maxSnapshotEntries + 8;
+            message = "tentaflake worker ${name} retained entry capacity must fit one worst-case running job.";
+          }
+          {
             assertion =
               lib.hasAttr group config.users.groups && config.users.groups.${group}.gid == agent.containerGid;
             message = "tentaflake worker ${name} host group ${group} must exist with GID ${toString agent.containerGid}.";
@@ -362,6 +391,7 @@ in
             "d ${stateDir name}/pending 0700 root root -"
             "d ${stateDir name}/approvals 0700 root root -"
             "d ${stateDir name}/jobs 0700 root root -"
+            "d ${stateDir name}/reservations 0700 root root -"
             "d ${resultDir name} 2750 root ${group} 14d"
           ]
           ++ lib.optionals (!stateParent) [

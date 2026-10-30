@@ -5,7 +5,7 @@
   ...
 }:
 let
-  constants = import ../lib/constants.nix;
+  defaultOwnership = (import ../lib/runtimeCatalog.nix).presets.generic.ownership;
   cfg = config.tentaflake.workspaceQuota;
   utils = import (pkgs.path + "/nixos/lib/utils.nix") { inherit lib config pkgs; };
   enabledAgents = lib.filterAttrs (_: agent: agent.enable) cfg.agents;
@@ -73,7 +73,7 @@ let
         workspace = lib.mkOption {
           type = lib.types.str;
           default = "";
-          example = "/var/lib/hermes-coding/workspace";
+          example = "/var/lib/tentaflake/agents/coding/workspace";
           description = "Exact controller workspace used as the Btrfs mount point.";
         };
         sizeMiB = lib.mkOption {
@@ -83,11 +83,11 @@ let
         };
         ownerUid = lib.mkOption {
           type = lib.types.ints.unsigned;
-          default = constants.containerUid;
+          default = config.tentaflake.agentInstances.${name}.uid or defaultOwnership.uid;
         };
         ownerGid = lib.mkOption {
           type = lib.types.ints.unsigned;
-          default = constants.containerGid;
+          default = config.tentaflake.agentInstances.${name}.gid or defaultOwnership.gid;
         };
         state = lib.mkOption {
           default = null;

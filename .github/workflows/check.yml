@@ -86,6 +86,10 @@ jobs:
         # Use the installed CI Nix, as the explicit evaluation job does.
         run: python3 scripts/test_eval_flake_nix.py
 
+      - name: Adapter catalog and documentation drift
+        if: needs.changes.outputs.static == 'true'
+        run: nix develop --command just catalog-check
+
       - name: Nix lint
         if: needs.changes.outputs.static == 'true'
         run: |
@@ -99,6 +103,10 @@ jobs:
       - name: Workflow lint
         if: needs.changes.outputs.static == 'true'
         run: nix develop --command actionlint .github/workflows/*.yml
+
+      - name: Optional host API protocol and action tests
+        if: needs.changes.outputs.static == 'true'
+        run: nix develop --command just host-api-test
 
       - name: Rust lint and unit tests
         if: needs.changes.outputs.rust == 'true'
@@ -152,10 +160,10 @@ jobs:
       # Read-only flake evaluation cannot instantiate an uncached closureInfo
       # derivation. Build the non-VM policy gates first; they materialize the
       # exact research closures without widening any sandbox mount.
-      - name: prepare research evaluation closures
+      - name: Prepare exact evaluation closures and source filesets
         if: needs.changes.outputs.evaluate == 'true'
         run: |
-          for check in research-policy module-evaluation; do
+          for check in research-policy module-evaluation rust-package-sources; do
             nix build --no-link ".#checks.x86_64-linux.$check"
           done
 
@@ -176,22 +184,23 @@ jobs:
         run: |
           selected_checks=()
           if [[ "$CHECK_DEVCONTAINER" == true ]]; then
-            selected_checks+=(.#checks.x86_64-linux.devcontainer-cli)
+            selected_checks+=(".#checks.x86_64-linux.devcontainer-cli")
           fi
           if [[ "$CHECK_EVALUATE" == true ]]; then
-            selected_checks+=(.#checks.x86_64-linux.image-pinning .#checks.x86_64-linux.agent-adapters .#checks.x86_64-linux.hardening-journald)
+            selected_checks+=(".#checks.x86_64-linux.image-pinning" ".#checks.x86_64-linux.agent-adapters" ".#checks.x86_64-linux.hardening-journald")
+            selected_checks+=(".#checks.x86_64-linux.host-api" ".#checks.x86_64-linux.host-api-evaluation")
           fi
           if [[ "$CHECK_CLI" == true ]]; then
-            selected_checks+=(.#checks.x86_64-linux.tentaflake-cli)
+            selected_checks+=(".#checks.x86_64-linux.tentaflake-cli")
           fi
           if [[ "$CHECK_BROKER" == true ]]; then
-            selected_checks+=(.#checks.x86_64-linux.tentaflake-broker)
+            selected_checks+=(".#checks.x86_64-linux.tentaflake-broker")
           fi
           if [[ "$CHECK_WORKER" == true ]]; then
-            selected_checks+=(.#checks.x86_64-linux.tentaflake-worker .#checks.x86_64-linux.tentaflake-worker-image)
+            selected_checks+=(".#checks.x86_64-linux.tentaflake-worker" ".#checks.x86_64-linux.tentaflake-worker-image")
           fi
           if [[ "$CHECK_CLI" == true || "$CHECK_BROKER" == true || "$CHECK_WORKER" == true ]]; then
-            selected_checks+=(.#checks.x86_64-linux.rust-package-sources)
+            selected_checks+=(".#checks.x86_64-linux.rust-package-sources")
           fi
           for ((offset=0; offset<${#selected_checks[@]}; offset+=4)); do
             nix build --no-link "${selected_checks[@]:offset:4}"
@@ -207,7 +216,9 @@ jobs:
 
       - name: nix build (runtime VM integration test)
         if: needs.changes.outputs.runtime == 'true'
-        run: nix build --no-link -L .#checks.x86_64-linux.vm-integration
+        run: |
+          nix build --no-link -L .#checks.x86_64-linux.vm-integration
+          nix build --no-link -L .#checks.x86_64-linux.worker-drain-wakeup
 
       - name: nix build (research VM integration test)
         if: needs.changes.outputs.research == 'true'

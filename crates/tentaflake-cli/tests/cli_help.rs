@@ -90,7 +90,8 @@ fn templates_are_configuration_free_and_preserve_vendor_arguments_after_separato
         .output()
         .unwrap();
     assert!(output.status.success());
-    let definition: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let definition: serde_json::Value =
+        toml_edit::de::from_str(std::str::from_utf8(&output.stdout).unwrap()).unwrap();
     assert_eq!(
         definition["agents"][0]["definition"]["command"],
         serde_json::json!(["fixture", "--json", "--hide"])
@@ -105,7 +106,8 @@ fn templates_are_configuration_free_and_preserve_vendor_arguments_after_separato
         .output()
         .unwrap();
     assert!(pi.status.success());
-    let template: serde_json::Value = serde_json::from_slice(&pi.stdout).unwrap();
+    let template: serde_json::Value =
+        toml_edit::de::from_str(std::str::from_utf8(&pi.stdout).unwrap()).unwrap();
     assert_eq!(template["agents"][0]["adapter"], "pi");
     assert_eq!(template["agents"][0]["name"], "research");
     assert_eq!(template["agents"][0]["autoStart"], false);

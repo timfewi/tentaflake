@@ -1,8 +1,67 @@
 { pkgs, lib }:
 
 let
-  preset = (import ../lib/runtimeCatalog.nix).presets.zeroclaw;
-  constants = import ../lib/constants.nix;
+  preset = {
+    schemaVersion = 1;
+    identity = {
+      id = "zeroclaw";
+      version = "0.8.2";
+      status = "compatibility";
+    };
+    artifact = {
+      kind = "oci";
+      reference = "ghcr.io/zeroclaw-labs/zeroclaw@sha256:eae321dac2d314bc282bdfb28b5378c9d527998f7e2fe0dee8315bfdcdf13a0c";
+      reviewed = true;
+      source = "ghcr.io/zeroclaw-labs/zeroclaw:v0.8.2";
+    };
+    command = [ "daemon" ];
+    configuration = {
+      format = "toml";
+      readOnly = true;
+    };
+    ownership = {
+      uid = 65534;
+      gid = 65534;
+    };
+    layout = {
+      state = "/var/lib/tentaflake/agents/<name>";
+      workspace = "data";
+      writable = [
+        "state"
+        "workspace"
+      ];
+      directories = [
+        ".zeroclaw"
+        ".zeroclaw/data"
+        "data"
+      ];
+    };
+    lifecycle = "service";
+    model = {
+      protocols = [ "openai-chat-completions" ];
+      streaming = "unknown";
+    };
+    research = {
+      supported = true;
+    };
+    execution = {
+      interface = "worker-queue-v1";
+      automatic = false;
+    };
+    capabilities = [
+      "files"
+      "shell"
+      "terminal"
+      "worker"
+      "model"
+      "research"
+    ];
+    evidence = {
+      fixture = "source-regression";
+      vendorAcceptance = "pending";
+    };
+  };
+  hostIdentity = import ../lib/agentIdentity.nix;
   containerSecurity = import ../lib/containerSecurity.nix { inherit lib; };
   generateConfiguration =
     name: settings: (pkgs.formats.toml { }).generate "${name}-config.toml" settings;
@@ -10,12 +69,12 @@ let
     {
       name,
       agenixFile ? null,
-      # Digest-pinned (lib/constants.nix). Overrides must be digest-pinned too — a
+      # Digest-pinned (this adapter). Overrides must be digest-pinned too — a
       # bare tag is rejected at eval time, see lib/pinnedImage.nix.
-      image ? constants.zeroclawImage,
+      image ? preset.artifact.reference,
       # Escape hatch for locally-built images that have no registry digest.
       allowMutableImage ? false,
-      stateDir ? "/var/lib/zeroclaw-${name}",
+      stateDir ? hostIdentity.stateDir name,
       seedDir ? null,
       gatewayPort ? 42617,
       hostPort ? null,
@@ -31,7 +90,7 @@ let
 
     { config, ... }:
     let
-      containerName = "zeroclaw-${name}";
+      containerName = hostIdentity.container name;
       backend = config.virtualisation.oci-containers.backend;
       serviceName = "${backend}-${containerName}.service";
       serviceAttr = lib.removeSuffix ".service" serviceName;
@@ -69,7 +128,8 @@ let
       runtimeDependencies = brokerUnits ++ lib.optional quotaEnabled quotaUnit ++ research.units;
       secureUnitPolicy = import ../lib/serviceRecovery.nix;
       configFile = generateConfiguration containerName research.settings;
-      inherit (constants) nobodyUid nobodyGid;
+      nobodyUid = preset.ownership.uid;
+      nobodyGid = preset.ownership.gid;
       owner = "${toString nobodyUid}:${toString nobodyGid}";
 
       baseContainer = {
@@ -181,11 +241,11 @@ let
 
       systemd.services =
         lib.optionalAttrs (seedDir != null) {
-          "seed-${containerName}" = {
+          "${containerName}-seed" = {
             description = "Seed workspace for ZeroClaw agent ${name}";
             wantedBy = [ serviceName ];
             before = [ serviceName ];
-            requires = lib.optional quotaEnabled quotaUnit;
+            requires = [ "systemd-tmpfiles-setup.service" ] ++ lib.optional quotaEnabled quotaUnit;
             after = [ "systemd-tmpfiles-setup.service" ] ++ lib.optional quotaEnabled quotaUnit;
             serviceConfig = {
               Type = "oneshot";
@@ -279,12 +339,12 @@ in
       ) (original.mcp.servers or [ ]);
     };
   };
-  inherit build;
+  inherit build preset;
   metadata =
     args: backend:
     let
-      stateDir = args.stateDir or "/var/lib/zeroclaw-${args.name}";
-      container = "zeroclaw-${args.name}";
+      stateDir = args.stateDir or (hostIdentity.stateDir args.name);
+      container = hostIdentity.container args.name;
     in
     {
       adapter = "zeroclaw";
@@ -294,8 +354,8 @@ in
       stateDirectories = preset.layout.directories;
       unit = "${backend}-${container}.service";
       workspace = "${stateDir}/data";
-      uid = constants.nobodyUid;
-      gid = constants.nobodyGid;
+      uid = preset.ownership.uid;
+      gid = preset.ownership.gid;
       runnable = true;
     };
 }
