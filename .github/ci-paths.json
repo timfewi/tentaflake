@@ -182,6 +182,17 @@
       "static"
     ]
   },
+  "workload-mapping": {
+    "paths": [
+      "modules/workload-mapping.nix",
+      "tests/workload-mapping-*vm.nix"
+    ],
+    "checks": [
+      "workloads",
+      "evaluate",
+      "static"
+    ]
+  },
   "workloads": {
     "paths": [
       "crates/tentaflake-workloads/**",

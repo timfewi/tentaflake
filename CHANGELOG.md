@@ -147,6 +147,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   second verification. Even with every command at its one-second deadline, all
   64 bindings are re-stamped inside the 10-second lease; a compile-time budget
   check and a 64-binding latency regression keep it that way.
+- Expose the Pi runtime and workload-mapping VM tests as flake checks, add a
+  64-binding workload lease scale VM, and run them plus the immutable control
+  store contract in CI when their paths change. Fix CI-exposed test races in the
+  CI selection fileset, host API client and CLI fixture scripts.
 - Keep `docs/` to inventoried product guides (checked by `just fast` and CI);
   move planning, backlog, prompt and archive-comparison notes and a private
   consumer's integration test out of the repository. Working notes belong in

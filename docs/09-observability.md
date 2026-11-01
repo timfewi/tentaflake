@@ -84,9 +84,13 @@ stop/restart, read permissions and corrupt/missing authority. Parent
 integration can add its consumer/UI configuration through `extraModules` and
 counter comparison/cross-tenant assertions through `extraTestScript`, before
 the final authority-corruption checks. This fixture is not native vendor/SDK
-runtime attestation. The focused Rust command after workspace registration is
-`cargo test -p tentaflake-workloads`; run the VM as a separate explicit gate,
-not as part of fast checks.
+runtime attestation. `tests/workload-mapping-scale-vm.nix` runs all 64
+supported bindings on the same NIC-less engine (four CPUs, 4096 MiB) and
+asserts every manifest stays live and younger than the 10-second lease over a
+30-second window. The focused Rust command is `cargo test -p
+tentaflake-workloads`; both VMs are `checks.*.workload-mapping-vm` and
+`checks.*.workload-mapping-scale-vm`, which CI runs when workload paths change,
+not part of local fast checks.
 
 ## Observability profile
 

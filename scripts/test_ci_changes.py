@@ -174,6 +174,15 @@ class CiSelection(unittest.TestCase):
                     self.assertEqual(selected["runtime"], crate == "activity")
                     self.assertFalse(selected["research"])
 
+    def test_workload_module_and_vm_tests_select_workload_gates(self):
+        for name in ("modules/workload-mapping.nix", "tests/workload-mapping-vm.nix",
+                     "tests/workload-mapping-scale-vm.nix"):
+            with self.subTest(name=name):
+                base = self.git("rev-parse", "HEAD")
+                self.write(name)
+                self.assertEqual(select(base, self.commit(), self.repository),
+                                 {"workloads", "evaluate", "static"})
+
     def test_pi_sources_select_non_vm_gates(self):
         for name in ("pkgs/tentaflake-pi/default.nix", "lib/piTransport.nix",
                      "tests/pi-runtime-evaluation.nix", "tests/pi-runtime-vm.nix",
@@ -451,6 +460,17 @@ class WorkflowPolicy(unittest.TestCase):
             "image-pinning", "hardening-journald", "agent-adapters", "module-evaluation",
             "research-policy",
         })
+
+    def test_component_vms_follow_pi_and_workload_selection(self):
+        for selected, expected in (
+            ({"pi"}, ["pi-runtime-vm"]),
+            ({"workloads", "rust"}, ["workload-mapping-vm", "workload-mapping-scale-vm"]),
+            (CHECKS, ["pi-runtime-vm", "workload-mapping-vm", "workload-mapping-scale-vm"]),
+        ):
+            with self.subTest(selected=sorted(selected)):
+                calls = self.run_step("nix build (component VM tests)", execution(selected))
+                self.assertEqual([call[-1].rsplit(".", 1)[-1] for call in calls], expected)
+                self.assertTrue(all(call[:3] == ["build", "--no-link", "-L"] for call in calls))
 
     def test_optional_cache_setup_is_bounded_and_nonfatal(self):
         workflow = (Path(__file__).resolve().parent.parent / ".github/workflows/check.yml").read_text()

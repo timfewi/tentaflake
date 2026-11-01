@@ -251,6 +251,14 @@
         vm-integration = pkgs.testers.runNixOSTest (import ./tests/integration.nix { inherit self pkgs; });
         research-integration = import ./tests/research-integration.nix { inherit self pkgs; };
         worker-drain-wakeup = import ./tests/worker-drain-wakeup.nix { inherit self pkgs; };
+        # Two admitted Pi capsules on the reviewed runsc-pi transport; no provider calls.
+        pi-runtime-vm = import ./tests/pi-runtime-vm.nix {
+          inherit self pkgs;
+          runtimePackage = self.packages.${system}.tentaflake-pi;
+          bundle = self.packages.${system}.tentaflake-pi-image;
+        };
+        workload-mapping-vm = import ./tests/workload-mapping-vm.nix { inherit pkgs; };
+        workload-mapping-scale-vm = import ./tests/workload-mapping-scale-vm.nix { inherit pkgs; };
         research-policy = import ./tests/research-policy.nix { inherit self pkgs; };
       };
 
