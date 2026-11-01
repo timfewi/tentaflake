@@ -1,9 +1,10 @@
 use std::fs;
-use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 use std::process::{Command, Output};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
+
+mod support;
 
 static NEXT_FIXTURE: AtomicU64 = AtomicU64::new(0);
 
@@ -46,9 +47,7 @@ printf '%s\n' "$FIXTURE_DISK"
 exit "$FIXTURE_DISK_EXIT""#,
             ),
         ] {
-            let path = root.join(name);
-            fs::write(&path, format!("#!{}\n{script}\n", shell.trim())).unwrap();
-            fs::set_permissions(path, fs::Permissions::from_mode(0o700)).unwrap();
+            support::write_executable(&root.join(name), shell.trim(), script);
         }
         fs::write(
             root.join("agents.tsv"),
@@ -262,14 +261,17 @@ fn diagnoses_host_failures_and_disk_pressure() {
 
 fn fake_backend(fixture: &Fixture) {
     let systemctl = fs::read_to_string(fixture.0.join("systemctl")).unwrap();
-    let interpreter = systemctl.lines().next().unwrap();
-    let path = fixture.0.join("docker");
-    fs::write(
-        &path,
-        format!("{interpreter}\nprintf '%s\\n' backend-invoked \"$@\"\n"),
-    )
-    .unwrap();
-    fs::set_permissions(path, fs::Permissions::from_mode(0o700)).unwrap();
+    let shell = systemctl
+        .lines()
+        .next()
+        .unwrap()
+        .strip_prefix("#!")
+        .unwrap();
+    support::write_executable(
+        &fixture.0.join("docker"),
+        shell,
+        "printf '%s\\n' backend-invoked \"$@\"",
+    );
 }
 
 #[test]

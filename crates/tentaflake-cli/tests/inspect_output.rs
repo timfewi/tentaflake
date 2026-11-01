@@ -1,9 +1,10 @@
 use std::fs;
-use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
+
+mod support;
 
 static NEXT_FIXTURE: AtomicU64 = AtomicU64::new(0);
 
@@ -16,8 +17,7 @@ impl Drop for Fixture {
 }
 
 fn executable(path: &Path, shell: &str, script: &str) {
-    fs::write(path, format!("#!{shell}\n{script}\n")).unwrap();
-    fs::set_permissions(path, fs::Permissions::from_mode(0o700)).unwrap();
+    support::write_executable(path, shell, script);
 }
 
 fn fixture() -> (Fixture, String) {

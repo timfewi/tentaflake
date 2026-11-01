@@ -5,6 +5,8 @@ use std::process::{Command, Output};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+mod support;
+
 static NEXT_FIXTURE: AtomicU64 = AtomicU64::new(0);
 const ARCHIVE: &str = "tentaflake-backup-fixture-20261030T000000Z.tar.gz";
 
@@ -59,9 +61,7 @@ printf 'synthetic-final-bytes\n'
 exit "$FIXTURE_TAR_EXIT""#,
             ),
         ] {
-            let path = root.join("bin").join(name);
-            fs::write(&path, format!("#!{shell}\n{script}\n")).unwrap();
-            fs::set_permissions(path, fs::Permissions::from_mode(0o700)).unwrap();
+            support::write_executable(&root.join("bin").join(name), &shell, script);
         }
         fs::write(
             root.join("agents.tsv"),
