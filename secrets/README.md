@@ -19,7 +19,7 @@ age.secrets.provider-key = {
 };
 
 # Within an enabled, otherwise complete per-agent broker declaration:
-tentaflake.broker.agents.hermes-assistant.llm.providerCredentialFile =
+tentaflake.broker.agents.agent-assistant.llm.providerCredentialFile =
   config.age.secrets.provider-key.path;
 ```
 

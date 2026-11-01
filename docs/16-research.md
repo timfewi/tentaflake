@@ -12,14 +12,32 @@ The template does not create an Internet route or obtain provider credentials.
 
 ## Configuration
 
-Declare a registered Research-capable adapter with `mkAgent` or either
-compatible runtime builder, then use its complete OCI container name:
+Declare a registered Research-capable Hermes or ZeroClaw adapter in
+`tentaflake.toml`, then opt in for its exact declared container ID:
+
+```toml
+[research]
+enable = true
+
+[research.agents.agent-assistant]
+uid = 62101
+
+[research.agents.agent-research]
+uid = 62102
+```
+
+This projects the per-agent map to `tentaflake.research.agents` and enables
+`services.secureResearch`; it does not provision a VPN or provider credentials.
+Names alone confer no permission. The shared Rust/Nix validators require
+distinct non-root relay UIDs and declared runnable Research-capable adapters;
+stopped Pi/OpenClaw and generic OCI cannot opt in. See the complete
+[public permission contract](08-agent-cli.md#public-research-permissions).
+Existing consumer Nix policy may still set `tentaflake.research.agents` directly;
+disabled or omitted public Research declarations do not override it.
+
+Configure the service separately in Nix host policy:
 
 ```nix
-tentaflake.research.agents = {
-  hermes-assistant.uid = 62101;
-  zeroclaw-assistant.uid = 62102;
-};
 services.secureResearch = {
   serviceUid = 4201;
   egressUid = 4202;
@@ -42,6 +60,12 @@ Missing or stale readiness prevents public requests. Optional search providers,
 Chromium and OCR require their own explicit configuration. Provider keys and
 data grants belong in the research service; never put keys in agent settings or
 the Nix store. Research summarization remains disabled in this topology.
+
+Offline declaration validation is not service admission: missing service/egress
+UIDs, VPN interface or public resolvers fails host evaluation. Relay UIDs must
+also be distinct from all host users and service identities. The runtime still
+requires fresh ready leases and separately configured provider/data/paid
+permissions for each requested operation; a relay grant cannot bypass them.
 
 Keep the agent's [LLM broker](12-brokered-egress.md),
 [disposable worker](13-disposable-worker.md) and
@@ -187,22 +211,36 @@ The security manifest records the declared mounts. `doctor --security` accepts
 the research socket only when its source, destination and read-only mode match
 that declaration; broad `/run`, writable and other-agent mounts remain unsafe.
 
-gVisor runs with `--host-uds=open` to connect to projected sockets; host socket
-creation remains disabled. Agent IP networking still permits only its declared
-LLM broker, or remains `network=none`. Browser, HTTP and shell networking cannot
-gain general egress by changing a tool setting.
+Research-enabled Hermes/ZeroClaw capsules explicitly select the named
+`runsc-research` wrapper with `--host-uds=open` to connect to projected sockets;
+host socket creation remains disabled. Stock `runsc` is unchanged and cannot
+open host Unix sockets, even while another agent has Research enabled.
+Docker and Podman register the additional named runtime without changing their
+defaults; a global elevated runtime default, wrapper alias, altered wrapper or
+extra runtime arguments fails host evaluation. Secure agents retain the exact
+stock runtime mapping in either backend. An ungranted container cannot select
+Research or Pi transport by name, alias or direct executable path. Unrelated
+consumer runtimes and unmanaged containers remain independent host policy.
+The separately reviewed internal Pi path retains its own `runsc-pi` transport
+and admission checks; this does not admit public stopped Pi declarations.
+
+The security manifest declares the exact configured runtime. Live inspection
+compares Docker's runtime name; missing declarations are unknown and a different
+name is unsafe. Podman's `OCIRuntime` supplies only the name, so even a matching
+name remains unknown without independent executable-path evidence. Agent IP
+networking still permits only its declared LLM broker, or remains `network=none`.
+Browser, HTTP and shell networking cannot gain general egress by changing a tool
+setting.
 
 Adapter hooks generate upstream-specific settings after shared socket/closure
 projection. An arbitrary OCI container with a runtime-like prefix cannot opt
 into Research; validation checks explicit registered instance metadata and the
-adapter's accepted capability. The OpenClaw and Pi scaffolds have no accepted
-Research discovery integration. See [agent adapters](agent-adapters.md).
+adapter's accepted capability. The OpenClaw scaffold has no accepted Research
+discovery integration; Pi uses its exact relay only after explicit host admission. See [agent adapters](agent-adapters.md).
 
-Hermes settings disable the `web` and `browser` toolsets and register
-`mcp_servers.secure-research-tool`. Additional MCP entries must be local stdio
-commands. ZeroClaw settings disable `browser`, `http_request`, `web_fetch` and
-`web_search`, and replace the MCP server list with this stdio service. These
-settings are applied after caller settings. The LLM broker permits local
+Native tool disabling and stdio settings are owned by the
+[adapter hooks](agent-adapters.md#native-configuration-and-state), applied after
+caller settings. The LLM broker permits local
 function/custom tool definitions but rejects provider-hosted tools, including
 web search and remote MCP, and known provider extension fields. Operators must
 select inference-only models; this does not constrain a provider's internal
@@ -213,7 +251,7 @@ can remain idle between tool calls. Stop one relay socket to revoke accepted
 connections immediately:
 
 ```sh
-sudo systemctl stop tentaflake-research-hermes-assistant.socket
+sudo systemctl stop tentaflake-research-agent-assistant.socket
 ```
 
 Stopping `agent-research.socket` also stops all relay sockets. Restart the
@@ -244,7 +282,7 @@ nix build --no-link -L .#checks.x86_64-linux.research-integration
 The policy check exercises remote MCP rejection, missing capability mounts,
 duplicate relay UIDs, legacy fetch rejection and disabled summarization. The VM
 runs the real stdio client and service inside real Docker/gVisor capsules with
-Hermes and ZeroClaw UID values, verifies the generated settings, performs MCP
+the selected adapters' numeric owners, verifies generated settings, performs MCP
 initialization and job creation, and checks direct IP and offline-fetch denial.
 Its container image is a synthetic Python probe. It does not run the actual
 vendor agent images or prove their MCP discovery behavior.
@@ -263,7 +301,7 @@ The upstream synthetic VM suite separately checks encrypted WireGuard egress,
 direct-path denial, parser credentials, rendering, resources, cross-agent
 ownership, idle sessions and socket revocation. See its
 [verification evidence](https://github.com/timfewi/tentaflake-research/blob/main/docs/verification.md).
-Actual Hermes/ZeroClaw sessions, Podman socket transport, paid-provider billing,
+Actual vendor-agent sessions, Podman socket transport, paid-provider billing,
 production VPN policy, ARM and arbitrary kernel escapes still require deployment
 acceptance. No production host is activated by these checks. Retrieved content
 remains untrusted; the network boundary does not prevent prompt injection or

@@ -11,7 +11,7 @@ let
   backend = config.tentaflake.containerBackend;
   hostName = config.tentaflake.hostName;
   flakeDir = "/etc/nixos";
-  rebuildCmd = "sudo nixos-rebuild switch --flake ${flakeDir}#${hostName}";
+  rebuildCmd = "sudo nixos-rebuild switch --flake ${flakeDir}#${config.tentaflake.configurationName}";
   cli = pkgs.callPackage ../pkgs/tentaflake-cli { };
 
   agentRecords = import ../lib/agentInventory.nix { inherit lib; } {
@@ -72,6 +72,7 @@ lib.mkIf cfg.enable {
         backend=${backend}
         flake_dir=${flakeDir}
         host_name=${hostName}
+        configuration_name=${config.tentaflake.configurationName}
         agents_file=/etc/tentaflake/agents.tsv
         security_profile=${config.tentaflake.security.profile}
         security_file=/etc/tentaflake/security.tsv

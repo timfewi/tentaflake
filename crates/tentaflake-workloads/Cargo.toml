@@ -1,0 +1,18 @@
+[package]
+name = "tentaflake-workloads"
+version.workspace = true
+edition = "2024"
+license = "MIT"
+description = "Fixed rootful Docker and kernel workload identity observer"
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "tentaflake-workloads"
+path = "src/main.rs"
+
+[dependencies]
+libc = "0.2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"

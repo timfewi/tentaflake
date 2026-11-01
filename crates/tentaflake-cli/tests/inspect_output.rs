@@ -1,9 +1,10 @@
 use std::fs;
-use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
+
+mod support;
 
 static NEXT_FIXTURE: AtomicU64 = AtomicU64::new(0);
 
@@ -16,8 +17,7 @@ impl Drop for Fixture {
 }
 
 fn executable(path: &Path, shell: &str, script: &str) {
-    fs::write(path, format!("#!{shell}\n{script}\n")).unwrap();
-    fs::set_permissions(path, fs::Permissions::from_mode(0o700)).unwrap();
+    support::write_executable(path, shell, script);
 }
 
 fn fixture() -> (Fixture, String) {
@@ -68,9 +68,10 @@ esac
         "printf 'Filesystem 1024-blocks Used Available Capacity Mounted on\nfixture 100 1 99 1%% /\n'",
     );
     fs::write(root.join("agents.tsv"), "").unwrap();
-    let mut fields = vec!["agent", "hermes-inspect-fixture", "balanced"];
+    let mut fields = vec!["agent", "agent-inspect-fixture", "balanced"];
     fields.extend(std::iter::repeat_n("true", 18));
     fields.extend(["false", "-", "true", "-", "tf-inspect"]);
+    fields.extend(["-", "-", "-", "-", "-"]);
     fs::write(
         root.join("security.tsv"),
         format!(
@@ -82,7 +83,7 @@ esac
 
     for backend in ["docker", "podman"] {
         fs::write(root.join("cli.conf"), format!(
-            "backend={backend}\nflake_dir=/fixture\nhost_name=fixture\nsecurity_profile=balanced\nagents_file={}\nsecurity_file={}\n",
+            "backend={backend}\nflake_dir=/fixture\nhost_name=fixture\nconfiguration_name=fixture\nsecurity_profile=balanced\nagents_file={}\nsecurity_file={}\n",
             root.join("agents.tsv").display(), root.join("security.tsv").display()
         )).unwrap();
         for flags in [vec!["--json"], vec!["--hide"], vec!["--json", "--hide"]] {
@@ -113,14 +114,14 @@ esac
                 assert!(value["findings"].is_array());
             }
             if flags.contains(&"--hide") {
-                assert!(!stdout.contains("hermes-inspect-fixture"), "{stdout}");
+                assert!(!stdout.contains("agent-inspect-fixture"), "{stdout}");
                 assert!(stdout.contains("redacted"), "{stdout}");
             }
             let calls = fs::read_to_string(&calls).unwrap();
             assert_eq!(
                 calls,
                 format!(
-                    "-n {backend} inspect hermes-inspect-fixture\n-n {backend} network inspect tf-inspect\n"
+                    "-n {backend} inspect agent-inspect-fixture\n-n {backend} network inspect tf-inspect\n"
                 )
             );
         }
@@ -149,7 +150,7 @@ printf '%s' "$TAILSCALE_FIXTURE"
     fs::write(
         root.join("cli.conf"),
         format!(
-            "backend=docker\nflake_dir=/fixture\nhost_name=private-host-fixture\nsecurity_profile=balanced\nagents_file={}\nsecurity_file={}\n",
+            "backend=docker\nflake_dir=/fixture\nhost_name=private-host-fixture\nconfiguration_name=fixture\nsecurity_profile=balanced\nagents_file={}\nsecurity_file={}\n",
             root.join("agents.tsv").display(), root.join("security.tsv").display()
         ),
     )

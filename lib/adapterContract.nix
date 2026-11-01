@@ -168,7 +168,8 @@ let
       "accepted"
     ]
     && builtins.isFunction adapter.build
-    && builtins.isFunction adapter.metadata;
+    && builtins.isFunction adapter.metadata
+    && (!(adapter ? admitted) || builtins.isFunction adapter.admitted);
 in
 if missing != [ ] then
   throw "tentaflake: adapter ${name} contract is missing: ${lib.concatStringsSep ", " missing}."

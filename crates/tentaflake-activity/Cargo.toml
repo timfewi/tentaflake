@@ -1,0 +1,18 @@
+[package]
+name = "tentaflake-activity"
+version.workspace = true
+edition = "2024"
+license = "MIT"
+description = "Minimized fixed-context activity publication to an external collector"
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "tentaflake-activity"
+path = "src/main.rs"
+
+[dependencies]
+libc = "0.2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"

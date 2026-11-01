@@ -14,7 +14,7 @@ use std::net::{TcpListener, TcpStream};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 fn main() {
     if let Err(error) = run() {
@@ -85,6 +85,7 @@ fn dispatch_connection(
         return None;
     }
     let guard = ActiveGuard(active);
+    let deadline = Instant::now() + settings.timeout;
     Some(std::thread::spawn(move || {
         let _guard = guard;
         handle_connection(
@@ -93,6 +94,7 @@ fn dispatch_connection(
             settings.header_limit,
             settings.body_limit,
             settings.timeout,
+            deadline,
         );
     }))
 }
@@ -103,10 +105,10 @@ fn handle_connection(
     header_limit: usize,
     body_limit: usize,
     timeout: Duration,
+    deadline: Instant,
 ) {
-    let _ = stream.set_read_timeout(Some(timeout));
     let _ = stream.set_write_timeout(Some(timeout));
-    let response = match read_request(stream, header_limit, body_limit) {
+    let response = match read_request(stream, header_limit, body_limit, deadline) {
         Ok(request) => broker.handle(request),
         Err(reason) => Response::json(400, json!({ "error": reason })),
     };

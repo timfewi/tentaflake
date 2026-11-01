@@ -10,7 +10,7 @@ on:
   workflow_dispatch:
     inputs:
       base_sha:
-        description: 'Comparison commit (40-char SHA); empty or unavailable history runs full inventory'
+        description: 'Comparison commit (40-char SHA) for a manual re-run; empty or unavailable history runs full inventory'
         type: string
         required: false
         default: ''
@@ -33,6 +33,11 @@ jobs:
       cli: ${{ steps.filter.outputs.cli }}
       broker: ${{ steps.filter.outputs.broker }}
       worker: ${{ steps.filter.outputs.worker }}
+      control: ${{ steps.filter.outputs.control }}
+      integrations: ${{ steps.filter.outputs.integrations }}
+      activity: ${{ steps.filter.outputs.activity }}
+      workloads: ${{ steps.filter.outputs.workloads }}
+      pi: ${{ steps.filter.outputs.pi }}
       devcontainer: ${{ steps.filter.outputs.devcontainer }}
       selection: ${{ steps.filter.outputs.selection }}
       static: ${{ steps.filter.outputs.static }}
@@ -46,17 +51,19 @@ jobs:
           python3 scripts/test_ci_changes.py
           python3 scripts/test_eval_flake.py
 
-      # One path policy; only an explicit dispatch can select expensive work.
-      # Unknown history selects all fast checks or the full explicit inventory.
+      - name: Documentation inventory and untracked working notes
+        run: python3 scripts/test_docs_inventory.py
+
+      # One path policy for PRs, pushes and manual dispatch: every affected
+      # lint, unit, evaluation, build and VM gate runs. Unknown history runs all.
       - name: Detect affected checks
         id: filter
         env:
           BASE_SHA: ${{ inputs.base_sha || github.event.pull_request.base.sha || github.event.before }}
           HEAD_SHA: ${{ github.sha }}
-          CHECK_MODE: ${{ github.event_name == 'workflow_dispatch' && 'full' || 'fast' }}
         run: |
           python3 scripts/ci_changes.py "$BASE_SHA" "$HEAD_SHA" \
-            --mode "$CHECK_MODE" --summary "$GITHUB_STEP_SUMMARY" >> "$GITHUB_OUTPUT"
+            --summary "$GITHUB_STEP_SUMMARY" >> "$GITHUB_OUTPUT"
 
   check:
     needs: changes
@@ -76,7 +83,7 @@ jobs:
             accept-flake-config = true
 
       # Contributor tools use the pinned binary cache. Uploading that store
-      # again costs more than these source checks; cache only explicit builds.
+      # again costs more than these source checks; cache only the build job.
       - name: nix fmt check
         if: needs.changes.outputs.static == 'true'
         run: nix develop --command just formatter-test
@@ -85,6 +92,10 @@ jobs:
         if: needs.changes.outputs.static == 'true'
         # Use the installed CI Nix, as the explicit evaluation job does.
         run: python3 scripts/test_eval_flake_nix.py
+
+      - name: Adapter catalog and documentation drift
+        if: needs.changes.outputs.static == 'true'
+        run: nix develop --command just catalog-check
 
       - name: Nix lint
         if: needs.changes.outputs.static == 'true'
@@ -100,15 +111,23 @@ jobs:
         if: needs.changes.outputs.static == 'true'
         run: nix develop --command actionlint .github/workflows/*.yml
 
+      - name: Optional host API protocol and action tests
+        if: needs.changes.outputs.static == 'true'
+        run: nix develop --command just host-api-test
+
       - name: Rust lint and unit tests
         if: needs.changes.outputs.rust == 'true'
         env:
           CHECK_CLI: ${{ needs.changes.outputs.cli }}
           CHECK_BROKER: ${{ needs.changes.outputs.broker }}
           CHECK_WORKER: ${{ needs.changes.outputs.worker }}
+          CHECK_CONTROL: ${{ needs.changes.outputs.control }}
+          CHECK_INTEGRATIONS: ${{ needs.changes.outputs.integrations }}
+          CHECK_ACTIVITY: ${{ needs.changes.outputs.activity }}
+          CHECK_WORKLOADS: ${{ needs.changes.outputs.workloads }}
         run: |
           packages=()
-          for crate in cli broker worker; do
+          for crate in cli broker worker control integrations activity workloads; do
             variable="CHECK_${crate^^}"
             if [[ "${!variable}" == true ]]; then
               packages+=(--package "tentaflake-$crate")
@@ -127,7 +146,7 @@ jobs:
         if: needs.changes.outputs.static == 'true'
         run: nix develop --command shellcheck installer/*.sh scripts/*.sh
 
-  # Share one store across explicit builds and VMs; automatic runs never enter.
+  # Share one store across affected builds and VMs on every PR and push.
   build:
     needs: changes
     if: needs.changes.outputs.builds == 'true'
@@ -152,10 +171,10 @@ jobs:
       # Read-only flake evaluation cannot instantiate an uncached closureInfo
       # derivation. Build the non-VM policy gates first; they materialize the
       # exact research closures without widening any sandbox mount.
-      - name: prepare research evaluation closures
+      - name: Prepare exact evaluation closures and source filesets
         if: needs.changes.outputs.evaluate == 'true'
         run: |
-          for check in research-policy module-evaluation; do
+          for check in research-policy module-evaluation rust-package-sources; do
             nix build --no-link ".#checks.x86_64-linux.$check"
           done
 
@@ -173,25 +192,38 @@ jobs:
           CHECK_CLI: ${{ needs.changes.outputs.cli }}
           CHECK_BROKER: ${{ needs.changes.outputs.broker }}
           CHECK_WORKER: ${{ needs.changes.outputs.worker }}
+          CHECK_CONTROL: ${{ needs.changes.outputs.control }}
+          CHECK_INTEGRATIONS: ${{ needs.changes.outputs.integrations }}
+          CHECK_ACTIVITY: ${{ needs.changes.outputs.activity }}
+          CHECK_WORKLOADS: ${{ needs.changes.outputs.workloads }}
+          CHECK_PI: ${{ needs.changes.outputs.pi }}
+          CHECK_RUST: ${{ needs.changes.outputs.rust }}
         run: |
           selected_checks=()
           if [[ "$CHECK_DEVCONTAINER" == true ]]; then
-            selected_checks+=(.#checks.x86_64-linux.devcontainer-cli)
+            selected_checks+=(".#checks.x86_64-linux.devcontainer-cli")
           fi
           if [[ "$CHECK_EVALUATE" == true ]]; then
-            selected_checks+=(.#checks.x86_64-linux.image-pinning .#checks.x86_64-linux.agent-adapters .#checks.x86_64-linux.hardening-journald)
+            selected_checks+=(".#checks.x86_64-linux.image-pinning" ".#checks.x86_64-linux.agent-adapters" ".#checks.x86_64-linux.hardening-journald")
+            selected_checks+=(".#checks.x86_64-linux.host-api" ".#checks.x86_64-linux.host-api-evaluation")
+            selected_checks+=(".#checks.x86_64-linux.system-schema" ".#checks.x86_64-linux.control-evaluation" ".#checks.x86_64-linux.ci-vm-selection")
+            selected_checks+=(".#checks.x86_64-linux.pi-runtime-evaluation" ".#checks.x86_64-linux.local-image-proof")
           fi
-          if [[ "$CHECK_CLI" == true ]]; then
-            selected_checks+=(.#checks.x86_64-linux.tentaflake-cli)
-          fi
-          if [[ "$CHECK_BROKER" == true ]]; then
-            selected_checks+=(.#checks.x86_64-linux.tentaflake-broker)
-          fi
+          for crate in cli broker worker control integrations activity workloads; do
+            variable="CHECK_${crate^^}"
+            if [[ "${!variable}" == true ]]; then
+              selected_checks+=(".#checks.x86_64-linux.tentaflake-$crate")
+            fi
+          done
           if [[ "$CHECK_WORKER" == true ]]; then
-            selected_checks+=(.#checks.x86_64-linux.tentaflake-worker .#checks.x86_64-linux.tentaflake-worker-image)
+            selected_checks+=(".#checks.x86_64-linux.tentaflake-worker-image")
           fi
-          if [[ "$CHECK_CLI" == true || "$CHECK_BROKER" == true || "$CHECK_WORKER" == true ]]; then
-            selected_checks+=(.#checks.x86_64-linux.rust-package-sources)
+          if [[ "$CHECK_PI" == true ]]; then
+            selected_checks+=(".#checks.x86_64-linux.tentaflake-pi" ".#checks.x86_64-linux.tentaflake-pi-recovery" ".#checks.x86_64-linux.pi-runtime-module-graph")
+            selected_checks+=(".#packages.x86_64-linux.tentaflake-pi-image")
+          fi
+          if [[ "$CHECK_RUST" == true ]]; then
+            selected_checks+=(".#checks.x86_64-linux.rust-package-sources")
           fi
           for ((offset=0; offset<${#selected_checks[@]}; offset+=4)); do
             nix build --no-link "${selected_checks[@]:offset:4}"
@@ -207,7 +239,9 @@ jobs:
 
       - name: nix build (runtime VM integration test)
         if: needs.changes.outputs.runtime == 'true'
-        run: nix build --no-link -L .#checks.x86_64-linux.vm-integration
+        run: |
+          nix build --no-link -L .#checks.x86_64-linux.vm-integration
+          nix build --no-link -L .#checks.x86_64-linux.worker-drain-wakeup
 
       - name: nix build (research VM integration test)
         if: needs.changes.outputs.research == 'true'

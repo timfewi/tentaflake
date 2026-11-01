@@ -5,9 +5,6 @@
 # Override these via tentaflake.* options in your host configuration.
 # ────────────────────────────────────────────────────────────
 
-let
-  inherit (import ./runtimeCatalog.nix) presets;
-in
 {
   # NixOS state version for stateful data compatibility. Set once at first install
   # and normally left unchanged across upgrades.
@@ -36,33 +33,4 @@ in
 
   # Default user description
   adminDescription = "System Administrator";
-
-  # Agent container images — DIGEST-PINNED, never tags.
-  #
-  # A tag is a mutable pointer the registry owner can repoint at any time; a
-  # digest names exact bytes. mkHermesAgent and mkZeroClawAgent reject
-  # unpinned images outright (see lib/pinnedImage.nix). These are
-  # multi-arch OCI index digests, so they resolve on both amd64 and arm64.
-  #
-  # Refresh with ./scripts/update-agent-images.sh
-  #
-  # Registries are spelled out — podman does not assume docker.io for a bare
-  # repository name the way the docker CLI does.
-  #
-  # docker.io/nousresearch/hermes-agent:latest as of 2026-07-18
-  hermesImage = presets.hermes.artifact.reference;
-  # ghcr.io/zeroclaw-labs/zeroclaw:v0.8.2
-  # (the tag is NOT part of the reference — podman/skopeo reject `repo:tag@digest`)
-  zeroclawImage = presets.zeroclaw.artifact.reference;
-  # UID/GID the official hermes-agent image runs its `hermes` user as. The host
-  # state dir + any mounted data must be owned by this so the container (which
-  # runs as this uid) can write them. Owning host dirs to a *different* uid (e.g.
-  # an auto-allocated NixOS system user) is the classic cause of PermissionError
-  # on $HERMES_HOME. Override via mkHermesAgent's `containerUid`/`containerGid`.
-  containerUid = presets.hermes.ownership.uid;
-  containerGid = presets.hermes.ownership.gid;
-
-  # ZeroClaw uses the standard nobody/nogroup identity in its pinned image.
-  nobodyUid = presets.zeroclaw.ownership.uid;
-  nobodyGid = presets.zeroclaw.ownership.gid;
 }

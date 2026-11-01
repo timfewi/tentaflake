@@ -2,9 +2,11 @@
 
 ## Result
 
-Installed hosts default to `balanced`. The common adapter builder and compatible
-Hermes/ZeroClaw wrappers apply one policy to final merged OCI configurations.
-OpenClaw and Pi remain stopped scaffolds without containers or operational support.
+Installed hosts default to `balanced`. TOML-defined instances use the internal
+builder and shared containment policy on final merged OCI configurations.
+OpenClaw remains a stopped scaffold without containers or operational support.
+Pi is the same stopped scaffold unless the host explicitly admits its reviewed
+runtime; see [Pi admission](agent-adapters.md).
 The policy rejects unsafe configurations during NixOS evaluation instead of
 silently weakening them. `strict` also fails because no tested separate-kernel boundary
 is implemented yet.
@@ -37,7 +39,9 @@ There is no automatic fallback between profiles.
 `lib/containerSecurity.nix` is applied after `extraContainerConfig`, so caller
 overrides cannot bypass the final checks. It enforces:
 
-- gVisor `runsc` selected explicitly for Docker or Podman;
+- gVisor selected explicitly for Docker or Podman: stock `runsc` for ordinary
+  capsules, named `runsc-research` only with the exact agent's Research grant,
+  or separately admitted `runsc-pi` for a reviewed Pi runtime;
 - explicit non-root UID/GID and `privileged=false`;
 - `cap-drop=ALL`, `no-new-privileges`, and read-only root;
 - the runtime default seccomp policy with every unconfined override rejected;
@@ -102,7 +106,7 @@ signing identity (or reviewed public key) per generated container name:
 ```nix
 tentaflake.imageProvenance = {
   requireForSecureAgents = true;
-  agents.hermes-assistant = {
+  agents.agent-assistant = {
     mode = "keyless";
     certificateIdentity =
       "https://github.com/example/project/"
@@ -139,10 +143,10 @@ Choose one of two explicit paths:
    tentaflake.security.profile = "dev";
    ```
 
-The second path restores compatibility; it is not recommended for untrusted
-24/7 agents. Legacy `agents.json` entries with direct environment files or
-service ports require dev. The schema-v1 generic `agents` array accepts stopped
-balanced adapter declarations; see [agent adapters](agent-adapters.md).
+The second path is not recommended for untrusted 24/7 agents. Direct credential
+files and published service ports remain dev-only adapter arguments. The required
+schema-v1 `agents` form accepts stopped balanced declarations; removed runtime
+arrays stay rejected in every profile. See [agent adapters](agent-adapters.md).
 
 The former `tentaflake.networking.egress` option is renamed to
 `tentaflake.networking.legacyPortEgress`. It is permitted only in `dev`. It
@@ -151,25 +155,19 @@ allowlist, container `FORWARD` policy, DNS control, or secure egress broker.
 
 ## Git auto-push
 
-Every enabled host-side push needs a runtime `tokenEnvFile`, a non-empty list
-of canonical full GitHub HTTPS remotes, and at least one branch:
+Host-side Git auto-push is removed. The adapter accepts no `gitAutoPush`
+argument and emits no publication service, timer or credential import.
 
-```nix
-gitAutoPush = {
-  tokenEnvFile = "/run/agenix/github-coding";
-  allowedRemotes = [
-    "https://github.com/example/coding.git"
-  ];
-  allowedBranches = [ "main" ];
-};
-```
+Agent-owned Git metadata is executable input: hooks, included configuration and
+helpers can run with the host process's authority. A checked fetch URL does not
+bind the push destination or credential use. The former root service therefore
+did not provide the advertised credential boundary.
 
-The host helper canonicalizes scheme, host, owner, and repository, rejects
-userinfo, subdomains, alternate schemes, extra paths, query/fragment syntax,
-and double `.git` suffixes, then pushes the exact checked branch. It uses a
-repository-scoped `safe.directory`, never `*`, and writes allow/deny/error
-records to journald. Use a fine-grained repository token or GitHub App
-credential with only contents-write permission.
+Existing installed units are not stopped by a source update. Stop the old timer
+and service, revoke its token, and activate the disabled configuration using the
+[operations migration](07-operations.md#git-auto-push). There is no replacement
+automatic publication capability; local commits and in-container Git identity
+remain available.
 
 ## Posture check
 
@@ -198,6 +196,30 @@ response, and `TFSEC-037` detects inconsistent broker labels/modes/endpoints.
 manifest starts with `manifest<TAB>2` and separates host policy from its typed
 management record. Legacy enable flags never prove private operator access.
 
+Current agent records have 31 tab-separated fields. The final field declares
+the exact runtime as JSON with only `name` and its pinned store `path`, or `-`
+when it cannot be established. Docker inspection must match the declared name.
+Podman's documented `OCIRuntime` reports only a name: a different name is unsafe,
+but a matching name remains unknown without independent executable-path evidence.
+An unexpected path-shaped value is unsupported schema evidence, not proof of
+either safety or drift.
+`runsc`, `runsc-research` and `runsc-pi` are distinct capabilities, never
+interchangeable runtime aliases. Older records lacking this evidence remain
+live-state unknown (`TFSEC-033`), even if an inspected name happens to be
+`runsc`; regenerate them through an authorized host update.
+Unknown runtime evidence does not suppress other live checks: an observed
+privilege, mount, network or resource violation still yields unsafe drift.
+
+Secure agents require the canonical, argument-free stock `runsc` mapping in the
+active Docker or Podman backend. Elevated Research/Pi wrappers cannot be
+registered through aliases, selected as global defaults, or selected directly
+by an ungranted container. Runtime selectors for managed agents must retain
+their exact admitted name and instance. Independent host runtime registrations,
+defaults and unmanaged containers remain consumer policy unless they reference
+these elevated transports; their operator-supplied executable semantics are not
+certified by Tentaflake. Opaque Docker daemon `extraOptions` cannot establish the
+canonical mapping and are refused for secure managed agents.
+
 The check combines declarative desired-state evidence with narrow live probes
 for Tailscale Serve/Funnel, backup freshness, root-disk pressure, and narrow
 Docker/Podman inspect comparisons. Podman uses its documented `OCIRuntime`,
@@ -206,10 +228,11 @@ effective/bounding capabilities, AppArmor profile, and Docker-compatible
 unparseable probe is a warning, never green. Configured broker endpoints are
 also checked for credential, policy, and audit-path readiness through
 `/healthz`. The generated manifest records each capsule's exact broker-network
-name, bind mounts, tmpfs sizes, absence of ports, and exact resource limits.
-Inspection requires `State.Running=true`, the exact network set and internal
-broker bridge, no published ports, and matching mounts and limits. Missing or
-legacy manifest fields remain unknown. Each OCI subprocess has a five-second
+name, bind mounts, tmpfs sizes, absence of ports, exact resource limits and
+runtime identity. Inspection requires `State.Running=true`, the exact network
+set and internal broker bridge, no published ports, and matching mounts,
+limits and runtime. Missing or legacy manifest fields remain unknown.
+Each OCI subprocess has a five-second
 deadline and an 8 MiB combined stdout/stderr ceiling, including inherited
 output handles; overflow remains unknown. Broker
 health probes run in batches of at most 16. The check still does not prove
@@ -230,33 +253,15 @@ restart, unsafe-doctor exit status, backup/restore, and a controlled VM reboot.
 The pinned Podman/runsc fixture reports an empty AppArmor profile and `null`
 effective/bounding capability fields. Its live doctor result is therefore
 critical for absent AppArmor; the VM verifies that negative result, not full
-Podman confinement. Complete-schema Rust fixtures test parsing independently.
+Podman confinement. Complete-schema Rust fixtures use the documented runtime
+name and remain unknown without separately observed executable-path evidence.
 
 It does not emulate a real tailnet policy, upstream provider, production
 registry, or a production-host activation/reboot drill.
 
 ## Threat model and residual risk
 
-The complete asset, adversary, trust-boundary, control/evidence, non-goal, and
-deployment-acceptance analysis is maintained in the
-[threat model](15-threat-model.md). The summary below is intentionally brief.
-
-Assets are the NixOS host, other agents, operator access, persistent state,
-provider/Git/backup credentials, and external accounts. Attackers include a
-compromised agent runtime, malicious web/document content, dependencies, image
-content, and hostile model output. The model assumes the host kernel, NixOS
-closure, gVisor package, OCI daemon, and operator identity are trusted.
-
-Phase A narrows filesystem and kernel authority. Phase B prevents direct
-egress, substitutes host-held provider credentials, and constrains external
-web retrieval. The disposable worker additionally bounds offline untrusted
-execution and requires host approval for non-local action classes, but cannot
-prove every controller tool actually routed work through it. It does not prove
-that an image digest is trustworthy, make
-Docker/gVisor immune to vulnerabilities, prevent malicious writes inside the
-agent's own workspace, bound runtime-specific state outside the workspace,
-prove a host UID remap, enforce tailnet policy, or make untrusted web content
-safe. Cosign verification
-proves only that the configured signer authorized the pinned artifact; it does
-not prove that the software is benign. Those are explicit residual risks and
-dependencies, not hidden fallbacks.
+The [threat model](15-threat-model.md) owns assets, adversaries, trust boundaries,
+residual risks and deployment acceptance. Digest/signature identity is not
+software trust, gVisor shares the trusted host kernel, and a worker declaration
+does not prove native tool mediation. No profile claims those gaps are closed.

@@ -1,0 +1,8 @@
+schemaVersion = 1
+
+[[agents]]
+adapter = "hermes"
+name = "invalid"
+autoStart = false
+[agents.settings.sampling]
+weights = [nan]

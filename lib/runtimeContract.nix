@@ -58,14 +58,16 @@ let
   workspace = raw.workspace or "/workspace";
   lifecycle = raw.lifecycle or "stopped";
 in
-if (raw.schemaVersion or null) != 1 then
-  fail "schemaVersion must be 1."
+if !builtins.isInt (raw.schemaVersion or null) || raw.schemaVersion != 1 then
+  fail "schemaVersion must be integer 1."
 else if !(raw ? image) || !builtins.isString raw.image then
   fail "image must be a digest-pinned OCI reference."
 else if
   !builtins.isList command
   || command == [ ]
-  || !lib.all (arg: builtins.isString arg && !(lib.hasInfix "\n" arg)) command
+  || !lib.all (
+    arg: builtins.isString arg && !(lib.hasInfix "\n" arg) && !(lib.hasInfix "\r" arg)
+  ) command
   || lib.head command == ""
 then
   fail "command must be a non-empty argument vector."

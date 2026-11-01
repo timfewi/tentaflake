@@ -1,0 +1,131 @@
+{
+  "schemaVersion": 1,
+  "stoppedAdapters": ["pi", "openclaw"],
+  "sections": {
+    "system": {
+      "hostName": { "type": "hostName", "path": ["tentaflake", "hostName"] },
+      "timeZone": { "type": "token", "path": ["tentaflake", "timeZone"] },
+      "stateVersion": { "type": "token", "path": ["tentaflake", "stateVersion"] },
+      "defaultLocale": { "type": "token", "path": ["tentaflake", "defaultLocale"] },
+      "consoleKeyMap": { "type": "token", "path": ["tentaflake", "consoleKeyMap"] }
+    },
+    "network": {
+      "managementEnable": { "type": "bool", "path": ["tentaflake", "management", "enable"] },
+      "transport": { "type": "enum", "values": ["tailscale"], "path": ["tentaflake", "management", "transport"] },
+      "sshPolicy": { "type": "enum", "values": ["tailnet-policy", "disabled"], "path": ["tentaflake", "management", "ssh", "policy"] }
+    },
+    "storage": {
+      "enable": { "type": "bool", "enabledPath": ["tentaflake", "backup", "enable"] },
+      "paths": {
+        "type": "list", "max": 128, "unique": true,
+        "items": { "type": "backupPath", "excludedRoots": ["/var/lib/docker", "/var/lib/containers"] },
+        "path": ["tentaflake", "backup", "paths"]
+      },
+      "repositoryFile": { "type": "runtimePath", "path": ["tentaflake", "backup", "repositoryFile"] },
+      "passwordFile": { "type": "runtimePath", "path": ["tentaflake", "backup", "passwordFile"] },
+      "environmentFile": { "type": "runtimePath", "path": ["tentaflake", "backup", "environmentFile"] }
+    },
+    "sandbox": {
+      "profile": { "type": "enum", "values": ["dev", "balanced", "strict"], "path": ["tentaflake", "security", "profile"] }
+    },
+    "shell": {
+      "enable": { "type": "bool", "path": ["tentaflake", "shell", "enable"] },
+      "motd": { "type": "bool", "path": ["tentaflake", "shell", "motd", "enable"] },
+      "tools": { "type": "bool", "path": ["tentaflake", "shell", "tools", "enable"] },
+      "starship": { "type": "bool", "path": ["tentaflake", "shell", "starship", "enable"] }
+    },
+    "llm": { "enable": { "type": "disabled" } },
+    "container": {
+      "backend": { "type": "enum", "values": ["docker", "podman"], "path": ["tentaflake", "containerBackend"] }
+    },
+    "ui": { "enable": { "type": "disabled" } },
+    "board": { "enable": { "type": "disabled" } },
+    "monitoring": { "enable": { "type": "disabled" } },
+    "research": {
+      "enable": { "type": "bool", "enabledPath": ["services", "secureResearch", "enable"] },
+      "agents": {
+        "type": "map", "max": 128, "keys": { "type": "agentId" },
+        "path": ["tentaflake", "research", "agents"],
+        "items": { "type": "object", "required": ["uid"], "fields": {
+          "uid": { "type": "owner" }
+        } }
+      }
+    },
+    "hostApi": {
+      "enable": { "type": "bool", "path": ["tentaflake", "hostApi", "enable"] },
+      "allowActions": { "type": "bool", "path": ["tentaflake", "hostApi", "allowActions"] },
+      "allowLogs": { "type": "bool", "path": ["tentaflake", "hostApi", "allowLogs"] },
+      "allowToolRequests": { "type": "bool", "path": ["tentaflake", "hostApi", "allowToolRequests"] },
+      "allowToolDecisions": { "type": "bool", "path": ["tentaflake", "hostApi", "allowToolDecisions"] },
+      "peers": {
+        "type": "list", "max": 64, "uniqueBy": "uid", "path": ["tentaflake", "hostApi", "peers"],
+        "items": { "type": "object", "required": ["uid", "agents", "permissions"], "fields": {
+          "uid": { "type": "owner" },
+          "agents": { "type": "list", "max": 128, "unique": true, "items": { "type": "agentId" } },
+          "permissions": { "type": "list", "max": 10, "unique": true, "items": {
+            "type": "enum", "values": ["read", "actions", "logs", "propose", "tool_requests", "tool_decisions", "host_health", "run_read", "run_submit", "run_stop"]
+          } }
+        } }
+      }
+    },
+    "connectors": {
+      "enable": { "type": "bool", "path": ["tentaflake", "integrations", "enable"] },
+      "configFile": { "type": "runtimePath", "path": ["tentaflake", "integrations", "configFile"] },
+      "advisory": { "type": "bool", "path": ["tentaflake", "integrations", "advisory", "enable"] }
+    },
+    "workloadMapping": {
+      "enable": { "type": "bool", "path": ["tentaflake", "workloadMapping", "enable"] },
+      "bindings": {
+        "type": "map", "max": 64, "keys": { "type": "agentId" },
+        "path": ["tentaflake", "workloadMapping", "bindings"],
+        "items": { "type": "object", "required": ["tenant_id", "workload_id", "policy_revision"], "fields": {
+          "tenant_id": { "type": "exactId" },
+          "workload_id": { "type": "exactId" },
+          "policy_revision": { "type": "exactId" }
+        } }
+      }
+    },
+    "securityObserver": { "enable": { "type": "disabled" } }
+  },
+  "agent": {
+    "name": { "type": "name" },
+    "adapter": { "type": "enum", "values": ["hermes", "zeroclaw", "pi", "openclaw", "generic"] },
+    "autoStart": { "type": "bool", "adapters": ["hermes", "zeroclaw", "pi", "openclaw"] },
+    "stateDir": { "type": "statePath", "excludedRoots": ["/var/lib/docker", "/var/lib/containers"], "adapters": ["hermes", "zeroclaw", "pi", "openclaw"] },
+    "definition": {
+      "type": "runtimeDefinition",
+      "adapters": ["generic"],
+      "required": ["schemaVersion", "image", "command"],
+      "fields": {
+        "schemaVersion": { "type": "version" },
+        "image": { "type": "pinnedImage" },
+        "command": { "type": "command" },
+        "workspace": { "type": "workspacePath" },
+        "lifecycle": { "type": "enum", "values": ["stopped", "service"] },
+        "ownership": {
+          "type": "object", "required": ["uid", "gid"],
+          "fields": { "uid": { "type": "owner" }, "gid": { "type": "owner" } }
+        },
+        "capabilities": { "type": "capabilities", "values": ["files", "shell", "terminal", "worker"] },
+        "resources": {
+          "type": "object",
+          "fields": {
+            "memory": { "type": "size" },
+            "memorySwap": { "type": "size" },
+            "cpus": { "type": "cpus" },
+            "nofile": { "type": "owner" },
+            "pidsLimit": { "type": "owner" },
+            "tmpfsSize": { "type": "size" },
+            "runTmpfsSize": { "type": "size" }
+          }
+        }
+      }
+    },
+    "user": { "type": "name", "adapters": ["hermes"] },
+    "group": { "type": "name", "adapters": ["hermes"] },
+    "uid": { "type": "uint", "adapters": ["hermes"] },
+    "gid": { "type": "uint", "adapters": ["hermes"] },
+    "containerUid": { "type": "uint", "adapters": ["hermes"] },
+    "containerGid": { "type": "uint", "adapters": ["hermes"] }
+  }
+}

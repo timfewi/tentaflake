@@ -1,0 +1,23 @@
+schemaVersion = 1
+
+[[agents]]
+name = "assistant"
+adapter = "hermes"
+autoStart = false
+
+[hostApi]
+enable = true
+allowLogs = true
+peers = [{ uid = 10001, agents = ["agent-assistant"], permissions = ["read", "logs"] }]
+
+[connectors]
+enable = true
+configFile = "/run/tentaflake/integrations.json"
+advisory = true
+
+[workloadMapping]
+enable = true
+[workloadMapping.bindings.agent-assistant]
+tenant_id = "example"
+workload_id = "assistant"
+policy_revision = "review-1"

@@ -1,16 +1,20 @@
 # ─────────────────────────────────────────────────────────────────────
 # examples/consumer-flake.nix — Minimal consumer config using tentaflake
 #
-# This is the RECOMMENDED way to use tentaflake:
-# your private config imports it as a flake input.
+# Keep deployment data in this consumer repository; the public input stays generic.
+# Copy this example to <consumer>/flake.nix and the public commented template to
+# <consumer>/tentaflake.toml. Review/edit that local TOML, then track it together
+# with the flake and private supporting modules. Pin the input in flake.lock.
+# Never put literal secrets in TOML: even a private consumer enters the Nix store.
 #
-#   git clone <your-private-repo>
-#   cd nixos-tentaflake-config
-#   sudo nixos-rebuild switch --flake .#<hostname>
+#   git add flake.nix flake.lock tentaflake.toml
+#   nix eval --json .#nixosConfigurations.agent-box.config.tentaflake.agentInstances
+#   nix build --no-link .#nixosConfigurations.agent-box.config.system.build.toplevel
+# Activation is a separate operator decision. See docs/08-agent-cli.md.
 # ─────────────────────────────────────────────────────────────────────
 
 {
-  description = "My Hermes agent machine — powered by tentaflake";
+  description = "My agent machine — powered by tentaflake";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
@@ -45,20 +49,14 @@
       pkgs = nixpkgs.legacyPackages.${system};
 
       # ── Import tentaflake helpers ──
-      # ZeroClaw agents work the same way: pass definitions to
-      # mkZeroClawAgent.
-      mkHermesAgent = tentaflake.lib.${system}.mkHermesAgent;
-      mkAgent = tentaflake.lib.${system}.mkAgent;
-      mkZeroClawAgent = tentaflake.lib.${system}.mkZeroClawAgent;
+      systemFromData = tentaflake.lib.${system}.systemFromData;
       constants = tentaflake.lib.${system}.constants;
 
       # ── Shared specialArgs for all hosts ──
       specialArgs = {
         inherit
           self
-          mkHermesAgent
-          mkAgent
-          mkZeroClawAgent
+          systemFromData
           constants
           ;
       };
@@ -81,16 +79,23 @@
             tentaflake.nixosModules.default
 
             # 2. Tentaflake config — set your options here
-            {
-              tentaflake = {
-                inherit hostName;
-                inherit adminUser;
-                timeZone = "UTC";
-                inherit (constants) defaultLocale;
-                inherit (constants) consoleKeyMap;
-                inherit (constants) stateVersion;
-              };
-            }
+            (
+              { config, ... }:
+              {
+                tentaflake = {
+                  configurationName = hostName;
+                  hostName = nixpkgs.lib.mkDefault hostName;
+                  inherit adminUser;
+                  timeZone = nixpkgs.lib.mkDefault "UTC";
+                  defaultLocale = nixpkgs.lib.mkDefault constants.defaultLocale;
+                  consoleKeyMap = nixpkgs.lib.mkDefault constants.consoleKeyMap;
+                  stateVersion = nixpkgs.lib.mkDefault constants.stateVersion;
+                };
+                # Input consumers do not import the root configuration.nix
+                # which normally projects this bootstrap/desired setting.
+                system.stateVersion = config.tentaflake.stateVersion;
+              }
+            )
 
             # 3. Agenix encrypted secrets
             agenix.nixosModules.age
@@ -119,12 +124,19 @@
           modules = [
             ./machines/agent-box/default.nix
             ./machines/agent-box/hardware-configuration.nix
-            ./machines/agent-box/agents.nix
+            # Host broker, Research, worker and quota policy stays in Nix.
+            ./machines/agent-box/host-policy.nix
             ./secrets/secrets.nix
+            # The path is relative to THIS consumer flake, not the Tentaflake input.
+            # Do not import tentaflake/configuration.nix or use its empty TOML as
+            # fallback. Missing/untracked/ignored local TOML must fail evaluation.
+            (systemFromData { file = ./tentaflake.toml; })
           ];
         };
 
         # ── Future machines: just add a new mkHost call ──
+        # Give every additional managed system its own explicit desired source;
+        # use separate consumer roots for the installed root-TOML CLI workflow.
         # another-host = mkHost {
         #   hostName = "another-host";
         #   adminUser = "alice";

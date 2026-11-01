@@ -1,7 +1,7 @@
 { pkgs }:
 let
   inherit (pkgs) lib;
-  builders = import ../lib { inherit pkgs lib; };
+  mkAgent = import ../lib/mkAgent.nix { inherit pkgs lib; };
   evaluate =
     extra:
     (import (pkgs.path + "/nixos/lib/eval-config.nix") {
@@ -52,11 +52,13 @@ let
   manifest = valid.environment.etc."tentaflake/security.tsv".text;
   capsules = evaluate {
     imports = [
-      (builders.mkHermesAgent {
+      (mkAgent {
+        adapter = "hermes";
         name = "management-hermes";
         autoStart = false;
       })
-      (builders.mkZeroClawAgent {
+      (mkAgent {
+        adapter = "zeroclaw";
         name = "management-zero";
         autoStart = false;
       })
@@ -64,13 +66,14 @@ let
   };
   brokerCapsule = evaluate {
     imports = [
-      (builders.mkHermesAgent {
+      (mkAgent {
+        adapter = "hermes";
         name = "management-broker";
         autoStart = false;
       })
     ];
     tentaflake.networking.enable = lib.mkForce true;
-    tentaflake.broker.agents.hermes-management-broker = {
+    tentaflake.broker.agents.agent-management-broker = {
       enable = true;
       subnet = "10.203.20.0/30";
       gateway = "10.203.20.1";
@@ -112,8 +115,8 @@ assert lib.hasInfix "\nmanagement\ttailscale\ttrue\ttrue\ttailnet-policy\n" mani
 assert lib.hasInfix "host\tbalanced\tfalse\tfalse\ttrue\ttrue\tfalse\t36\n" capsuleManifest;
 assert lib.hasInfix "host\tbalanced\tfalse\ttrue\ttrue\ttrue\tfalse\t36\n" brokerManifest;
 assert lib.all (name: lib.hasInfix "agent\t${name}\tbalanced" capsuleManifest) [
-  "hermes-management-hermes"
-  "zeroclaw-management-zero"
+  "agent-management-hermes"
+  "agent-management-zero"
 ];
 assert denies "private management transport" disabledAlias;
 assert denies "private management transport" disabled;

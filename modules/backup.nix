@@ -48,8 +48,8 @@ in
       type = lib.types.listOf lib.types.str;
       default = [ ];
       example = [
-        "/var/lib/hermes-coding"
-        "/var/lib/tentaflake-broker-llm-hermes-coding"
+        "/var/lib/tentaflake/agents/coding"
+        "/var/lib/tentaflake-broker-llm-agent-coding"
       ];
       description = "Explicit agent state, workspace, broker audit, and budget paths to back up. Enabled managed state and workspace mounts inside these paths are included as separate sources.";
     };

@@ -1,244 +1,128 @@
 # Agent adapters
 
-Status: common schema-v1 OCI definitions and preset discovery are available.
-Generic workloads remain stopped pending capability-specific admission. OpenClaw
-and Pi remain stopped scaffolds; vendor runtime acceptance is separate.
-
-The requirement is one discoverable adapter per integrated runtime, a common
-consumer builder, unchanged Hermes/ZeroClaw state and public arguments, and
-explicit instance identities. Verification uses `checks.*.agent-adapters`,
-`checks.*.research-policy`, the installer-generated flake regression, Rust CLI
-fixtures, and `just fast`. Vendor runtime acceptance is a separate workload.
+`tentaflake.toml` is the only public instance-definition source. Each
+`adapters/<id>.nix` owns that runtime's implementation and pure `preset` facts:
+image, native configuration, commands, layout, ownership, hooks and evidence.
+Shared host modules own
+containment, broker, worker, quota, Research and recovery policy; selecting a
+runtime never selects a weaker security implementation.
 
 ## Consumer API
 
-```nix
-{ mkAgent }:
-[
-  (mkAgent {
-    adapter = "openclaw";
-    name = "assistant";
-    autoStart = false;
-  })
-]
-```
-
-This creates only an intentionally stopped refusal unit. It creates no OCI
-container or state directory, downloads no image, and grants no network or
-Research capability. OpenClaw and Pi share one scaffold builder
-(`lib/stoppedScaffold.nix`), so a same-identity OCI container or enabled quota
-fails the assertions of either. An explicit start fails with the missing
-acceptance requirements. `autoStart = true`, runtime settings, and image/tool
-overrides are unavailable until those requirements are verified. This is partial
-delivery, not a working secure OpenClaw deployment.
-
-The planned Pi Durable 1.4.0 integration is likewise discoverable as
-`adapter = "pi"` with `autoStart = false`. It produces only a stopped refusal
-unit: no OCI container, state directories, image, credential, network or socket
-projection. Its UID/GID 10100, distinct from the Hermes default identity, and
-its state/workspace paths are reserved metadata, not provisioned resources.
-Automatic start, runtime settings and image or mount overrides are rejected. The version names the target
-documentation, not an installed or verified SDK artifact. A reviewed image,
-actual runner and separate broker, Research, Board, lifecycle and host-boundary
-acceptance remain required before a runnable adapter can be considered.
-
-For current runtimes use `adapter = "hermes"` or `"zeroclaw"`. Their supported
-arguments and defaults are those of `mkHermesAgent` and `mkZeroClawAgent`.
-Both legacy entrypoints remain available. The library exports `mkAgent` and the
-lazy `adapters` registry alongside those helpers. Installed and consumer flakes
-pass them through `specialArgs`; the installer copies the adapter directory.
-An older `my-agents.nix` accepting only `{ mkHermesAgent }` still works because
-the importer passes only the helpers that its function requests.
-
-See [the complete secure consumer example](../examples/adapter-secure.nix) for
-Hermes with matching LLM broker, offline worker, Btrfs workspace and Research
-relay. Its operator inputs are runtime credential paths, exact model prices,
-VPN interface and readiness configuration. There is no operational OpenClaw
-example yet: copying those host declarations would not solve tool routing or
-model compatibility.
-
-## Generic isolated workload
-
-A local definition needs no new Rust adapter or upstream security module:
+Consumer NixOS modules load their own tracked TOML with the public file-only
+helper. Keep the upstream commented template empty; see
+[installation-owned configuration](08-agent-cli.md#installation-owned-configuration)
+for the consumer/fork layout, Git filtering and missing-source refusal:
 
 ```nix
-{ mkAgent }:
-[
-  (mkAgent {
-    adapter = "generic";
-    name = "coding";
-    definition = {
-      schemaVersion = 1;
-      # Replace with an independently reviewed artifact, never a mutable tag.
-      image = "registry.example.invalid/agent@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
-      command = [ "agent" "--interactive" ];
-      ownership = { uid = 10000; gid = 10000; };
-      workspace = "/workspace";
-      resources = { memory = "2g"; memorySwap = "2g"; cpus = "2.0"; pidsLimit = 512; };
-      lifecycle = "stopped";
-      capabilities = [ "files" "shell" "terminal" ];
-    };
-  })
-]
-```
-
-The same `definition` object is accepted in a schema-v1 JSON `agents` entry.
-On installed hosts, [CLI onboarding](08-agent-cli.md#add-an-agent-on-an-installed-host)
-creates templates, validates plans and imports stopped additions without activation.
-The argument vector follows OCI semantics and preserves the image entrypoint.
-Image review/provenance remains operator-owned; a digest alone is not proof of
-trust. Evaluation neither downloads the image nor activates the host.
-
-The instance root `/var/lib/generic-NAME` belongs to root and is not mounted
-into the capsule. Its separate `state` and `workspace` children belong to the
-container UID/GID; `state` mounts at `/state` with `HOME=/state`. The agent cannot
-replace its mount sources through a writable parent. Startup refuses symlink
-sources or a parent without root ownership and mode 0700. The private `workspace`
-child is mounted at the requested workspace path and becomes the working
-directory. That destination must be `/workspace` or a
-normalized child. Non-root ownership defaults to 10000:10000. Resource fields
-inherit host security limits; allowed overrides are `memory`, `memorySwap`,
-`cpus`, `nofile`, `pidsLimit`, `tmpfsSize` and `runTmpfsSize`. Values must be
-positive. Host administrators remain responsible for appropriate aggregate bounds.
-
-An optional [private state quota](14-workspace-quota.md) uses the same managed
-Btrfs mechanism as the workspace, with `state.path` matching the adapter's
-`stateStorage`. For this generic instance the path is
-`/var/lib/generic-coding/state`; legacy runtimes retain their existing state
-roots. Quota activation and existing-data migration remain explicit operator
-operations. A quota does not make a stopped workload operational.
-
-Unknown versions/fields, root ownership, unpinned images, extra mounts,
-environment/credential inputs, malformed commands and unsupported capabilities
-fail before a module is produced. Definitions are non-secret, including command
-arguments. Native shell/files run inside the ordinary gVisor capsule; this
-contract does not redirect native execution to the worker. `worker` is an
-additional declaration requiring matching host workspace/identity policy; no
-automatic vendor routing is claimed.
-
-The workload uses the existing host-selected Docker/Podman backend, gVisor,
-read-only root, no-new-privileges, dropped capabilities, bounded resources and
-`network=none`. It exposes no host/other-agent socket or model credentials.
-Generic model and Research hooks are not yet accepted. `lifecycle = "service"`
-or forcing `autoStart` still fails current broker/worker/quota/Research gates;
-capability-specific admission is tracked in #116. `dev` is unavailable for the
-new generic contract. After an explicitly authorized host update, an operator
-may manually start an intentionally stopped offline workload and attach with
-`tentaflake shell generic-NAME` or `tentaflake exec generic-NAME -- ...`.
-These source fixtures do not establish vendor support or live isolation evidence.
-
-### OpenShell reuse decision
-
-Keep the existing OCI/gVisor backend for this contract. The investigated NVIDIA
-OpenShell 0.1.x architecture supports separating agent commands from trusted
-policy and credentials, which this design adopts. There is no verified NixOS,
-gVisor, exact broker or isolated Research compatibility, so OpenShell is not a
-required dependency. A future backend needs its own bounded compatibility and
-isolation acceptance; selecting another agent must not select weaker containment.
-See [the comparison and evidence limits](roadmap.md#inspiration-and-evidence-limits).
-
-## Schema version 1
-
-`adapters/default.nix` explicitly imports the generic workload and the Hermes,
-ZeroClaw, OpenClaw and Pi presets.
-Imports are lazy; discovering names requires no packages, image downloads or
-services. `mkAgent` validates only the selected adapter. Unsupported options,
-invalid settings shapes and unknown adapters fail during evaluation.
-
-| Field | Contract |
-| --- | --- |
-| `schemaVersion` | `1` |
-| `identity` | Runtime ID, investigated version and `compatibility`, `scaffold`, `definition` or `operational` status |
-| `artifact` | Reviewed digest-pinned OCI reference, unselected scaffold, or operator-supplied generic instance artifact |
-| `command` | Upstream default argument vector |
-| `configuration` | Configuration format (`none` for generic), read-only generation and `generate name settings` hook |
-| `ownership` | Default positive numeric UID/GID |
-| `layout` | Default state pattern, workspace suffix, writable areas and relative initialization directories |
-| `lifecycle` | Managed service or stopped scaffold |
-| `model` | Protocol families and `required`, `optional` or `unknown` streaming requirement |
-| `research` | Accepted capability and upstream settings hook; tool discovery needs separate runtime evidence |
-| `execution` | Worker queue interface and whether automatic routing is verified |
-| `build` | Runtime module generator with its precise supported argument set |
-| `metadata` | Effective instance, container, unit, logical state root, actual `stateStorage` source, initialization directories, workspace and numeric ownership |
-| `capabilities` | Declared available hooks; declarations do not prove vendor acceptance |
-| `evidence` | Source/refusal regression level and separately recorded vendor acceptance |
-
-Adapter facts do not grant host authority. Shared `containerSecurity`, Research
-socket projection, broker, worker, quota, image provenance and recovery modules
-retain policy ownership. The shared `containerSecurity.apply` builder validates
-the final image and owns containment for generic, Hermes and ZeroClaw workloads. Legacy native features
-remain in their existing builders.
-
-`tentaflake.agentInstances` is a read-only map derived from adapter declarations.
-Inventory consumes explicit adapter/name/container/unit/state fields, keeps the
-five-column TSV contract and retains the original prefix/first-volume fallback
-for unmanaged OCI containers. Duplicate effective container identities fail,
-including duplicates across Nix imports and JSON input.
-Different runtimes may retain the same short name; use their complete container
-identities in CLI commands to select one unambiguously.
-
-## Compatibility and state
-
-| Runtime | Container / unit | State / workspace | Container owner |
-| --- | --- | --- | --- |
-| Generic workload | `generic-NAME` / `BACKEND-generic-NAME.service` | `/var/lib/generic-NAME` / `workspace` | 10000:10000, with definition ownership |
-| Hermes | `hermes-NAME` / `BACKEND-hermes-NAME.service` | `/var/lib/hermes-NAME` / `workspace` | 10000:10000, retaining overrides |
-| ZeroClaw | `zeroclaw-NAME` / `BACKEND-zeroclaw-NAME.service` | `/var/lib/zeroclaw-NAME` / `data` | 65534:65534 |
-| OpenClaw scaffold | Reserved `openclaw-NAME` identity / refusal unit | Unprovisioned `/var/lib/openclaw-NAME` / `workspace` | 1000:1000 |
-| Pi scaffold | Reserved `pi-NAME` identity / refusal unit | Unprovisioned `/var/lib/pi-NAME` / `workspace` | 10100:10100 |
-
-Custom existing state directories, host users, seed destinations, no-clobber
-copying, numeric owners, commands and optional operational services stay intact.
-There is no automatic state move, deletion, conversion or reset. OpenClaw's
-upstream `/home/node/.openclaw` mount is only a future runtime layout; the current
-scaffold mounts nothing. Existing ext4 workspace migration remains explicit;
-new managed workspaces are Btrfs and at least 128 MiB.
-
-## JSON input
-
-```json
+{ systemFromData, ... }:
 {
-  "schemaVersion": 1,
-  "agents": [
-    { "adapter": "hermes", "name": "coding", "autoStart": false },
-    { "adapter": "openclaw", "name": "assistant", "autoStart": false }
-  ]
+  imports = [ (systemFromData { file = ./tentaflake.toml; }) ];
 }
 ```
 
-The generic `agents` array requires the declared `schemaVersion`. Entries use
-the selected builder's arguments. Legacy `hermes` and `zeroclaw` arrays remain
-supported without a version; their existing fields and generated settings are
-retained. Generic and legacy arrays are additive, with no replacement or hidden
-precedence. Effective container collisions fail. Unknown root/entry fields,
-unknown adapters, malformed entries and unsupported schema versions fail with
-the relevant input location. Input remains non-secret; real provider keys are
-host runtime files, never settings or environment values in the Nix store.
+Pass `tentaflake.lib.${system}.systemFromData` through `specialArgs`.
+Inline `data`, `mkAgent` and adapter `.build` functions are not public APIs.
 
-## Research and execution
+Choose `hermes`, `zeroclaw`, `generic`, `openclaw` or `pi`. Unsupported adapter
+arguments fail evaluation. The registry is lazy: discovery does not download
+images or instantiate services. See [configuration](08-agent-cli.md) for TOML
+and installed-host onboarding, and [the secure consumer example](../examples/adapter-secure.nix)
+for matching host declarations.
 
-`researchClient.nix` projects only the shared pinned client closure and exact
-per-agent read-only relay socket. Upstream settings are adapter hooks. Research
-validation requires an explicit registered adapter with accepted capability,
-rather than trusting an OCI name prefix. Hermes disables native web/browser
-toolsets and accepts only local stdio MCP additions. ZeroClaw disables its
-native web tools and replaces its MCP list with the isolated stdio server.
-Remote additions, legacy fetch, missing read-only mounts and other-agent sockets
-remain rejected. Revocation and peer-UID isolation remain service-owned.
+All managed identities are `agent-<name>` with unit
+`<backend>-agent-<name>.service`. Names must be globally unique across adapters
+and must not conflict with other host OCI declarations. Default host state is
+`/var/lib/tentaflake/agents/<name>`; an explicit adapter `stateDir` preserves an
+operator-selected path. Read `tentaflake.agentInstances` metadata for effective
+container/unit, logical state root, actual `stateStorage`, workspace, numeric
+ownership and `runnable`. Do not infer these from runtime prefixes. The CLI
+retains a fallback for unmanaged OCI containers.
 
-Declaring a worker is not automatic mediation. Current adapters expose the
-existing queue/results interface; this change adds no automatic interception
-of built-in shell, build, plugin or foreign-code tools. The threat model and
-[worker controls](13-disposable-worker.md) retain that limitation.
+Public `stateDir` accepts normalized `/var/lib` paths, preserving existing
+operator-selected state such as `/var/lib/private/kept` without relocating data.
+The shared schema excludes the known container-engine state roots
+`/var/lib/docker` and `/var/lib/containers` and every descendant, including for
+stopped agents. Component boundaries are exact: `/var/lib/docker-agent` and
+`/var/lib/containers_agent` remain valid. This exclusion is not proof that every
+other host path is safe: operators must still select dedicated agent-owned
+state, and runtime containment and ownership checks still apply. Low-level
+trusted Nix configuration is a separate authority boundary, not permission to
+bypass the public desired-system rule.
+
+## Generic isolated workload
+
+A reviewed custom OCI image and its in-capsule argv are supported:
+
+```toml
+schemaVersion = 1
+
+[[agents]]
+adapter = "generic"
+name = "coding"
+autoStart = false
+
+[agents.definition]
+schemaVersion = 1
+image = "registry.example.invalid/agent@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+command = ["agent", "--interactive"]
+workspace = "/workspace"
+lifecycle = "stopped"
+capabilities = ["files", "shell", "terminal"]
+
+[agents.definition.ownership]
+uid = 10000
+gid = 10000
+```
+
+Replace the illustrative image with your reviewed digest-pinned artifact.
+The argument vector preserves the OCI entrypoint and runs only inside the
+offline capsule, never on the host. The root-owned mode-0700 instance root
+remains unmounted; separately owned state and workspace children mount at
+`/state` and the declared workspace (`/workspace` or a normalized child).
+Read effective paths and owners from instance metadata for quota/worker policy.
+Startup refuses unsafe ownership and symlink sources.
+
+Definitions reject mutable images, root ownership, extra mounts, environment or
+credential inputs, malformed commands and unsupported capabilities. The capsule
+has a read-only root, dropped capabilities, bounded resources and `network=none`.
+There is no accepted provider/model or Research integration, dev escape or
+automatic startup. Host commands are not public schema inputs. Migration refuses
+unsupported fields rather than silently dropping behavior.
+
+## Native configuration and state
+
+Native details belong here and in each adapter, not in shared host services:
+
+| Adapter | Native configuration/layout | Default numeric owner |
+|---|---|---|
+| Hermes | YAML `/state/config.yaml`, `HERMES_HOME=/state`, `/state/workspace` | 10000:10000 |
+| ZeroClaw | TOML `/zeroclaw-data/.zeroclaw/config.toml`, `data` workspace child | 65534:65534 |
+| Generic | No generated native config; `/state` and declared workspace | 10000:10000, definition override |
+
+Native configuration is owned by the fixed adapter presets and host policy.
+Public agent fields are limited to `name`, `adapter`, `autoStart`, `stateDir`,
+`user`, `group`, `uid`, `gid`, `containerUid` and `containerGid`; generic agents
+also accept the validated `definition` above. Arbitrary `settings`, host commands,
+environment, mounts and `seedDir` are refused.
+Preserve existing unsupported native configuration during migration by stopping
+and resolving the unsupported input, never by dropping it from the candidate.
+
+Research hooks disable native web paths and project only the pinned stdio
+client closure and exact read-only relay socket. Hermes permits local stdio
+MCP additions; ZeroClaw replaces its native MCP list with the isolated server.
+Remote MCP, provider-hosted web tools, legacy fetch and other-agent sockets are
+not alternate routes. [Research](16-research.md) owns revocation and readiness;
+[worker policy](13-disposable-worker.md) owns offline execution and approval.
 
 ## Support and upstream evidence
 
-`adapters/catalog.json` is the versioned source of preset, capability and support
-facts. Nix imports it, `tentaflake runtimes [--json]` embeds it in the CLI, and
-`python3 scripts/runtime-catalog-docs.py` renders this table. Its `--check` mode
-runs in `checks.*.agent-adapters`. A declaration or source regression is not
-actual vendor runtime acceptance. The generic definition's artifact is chosen
-and reviewed by the operator; its catalog entry selects no image.
+Edit runtime facts only in `adapters/<id>.nix`. `lib/runtimeCatalog.nix` projects
+the pure presets; `adapters/catalog.json` is the generated CLI catalog, not a
+second editable source. Regenerate JSON and the table together with
+`python3 scripts/runtime-catalog-docs.py`. The same script's `--check` detects
+drift. Catalog facts, source regressions and synthetic probes never establish
+real vendor acceptance.
 
 <!-- runtime-catalog:start -->
 
@@ -252,85 +136,249 @@ and reviewed by the operator; its catalog entry selects no image.
 
 <!-- runtime-catalog:end -->
 
-OpenCode and Goose are the next investigations. Codex, Claude Code, Aider and
-OpenHands remain candidates. No adapter files or support claims are added for
-them. Pi is listed only as the non-runnable scaffold described above.
+### Pi Durable: pinned thin runner with fail-closed admission
 
-Primary OpenClaw sources read through the isolated Research service:
+The runner compiles the reviewed, immutable **upstream source**
+[`earendil-works/pi` revision `35dfa757378bd7a8570670e99c2687bdd1039a06`](https://github.com/earendil-works/pi/tree/35dfa757378bd7a8570670e99c2687bdd1039a06).
+Its [`packages/durable/package.json`](https://github.com/earendil-works/pi/blob/35dfa757378bd7a8570670e99c2687bdd1039a06/packages/durable/package.json)
+names `@earendil-works/pi-durable` **1.4.0**, ESM, Node **>=22.19.0**.
+The [root MIT license](https://github.com/earendil-works/pi/blob/35dfa757378bd7a8570670e99c2687bdd1039a06/LICENSE)
+is copyright 2025 Mario Zechner and requires retaining its copyright and
+permission notice. The package declares MIT too. This is not a dependency-wide
+license audit or proof that a published tarball matches this source revision.
+Declared upstream runtime dependencies are Chord, Pi AI, Pi Codemode and Pi
+Telemetry 1.4.0, Photon 0.3.3, diff 8.0.4 and typebox 1.3.27.
+`pkgs/tentaflake-pi/upstream.nix` builds the selected workspace closure with the
+upstream lock, not a global npm installation. The runner uses pinned Nixpkgs
+Node 24. Generated provider JSON and its manifest come from the separately hashed
+MIT `@earendil-works/pi-ai` 1.4.0 archive
+(`sha256-tA4rqLtvwzKQj4uW6DfcLR/ftF65zTgvWu0RFGKYHjw=`); packaged JavaScript is
+not substituted for reviewed source. Upstream model-data checks remain enabled.
+The retained upstream notice is `pkgs/tentaflake-pi/UPSTREAM-LICENSE`.
 
-- [v2026.9.7 Dockerfile](https://github.com/openclaw/openclaw/blob/v2026.9.7/Dockerfile): Node user UID 1000, private `/home/node/.openclaw` state, default gateway command and image entrypoint.
-- [v2026.9.7 license](https://github.com/openclaw/openclaw/blob/v2026.9.7/LICENSE): MIT, OpenClaw Foundation; third-party notices require review before packaging.
-- [v2026.9.7 configuration reference](https://github.com/openclaw/openclaw/blob/v2026.9.7/docs/gateway/configuration-reference.md): JSON5 configuration and actual schema/parser validation commands.
-- [v2026.9.7 custom providers](https://github.com/openclaw/openclaw/blob/v2026.9.7/docs/gateway/config-tools/custom-providers.md): OpenAI Completions/Responses protocol choices; no verified non-streaming mode. `supportsUsageInStreaming` concerns streaming usage metadata and does not establish a non-streaming fallback.
-- [v2026.9.7 MCP/extensions](https://github.com/openclaw/openclaw/blob/v2026.9.7/docs/gateway/config-extensions.md): native `mcp.servers` stdio declarations and session discovery. This is documentation evidence, not proof of discovery in our image.
-- [v2026.9.7 exec tool](https://github.com/openclaw/openclaw/blob/v2026.9.7/docs/tools/exec.md): exec targets gateway/sandbox/node and can mutate permitted paths; none constitutes the Tentaflake disposable-worker queue.
-- [v2026.9.7 stream selection](https://github.com/openclaw/openclaw/blob/v2026.9.7/src/agents/embedded-agent-runner/stream-resolution.ts) and [transport factory](https://github.com/openclaw/openclaw/blob/v2026.9.7/packages/ai/src/transports/provider-transport-stream.ts): the embedded runner selects built-in OpenAI stream functions. Provider overrides are extension code, not a verified non-streaming setting.
-- [v2026.9.7 Completions request builder](https://github.com/openclaw/openclaw/blob/v2026.9.7/packages/ai/src/transports/openai-completions-params.ts#L309): both direct and managed modes use a request with `stream: true`; `supportsUsageInStreaming` only controls `stream_options.include_usage`.
-- [v2026.9.7 Responses provider](https://github.com/openclaw/openclaw/blob/v2026.9.7/packages/ai/src/providers/openai-responses.ts#L143) and [stream lifecycle](https://github.com/openclaw/openclaw/blob/v2026.9.7/packages/ai/src/providers/openai-responses-shared.ts#L172): the direct provider constructs `stream: true` and consumes a Responses event stream.
+The exact **default upstream recovery hazard**, avoided by the runner, is graceful
+close followed by resume:
 
-No runtime artifact was downloaded, built or pulled. Repository/release HTML exceeded
-the bounded extraction limit; the older embedded-runner source path returned
-404. The versioned directory index identified the current source paths above.
-The inspected built-in OpenAI request builders require streaming. The broker
-now offers opt-in bounded SSE for Chat Completions/Responses; Anthropic Messages
-remain rejected. See [streaming policy](12-brokered-egress.md#streaming-model-responses). The scaffold therefore declares streaming
-as required for those built-in transports and refuses activation. This is a
-source-level incompatibility finding; no actual pinned executable was exercised.
-It does not rule out a separately reviewed custom provider or an upstream change.
-Setting `stream: false` in a payload hook alone does not establish compatibility
-with an event-stream consumer. Broker streaming does not establish acceptance with that pinned executable.
+- [`scheduler.ts`, `join()`, lines 563–583](https://github.com/earendil-works/pi/blob/35dfa757378bd7a8570670e99c2687bdd1039a06/packages/durable/src/harness/scheduler.ts#L563-L583)
+  aborts invocations and writes still-running tasks back as `pending`; its
+  comment explicitly says the next open counts no restart.
+- [`generation.ts`, request phase, lines 264–268](https://github.com/earendil-works/pi/blob/35dfa757378bd7a8570670e99c2687bdd1039a06/packages/durable/src/harness/generation.ts#L264-L268)
+  takes the interrupted-attempt branch only when `task.restarts` is defined.
+  Consequently disabling `settings.retry.enabled` does not prevent this
+  pending request from being sent again after close/reopen/resume.
+- The upstream
+  [`harness-generation-recovery.test.ts`, lines 125–165](https://github.com/earendil-works/pi/blob/35dfa757378bd7a8570670e99c2687bdd1039a06/packages/durable/test/harness-generation-recovery.test.ts#L125-L165)
+  explicitly expects a committed partial to become an aborted entry and the
+  same messages to be sent again. These are inspected test sources, not tests
+  executed by Tentaflake.
 
-The existing broker credential-substitution regression also sends source-derived
-streaming request shapes to both broker routes. It requires HTTP 400 with
-`streaming is disabled`, unchanged budget state, and an audit entry without
-prompts or credential values. Its upstream fixture is already closed, so an
-accidental dispatch cannot satisfy the expected result. These deterministic
-probes preserve the default denial. Separate live loopback-provider tests cover
-the opt-in SSE transport, not vendor compatibility.
+This is **not** a claim that upstream lacks all recovery controls.
+[`generation.ts`, `interrupted()`, lines 496–544](https://github.com/earendil-works/pi/blob/35dfa757378bd7a8570670e99c2687bdd1039a06/packages/durable/src/harness/generation.ts#L496-L544)
+does honor disabled retries for a crash-marked request.
+[`tool.ts`, lines 193–207](https://github.com/earendil-works/pi/blob/35dfa757378bd7a8570670e99c2687bdd1039a06/packages/durable/src/harness/tool.ts#L193-L207)
+commits execution intent with default `replay: "unsafe"` and re-executes only
+when both stored and current tool policy say `"safe"`. These are useful
+prerequisites for Research and worker mediation, not end-to-end acceptance.
+An abort-before-close design must prove durable cancellation of every affected
+task before scheduler shutdown, including concurrent submission, compaction,
+failure during cancellation and restored older state. Simply substituting
+`close()` for cancellation, disabling retries, or supplying a duplicate
+submission ID is insufficient. No replacement model loop is supplied.
 
-## OpenClaw acceptance and next design
+The public seam needs care beyond these retry flags:
 
-Before enabling OpenClaw:
+- [`scheduler.ts`, lines 2627–2643](https://github.com/earendil-works/pi/blob/35dfa757378bd7a8570670e99c2687bdd1039a06/packages/durable/src/harness/scheduler.ts#L2627-L2643)
+  catches generation-hook failures and reports `extension_error`, continuing
+  unless the invocation is already aborted. A thrown journal/fsync failure in
+  `beforeRequest` or `beforeProviderRequest` is not an authorization barrier.
+- [`harness/types.ts`, lines 970–987](https://github.com/earendil-works/pi/blob/35dfa757378bd7a8570670e99c2687bdd1039a06/packages/durable/src/harness/types.ts#L970-L987)
+  supplies hooks with stable task/conversation identities, but `afterResponse`
+  runs before classification. Clearing an outer intent there loses protection
+  if the process dies before the SDK commits its result.
+- [`compaction.ts`, lines 164–190](https://github.com/earendil-works/pi/blob/35dfa757378bd7a8570670e99c2687bdd1039a06/packages/durable/src/harness/compaction.ts#L164-L190)
+  calls `models.completeSimple` without generation request hooks or the
+  generation task's interrupted-attempt guard. Recovery can repeat the summary
+  request; disabled retry settings alone do not cover this path.
+- [`ai/src/models.ts`, lines 258–367](https://github.com/earendil-works/pi/blob/35dfa757378bd7a8570670e99c2687bdd1039a06/packages/ai/src/models.ts#L258-L367)
+  is a public structural interface accepted by `HarnessOptions.models`. A
+  fail-closed facade could mediate all model methods, while independently
+  refusing catalog refresh, login, images, classification and deferred requests
+  outside the allowed protocol. Model options carry conversation session
+  identity, not the SDK task ID.
 
-1. Review the exact OCI release digest and provenance, or separately review a
-   local image with exact source/dependency hashes. Retain secure image checks.
-2. Parse generated read-only configuration with the actual pinned executable;
-   exercise startup, intentional stop, crash recovery and state after restart.
-3. Capture a real bounded request against a deterministic broker fixture. Prove
-   transport compatibility using the opt-in broker SSE path. Repeat bounded
-   partial-output, cancellation, timeout/audit failure and conservative budget
-   checks with that executable.
-4. With only the projected stdio relay, prove actual tool discovery and one
-   Research call. Verify native web tools, remote MCP, provider-hosted tools,
-   channels, remote plugins and background tools cannot create another path.
-5. Implement a reviewed upstream execution extension mapping commands to
-   worker-queue v1 requests, await exact-ID results and propagate rejection,
-   timeout and cancellation. Disable built-in exec/process alternatives and
-   prove a build runs in the disposable no-egress capsule.
-6. Wire the exact broker/worker/Btrfs quota/Research declarations, matching paths
-   and UID/GID. Operator-provisioned credentials and VPN readiness stay on the
-   host. Repeat negative policy checks after overrides and provenance gates.
+`pkgs/tentaflake-pi/{ledger,mediation,engine,runner}.mjs` implements the outer
+single-writer receipt ledger and whole-instance quarantine around the real SDK;
+it is not a replacement scheduler. An exclusive SQLite owner transaction holds
+the process lease. FULL-synchronous admission and operation receipts precede
+every model, Research and worker dispatch. Numeric SDK task IDs are retained as
+stable correlations. A repeated request ID returns its existing run; a different
+body under that ID is refused. One active submission is allowed.
 
-The broker streaming prerequisite is implemented separately from the adapter
-refactor, with bounded SSE events/output, first/idle/total deadlines, cancellation,
-no replay, pre-dispatch audit/budget admission and conservative reservation.
-Actual OpenClaw transport acceptance remains unverified. Keep provider credentials
-host-only and retain model/tool allowlists; repeat partial-output, usage,
-cancellation and audit-failure checks before any adapter activation.
-Heavy VM/image/system builds and paid-provider probes need separate workload
-authorization. Synthetic policy fixtures and package builds never establish
-vendor operational compatibility.
+The submission barrier remains until committed SDK settlement **and idle**, never
+merely `afterResponse` or transport EOF. Stop records uncertainty before aborting.
+Already-dispatched provider or worker operations may still finish; stop does not
+claim to retract them, and their uncertainty is never converted into permission
+to submit again.
+Restart marks every unsettled admission uncertain before any writable SDK open.
+Even a nominally clean ledger is checked against a read-only Harness inspection
+and both directions of the SDK submission/receipt mapping; live or mismatched
+restored state is durably quarantined. Upstream documents that `readOnly` recovers
+nothing and rejects scheduling (`harness/types.ts`, lines 731–738).
+Quarantine still permits receipt/status inspection, but neither writable Harness
+open, new submissions nor redispatch. There is no quarantine-clear, restore/import,
+or automatic reconciliation API. Restoring historical snapshots is not an admitted
+resumption procedure; an internally consistent rollback cannot be detected by a
+local receipt database alone.
 
-## Implementation and evidence status
+The only model path is the pinned OpenAI Responses `streamSimple` implementation,
+with one fixed broker model, a virtual key, SSE, zero retries, no redirects and
+an injected guarded fetch. The source forwards that fetch through
+`ai/src/api/simple-options.ts` to `openai-responses.ts`; the latter also sets the
+OpenAI SDK's own `maxRetries` to zero. Each physical send requires a one-use task
+correlation and the persisted barrier. All other Models facade methods, including
+deferred responses, images, classification, login, refresh and ordinary completion,
+are denied. Compaction is disabled and its completion path is unavailable.
+Public/invalid broker addresses are rejected; production configuration comes only
+from the exact broker instance, not agent settings.
 
-The adapter foundation, compatible wrappers, explicit inventory, versioned
-JSON and opt-in broker SSE are implemented. Focused policy and protocol
-fixtures cover shared admission, default streaming denial and bounded streaming
-failure paths. See [brokered egress](12-brokered-egress.md) for transport details
-and [build boundaries](17-builds.md) for the verification entrypoints.
+Research runs only the pinned `${researchClient}/bin/research-client --socket
+/run/tentaflake-research/socket` stdio client, with the five-tool manifest and
+bounded MCP initialization. That client, not this runner, implements the framed
+relay protocol and Hello/version/tool validation. The pinned relay authenticates
+the client UID; the client does **not** perform reciprocal server `SO_PEERCRED`
+authentication. Exact root-owned socket provenance and read-only closure/mounts
+therefore remain required. There is no generic MCP server configuration.
+Execution publishes only versioned `local-reversible` requests to the existing
+offline worker queue; native bash, arbitrary extension loading, direct execution,
+direct internet access and unrelated host/engine sockets are unavailable.
 
-OpenClaw has no selected OCI artifact. Actual native configuration parsing,
-model/Research calls, worker mediation, lifecycle and persistence acceptance
-remain pending. Hermes/ZeroClaw retain their existing integrations; synthetic
-fixtures do not establish actual vendor workloads. No host activation is
-implied by source checks.
+`adapters/pi/options.nix` keeps host admission disabled by default. Enabling it
+requires the exact runner package and local OCI bundle, their matching immutable
+image selector/proof, shared balanced containment, one Responses-compatible
+SSE-enabled broker model, the exact Research relay, and the exact offline-worker
+workspace/UID plus **both workspace and durable-state quotas**. A chat-only strict
+cost envelope is incompatible and refused, not silently weakened. After loading,
+startup checks the exact immutable **configuration digest**, not merely an image
+tag. Classic engine IDs provide that digest directly. Docker's containerd image
+store may instead report a manifest ID: only for Docker, a differing well-formed
+ID triggers a strictly local fixed-selector export and hashing of the exact raw
+config bytes. The export is limited to 2 GiB/150 seconds, the complete fallback
+to 180 seconds, its parser to 256 MiB, the manifest to 64 KiB and the config to
+4 MiB. Ambiguous members, links, malformed paths, mismatches and export failures
+refuse startup; no registry/pull fallback exists. Podman retains direct-ID-only
+verification. User image/stream, native command and arbitrary mount overrides
+remain prohibited.
+
+Admission also requires explicit `tentaflake.piRuntime.transport = "runsc-pi-v1"`.
+The dedicated `runsc-pi` wrapper alone enables `--host-uds=all`; ordinary runsc
+is unchanged, including Research's existing open-only override. Docker uses
+the exact canonical wrapper without runtime arguments; Podman uses its exact
+containers.conf mapping. Rootless engines, user mappings, alternate wrapper
+paths/flags and selecting this runtime as the engine default are refused.
+The internal transport predicate is shared with host API descriptor admission
+and security evidence. Selecting a flag is not runtime acceptance.
+
+In this reviewed rootful transport the host listener is the **UID 0 gofer**,
+while its socket inode belongs to **10100:10100**. The outbound API connection
+trusts root/engine administration only after private ancestry and pinned-inode
+checks, and still requires the bearer token; this is not an inbound root grant.
+Research outbound credential impersonation is independently authenticated by
+the host relay; no reciprocal server-UID handshake is claimed.
+
+The runtime has private `state` and `workspace` directories owned by 10100:10100,
+mode 0700, below a root-owned private instance parent. Its root-owned runtime
+parent is mode 0700. Only the control directory is 10100:10100 mode 0710 and its
+Unix socket mode 0620, permitting the separately authorized host API's exact
+supplementary group to connect. The API token is root:10100 mode 0440, regular,
+single-link and read-only in the container; the broker virtual token remains
+10100:10100 mode 0400. Real provider credentials never enter the capsule.
+
+The bearer-authenticated native socket supports `POST /api/sessions`,
+`POST /v1/runs` (`session_id`, `input`, `context_mode: "persistent"`, `request_id`),
+`GET /v1/runs/{id}`, lookup by `request_id`, `/result`, `/events`, and
+`POST /v1/runs/{id}/stop`. Responses carry a client-compatible `run_id` and native
+run projection; uncertain work is `state: "interrupted", uncertain: true`.
+SSE carries terminal results only, not fabricated token deltas. Capabilities
+explicitly deny live inputs and session import. Isolated context is unsupported.
+Task ownership stays with the client's own task system; the runner API does
+not grant enterprise approvals, connector permissions, or standalone UI admission.
+
+Focused verification belongs to the integration owner:
+
+- Build `.#tentaflake-pi-sdk`, `.#tentaflake-pi` and `.#tentaflake-pi-image`.
+- Run the packaged `bin/tentaflake-pi-test`: exclusive ownership, duplicate and
+  conflicting requests, stop/reopen, durable barriers, denied provider paths,
+  credential permissions, and real pinned-SDK kill/close-after-send fixtures.
+  Restored-receipt mismatch cases must stay quarantined with zero redispatch.
+- Evaluate `tests/stopped-scaffold.nix` and the shared adapter/containment suite.
+- Run `tests/research-integration.nix` when VM verification is authorized; its
+  added Node probe uses this runner's actual Research class, pinned real client
+  and real relay with an offline-denied fetch, not a generic MCP mock.
+- Evaluate `tests/pi-runtime-evaluation.nix { inherit pkgs; }` for exact
+  configured transport and wrong-path/flags/rootless/user-mapping negatives.
+- Build/run `tests/pi-runtime-vm.nix { inherit self pkgs; runtimePackage = ...;
+  bundle = ...; }` through its separate `.driver`, under the bounded agent
+  launcher. It is not part of the fast gate. The disposable two-agent VM is
+  limited to two cores, 4096 MiB and 900 seconds, with synthetic credentials,
+  loopback-only unused provider configuration, real pinned runner/SDK and
+  offline Research. It exercises listener-versus-inode identity, empty-capability
+  API transport, private-path negatives, containment and Research connectivity.
+  It does not yet prove model Responses exchange, relay upstream attribution,
+  stale-inode replacement races or Podman runtime behavior. Those remain
+  acceptance gaps, not successes implied by a source/evaluation check.
+
+These fixture sources are not evidence of live model/provider acceptance.
+OpenClaw still provisions only a stopped refusal unit. Its investigated OpenAI
+transports require streaming; broker SSE alone is not executable compatibility
+proof. Hermes/ZeroClaw also retain pending real-vendor model/Research/execution/
+lifecycle acceptance. See [verification](17-builds.md).
+
+## Breaking migration
+
+This is a clean interface cutover with an explicit, offline migration:
+
+1. Use `tentaflake config migrate` on the legacy `agents.toml` source.
+   Migration must retain every reviewed instance, identity, supported path and
+   owner, startup intent and optional `_securityNote` metadata; unsupported
+   settings, host commands or host policy require refusal, not data loss.
+   `schemaVersion = 1` and `agents` are required: use `agents = []` only for an
+   intentionally empty host, otherwise `[[agents]]` tables as shown above.
+   TOML has no JSON `null`; omit optional unset fields rather than inventing
+   values. Keep credentials outside the inventory and Nix store.
+   Review the complete translation before removing the old live file; keep
+   any backup outside the live inventory path. A remaining `agents.toml` or `agents.json`
+   is refused, even alongside TOML, never silently ignored or automatically
+   converted. A remaining `my-agents.nix` is refused without evaluation.
+   No separate example inventory is shipped: the checked-in and installer
+   default is empty, not a migration of existing instances.
+   Consumer flakes use file-only `systemFromData { file = ./tentaflake.toml; }`.
+   Legacy `hermes`/`zeroclaw` arrays and public builders are removed. Use the
+   `tentaflake` host CLI; the old host `hermes` alias and runtime-specific
+   skills are removed. CLI import writes the same TOML source and never starts
+   agents. Review, track, evaluate and build the migrated source before a
+   separately authorized activation.
+2. Resolve duplicate short names before switching: names are now globally
+   unique. Map each old runtime-prefixed ID to `agent-<name>`.
+3. Back up and verify state and mounted workspaces. Explicitly retain old
+   storage with adapter `stateDir` where needed; no runtime data is moved,
+   deleted, hidden, reformatted or reset automatically. Do not mistake a fresh
+   default directory for migration. Preserve native layout and numeric owners.
+4. Rekey every host unit/service reference and broker, worker, quota, Research,
+   provenance and backup declaration to the new container ID. Match effective
+   workspace/`stateStorage` and ownership metadata, not a guessed directory.
+   Preserve quota backing images and mounted data; changing an ID can select a
+   new image path. Follow [quota migration](14-workspace-quota.md) deliberately.
+5. Preserve broker virtual-key/budget state and durable worker queues. Do not
+   initialize a fresh budget to erase spend or held reservations; preserve and
+   reconcile accounting through the [broker procedure](12-brokered-egress.md).
+   Inspect old pending/running work using [worker recovery](13-disposable-worker.md);
+   never replay uncertain execution.
+6. Stop old controllers, brokers, workers, timers and other state writers as an
+   explicit operator action before activating their replacements. Source edits
+   alone do not stop installed units. Review the complete build and planned
+   storage/accounting mapping, activate only with authorization, then verify
+   old units are stopped and new units use the preserved data. Keep recovery
+   copies until a restore and application check succeeds.
+
+No automatic budget reset, quota recreation, unit shutdown or state relocation
+is implied by selecting a new adapter or rebuilding.

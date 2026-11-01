@@ -16,8 +16,8 @@
 }:
 
 let
-  inherit (builtins.fromTOML (builtins.readFile ../../crates/tentaflake-worker/Cargo.toml)) package;
-  inherit (builtins.fromTOML (builtins.readFile ../../Cargo.toml)) workspace;
+  inherit (fromTOML (builtins.readFile ../../crates/tentaflake-worker/Cargo.toml)) package;
+  inherit (fromTOML (builtins.readFile ../../Cargo.toml)) workspace;
 in
 dockerTools.buildLayeredImage {
   inherit (package) name;

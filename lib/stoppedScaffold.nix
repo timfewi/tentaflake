@@ -4,15 +4,17 @@
 { lib }:
 {
   id,
+  preset,
   displayName,
   reason,
   settingsReason,
 }:
 let
-  preset = (import ./runtimeCatalog.nix).presets.${id};
-  defaultStateDir = name: "/var/lib/${id}-${name}";
+  hostIdentity = import ./agentIdentity.nix;
+  defaultStateDir = hostIdentity.stateDir;
 in
 {
+  inherit preset;
   inherit (preset)
     schemaVersion
     identity
@@ -43,7 +45,7 @@ in
       settings ? { },
     }:
     let
-      container = "${id}-${name}";
+      container = hostIdentity.container name;
     in
     if autoStart then
       throw "tentaflake: ${reason} Keep autoStart = false."
@@ -88,7 +90,7 @@ in
     args: backend:
     let
       stateDir = args.stateDir or (defaultStateDir args.name);
-      container = "${id}-${args.name}";
+      container = hostIdentity.container args.name;
     in
     {
       adapter = id;

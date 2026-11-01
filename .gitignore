@@ -2,15 +2,15 @@ result
 result-*
 *.tmp
 *.bak
-.agents.json.lock
-agents.json.pending
+.tentaflake.toml.lock
+tentaflake.toml.pending
 
 # Local overrides — user secrets and home-manager config.
-# Note: my-agents.nix is intentionally NOT ignored — the flake must evaluate it,
-# and flakes only see git-tracked files (run `git add my-agents.nix`).
+# The public tentaflake.toml stays an empty commented template. Deployment data
+# belongs in a consumer/fork's tracked TOML, not an ignored upstream override.
+# It is intentionally NOT ignored: ordinary flakes omit untracked/ignored files.
 home.nix
 secrets/*.env
-!secrets/hermes.env.example
 
 # Personal local agent rules — private, never committed
 CLAUDE.local.md
@@ -40,3 +40,6 @@ age.key
 
 # Logs
 *.log
+
+# Local agent/contributor working notes; never committed or published.
+.scratch/

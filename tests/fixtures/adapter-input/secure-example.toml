@@ -1,0 +1,2 @@
+schemaVersion = 1
+agents = [{ "adapter" = "hermes", "name" = "assistant", "autoStart" = true, "settings" = { "model" = { "default" = "fixture-model", "provider" = "custom", "base_url" = "http://10.203.20.1:7810/v1" }, "agent" = { "disabled_toolsets" = ["web", "browser"] } } }]

@@ -1,15 +1,68 @@
 # Agent-independent OCI workload. Host policy owns the isolation backend.
 { pkgs, lib }:
 let
-  preset = (import ../lib/runtimeCatalog.nix).presets.generic;
+  preset = {
+    schemaVersion = 1;
+    identity = {
+      id = "generic";
+      version = "1";
+      status = "definition";
+    };
+    artifact = {
+      kind = "instance";
+      reference = null;
+      reviewed = false;
+    };
+    command = [ ];
+    configuration = {
+      format = "none";
+      readOnly = true;
+    };
+    ownership = {
+      uid = 10000;
+      gid = 10000;
+    };
+    layout = {
+      state = "/var/lib/tentaflake/agents/<name>";
+      workspace = "workspace";
+      writable = [
+        "state"
+        "workspace"
+      ];
+      directories = [ ];
+    };
+    lifecycle = "service";
+    model = {
+      protocols = [ ];
+      streaming = "unknown";
+    };
+    research = {
+      supported = false;
+    };
+    execution = {
+      interface = "worker-queue-v1";
+      automatic = false;
+    };
+    capabilities = [
+      "files"
+      "shell"
+      "terminal"
+      "worker"
+    ];
+    evidence = {
+      fixture = "source-regression";
+      vendorAcceptance = "operator-owned";
+    };
+  };
+  hostIdentity = import ../lib/agentIdentity.nix;
   validate = import ../lib/runtimeContract.nix { inherit lib; };
   security = import ../lib/containerSecurity.nix { inherit lib; };
   metadata =
     args: backend:
     let
       definition = validate args.definition;
-      container = "generic-${args.name}";
-      stateDir = "/var/lib/${container}";
+      container = hostIdentity.container args.name;
+      stateDir = hostIdentity.stateDir args.name;
     in
     {
       adapter = "generic";
@@ -45,7 +98,7 @@ in
       valid = false;
     };
   };
-  inherit metadata;
+  inherit metadata preset;
   build =
     { name, definition }:
     let

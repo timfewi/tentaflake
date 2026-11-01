@@ -27,7 +27,7 @@ def run(script: str, root: Path, expected: str, evidence: str | None = None) -> 
         # Supply only mount metadata; the real helper must check the actual
         # temporary image length before privileged ownership changes.
         query("findmnt", "/dev/loop999999")
-        query("losetup", str(root / "lib/tentaflake-workspace-volumes/state/hermes-quota.img"))
+        query("losetup", str(root / "lib/tentaflake-workspace-volumes/state/agent-hermes-quota.img"))
     result = subprocess.run(
         ["bash", "-eu", "-c", relocated], capture_output=True, text=True, timeout=15
     )
@@ -45,7 +45,8 @@ def check(script: str, target: str, case: str, expected: str) -> None:
         marker.write_text("preserve unrelated data\n")
         before = (other.stat().st_mode, marker.read_bytes())
         source.parent.mkdir(parents=True)
-        image = root / f"lib/tentaflake-workspace-volumes/state/{target.split('/')[0]}.img"
+        name = target.split("/")[2]
+        image = root / f"lib/tentaflake-workspace-volumes/state/agent-{name}.img"
         if case == "source-link":
             source.symlink_to(other, target_is_directory=True)
         elif case == "source-file":
@@ -101,18 +102,18 @@ def check(script: str, target: str, case: str, expected: str) -> None:
 def main() -> None:
     prepare, owner = (Path(path).read_text() for path in sys.argv[1:])
     for case in ["source-link", "ancestor-link"]:
-        check(prepare, "generic-quota/state", case, "refusing symlink")
-    check(owner, "hermes-quota", "source-link", "refusing symlink")
-    check(owner, "hermes-quota", "source-file", "refusing symlink or non-directory")
-    check(owner, "hermes-quota", "child-link", "refusing symlink")
+        check(prepare, "tentaflake/agents/generic-quota/state", case, "refusing symlink")
+    check(owner, "tentaflake/agents/hermes-quota", "source-link", "refusing symlink")
+    check(owner, "tentaflake/agents/hermes-quota", "source-file", "refusing symlink or non-directory")
+    check(owner, "tentaflake/agents/hermes-quota", "child-link", "refusing symlink")
     for case in ["nonempty", "nonempty-existing-image", "namespace-bind", "worker-scaffold"]:
-        check(prepare, "generic-quota/state", case, "refusing to hide non-empty state")
+        check(prepare, "tentaflake/agents/generic-quota/state", case, "refusing to hide non-empty state")
     for case in ["image-link", "image-directory"]:
-        check(prepare, "generic-quota/state", case, "image is not a regular file")
-    check(prepare, "generic-quota/state", "incomplete-image", "incomplete image exists")
-    check(prepare, "generic-quota/state", "wrong-size", "state image size drift")
-    check(prepare, "generic-quota/state", "wrong-format", "state image is not Btrfs")
-    check(owner, "hermes-quota", "owner-wrong-size", "state image size drift")
+        check(prepare, "tentaflake/agents/generic-quota/state", case, "image is not a regular file")
+    check(prepare, "tentaflake/agents/generic-quota/state", "incomplete-image", "incomplete image exists")
+    check(prepare, "tentaflake/agents/generic-quota/state", "wrong-size", "state image size drift")
+    check(prepare, "tentaflake/agents/generic-quota/state", "wrong-format", "state image is not Btrfs")
+    check(owner, "tentaflake/agents/hermes-quota", "owner-wrong-size", "state image size drift")
     print("15 generated quota helper refusal checks passed")
 
 

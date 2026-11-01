@@ -1,8 +1,12 @@
 [workspace]
 members = [
+  "crates/tentaflake-activity",
   "crates/tentaflake-broker",
   "crates/tentaflake-cli",
+  "crates/tentaflake-control",
+  "crates/tentaflake-integrations",
   "crates/tentaflake-worker",
+  "crates/tentaflake-workloads",
 ]
 resolver = "2"
 

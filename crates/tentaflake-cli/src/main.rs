@@ -5,6 +5,7 @@ use std::fs;
 use std::io::{self, IsTerminal, Read, Write};
 use std::net::{SocketAddr, TcpStream};
 use std::os::fd::OwnedFd;
+use std::os::unix::fs::OpenOptionsExt;
 use std::os::unix::net::UnixStream;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
@@ -12,6 +13,7 @@ use std::process::{Command, ExitCode, Output, Stdio};
 use std::time::{Duration, Instant, SystemTime};
 
 const RUNTIME_CATALOG: &str = include_str!("../../../adapters/catalog.json");
+mod desired_system;
 mod onboarding;
 
 const DEFAULT_CONFIG: &str = "/etc/tentaflake/cli.conf";
@@ -28,6 +30,7 @@ struct Config {
     backend: String,
     flake_dir: PathBuf,
     host_name: String,
+    configuration_name: String,
     agents_file: PathBuf,
     security_profile: String,
     security_file: PathBuf,
@@ -82,6 +85,11 @@ struct DeclaredLiveResources {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+struct DeclaredRuntime {
+    name: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 struct SecurityAgent {
     name: String,
     profile: String,
@@ -112,6 +120,7 @@ struct SecurityAgent {
     declared_tmpfs: Option<BTreeMap<String, u64>>,
     declared_ports_absent: Option<bool>,
     declared_live_resources: Option<DeclaredLiveResources>,
+    declared_runtime: Option<DeclaredRuntime>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -172,8 +181,6 @@ fn main() -> ExitCode {
 
     if invoked_as == "tentaflake-status" {
         args.insert(0, "status".into());
-    } else if invoked_as == "hermes" {
-        eprintln!("warning: `hermes` is deprecated; use `tentaflake`");
     }
 
     match run(args) {
@@ -189,6 +196,7 @@ fn run(mut args: Vec<String>) -> Result<u8, String> {
     let mode = take_output_flags(&mut args);
     let command = args.first().map(String::as_str).unwrap_or("status");
     match command {
+        "config" => return desired_system::run(&args[1..], mode),
         "remote-check" => return remote_check(&args[1..]),
         "runtimes" => return runtimes(&args[1..], mode),
         "agent" if args.get(1).map(String::as_str) == Some("template") => {
@@ -219,9 +227,6 @@ fn run(mut args: Vec<String>) -> Result<u8, String> {
         "rebuild" => rebuild(&config),
         "update" => update(&config),
         "agent" => onboarding::run(&config, &agents, &args[1..], mode),
-        "top" | "console" => Err(format!(
-            "`{command}` was removed with the auditd/SQLite web-console stack; use the observability profile"
-        )),
         other => Err(format!("unknown command `{other}`; run `tentaflake help`")),
     }
 }
@@ -351,6 +356,7 @@ fn parse_config(text: &str) -> Result<Config, String> {
     let mut backend = None;
     let mut flake_dir = None;
     let mut host_name = None;
+    let mut configuration_name = None;
     let mut agents_file = None;
     let mut security_profile = None;
     let mut security_file = None;
@@ -367,6 +373,7 @@ fn parse_config(text: &str) -> Result<Config, String> {
             "backend" => backend = Some(value.trim().to_owned()),
             "flake_dir" => flake_dir = Some(PathBuf::from(value.trim())),
             "host_name" => host_name = Some(value.trim().to_owned()),
+            "configuration_name" => configuration_name = Some(value.trim().to_owned()),
             "agents_file" => agents_file = Some(PathBuf::from(value.trim())),
             "security_profile" => security_profile = Some(value.trim().to_owned()),
             "security_file" => security_file = Some(PathBuf::from(value.trim())),
@@ -388,6 +395,7 @@ fn parse_config(text: &str) -> Result<Config, String> {
         backend,
         flake_dir: flake_dir.ok_or("missing config key `flake_dir`")?,
         host_name: host_name.ok_or("missing config key `host_name`")?,
+        configuration_name: configuration_name.ok_or("missing config key `configuration_name`")?,
         agents_file: agents_file.unwrap_or_else(|| PathBuf::from(DEFAULT_AGENTS)),
         security_profile,
         security_file: security_file
@@ -531,7 +539,7 @@ fn parse_security_state(text: &str) -> Result<SecurityState, String> {
                     ssh_policy,
                 });
             }
-            Some("agent") if (25..=30).contains(&fields.len()) => agents.push(SecurityAgent {
+            Some("agent") if (25..=31).contains(&fields.len()) => agents.push(SecurityAgent {
                 name: fields[1].into(),
                 profile: fields[2].into(),
                 network_isolated: parse_bool(fields[3], index + 1)?,
@@ -577,6 +585,11 @@ fn parse_security_state(text: &str) -> Result<SecurityState, String> {
                 declared_live_resources: fields
                     .get(29)
                     .map(|value| parse_declared_live_resources(value, index + 1))
+                    .transpose()?
+                    .flatten(),
+                declared_runtime: fields
+                    .get(30)
+                    .map(|value| parse_declared_runtime(value, index + 1))
                     .transpose()?
                     .flatten(),
             }),
@@ -765,6 +778,39 @@ fn parse_declared_live_resources(
         ));
     }
     Ok(Some(resources))
+}
+
+fn parse_declared_runtime(value: &str, line: usize) -> Result<Option<DeclaredRuntime>, String> {
+    if value == "-" {
+        return Ok(None);
+    }
+    let invalid = || format!("invalid declared runtime on security manifest line {line}");
+    let parsed: serde_json::Value = serde_json::from_str(value).map_err(|_| invalid())?;
+    let fields = parsed.as_object().ok_or_else(invalid)?;
+    let name = fields.get("name").and_then(serde_json::Value::as_str);
+    let path = fields.get("path").and_then(serde_json::Value::as_str);
+    let (Some(name), Some(path)) = (name, path) else {
+        return Err(invalid());
+    };
+    if fields.len() != 2
+        || !matches!(name, "runsc" | "runsc-research" | "runsc-pi")
+        || !path.rsplit_once("/bin/").is_some_and(|(root, binary)| {
+            binary == name
+                && root.strip_prefix("/nix/store/").is_some_and(|item| {
+                    !item.is_empty()
+                        && item
+                            .bytes()
+                            .all(|byte| byte.is_ascii_alphanumeric() || b"+._-".contains(&byte))
+                        && item != "."
+                        && item != ".."
+                })
+        })
+    {
+        return Err(invalid());
+    }
+    Ok(Some(DeclaredRuntime {
+        name: name.to_owned(),
+    }))
 }
 
 fn security_findings(state: &SecurityState) -> Vec<Finding> {
@@ -1342,13 +1388,20 @@ fn live_container_security_from_manifest(
         agent.declared_mounts.as_deref(),
         agent.declared_tmpfs.as_ref(),
         agent.declared_live_resources.as_ref(),
+        agent.declared_runtime.as_ref(),
         value,
         expected_network,
     ) {
-        (Some(false), _, _, _, _, _) => LiveContainerState::Unsafe,
-        (Some(true), Some(mounts), Some(tmpfs), Some(resources), Some(value), Some(network)) => {
-            live_container_security(value, backend, network, mounts, tmpfs, resources)
-        }
+        (Some(false), _, _, _, _, _, _) => LiveContainerState::Unsafe,
+        (
+            Some(true),
+            Some(mounts),
+            Some(tmpfs),
+            Some(resources),
+            runtime,
+            Some(value),
+            Some(network),
+        ) => live_container_security(value, backend, network, mounts, tmpfs, resources, runtime),
         _ => LiveContainerState::Unknown,
     }
 }
@@ -1360,6 +1413,7 @@ fn live_container_security(
     declared_mounts: &[DeclaredMount],
     declared_tmpfs: &BTreeMap<String, u64>,
     declared_live_resources: &DeclaredLiveResources,
+    declared_runtime: Option<&DeclaredRuntime>,
 ) -> LiveContainerState {
     let Some(containers) = value.as_array() else {
         return LiveContainerState::Unknown;
@@ -1385,6 +1439,7 @@ fn live_container_security(
         declared_mounts,
         declared_tmpfs,
         declared_live_resources,
+        declared_runtime,
     )
 }
 
@@ -1622,6 +1677,7 @@ fn live_observed_security_drift(
     declared_mounts: &[DeclaredMount],
     declared_tmpfs: &BTreeMap<String, u64>,
     declared_live_resources: &DeclaredLiveResources,
+    declared_runtime: Option<&DeclaredRuntime>,
 ) -> LiveContainerState {
     let network_settings = container
         .get("NetworkSettings")
@@ -1695,13 +1751,9 @@ fn live_observed_security_drift(
     };
     state = merge_live_state(
         state,
-        match runtime {
-            Some(runtime) if runtime == "runsc" || runtime.ends_with("/runsc") => {
-                LiveContainerState::Secure
-            }
-            Some(_) => LiveContainerState::Unsafe,
-            None => LiveContainerState::Unknown,
-        },
+        declared_runtime.map_or(LiveContainerState::Unknown, |declared| {
+            live_runtime_security(runtime, backend, declared)
+        }),
     );
     state = merge_live_state(state, live_security_options_security(host));
     state = merge_live_state(
@@ -1711,6 +1763,23 @@ fn live_observed_security_drift(
     state = merge_live_state(state, live_capabilities_security(container, host, backend));
     state = merge_live_state(state, live_apparmor_security(container, backend));
     state
+}
+
+fn live_runtime_security(
+    observed: Option<&str>,
+    backend: &str,
+    declared: &DeclaredRuntime,
+) -> LiveContainerState {
+    match (backend, observed) {
+        ("docker", Some(runtime)) if runtime == declared.name => LiveContainerState::Secure,
+        // Podman exposes the runtime name, not its executable. A matching
+        // name cannot prove the configured pinned path was actually used.
+        ("podman", Some(runtime)) if runtime == declared.name || runtime.contains('/') => {
+            LiveContainerState::Unknown
+        }
+        ("docker" | "podman", Some(_)) => LiveContainerState::Unsafe,
+        _ => LiveContainerState::Unknown,
+    }
 }
 
 fn merge_live_state(
@@ -2194,10 +2263,20 @@ fn find_agent<'a>(agents: &'a [Agent], query: Option<&String>) -> Result<&'a Age
             .join(" ");
         format!("missing agent name; available: {names}")
     })?;
-    agents
-        .iter()
-        .find(|agent| &agent.name == query || &agent.container == query)
-        .ok_or_else(|| format!("unknown agent `{query}`"))
+    // A display name must never shadow another instance's canonical identity.
+    if let Some(agent) = agents.iter().find(|agent| &agent.container == query) {
+        return Ok(agent);
+    }
+    let mut matches = agents.iter().filter(|agent| &agent.name == query);
+    let agent = matches
+        .next()
+        .ok_or_else(|| format!("unknown agent `{query}`"))?;
+    if matches.next().is_some() {
+        return Err(format!(
+            "ambiguous agent name `{query}`; use an exact container ID from `tentaflake status --json`"
+        ));
+    }
+    Ok(agent)
 }
 
 fn status(config: &Config, agents: &[Agent], mode: OutputMode) -> Result<u8, String> {
@@ -2218,11 +2297,14 @@ fn status(config: &Config, agents: &[Agent], mode: OutputMode) -> Result<u8, Str
                 print!(",");
             }
             let name = mode.agent(index, &agent.name);
+            let id = mode.agent(index, &agent.container);
             print!(
-                "{{\"name\":\"{}\",\"runtime\":\"{}\",\"state\":\"{}\"}}",
+                "{{\"id\":\"{}\",\"name\":\"{}\",\"runtime\":\"{}\",\"state\":\"{}\",\"runnable\":{}}}",
+                json_escape(&id),
                 json_escape(&name),
                 json_escape(&agent.runtime),
-                json_escape(state)
+                json_escape(state),
+                agent.runnable
             );
         }
         println!("]}}");
@@ -2420,49 +2502,42 @@ fn backup(agents: &[Agent], args: &[String]) -> Result<u8, String> {
     let stamp = output("date", &["-u", "+%Y%m%dT%H%M%SZ"])?;
     let stamp = String::from_utf8_lossy(&stamp.stdout).trim().to_owned();
     let archive = format!("tentaflake-{}-{stamp}.tar.gz", agent.name);
+    // Create as the caller before sudo starts. Never let a privileged command
+    // reopen the caller-controlled archive pathname.
+    let file = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(&archive)
+        .map_err(|error| format!("cannot create private backup {archive}: {error}"))?;
     let status = Command::new("sudo")
         .arg("tar")
         .arg("czf")
-        .arg(&archive)
+        .arg("-")
         .arg("-C")
         .arg(parent)
         .arg(base)
+        .stdout(Stdio::from(file))
         .status()
-        .map_err(|error| format!("cannot execute backup: {error}"))?;
+        .map_err(|error| {
+            format!("cannot execute backup: {error}; private output retained: {archive}")
+        })?;
     if !status.success() {
-        return Ok(status.code().unwrap_or(1) as u8);
-    }
-    let uid = current_id("-u")?;
-    let gid = current_id("-g")?;
-    let owner = format!("{uid}:{gid}");
-    let status = Command::new("sudo")
-        .args(["chown", &owner, &archive])
-        .status()
-        .map_err(|error| format!("cannot restore backup ownership: {error}"))?;
-    if !status.success() {
-        return Ok(status.code().unwrap_or(1) as u8);
-    }
-    let status = Command::new("chmod")
-        .args(["0600", &archive])
-        .status()
-        .map_err(|error| format!("cannot secure backup permissions: {error}"))?;
-    if !status.success() {
+        // The name may have been replaced while tar was running. Do not unlink
+        // it: leave the private partial archive for the operator to inspect.
+        eprintln!("backup failed; private partial output retained: {archive}");
         return Ok(status.code().unwrap_or(1) as u8);
     }
     println!("backup written: {archive}");
     Ok(0)
 }
 
-fn current_id(flag: &str) -> Result<String, String> {
-    let result = output("id", &[flag])?;
-    if !result.status.success() {
-        return Err(format!("`id {flag}` failed"));
-    }
-    Ok(String::from_utf8_lossy(&result.stdout).trim().to_owned())
-}
-
 fn rebuild(config: &Config) -> Result<u8, String> {
-    let target = format!("{}#{}", config.flake_dir.display(), config.host_name);
+    let target = format!(
+        "{}#{}",
+        config.flake_dir.display(),
+        config.configuration_name
+    );
     let mut command = Command::new("sudo");
     command.args(["nixos-rebuild", "switch", "--flake", &target]);
     exec(command)
@@ -2687,7 +2762,9 @@ fn print_help() {
            tentaflake doctor --security [--json]\n\
            tentaflake backup <name>\n\
            tentaflake rebuild|update\n\n\
-         Agent definitions are declarative: edit agents.json or my-agents.nix, then rebuild."
+         Desired system: edit tentaflake.toml, then rebuild.\n\
+         Offline: tentaflake config validate|normalize <file> [--json]\n\
+         Migration: tentaflake config migrate <agents.toml|agents.json> <tentaflake.toml>"
     );
 }
 
@@ -2698,9 +2775,11 @@ mod tests {
     #[test]
     fn parses_config_and_defaults_agents_path() {
         let config =
-            parse_config("backend=podman\nflake_dir=/etc/nixos\nhost_name=agent-host\n").unwrap();
+            parse_config("backend=podman\nflake_dir=/etc/nixos\nhost_name=renamed-host\nconfiguration_name=agent-host\n").unwrap();
         assert_eq!(config.backend, "podman");
         assert_eq!(config.agents_file, PathBuf::from(DEFAULT_AGENTS));
+        assert_eq!(config.host_name, "renamed-host");
+        assert_eq!(config.configuration_name, "agent-host");
     }
 
     #[test]
@@ -2724,39 +2803,41 @@ mod tests {
     #[test]
     fn parses_agent_records() {
         let agents = parse_agents(
-            "hermes\tcoding\thermes-coding\tdocker-hermes-coding.service\t/var/lib/hermes-coding\ttrue\n",
+            "generic\tcoding\tagent-coding\tdocker-agent-coding.service\t/var/lib/tentaflake/agents/coding\ttrue\n",
         )
         .unwrap();
         assert_eq!(agents.len(), 1);
         assert_eq!(agents[0].name, "coding");
-        assert_eq!(agents[0].state_dir, PathBuf::from("/var/lib/hermes-coding"));
+        assert_eq!(
+            agents[0].state_dir,
+            PathBuf::from("/var/lib/tentaflake/agents/coding")
+        );
     }
 
     #[test]
     fn adapter_inventory_preserves_explicit_identity_and_unit() {
         let agents = parse_agents(
-            "openclaw\thermes-assistant\topenclaw-hermes-assistant\tpodman-openclaw-hermes-assistant.service\t/var/lib/custom-state\tfalse\n\
-             hermes\tzeroclaw-coding\thermes-zeroclaw-coding\tdocker-hermes-zeroclaw-coding.service\t/var/lib/existing-state\ttrue\n",
+            "future-runtime\tassistant\tagent-assistant\tpodman-agent-assistant.service\t/var/lib/custom-state\tfalse\n\
+             generic\tcoding\tagent-coding\tdocker-agent-coding.service\t/var/lib/existing-state\ttrue\n",
         )
         .unwrap();
-        let openclaw = find_agent(&agents, Some(&"hermes-assistant".into())).unwrap();
-        assert_eq!(openclaw.runtime, "openclaw");
-        assert_eq!(openclaw.container, "openclaw-hermes-assistant");
-        assert_eq!(openclaw.unit, "podman-openclaw-hermes-assistant.service");
-        assert_eq!(openclaw.state_dir, PathBuf::from("/var/lib/custom-state"));
+        let agent = find_agent(&agents, Some(&"assistant".into())).unwrap();
+        assert_eq!(agent.runtime, "future-runtime");
+        assert_eq!(agent.container, "agent-assistant");
+        assert_eq!(agent.unit, "podman-agent-assistant.service");
+        assert_eq!(agent.state_dir, PathBuf::from("/var/lib/custom-state"));
         assert_eq!(
-            find_agent(&agents, Some(&"hermes-zeroclaw-coding".into()))
+            find_agent(&agents, Some(&"agent-coding".into()))
                 .unwrap()
                 .name,
-            "zeroclaw-coding"
+            "coding"
         );
     }
 
     #[test]
     fn rejects_malformed_agent_records() {
-        assert!(parse_agents("hermes\tmissing\tfields\n").is_err());
-        let legacy =
-            "hermes\tcoding\thermes-coding\tdocker-hermes-coding.service\t/var/lib/hermes-coding";
+        assert!(parse_agents("generic\tmissing\tfields\n").is_err());
+        let legacy = "generic\tcoding\tagent-coding\tdocker-agent-coding.service\t/var/lib/tentaflake/agents/coding";
         assert!(parse_agents(legacy).is_err());
         assert!(parse_agents(&format!("{legacy}\tmaybe")).is_err());
         assert!(!parse_agents(&format!("{legacy}\tfalse")).unwrap()[0].runnable);
@@ -2765,7 +2846,7 @@ mod tests {
     #[test]
     fn finds_agent_by_name_or_container() {
         let agents = parse_agents(
-            "zeroclaw\tassistant\tzeroclaw-assistant\tdocker-zeroclaw-assistant.service\t/var/lib/zeroclaw-assistant\ttrue\n",
+            "generic\tassistant\tagent-assistant\tdocker-agent-assistant.service\t/var/lib/tentaflake/agents/assistant\ttrue\n",
         )
         .unwrap();
         assert_eq!(
@@ -2773,10 +2854,45 @@ mod tests {
             "assistant"
         );
         assert_eq!(
-            find_agent(&agents, Some(&"zeroclaw-assistant".into()))
+            find_agent(&agents, Some(&"agent-assistant".into()))
                 .unwrap()
                 .name,
             "assistant"
+        );
+    }
+
+    #[test]
+    fn exact_container_identity_wins_over_another_agents_display_name() {
+        let agents = parse_agents(
+            "generic\tagent-coding\tagent-agent-coding\tdocker-agent-agent-coding.service\t/var/lib/tentaflake/agents/agent-coding\ttrue\n\
+             future-runtime\tcoding\tagent-coding\tdocker-agent-coding.service\t/var/lib/tentaflake/agents/coding\ttrue\n",
+        )
+        .unwrap();
+        assert_eq!(
+            find_agent(&agents, Some(&"agent-coding".into()))
+                .unwrap()
+                .runtime,
+            "future-runtime"
+        );
+    }
+
+    #[test]
+    fn ambiguous_display_names_require_a_canonical_identity() {
+        let agents = parse_agents(
+            "generic\tassistant\tagent-assistant\tdocker-agent-assistant.service\t/var/lib/tentaflake/agents/assistant\ttrue\n\
+             unmanaged\tassistant\texternal-assistant\tdocker-external-assistant.service\t/var/lib/external-assistant\ttrue\n",
+        )
+        .unwrap();
+        assert!(
+            find_agent(&agents, Some(&"assistant".into()))
+                .unwrap_err()
+                .contains("ambiguous")
+        );
+        assert_eq!(
+            find_agent(&agents, Some(&"agent-assistant".into()))
+                .unwrap()
+                .runtime,
+            "generic"
         );
     }
 
@@ -3228,12 +3344,12 @@ mod tests {
     fn security_inspection_targets_the_manifest_container_name() {
         let state = parse_security_state(
             "manifest\t2\nhost\tbalanced\tfalse\tfalse\ttrue\ttrue\ttrue\t36\nmanagement\ttailscale\ttrue\ttrue\ttailnet-policy\n\
-             agent\thermes-fixture\tbalanced\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\tfalse\tfalse\t-\tfalse\t-\n",
+             agent\tagent-fixture\tbalanced\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\tfalse\tfalse\t-\tfalse\t-\n",
         )
         .unwrap();
         let agent = &state.agents[0];
 
-        assert_eq!(agent.name, "hermes-fixture");
+        assert_eq!(agent.name, "agent-fixture");
         assert!(agent.declared_ports_absent.is_none());
         assert!(agent.declared_live_resources.is_none());
         assert_eq!(
@@ -3247,7 +3363,7 @@ mod tests {
         );
         assert_eq!(
             inspect_arguments_for_agent("docker", agent),
-            ["-n", "docker", "inspect", "hermes-fixture"]
+            ["-n", "docker", "inspect", "agent-fixture"]
         );
     }
 
@@ -3255,11 +3371,13 @@ mod tests {
     fn parses_current_live_evidence_manifest_fields() {
         let state = parse_security_state(concat!(
             "manifest\t2\nhost\tbalanced\tfalse\tfalse\ttrue\ttrue\ttrue\t36\nmanagement\ttailscale\ttrue\ttrue\ttailnet-policy\n",
-            "agent\thermes-fixture\tbalanced\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\tfalse\tfalse\t-\tfalse\t-",
+            "agent\tagent-fixture\tbalanced\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue\tfalse\tfalse\t-\tfalse\t-",
             "\tnone\t[]\t",
             r#"{"/run":67108864,"/tmp":268435456,"/var/tmp":268435456}"#,
             "\ttrue\t",
             r#"{"memoryBytes":2147483648,"memorySwapBytes":2147483648,"nanoCpus":2000000000,"pidsLimit":512,"nofile":4096,"nproc":512}"#,
+            "\t",
+            r#"{"name":"runsc","path":"/nix/store/fixture/bin/runsc"}"#,
             "\n"
         ))
         .unwrap();
@@ -3275,6 +3393,31 @@ mod tests {
         assert_eq!(
             agent.declared_live_resources,
             Some(test_declared_live_resources())
+        );
+        assert_eq!(agent.declared_runtime, Some(test_declared_runtime("runsc")));
+        let mut without_runtime = agent.clone();
+        without_runtime.declared_runtime = None;
+        assert_eq!(
+            live_container_security_from_manifest(
+                &without_runtime,
+                Some(&serde_json::json!([])),
+                "docker",
+                Some("none"),
+            ),
+            LiveContainerState::Unknown
+        );
+        let privileged = serde_json::json!([{
+            "State": {"Running": true},
+            "HostConfig": {"Privileged": true}
+        }]);
+        assert_eq!(
+            live_container_security_from_manifest(
+                &without_runtime,
+                Some(&privileged),
+                "docker",
+                Some("none"),
+            ),
+            LiveContainerState::Unsafe
         );
 
         let mut ports_declared = agent.clone();
@@ -3313,7 +3456,7 @@ mod tests {
     #[test]
     fn research_mount_requires_exact_readonly_declaration() {
         let declared = vec![DeclaredMount {
-            source: "/run/tentaflake-research/hermes-coding".into(),
+            source: "/run/tentaflake-research/agent-coding".into(),
             destination: "/run/tentaflake-research".into(),
             writable: false,
         }];
@@ -3329,11 +3472,11 @@ mod tests {
         for (field, value) in [
             (
                 "Source",
-                serde_json::json!("/run/tentaflake-research/hermes-other"),
+                serde_json::json!("/run/tentaflake-research/agent-other"),
             ),
             (
                 "Source",
-                serde_json::json!("/run/tentaflake-research/hermes-coding/.."),
+                serde_json::json!("/run/tentaflake-research/agent-coding/.."),
             ),
             ("Destination", serde_json::json!("/run/other")),
             ("RW", serde_json::json!(true)),
@@ -3351,7 +3494,7 @@ mod tests {
     fn declared_mount_manifest_is_closed_and_typed() {
         assert_eq!(
             parse_declared_mounts(
-                r#"["/var/lib/hermes-coding:/home/hermes:rw","/nix/store/config:/config:ro"]"#,
+                r#"["/var/lib/tentaflake/agents/coding:/state:rw","/nix/store/config:/config:ro"]"#,
                 2,
             )
             .unwrap(),
@@ -3362,8 +3505,8 @@ mod tests {
                     writable: false,
                 },
                 DeclaredMount {
-                    source: "/var/lib/hermes-coding".into(),
-                    destination: "/home/hermes".into(),
+                    source: "/var/lib/tentaflake/agents/coding".into(),
+                    destination: "/state".into(),
                     writable: true,
                 },
             ])
@@ -3389,6 +3532,75 @@ mod tests {
             pids_limit: 512,
             nofile: 4096,
             nproc: 512,
+        }
+    }
+
+    fn test_declared_runtime(name: &str) -> DeclaredRuntime {
+        DeclaredRuntime { name: name.into() }
+    }
+
+    #[test]
+    fn declared_runtime_is_exact_typed_and_never_inferred_from_a_name() {
+        assert_eq!(parse_declared_runtime("-", 2).unwrap(), None);
+        for name in ["runsc", "runsc-research", "runsc-pi"] {
+            let declared = test_declared_runtime(name);
+            let path = format!("/nix/store/fixture/bin/{name}");
+            let encoded = serde_json::json!({"name":name,"path":path}).to_string();
+            assert_eq!(
+                parse_declared_runtime(&encoded, 2).unwrap(),
+                Some(declared.clone())
+            );
+            assert_eq!(
+                live_runtime_security(Some(name), "docker", &declared),
+                LiveContainerState::Secure
+            );
+            assert_eq!(
+                live_runtime_security(Some(&path), "podman", &declared),
+                LiveContainerState::Unknown
+            );
+            assert_eq!(
+                live_runtime_security(None, "docker", &declared),
+                LiveContainerState::Unknown
+            );
+            assert_eq!(
+                live_runtime_security(Some(name), "unknown", &declared),
+                LiveContainerState::Unknown
+            );
+            for other in ["runsc", "runsc-research", "runsc-pi", "runc", "arbitrary"] {
+                if other != name {
+                    assert_eq!(
+                        live_runtime_security(Some(other), "docker", &declared),
+                        LiveContainerState::Unsafe
+                    );
+                    assert_eq!(
+                        live_runtime_security(Some(other), "podman", &declared),
+                        LiveContainerState::Unsafe
+                    );
+                }
+            }
+            let unpinned = format!("/tmp/{name}");
+            assert_eq!(
+                live_runtime_security(Some(&unpinned), "podman", &declared),
+                LiveContainerState::Unknown
+            );
+            let other_store = format!("/nix/store/other/bin/{name}");
+            assert_eq!(
+                live_runtime_security(Some(&other_store), "podman", &declared),
+                LiveContainerState::Unknown
+            );
+            assert_eq!(
+                live_runtime_security(Some(name), "podman", &declared),
+                LiveContainerState::Unknown
+            );
+        }
+        for encoded in [
+            r#"{"name":"arbitrary","path":"/nix/store/fixture/bin/arbitrary"}"#,
+            r#"{"name":"runsc-research","path":"/nix/store/fixture/bin/runsc"}"#,
+            r#"{"name":"runsc","path":"/tmp/runsc"}"#,
+            r#"{"name":"runsc","path":"/nix/store/../bin/runsc"}"#,
+            r#"{"name":"runsc","path":"/nix/store/fixture/bin/runsc","args":["--host-uds=all"]}"#,
+        ] {
+            assert!(parse_declared_runtime(encoded, 2).is_err());
         }
     }
 
@@ -3441,8 +3653,8 @@ mod tests {
     #[test]
     fn rejects_insecure_live_container_inspect_state() {
         let declared_mounts = vec![DeclaredMount {
-            source: "/var/lib/hermes-coding".into(),
-            destination: "/home/hermes".into(),
+            source: "/var/lib/tentaflake/agents/coding".into(),
+            destination: "/state".into(),
             writable: true,
         }];
         let declared_tmpfs = test_declared_tmpfs();
@@ -3482,8 +3694,8 @@ mod tests {
             "Mounts": [
                 {
                     "Type": "bind",
-                    "Source": "/var/lib/hermes-coding",
-                    "Destination": "/home/hermes",
+                    "Source": "/var/lib/tentaflake/agents/coding",
+                    "Destination": "/state",
                     "RW": true
                 }
             ]
@@ -3496,8 +3708,35 @@ mod tests {
                 &declared_mounts,
                 &declared_tmpfs,
                 &declared_live_resources,
+                Some(&test_declared_runtime("runsc")),
             ),
             LiveContainerState::Secure
+        );
+        assert_eq!(
+            live_container_security(
+                &inspect,
+                "docker",
+                "none",
+                &declared_mounts,
+                &declared_tmpfs,
+                &declared_live_resources,
+                None,
+            ),
+            LiveContainerState::Unknown
+        );
+        let mut privileged_without_runtime = inspect.clone();
+        privileged_without_runtime[0]["HostConfig"]["Privileged"] = serde_json::json!(true);
+        assert_eq!(
+            live_container_security(
+                &privileged_without_runtime,
+                "docker",
+                "none",
+                &declared_mounts,
+                &declared_tmpfs,
+                &declared_live_resources,
+                None,
+            ),
+            LiveContainerState::Unsafe
         );
         let mut empty_none_network = inspect.clone();
         empty_none_network[0]["NetworkSettings"]["Networks"] = serde_json::json!({});
@@ -3509,6 +3748,7 @@ mod tests {
                 &declared_mounts,
                 &declared_tmpfs,
                 &declared_live_resources,
+                Some(&test_declared_runtime("runsc")),
             ),
             LiveContainerState::Secure
         );
@@ -3526,6 +3766,7 @@ mod tests {
                 &declared_mounts,
                 &declared_tmpfs,
                 &declared_live_resources,
+                Some(&test_declared_runtime("runsc")),
             ),
             LiveContainerState::Unknown
         );
@@ -3540,6 +3781,7 @@ mod tests {
                 &declared_mounts,
                 &declared_tmpfs,
                 &declared_live_resources,
+                Some(&test_declared_runtime("runsc")),
             ),
             LiveContainerState::Unsafe
         );
@@ -3557,6 +3799,7 @@ mod tests {
                     &declared_mounts,
                     &declared_tmpfs,
                     &declared_live_resources,
+                    Some(&test_declared_runtime("runsc")),
                 ),
                 LiveContainerState::Unsafe,
                 "published port in {scope}.{field} was not rejected"
@@ -3573,6 +3816,7 @@ mod tests {
                 &declared_mounts,
                 &declared_tmpfs,
                 &declared_live_resources,
+                Some(&test_declared_runtime("runsc")),
             ),
             LiveContainerState::Secure
         );
@@ -3590,6 +3834,7 @@ mod tests {
                     &declared_mounts,
                     &declared_tmpfs,
                     &declared_live_resources,
+                    Some(&test_declared_runtime("runsc")),
                 ),
                 LiveContainerState::Unknown,
                 "missing {scope}.{field} was not treated as unknown"
@@ -3606,6 +3851,7 @@ mod tests {
                 &declared_mounts,
                 &declared_tmpfs,
                 &declared_live_resources,
+                Some(&test_declared_runtime("runsc")),
             ),
             LiveContainerState::Unknown
         );
@@ -3623,6 +3869,7 @@ mod tests {
                 &declared_mounts,
                 &declared_tmpfs,
                 &declared_live_resources,
+                Some(&test_declared_runtime("runsc")),
             ),
             LiveContainerState::Unknown
         );
@@ -3636,6 +3883,7 @@ mod tests {
                 &declared_mounts,
                 &declared_tmpfs,
                 &declared_live_resources,
+                Some(&test_declared_runtime("runsc")),
             ),
             LiveContainerState::Unsafe
         );
@@ -3656,6 +3904,7 @@ mod tests {
                     &declared_mounts,
                     &declared_tmpfs,
                     &declared_live_resources,
+                    Some(&test_declared_runtime("runsc")),
                 ),
                 LiveContainerState::Unsafe,
                 "resource drift in {field} was not rejected"
@@ -3675,6 +3924,7 @@ mod tests {
                 &declared_mounts,
                 &declared_tmpfs,
                 &declared_live_resources,
+                Some(&test_declared_runtime("runsc")),
             ),
             LiveContainerState::Unsafe
         );
@@ -3689,6 +3939,7 @@ mod tests {
                 &declared_mounts,
                 &declared_tmpfs,
                 &declared_live_resources,
+                Some(&test_declared_runtime("runsc")),
             ),
             LiveContainerState::Unsafe
         );
@@ -3705,6 +3956,7 @@ mod tests {
                 &declared_mounts,
                 &declared_tmpfs,
                 &declared_live_resources,
+                Some(&test_declared_runtime("runsc")),
             ),
             LiveContainerState::Unknown
         );
@@ -3718,6 +3970,7 @@ mod tests {
                 &declared_mounts,
                 &declared_tmpfs,
                 &declared_live_resources,
+                Some(&test_declared_runtime("runsc")),
             ),
             LiveContainerState::Unsafe
         );
@@ -3732,6 +3985,7 @@ mod tests {
                     &declared_mounts,
                     &declared_tmpfs,
                     &declared_live_resources,
+                    Some(&test_declared_runtime("runsc")),
                 ),
                 LiveContainerState::Unsafe,
                 "explicit null {field} evidence was not rejected"
@@ -3752,6 +4006,7 @@ mod tests {
                 &declared_mounts,
                 &declared_tmpfs,
                 &declared_live_resources,
+                Some(&test_declared_runtime("runsc")),
             ),
             LiveContainerState::Unsafe
         );
@@ -3765,6 +4020,7 @@ mod tests {
                 &declared_mounts,
                 &declared_tmpfs,
                 &declared_live_resources,
+                Some(&test_declared_runtime("runsc")),
             ),
             LiveContainerState::Unknown
         );
@@ -3778,6 +4034,7 @@ mod tests {
                 &declared_mounts,
                 &declared_tmpfs,
                 &declared_live_resources,
+                Some(&test_declared_runtime("runsc")),
             ),
             LiveContainerState::Unsafe
         );
@@ -3793,6 +4050,7 @@ mod tests {
                     &declared_mounts,
                     &declared_tmpfs,
                     &declared_live_resources,
+                    Some(&test_declared_runtime("runsc")),
                 ),
                 LiveContainerState::Unsafe,
                 "unsafe security option was not rejected: {option}"
@@ -3812,6 +4070,7 @@ mod tests {
                 &declared_mounts,
                 &declared_tmpfs,
                 &declared_live_resources,
+                Some(&test_declared_runtime("runsc")),
             ),
             LiveContainerState::Unsafe
         );
@@ -3826,6 +4085,7 @@ mod tests {
                 &declared_mounts,
                 &declared_tmpfs,
                 &declared_live_resources,
+                Some(&test_declared_runtime("runsc")),
             ),
             LiveContainerState::Unsafe
         );
@@ -3845,6 +4105,7 @@ mod tests {
                     &declared_mounts,
                     &declared_tmpfs,
                     &declared_live_resources,
+                    Some(&test_declared_runtime("runsc")),
                 ),
                 LiveContainerState::Unsafe,
                 "tmpfs drift was not rejected: {options}"
@@ -3861,6 +4122,7 @@ mod tests {
                 &declared_mounts,
                 &declared_tmpfs,
                 &declared_live_resources,
+                Some(&test_declared_runtime("runsc")),
             ),
             LiveContainerState::Unknown
         );
@@ -3877,6 +4139,7 @@ mod tests {
                 &declared_mounts,
                 &declared_tmpfs,
                 &declared_live_resources,
+                Some(&test_declared_runtime("runsc")),
             ),
             LiveContainerState::Unsafe
         );
@@ -3891,6 +4154,7 @@ mod tests {
                 &declared_mounts,
                 &declared_tmpfs,
                 &declared_live_resources,
+                Some(&test_declared_runtime("runsc")),
             ),
             LiveContainerState::Unsafe
         );
@@ -3904,6 +4168,7 @@ mod tests {
                 &declared_mounts,
                 &declared_tmpfs,
                 &declared_live_resources,
+                Some(&test_declared_runtime("runsc")),
             ),
             LiveContainerState::Unsafe
         );
@@ -3917,6 +4182,7 @@ mod tests {
                 &declared_mounts,
                 &declared_tmpfs,
                 &declared_live_resources,
+                Some(&test_declared_runtime("runsc")),
             ),
             LiveContainerState::Unknown
         );
@@ -3931,6 +4197,7 @@ mod tests {
                 &declared_mounts,
                 &declared_tmpfs,
                 &declared_live_resources,
+                Some(&test_declared_runtime("runsc")),
             ),
             LiveContainerState::Unknown
         );
@@ -3944,6 +4211,7 @@ mod tests {
                 &declared_mounts,
                 &declared_tmpfs,
                 &declared_live_resources,
+                Some(&test_declared_runtime("runsc")),
             ),
             LiveContainerState::Unsafe
         );
@@ -3957,6 +4225,7 @@ mod tests {
                 &declared_mounts,
                 &declared_tmpfs,
                 &declared_live_resources,
+                Some(&test_declared_runtime("runsc")),
             ),
             LiveContainerState::Unsafe
         );
@@ -3975,6 +4244,7 @@ mod tests {
                 &declared_mounts,
                 &declared_tmpfs,
                 &declared_live_resources,
+                Some(&test_declared_runtime("runsc")),
             ),
             LiveContainerState::Unsafe
         );
@@ -3988,6 +4258,7 @@ mod tests {
                 &declared_mounts,
                 &declared_tmpfs,
                 &declared_live_resources,
+                Some(&test_declared_runtime("runsc")),
             ),
             LiveContainerState::Unsafe
         );
@@ -4002,6 +4273,7 @@ mod tests {
                 &declared_mounts,
                 &declared_tmpfs,
                 &declared_live_resources,
+                Some(&test_declared_runtime("runsc")),
             ),
             LiveContainerState::Unsafe
         );
@@ -4019,10 +4291,11 @@ mod tests {
                 &declared_mounts,
                 &declared_tmpfs,
                 &declared_live_resources,
+                Some(&test_declared_runtime("runsc")),
             ),
             LiveContainerState::Unsafe
         );
-        inspect[0]["Mounts"][0]["Destination"] = serde_json::json!("/home/hermes");
+        inspect[0]["Mounts"][0]["Destination"] = serde_json::json!("/state");
         inspect[0]["Mounts"][0]["RW"] = serde_json::json!(false);
         assert_eq!(
             live_container_security(
@@ -4032,6 +4305,7 @@ mod tests {
                 &declared_mounts,
                 &declared_tmpfs,
                 &declared_live_resources,
+                Some(&test_declared_runtime("runsc")),
             ),
             LiveContainerState::Unsafe
         );
@@ -4046,6 +4320,7 @@ mod tests {
                 &declared_mounts,
                 &declared_tmpfs,
                 &declared_live_resources,
+                Some(&test_declared_runtime("runsc")),
             ),
             LiveContainerState::Unsafe
         );
@@ -4054,21 +4329,21 @@ mod tests {
     #[test]
     fn parses_podman_live_container_security_state() {
         let declared_mounts = vec![DeclaredMount {
-            source: "/var/lib/zeroclaw-assistant".into(),
-            destination: "/zeroclaw-data".into(),
+            source: "/var/lib/tentaflake/agents/assistant".into(),
+            destination: "/state".into(),
             writable: true,
         }];
         let declared_tmpfs = test_declared_tmpfs();
         let declared_live_resources = test_declared_live_resources();
         let mut inspect = serde_json::json!([{
             "AppArmorProfile": "containers-default-0.57.0",
-            "OCIRuntime": "/nix/store/fixture/bin/runsc",
+            "OCIRuntime": "runsc",
             "EffectiveCaps": [],
             "BoundingCaps": [],
             "State": { "Running": true },
             "Config": { "User": "65534:65534" },
             "NetworkSettings": {
-                "Networks": { "tf-zeroclaw-assistant": {} },
+                "Networks": { "tf-agent-assistant": {} },
                 "Ports": {}
             },
             "HostConfig": {
@@ -4099,8 +4374,8 @@ mod tests {
             "Mounts": [
                 {
                     "Type": "bind",
-                    "Source": "/var/lib/zeroclaw-assistant",
-                    "Destination": "/zeroclaw-data",
+                    "Source": "/var/lib/tentaflake/agents/assistant",
+                    "Destination": "/state",
                     "RW": true
                 }
             ]
@@ -4109,12 +4384,13 @@ mod tests {
             live_container_security(
                 &inspect,
                 "podman",
-                "tf-zeroclaw-assistant",
+                "tf-agent-assistant",
                 &declared_mounts,
                 &declared_tmpfs,
                 &declared_live_resources,
+                Some(&test_declared_runtime("runsc")),
             ),
-            LiveContainerState::Secure
+            LiveContainerState::Unknown
         );
         let mut missing_podman_propagation = inspect.clone();
         missing_podman_propagation[0]["HostConfig"]["Tmpfs"]["/run"] =
@@ -4123,10 +4399,11 @@ mod tests {
             live_container_security(
                 &missing_podman_propagation,
                 "podman",
-                "tf-zeroclaw-assistant",
+                "tf-agent-assistant",
                 &declared_mounts,
                 &declared_tmpfs,
                 &declared_live_resources,
+                Some(&test_declared_runtime("runsc")),
             ),
             LiveContainerState::Unsafe
         );
@@ -4137,10 +4414,11 @@ mod tests {
             live_container_security(
                 &conflicting_podman_propagation,
                 "podman",
-                "tf-zeroclaw-assistant",
+                "tf-agent-assistant",
                 &declared_mounts,
                 &declared_tmpfs,
                 &declared_live_resources,
+                Some(&test_declared_runtime("runsc")),
             ),
             LiveContainerState::Unsafe
         );
@@ -4154,10 +4432,11 @@ mod tests {
             live_container_security(
                 &missing_named_networks,
                 "podman",
-                "tf-zeroclaw-assistant",
+                "tf-agent-assistant",
                 &declared_mounts,
                 &declared_tmpfs,
                 &declared_live_resources,
+                Some(&test_declared_runtime("runsc")),
             ),
             LiveContainerState::Unknown
         );
@@ -4168,10 +4447,11 @@ mod tests {
             live_container_security(
                 &additional_named_network,
                 "podman",
-                "tf-zeroclaw-assistant",
+                "tf-agent-assistant",
                 &declared_mounts,
                 &declared_tmpfs,
                 &declared_live_resources,
+                Some(&test_declared_runtime("runsc")),
             ),
             LiveContainerState::Unsafe
         );
@@ -4189,8 +4469,9 @@ mod tests {
                 &declared_mounts,
                 &declared_tmpfs,
                 &declared_live_resources,
+                Some(&test_declared_runtime("runsc")),
             ),
-            LiveContainerState::Secure
+            LiveContainerState::Unknown
         );
 
         let mut inconsistent_podman_cpu = inspect.clone();
@@ -4199,10 +4480,11 @@ mod tests {
             live_container_security(
                 &inconsistent_podman_cpu,
                 "podman",
-                "tf-zeroclaw-assistant",
+                "tf-agent-assistant",
                 &declared_mounts,
                 &declared_tmpfs,
                 &declared_live_resources,
+                Some(&test_declared_runtime("runsc")),
             ),
             LiveContainerState::Unsafe
         );
@@ -4212,10 +4494,11 @@ mod tests {
             live_container_security(
                 &drifted_podman_nproc,
                 "podman",
-                "tf-zeroclaw-assistant",
+                "tf-agent-assistant",
                 &declared_mounts,
                 &declared_tmpfs,
                 &declared_live_resources,
+                Some(&test_declared_runtime("runsc")),
             ),
             LiveContainerState::Unsafe
         );
@@ -4225,10 +4508,11 @@ mod tests {
             live_container_security(
                 &inspect,
                 "podman",
-                "tf-zeroclaw-assistant",
+                "tf-agent-assistant",
                 &declared_mounts,
                 &declared_tmpfs,
                 &declared_live_resources,
+                Some(&test_declared_runtime("runsc")),
             ),
             LiveContainerState::Unsafe
         );
@@ -4241,10 +4525,11 @@ mod tests {
             live_container_security(
                 &inspect,
                 "podman",
-                "tf-zeroclaw-assistant",
+                "tf-agent-assistant",
                 &declared_mounts,
                 &declared_tmpfs,
                 &declared_live_resources,
+                Some(&test_declared_runtime("runsc")),
             ),
             LiveContainerState::Unknown
         );

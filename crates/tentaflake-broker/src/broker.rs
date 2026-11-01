@@ -1,15 +1,13 @@
 use crate::config::{Config, ModelPolicy};
 use crate::http::{Request, Response};
 use crate::policy::{ResolvedTarget, resolve_public_target};
-use crate::state::{Audit, Limits, UsageGuard, read_secret, unix_seconds};
+use crate::state::{Audit, Limits, Quarantine, UsageGuard, read_secret, unix_seconds};
 use crate::streaming::StreamingResponse;
 use reqwest::blocking::{Client, Response as UpstreamResponse};
 use reqwest::header::{CONTENT_TYPE, LOCATION};
 use serde::Deserialize;
 use serde_json::{Value, json};
-use std::fs::OpenOptions;
-use std::io::{Read, Write};
-use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+use std::io::Read;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
@@ -18,6 +16,7 @@ pub struct Broker {
     config: Config,
     limits: Arc<Limits>,
     audit: Arc<Audit>,
+    quarantine: Option<Quarantine>,
 }
 
 impl Broker {
@@ -40,6 +39,17 @@ impl Broker {
             config.max_audit_bytes,
         ));
         audit.check_ready()?;
+        let quarantine = config
+            .fetch
+            .as_ref()
+            .map(|policy| {
+                Quarantine::open(
+                    &policy.quarantine_dir,
+                    policy.max_quarantine_bytes,
+                    policy.max_quarantine_entries,
+                )
+            })
+            .transpose()?;
         audit.record(
             &config.agent,
             "startup",
@@ -50,6 +60,7 @@ impl Broker {
             config,
             limits,
             audit,
+            quarantine,
         })
     }
 
@@ -92,6 +103,11 @@ impl Broker {
     }
 
     fn handle_llm(&self, request: Request) -> Result<Response, Failure> {
+        let mut activity = self.config.activity.as_ref().and_then(|config| {
+            tentaflake_activity::Guard::new(config)
+                .map_err(|_| eprintln!("tentaflake activity telemetry_gap"))
+                .ok()
+        });
         self.require_post_and_auth(&request)?;
         let route = route_without_query(&request.path);
         if !matches!(route, "/v1/chat/completions" | "/v1/responses") {
@@ -130,7 +146,7 @@ impl Broker {
         if streaming && !policy.streaming.enable {
             return Err(Failure::new(400, "llm", "streaming is disabled"));
         }
-        if streaming
+        if (streaming || route == "/v1/chat/completions")
             && object
                 .get("n")
                 .is_some_and(|value| value.as_u64() != Some(1))
@@ -138,7 +154,7 @@ impl Broker {
             return Err(Failure::new(
                 400,
                 "llm",
-                "streaming requires one completion choice",
+                "request requires one completion choice",
             ));
         }
         if streaming
@@ -231,6 +247,7 @@ impl Broker {
                 "llm",
                 "authorized",
                 json!({
+                    "operation_id": activity.as_ref().map(|activity| &activity.operation_id),
                     "provider": resolved.host,
                     "route": route,
                     "model": model_name,
@@ -245,7 +262,9 @@ impl Broker {
                 content_type: "text/event-stream".into(),
                 body: Vec::new(),
                 settlement: None,
+                activity: None,
                 streaming: Some(Box::new(StreamingResponse {
+                    activity,
                     target: resolved,
                     credential,
                     session_id,
@@ -277,7 +296,11 @@ impl Broker {
             upstream = upstream.header("x-opencode-session", session);
         }
         if let Some(reservation) = &reservation {
+            // Existing reservation is the durable accounting authority.
             reservation.mark_dispatched();
+        }
+        if let Some(activity) = &mut activity {
+            activity.dispatched();
         }
         let response = upstream
             .send()
@@ -340,12 +363,18 @@ impl Broker {
                 }),
             )
             .map_err(|_| Failure::new(503, "audit", "audit log is unavailable"))?;
+        let activity = activity.map(|activity| {
+            let outcome =
+                nonstream_activity_outcome(route, status, response_json.as_ref(), &model_name);
+            (activity, outcome)
+        });
         Ok(Response {
             status,
             content_type,
             body: response_body,
             settlement: if confirmed { reservation } else { None },
             streaming: None,
+            activity,
         })
     }
 
@@ -438,22 +467,11 @@ impl Broker {
                 })
                 .collect();
             let quarantine_id = quarantine_id();
-            let quarantine_path = policy.quarantine_dir.join(&quarantine_id);
-            std::fs::create_dir_all(&policy.quarantine_dir)
-                .map_err(|_| Failure::new(503, "fetch", "quarantine is unavailable"))?;
-            std::fs::set_permissions(
-                &policy.quarantine_dir,
-                std::fs::Permissions::from_mode(0o700),
-            )
-            .map_err(|_| Failure::new(503, "fetch", "cannot protect quarantine"))?;
-            let mut file = OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .mode(0o600)
-                .open(&quarantine_path)
-                .map_err(|_| Failure::new(503, "fetch", "cannot create quarantine object"))?;
-            file.write_all(&bytes)
-                .map_err(|_| Failure::new(503, "fetch", "cannot write quarantine object"))?;
+            self.quarantine
+                .as_ref()
+                .expect("fetch quarantine initialized")
+                .store(&quarantine_id, &bytes)
+                .map_err(|_| Failure::new(503, "fetch", "quarantine is unavailable or full"))?;
             self.audit
                 .record(
                     &self.config.agent,
@@ -598,6 +616,50 @@ pub(crate) fn provider_model_matches(requested: &str, returned: &str) -> bool {
                     && snapshot.ends_with(|c: char| c.is_ascii_digit())
                     && snapshot.bytes().filter(u8::is_ascii_digit).count() >= 4
             })
+}
+
+fn nonstream_activity_outcome(
+    route: &str,
+    status: u16,
+    value: Option<&Value>,
+    requested_model: &str,
+) -> tentaflake_activity::Outcome {
+    use tentaflake_activity::Outcome;
+    if status >= 300 {
+        return Outcome::Failed;
+    }
+    let Some(value) = value.filter(|_| status == 200) else {
+        return Outcome::Uncertain;
+    };
+    if route == "/v1/chat/completions" {
+        return if complete_chat_response(value, requested_model) {
+            Outcome::Succeeded
+        } else {
+            Outcome::Uncertain
+        };
+    }
+    if value.get("object").and_then(Value::as_str) != Some("response")
+        || !value
+            .get("id")
+            .and_then(Value::as_str)
+            .is_some_and(|id| !id.is_empty())
+        || !value
+            .get("model")
+            .and_then(Value::as_str)
+            .is_some_and(|model| provider_model_matches(requested_model, model))
+    {
+        return Outcome::Uncertain;
+    }
+    match value.get("status").and_then(Value::as_str) {
+        Some("completed")
+            if value.get("output").is_some_and(Value::is_array)
+                && value.get("error").is_none_or(Value::is_null) =>
+        {
+            Outcome::Succeeded
+        }
+        Some("failed") => Outcome::Failed,
+        _ => Outcome::Uncertain,
+    }
 }
 
 fn complete_chat_response(value: &Value, requested_model: &str) -> bool {
@@ -972,6 +1034,8 @@ mod tests {
     use crate::http::read_request;
     use std::collections::HashMap;
     use std::fs;
+    use std::fs::OpenOptions;
+    use std::io::Write;
     use std::net::TcpListener;
     use std::os::unix::fs::OpenOptionsExt;
     use std::path::{Path, PathBuf};
@@ -1000,6 +1064,157 @@ mod tests {
     }
 
     #[test]
+    fn nonstream_activity_tracks_terminal_envelope_and_downstream_delivery() {
+        use crate::http::write_response;
+        use std::net::{Shutdown, TcpStream};
+        use std::os::unix::fs::PermissionsExt;
+        use std::os::unix::net::UnixListener;
+        use std::sync::mpsc;
+
+        let chat = json!({"id":"fixture","object":"chat.completion","model":"fixture-model",
+            "choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}]});
+        let responses = json!({"id":"fixture","object":"response","model":"fixture-model",
+            "status":"completed","error":null,"output":[]});
+        let mut failed = responses.clone();
+        failed["status"] = json!("failed");
+        failed["error"] = json!({"code":"server_error"});
+        let mut incomplete = responses.clone();
+        incomplete["status"] = json!("incomplete");
+        let mut wrong_model = responses.clone();
+        wrong_model["model"] = json!("other-model");
+        for (route, body, deliver, expected) in [
+            ("/v1/chat/completions", chat.clone(), true, "succeeded"),
+            ("/v1/chat/completions", chat, false, "uncertain"),
+            ("/v1/responses", responses, true, "succeeded"),
+            ("/v1/responses", failed, true, "failed"),
+            ("/v1/responses", incomplete, true, "uncertain"),
+            ("/v1/responses", wrong_model, true, "uncertain"),
+        ] {
+            // Keep native Unix paths short even under a long build TMPDIR.
+            let directory = Path::new("/tmp").join(format!("tfba-{}", quarantine_id()));
+            fs::create_dir(&directory).unwrap();
+            fs::set_permissions(&directory, fs::Permissions::from_mode(0o700)).unwrap();
+            write_secret(&directory.join("token"), "virtual-agent-key");
+            write_secret(&directory.join("provider"), "real-provider-key");
+            let socket = directory.join("activity.sock");
+            let listener = UnixListener::bind(&socket).unwrap();
+            listener.set_nonblocking(true).unwrap();
+            let (events, received) = mpsc::channel();
+            let collector = thread::spawn(move || {
+                let deadline = Instant::now() + Duration::from_secs(5);
+                let mut stream = loop {
+                    match listener.accept() {
+                        Ok((stream, _)) => break stream,
+                        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                            assert!(Instant::now() < deadline, "activity was not published");
+                            thread::sleep(Duration::from_millis(1));
+                        }
+                        Err(error) => panic!("collector accept: {error}"),
+                    }
+                };
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(2)))
+                    .unwrap();
+                let mut length = [0; 4];
+                stream.read_exact(&mut length).unwrap();
+                let length = u32::from_be_bytes(length) as usize;
+                assert!(length <= 8192);
+                let mut bytes = vec![0; length];
+                stream.read_exact(&mut bytes).unwrap();
+                events
+                    .send(serde_json::from_slice::<Value>(&bytes).unwrap())
+                    .unwrap();
+                let reply = br#"{"version":1,"status":"ok"}"#;
+                stream
+                    .write_all(&(reply.len() as u32).to_be_bytes())
+                    .unwrap();
+                stream.write_all(reply).unwrap();
+            });
+            let upstream = TcpListener::bind("127.0.0.1:0").unwrap();
+            let address = upstream.local_addr().unwrap();
+            let provider = thread::spawn(move || {
+                let (mut stream, _) = upstream.accept().unwrap();
+                read_request(
+                    &mut stream,
+                    32768,
+                    1048576,
+                    Instant::now() + Duration::from_secs(5),
+                )
+                .unwrap();
+                let body = serde_json::to_vec(&body).unwrap();
+                write!(stream, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", body.len()).unwrap();
+                stream.write_all(&body).unwrap();
+            });
+            let config: Config = serde_json::from_value(json!({
+                "agent":"fixture", "listen":"127.0.0.1:7810",
+                "token_file":directory.join("token"), "audit_file":directory.join("audit"),
+                "budget_state_file":directory.join("budget"), "max_response_bytes":8192,
+                "llm":{
+                    "upstream_base_url":format!("http://{address}/v1/"),
+                    "provider_credential_file":directory.join("provider"),
+                    "allowed_models":[{"name":"fixture-model",
+                        "input_microusd_per_million":1000,"output_microusd_per_million":2000}],
+                    "max_completion_tokens":32, "allow_plain_http_for_tests":true
+                }
+            }))
+            .unwrap();
+            let mut broker = Broker::new(config).unwrap();
+            // Substitute only fixture socket/UID policy after production validation.
+            broker.config.activity = Some(
+                serde_json::from_value(json!({
+                    "socket":socket, "server_uid":unsafe {libc::geteuid()},
+                    "producer_uid":unsafe {libc::geteuid()}, "producer_id":"broker-test",
+                    "tenant_id":"tenant", "agent_id":"agent-fixture", "run_id":"host-context",
+                    "workload_id":"broker", "generation":1, "policy_revision":"test"
+                }))
+                .unwrap(),
+            );
+            let payload = if route == "/v1/responses" {
+                json!({"model":"fixture-model","input":"fixture","max_output_tokens":8})
+            } else {
+                json!({"model":"fixture-model","messages":[{"role":"user","content":"fixture"}],
+                    "max_tokens":8})
+            };
+            let response = broker.handle(Request {
+                method: "POST".into(),
+                path: route.into(),
+                headers: HashMap::from([
+                    ("authorization".into(), "Bearer virtual-agent-key".into()),
+                    ("content-type".into(), "application/json".into()),
+                ]),
+                body: serde_json::to_vec(&payload).unwrap(),
+            });
+            assert_eq!(response.status, 200);
+            assert!(matches!(
+                received.try_recv(),
+                Err(mpsc::TryRecvError::Empty)
+            ));
+            let ingress = TcpListener::bind("127.0.0.1:0").unwrap();
+            let mut client = TcpStream::connect(ingress.local_addr().unwrap()).unwrap();
+            client
+                .set_read_timeout(Some(Duration::from_secs(2)))
+                .unwrap();
+            let (mut downstream, _) = ingress.accept().unwrap();
+            if !deliver {
+                downstream.shutdown(Shutdown::Write).unwrap();
+            }
+            assert_eq!(write_response(&mut downstream, response).is_ok(), deliver);
+            drop(downstream);
+            if deliver {
+                let mut delivered = Vec::new();
+                client.read_to_end(&mut delivered).unwrap();
+                assert!(delivered.starts_with(b"HTTP/1.1 200 OK"));
+            }
+            let event = received.recv_timeout(Duration::from_secs(2)).unwrap();
+            assert_eq!(event["event"]["outcome"], expected);
+            assert_eq!(event["event"]["operation"], "model");
+            collector.join().unwrap();
+            provider.join().unwrap();
+            fs::remove_dir_all(directory).unwrap();
+        }
+    }
+
+    #[test]
     fn substitutes_provider_credential_without_logging_prompt() {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let address = listener.local_addr().unwrap();
@@ -1012,7 +1227,13 @@ mod tests {
                     stream
                         .set_read_timeout(Some(Duration::from_secs(5)))
                         .unwrap();
-                    let request = read_request(&mut stream, 32 * 1024, 1024 * 1024).unwrap();
+                    let request = read_request(
+                        &mut stream,
+                        32 * 1024,
+                        1024 * 1024,
+                        Instant::now() + Duration::from_secs(5),
+                    )
+                    .unwrap();
                     assert_eq!(request.path, route);
                     assert_eq!(request.headers["authorization"], "Bearer real-provider-key");
                     assert_eq!(
@@ -1046,6 +1267,7 @@ mod tests {
         write_secret(&token_file, "virtual-agent-key");
         write_secret(&provider_file, "real-provider-key");
         let config = Config {
+            activity: None,
             agent: "coding".into(),
             listen: "127.0.0.1:7810".parse().unwrap(),
             token_file,
@@ -1079,7 +1301,18 @@ mod tests {
             fetch: None,
         };
         config.validate().unwrap();
-        let broker = Broker::new(config).unwrap();
+        let mut broker = Broker::new(config).unwrap();
+        // Inject an unavailable collector after construction so this production
+        // dispatch/denial fixture also proves telemetry cannot trigger replay.
+        broker.config.activity = Some(
+            serde_json::from_value(json!({
+                "socket":"/run/tentaflake-no-collector/socket", "server_uid":1,
+                "producer_uid":unsafe {libc::geteuid()}, "producer_id":"broker-test",
+                "tenant_id":"tenant","agent_id":"agent-coding","run_id":"host-context",
+                "workload_id":"broker","generation":1,"policy_revision":"test"
+            }))
+            .unwrap(),
+        );
         let body = br#"{"model":"example/model","messages":[{"role":"user","content":"SENSITIVE_PROMPT_FIXTURE"}],"max_tokens":8,"tools":[{"type":"function","function":{"name":"research_fetch","parameters":{"type":"object","properties":{}}}}],"tool_choice":{"type":"function","function":{"name":"research_fetch"}}}"#.to_vec();
         for route in routes {
             let mut payload: Value = serde_json::from_slice(&body).unwrap();
@@ -1128,6 +1361,11 @@ mod tests {
             body: br#"{"model":"not-allowed","messages":[]}"#.to_vec(),
         });
         assert_eq!(denied.status, 403);
+        assert!(
+            fs::read_to_string(&audit_file)
+                .unwrap()
+                .contains("\"denied\"")
+        );
 
         let budget_before = fs::read(&broker.config.budget_state_file).unwrap();
         let unauthenticated = broker.handle(Request {

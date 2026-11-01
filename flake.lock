@@ -1,73 +1,5 @@
 {
   "nodes": {
-    "flake-parts": {
-      "inputs": {
-        "nixpkgs-lib": [
-          "hermes-agent",
-          "nixpkgs"
-        ]
-      },
-      "locked": {
-        "lastModified": 1790898470,
-        "narHash": "sha256-zTwuwezD0w3hpga6a6P8emidzAZFyWqlNeRBlpWOOl8=",
-        "owner": "hercules-ci",
-        "repo": "flake-parts",
-        "rev": "024633cd702b10285db5cb19b40ad48d2399ba60",
-        "type": "github"
-      },
-      "original": {
-        "owner": "hercules-ci",
-        "repo": "flake-parts",
-        "type": "github"
-      }
-    },
-    "hermes-agent": {
-      "inputs": {
-        "flake-parts": "flake-parts",
-        "home-manager": "home-manager",
-        "nixpkgs": [
-          "nixpkgs"
-        ],
-        "npm-lockfile-fix": "npm-lockfile-fix",
-        "pyproject-build-systems": "pyproject-build-systems",
-        "pyproject-nix": "pyproject-nix",
-        "uv2nix": "uv2nix"
-      },
-      "locked": {
-        "lastModified": 1792964957,
-        "narHash": "sha256-15kNjCmBrVKExaaYCeSzcSBXUISU2Y6o1DFPH762L5k=",
-        "owner": "NousResearch",
-        "repo": "hermes-agent",
-        "rev": "1f91da2a277093c6909542d8c725c0c52fae4628",
-        "type": "github"
-      },
-      "original": {
-        "owner": "NousResearch",
-        "repo": "hermes-agent",
-        "type": "github"
-      }
-    },
-    "home-manager": {
-      "inputs": {
-        "nixpkgs": [
-          "hermes-agent",
-          "nixpkgs"
-        ]
-      },
-      "locked": {
-        "lastModified": 1792703141,
-        "narHash": "sha256-3X34FaSeMJXMx8CK/BN6sZ9knwNauuiJXQhLM+bQQuI=",
-        "owner": "nix-community",
-        "repo": "home-manager",
-        "rev": "6750249c69969d09d952efaf3fab88a2bdac7ec6",
-        "type": "github"
-      },
-      "original": {
-        "owner": "nix-community",
-        "repo": "home-manager",
-        "type": "github"
-      }
-    },
     "nixpkgs": {
       "locked": {
         "lastModified": 1792773339,
@@ -100,24 +32,20 @@
         "type": "github"
       }
     },
-    "npm-lockfile-fix": {
-      "inputs": {
-        "nixpkgs": [
-          "hermes-agent",
-          "nixpkgs"
-        ]
-      },
+    "pi-upstream": {
+      "flake": false,
       "locked": {
-        "lastModified": 1775903712,
-        "narHash": "sha256-2GV79U6iVH4gKAPWYrxUReB0S41ty/Y3dBLquU8AlaA=",
-        "owner": "jeslie0",
-        "repo": "npm-lockfile-fix",
-        "rev": "c6093acb0c0548e0f9b8b3d82918823721930fe8",
+        "lastModified": 1793402276,
+        "narHash": "sha256-wq8X5a4IJBnpHRbYD2WAD/2syM4q6ba2XS1+3mCO0oM=",
+        "owner": "earendil-works",
+        "repo": "pi",
+        "rev": "35dfa757378bd7a8570670e99c2687bdd1039a06",
         "type": "github"
       },
       "original": {
-        "owner": "jeslie0",
-        "repo": "npm-lockfile-fix",
+        "owner": "earendil-works",
+        "repo": "pi",
+        "rev": "35dfa757378bd7a8570670e99c2687bdd1039a06",
         "type": "github"
       }
     },
@@ -129,74 +57,24 @@
         ]
       },
       "locked": {
-        "lastModified": 1792786492,
-        "narHash": "sha256-kdV5X1YuGIDYtMnWO5nqZ1qO4a2Hn//x+cewd8K9vK8=",
+        "lastModified": 1793358625,
+        "narHash": "sha256-a1wA32BcO1wI4TzipaXZQeBn3FZXOCEBYTIvtdJ362k=",
         "owner": "timfewi",
         "repo": "project-check-nix",
-        "rev": "56962fbd92f992938f39b44b2590adf843ebe757",
+        "rev": "8aafbb522294b507a003d94a8a3f946d8e52380b",
         "type": "github"
       },
       "original": {
         "owner": "timfewi",
         "repo": "project-check-nix",
-        "rev": "56962fbd92f992938f39b44b2590adf843ebe757",
-        "type": "github"
-      }
-    },
-    "pyproject-build-systems": {
-      "inputs": {
-        "nixpkgs": [
-          "hermes-agent",
-          "nixpkgs"
-        ],
-        "pyproject-nix": [
-          "hermes-agent",
-          "pyproject-nix"
-        ],
-        "uv2nix": [
-          "hermes-agent",
-          "uv2nix"
-        ]
-      },
-      "locked": {
-        "lastModified": 1792499785,
-        "narHash": "sha256-mGOkvueuMGSRiD75ccxFzfEvSlIU9ztjFluHMKOtogY=",
-        "owner": "pyproject-nix",
-        "repo": "build-system-pkgs",
-        "rev": "a17819c85163988e063806ffc4f6d2716bc8ead8",
-        "type": "github"
-      },
-      "original": {
-        "owner": "pyproject-nix",
-        "repo": "build-system-pkgs",
-        "type": "github"
-      }
-    },
-    "pyproject-nix": {
-      "inputs": {
-        "nixpkgs": [
-          "hermes-agent",
-          "nixpkgs"
-        ]
-      },
-      "locked": {
-        "lastModified": 1791657700,
-        "narHash": "sha256-vcCAvhtA7hG+/gOge29hYHy7I/dLkIsr5nLx4sFEQic=",
-        "owner": "pyproject-nix",
-        "repo": "pyproject.nix",
-        "rev": "ddc400a6883b042646d0940e65971bb7f7e96107",
-        "type": "github"
-      },
-      "original": {
-        "owner": "pyproject-nix",
-        "repo": "pyproject.nix",
+        "rev": "8aafbb522294b507a003d94a8a3f946d8e52380b",
         "type": "github"
       }
     },
     "root": {
       "inputs": {
-        "hermes-agent": "hermes-agent",
         "nixpkgs": "nixpkgs",
+        "pi-upstream": "pi-upstream",
         "tentaflake-research": "tentaflake-research"
       }
     },
@@ -206,41 +84,17 @@
         "project-check": "project-check"
       },
       "locked": {
-        "lastModified": 1792968862,
-        "narHash": "sha256-fjhLin8Ty0Jt2hjpZTZl3ysFmc/wHknd/03ZxeQpwrY=",
+        "lastModified": 1793528028,
+        "narHash": "sha256-XefePhkdNLM7vHIkM/CV+9/P00FVaLKGSHe6lAITMKQ=",
         "owner": "timfewi",
         "repo": "tentaflake-research",
-        "rev": "babdca58ddada874aae22a5042cf90675a0d72eb",
+        "rev": "3503d8da7307b4795fc80baa1f142b3ef1baec7f",
         "type": "github"
       },
       "original": {
         "owner": "timfewi",
         "repo": "tentaflake-research",
-        "type": "github"
-      }
-    },
-    "uv2nix": {
-      "inputs": {
-        "nixpkgs": [
-          "hermes-agent",
-          "nixpkgs"
-        ],
-        "pyproject-nix": [
-          "hermes-agent",
-          "pyproject-nix"
-        ]
-      },
-      "locked": {
-        "lastModified": 1792666911,
-        "narHash": "sha256-UWo7wDPi00YXOI1Io7g4vGKuCSPJ863kHJVDzsgqtoM=",
-        "owner": "pyproject-nix",
-        "repo": "uv2nix",
-        "rev": "0fdaa03ea3c3c16dbb1fe4d69108f07227a4b42d",
-        "type": "github"
-      },
-      "original": {
-        "owner": "pyproject-nix",
-        "repo": "uv2nix",
+        "rev": "3503d8da7307b4795fc80baa1f142b3ef1baec7f",
         "type": "github"
       }
     }

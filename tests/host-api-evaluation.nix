@@ -1,0 +1,274 @@
+{ pkgs }:
+let
+  mkAgent = import ../lib/mkAgent.nix {
+    inherit pkgs;
+    inherit (pkgs) lib;
+  };
+  evaluate =
+    extra:
+    (import (pkgs.path + "/nixos/lib/eval-config.nix") {
+      system = pkgs.stdenv.hostPlatform.system;
+      specialArgs.researchFlake = null;
+      modules = [
+        ../modules/default.nix
+        {
+          system.stateVersion = "26.05";
+          fileSystems."/" = {
+            device = "/dev/disk/by-label/nixos";
+            fsType = "btrfs";
+          };
+          boot.loader.grub.devices = [ "nodev" ];
+          tentaflake = {
+            adminUser = "operator";
+            boot.enable = false;
+            locale.enable = false;
+            networking.enable = false;
+            nixSettings.enable = false;
+            packages.enable = false;
+            shell.enable = false;
+          };
+        }
+        extra
+      ];
+    }).config;
+  disabled = evaluate { };
+  enabled = evaluate { tentaflake.hostApi.enable = true; };
+  noWorkerDependency = evaluate {
+    tentaflake.hostApi.enable = true;
+    tentaflake.worker.package = throw "disabled worker inspection must not force its package";
+  };
+  writable = evaluate {
+    tentaflake.hostApi = {
+      enable = true;
+      allowActions = true;
+      allowLogs = true;
+    };
+  };
+  scoped = evaluate {
+    imports = [
+      (mkAgent {
+        adapter = "hermes";
+        name = "scoped";
+        autoStart = false;
+      })
+    ];
+    tentaflake.hostApi = {
+      enable = true;
+      peers = [
+        {
+          uid = 12345;
+          agents = [ "agent-scoped" ];
+          permissions = [
+            "read"
+            "run_read"
+            "run_submit"
+            "run_stop"
+          ];
+        }
+      ];
+    };
+  };
+  unknownPeerAgent = evaluate {
+    tentaflake.hostApi = {
+      enable = true;
+      peers = [
+        {
+          uid = 12345;
+          agents = [ "agent-absent" ];
+          permissions = [ "read" ];
+        }
+      ];
+    };
+  };
+  workerHost =
+    decisions:
+    evaluate {
+      imports = [
+        (mkAgent {
+          adapter = "hermes";
+          name = "operator";
+          autoStart = false;
+        })
+      ];
+      tentaflake.hostApi = {
+        enable = true;
+        allowToolRequests = true;
+        allowToolDecisions = decisions;
+      };
+      tentaflake.worker.agents.agent-operator = {
+        enable = true;
+        workspace = "/var/lib/tentaflake/agents/operator/workspace";
+      };
+    };
+  inspectedWorker = workerHost false;
+  controlledWorker = workerHost true;
+  invalidDecisions = evaluate {
+    tentaflake.hostApi = {
+      enable = true;
+      allowToolDecisions = true;
+    };
+  };
+  policies = import ../lib/hostApiPolicy.nix {
+    config = inspectedWorker;
+    inherit (pkgs) lib;
+  };
+  piTransport = import ../lib/piTransport.nix {
+    inherit pkgs;
+    inherit (pkgs) lib;
+  };
+  # Synthetic declarations isolate host projection admission, not runtime acceptance.
+  runnerHost =
+    adapter: runnable: enable: selector: transportEnabled: extraOptions:
+    evaluate {
+      tentaflake = {
+        hostApi.enable = true;
+        piRuntime = {
+          inherit enable;
+          transport = if transportEnabled then piTransport.version else null;
+          package = pkgs.hello;
+          image = "localhost/fixture:reviewed";
+          bundle = pkgs.runCommand "synthetic-pi-bundle" {
+            passthru = {
+              imageVerificationVersion = 1;
+              imageSelector = selector;
+              runtimePackage = pkgs.hello;
+            };
+          } "mkdir $out";
+        };
+        agentDeclarations = [
+          {
+            inherit adapter runnable;
+            name = "runner";
+            container = "agent-runner";
+            unit = "docker-agent-runner.service";
+            stateDir = "/var/lib/tentaflake/agents/runner";
+            stateStorage = "/var/lib/tentaflake/agents/runner/state";
+            workspace = "/var/lib/tentaflake/agents/runner/workspace";
+            uid = 10100;
+            gid = 10100;
+          }
+        ];
+      };
+      virtualisation = {
+        oci-containers = {
+          backend = "docker";
+          containers.agent-runner = {
+            image = "localhost/fixture:reviewed";
+            inherit extraOptions;
+          };
+        };
+        docker.daemon.settings.runtimes.runsc-pi.path = piTransport.path;
+      };
+    };
+  admittedRunner = runnerHost "pi" true true "localhost/fixture:reviewed" true [ ];
+  stoppedRunner = runnerHost "pi" false true "localhost/fixture:reviewed" true [ ];
+  disabledRunner = runnerHost "pi" true false "localhost/fixture:reviewed" true [ ];
+  otherRunner = runnerHost "hermes" true true "localhost/fixture:reviewed" true [ ];
+  unreviewedRunner = runnerHost "pi" true true "localhost/fixture:other" true [ ];
+  unsupportedRunner = runnerHost "pi" true true "localhost/fixture:reviewed" false [ ];
+  remappedRunner = runnerHost "pi" true true "localhost/fixture:reviewed" true [ "--userns=private" ];
+  generatedConfig =
+    configuration:
+    pkgs.lib.last (
+      pkgs.lib.splitString " " configuration.systemd.services.tentaflake-api.serviceConfig.ExecStart
+    );
+  service = enabled.systemd.services.tentaflake-api.serviceConfig;
+  failures =
+    configuration:
+    map (entry: entry.message) (pkgs.lib.filter (entry: !entry.assertion) configuration.assertions);
+in
+assert pkgs.lib.assertMsg (failures disabled == [ ]) (builtins.toJSON (failures disabled));
+assert pkgs.lib.assertMsg (failures enabled == [ ]) (builtins.toJSON (failures enabled));
+assert pkgs.lib.assertMsg (failures writable == [ ]) (builtins.toJSON (failures writable));
+assert pkgs.lib.assertMsg (failures inspectedWorker == [ ]) (
+  builtins.toJSON (failures inspectedWorker)
+);
+assert pkgs.lib.assertMsg (failures controlledWorker == [ ]) (
+  builtins.toJSON (failures controlledWorker)
+);
+assert pkgs.lib.any (pkgs.lib.hasInfix "allowToolDecisions requires allowToolRequests") (
+  failures invalidDecisions
+);
+assert failures scoped == [ ];
+assert scoped.systemd.services.tentaflake-api.serviceConfig.RuntimeDirectoryMode == "0711";
+assert enabled.tentaflake.hostApi.peers == null;
+assert scoped.tentaflake.hostApi.peers != null;
+assert
+  admittedRunner.systemd.services.tentaflake-api.serviceConfig.SupplementaryGroups == [ "10100" ];
+assert admittedRunner.systemd.services.tentaflake-api.serviceConfig.CapabilityBoundingSet == "";
+assert pkgs.lib.all
+  (
+    configuration:
+    configuration.systemd.services.tentaflake-api.serviceConfig.SupplementaryGroups == [ ]
+  )
+  [
+    enabled
+    stoppedRunner
+    disabledRunner
+    otherRunner
+    unreviewedRunner
+    unsupportedRunner
+    remappedRunner
+  ];
+assert pkgs.lib.any (pkgs.lib.hasInfix "exact declared agent IDs") (failures unknownPeerAgent);
+assert !(disabled.systemd.services ? tentaflake-api);
+assert !(disabled.users.groups ? tentaflake-api);
+assert !enabled.tentaflake.hostApi.allowActions;
+assert !enabled.tentaflake.hostApi.allowLogs;
+assert !enabled.tentaflake.hostApi.allowToolRequests;
+assert !enabled.tentaflake.hostApi.allowToolDecisions;
+assert writable.tentaflake.hostApi.allowActions;
+assert writable.tentaflake.hostApi.allowLogs;
+assert !(enabled.users.users ? tentahq-ui);
+assert !(enabled.environment.etc ? "tentaflake/cli.conf");
+assert service.User == "root";
+assert pkgs.lib.hasInfix "tentaflake-host-api --config /nix/store/" service.ExecStart;
+assert pkgs.lib.hasInfix "tentaflake-host-api --config /nix/store/"
+  noWorkerDependency.systemd.services.tentaflake-api.serviceConfig.ExecStart;
+assert service.Group == "tentaflake-api";
+assert service.RestrictAddressFamilies == [ "AF_UNIX" ];
+assert service.CapabilityBoundingSet == "";
+assert service.AmbientCapabilities == "";
+assert service.NoNewPrivileges;
+assert service.ProtectSystem == "strict";
+assert service.ReadWritePaths == [ ];
+assert inspectedWorker.systemd.services.tentaflake-api.serviceConfig.ReadWritePaths == [ ];
+assert
+  controlledWorker.systemd.services.tentaflake-api.serviceConfig.ReadWritePaths
+  == [ "-/var/lib/tentaflake-worker-agent-operator" ];
+assert
+  controlledWorker.systemd.paths.tentaflake-worker-agent-operator.pathConfig.PathExists
+  == "/var/lib/tentaflake-worker-agent-operator/.drain-request";
+assert controlledWorker.systemd.services.tentaflake-api.serviceConfig.CapabilityBoundingSet == "";
+assert pkgs.lib.hasInfix "tentaflake-host-api --config /nix/store/"
+  controlledWorker.systemd.services.tentaflake-api.serviceConfig.ExecStart;
+assert policies.agent-operator.managed;
+assert !policies.agent-operator.research.enabled;
+assert policies.agent-operator.research.readiness == "unverified";
+assert policies.agent-operator.worker.enabled;
+assert policies.agent-operator.worker.limits.max_timeout_seconds == 3600;
+assert policies.agent-operator.auto_start == false;
+assert !(pkgs.lib.hasInfix "/var/lib" (builtins.toJSON policies));
+assert !(pkgs.lib.hasInfix "Credential" (builtins.toJSON policies));
+assert service.StateDirectoryMode == "0700";
+assert service.RuntimeDirectoryMode == "0750";
+assert service.UMask == "0077";
+assert enabled.networking.firewall.allowedTCPPorts == disabled.networking.firewall.allowedTCPPorts;
+pkgs.runCommand "tentaflake-host-api-evaluation" { } ''
+  ${pkgs.python3}/bin/python3 - ${generatedConfig admittedRunner} ${generatedConfig stoppedRunner} ${generatedConfig disabledRunner} ${generatedConfig otherRunner} ${generatedConfig unreviewedRunner} ${generatedConfig unsupportedRunner} ${generatedConfig remappedRunner} <<'PY'
+  import json
+  import sys
+  with open(sys.argv[1]) as source:
+      assert json.load(source)["runners"] == {
+          "agent-runner": {
+              "socket": "/run/tentaflake-pi/agent-runner/control/runner.sock",
+              "token": "/run/tentaflake-pi/agent-runner/api-token",
+              "transport": "runsc-pi-v1",
+          }
+      }
+  for path in sys.argv[2:]:
+      with open(path) as source:
+          assert json.load(source)["runners"] == {}
+  PY
+  touch "$out"
+''

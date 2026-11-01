@@ -18,16 +18,17 @@ in
       [ "tentaflake" "management" "enable" ]
     )
     (lib.mkRenamedOptionModule
-      [ "tentaflake" "shell" "hermesCli" "enable" ]
-      [ "tentaflake" "shell" "tentaflakeCli" "enable" ]
-    )
-    (lib.mkRenamedOptionModule
       [ "tentaflake" "networking" "egress" ]
       [ "tentaflake" "networking" "legacyPortEgress" ]
     )
   ];
 
   options.tentaflake = {
+    configurationName = lib.mkOption {
+      type = lib.types.strMatching "[a-z0-9]([a-z0-9-]*[a-z0-9])?";
+      default = hostName;
+      description = "Stable nixosConfigurations selector, independent of the desired hostname";
+    };
     hostName = lib.mkOption {
       type = lib.types.str;
       default = hostName;

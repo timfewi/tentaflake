@@ -108,6 +108,18 @@ or fresh installation. Agent workspace images also use Btrfs; see the
 [workspace migration guide](14-workspace-quota.md) before updating existing
 quota-enabled deployments.
 
+The installer creates an installation-owned Git repository at `/etc/nixos`.
+During fresh-install initialization only, it creates the root `tentaflake.toml`
+with `schemaVersion = 1` and `agents = []` if absent; an existing regular file is
+preserved. This is separate from the public commented template. No example agent
+starts automatically. Edit/import reviewed stopped instances into that installed
+file, track it in the installation's Git source and configure matching Nix host
+policy. Later evaluation and onboarding refuse a missing file, never replace it
+with the upstream empty template. Existing `agents.toml` or `agents.json` requires
+deliberate [migration](agent-adapters.md#breaking-migration), including when both
+old and new sources exist. For input-based deployments, follow the separate
+[consumer/fork workflow](08-agent-cli.md#installation-owned-configuration).
+
 After installation and reboot, continue with
 [the quick start](01-quickstart.md).
 

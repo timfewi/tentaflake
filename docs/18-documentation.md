@@ -1,92 +1,114 @@
 # Documentation ownership and release synchronization
 
-The public Tentaflake repository owns product behavior, configuration examples,
-support status, and operational guides. The public website and documentation
-site present a pinned release of that material. Website maintenance can remain
-separate without making contributors maintain two copies of every guide.
+The public repository owns behavior, examples, support facts and guides. The
+website mirrors a pinned release; contributors need no private website access.
+Never describe an unreleased checkout as already published.
+
+## What belongs in `docs/`
+
+`docs/` contains only maintained product documentation: what Tentaflake is,
+how to install, configure, operate and secure it, and its released direction.
+Every guide is written for users and operators, is accurate for the current
+source and is published on the website. Write it as a description of the
+product, not of the work that produced it.
+
+These never belong in `docs/` (or anywhere else in Git):
+
+- implementation plans, backlogs, goals, task lists and agent prompts;
+- review, investigation, session or archive-comparison notes;
+- private deployment facts: consumer or private repository names and
+  revisions, host names, infrastructure, provider accounts, local paths and
+  workspace state.
+
+Agents and contributors write such working notes to the repository-local
+`.scratch/` directory. It is ignored by Git, is never committed or published
+and is never a source of truth. Durable outcomes go into code, the owning
+guide, `CHANGELOG.md` or the pull request description.
+
+## Guide inventory
+
+Each file in `docs/` must appear exactly once below, with its website route.
+A new, renamed or removed guide changes this table in the same pull request
+and is named in the PR and `CHANGELOG.md`; the website adds or removes the
+route at its next release sync. `python3 scripts/test_docs_inventory.py` (part
+of `just fast` and every CI run) fails when `docs/` and this table differ or
+when anything below `.scratch/` is tracked.
+
+<!-- guide-inventory:start -->
+| Source | Website route |
+|---|---|
+| `docs/00-install.md` | `getting-started/install` |
+| `docs/01-quickstart.md` | `getting-started/quickstart` |
+| `docs/02-agent-tips.md` | `operations/agent-management` |
+| `docs/03-skill-index.md` | `reference/skills` |
+| `docs/04-agenix-secrets.md` | `configuration/secrets` |
+| `docs/05-fork-checklist.md` | `reference/fork-checklist` |
+| `docs/06-shell.md` | `operations/cli-shell` |
+| `docs/07-operations.md` | `operations/recovery` |
+| `docs/08-agent-cli.md` | `configuration/agents` |
+| `docs/09-observability.md` | `operations/observability` |
+| `docs/10-security-profiles.md` | `security/profiles` |
+| `docs/11-tailscale-management.md` | `operations/tailscale` |
+| `docs/12-brokered-egress.md` | `configuration/brokered-egress` |
+| `docs/13-disposable-worker.md` | `configuration/disposable-worker` |
+| `docs/14-workspace-quota.md` | `configuration/workspace-quota` |
+| `docs/15-threat-model.md` | `security/threat-model` |
+| `docs/16-research.md` | `configuration/research` |
+| `docs/17-builds.md` | `reference/builds` |
+| `docs/18-documentation.md` | `reference/documentation` |
+| `docs/19-web-ui.md` | new; route added at next release sync |
+| `docs/20-system-control.md` | new; route added at next release sync |
+| `docs/21-enterprise-connectors.md` | new; route added at next release sync |
+| `docs/agent-adapters.md` | `configuration/agent-adapters` |
+| `docs/roadmap.md` | product roadmap, synchronized separately |
+| `docs/tailscale-policy.example.json` | example linked from `operations/tailscale` |
+<!-- guide-inventory:end -->
+
+`README.md`, `SECURITY.md` and `CHANGELOG.md` are mirrored as
+`concepts/architecture`, `security/reporting` and `reference/changelog`.
 
 ## Source ownership
 
-| Content | Authoritative source | Maintenance |
-|---|---|---|
-| Scope and entry points | `README.md` | Update with behavior and support changes |
-| Product direction and planned milestones | `docs/roadmap.md` | Keep plans separate from implemented and released support |
-| Preset, capability and acceptance facts | `adapters/catalog.json` | Generate the adapter table; embed the same catalog in CLI discovery |
-| Configuration and operational detail | `docs/` | Keep examples consistent with modules and builders |
-| Development workflow | `CONTRIBUTING.md`, `AGENTS.md` / `CLAUDE.md` | Keep commands and verification boundaries accurate |
-| Bundled operational skills | `.agents/skills/` | Update the skill and its related guide together |
-| Release history | `CHANGELOG.md` | Preserve historical entries; describe new changes separately |
-| Navigation, search, summaries and presentation | Website | Generate guides from the public source; review summaries |
+| Content | Owner |
+|---|---|
+| Scope/onboarding | `README.md`, `docs/01-quickstart.md`, `docs/08-agent-cli.md` |
+| Runtime implementation and pure preset facts | `adapters/<id>.nix` |
+| Generated CLI/support projections | `adapters/catalog.json`, marked table in `docs/agent-adapters.md` |
+| Host policy and operational procedures | Owning guides in `docs/` and linked modules |
+| Development contracts | `AGENTS.md` (`CLAUDE.md` symlink), `CONTRIBUTING.md`, shared skills |
+| Released history/direction | `CHANGELOG.md` / `docs/roadmap.md`, kept distinct |
+| Working notes | `.scratch/` (ignored, never published) |
+| Routes/search/presentation | Website maintainer |
 
-Private deployment details and website implementation belong outside this
-generic repository. Public contributor workflows must not depend on access to
-a separately maintained repository or its credentials.
+Regenerate adapter projections with `python3 scripts/runtime-catalog-docs.py`;
+`just catalog-check` detects drift. Keep generated table markers intact and
+never edit the catalog as a second runtime source.
 
-## For public contributors
+## Contributors
 
-1. Change the implementation and its authoritative guide together. Update the
-   README, agent instructions, examples and affected skills where needed.
-2. Check option names, defaults, CLI examples, local links, and support claims
-   against source. Keep configured policy, fixture evidence and actual runtime
-   acceptance distinct.
-3. Run `just fast` and any explicitly selected checks required for the change;
-   record what passed and what remains unverified.
-4. Identify added, renamed or removed guides in the PR so the website maintainer
-   can update navigation. Public contributors need only the public repository.
+Update implementation, authoritative guide and affected examples/skills together.
+Check names/defaults, local links and support claims against source. Distinguish
+policy declarations, synthetic evidence and actual vendor acceptance. Link
+policy details instead of copying security essays across guides. Record actual
+checks and unknown evidence in the pull request, not in a guide.
 
-Release tags are explicit maintainer actions. A merge to `main` does not create
-a new release automatically. Keep existing tags immutable and describe an
-unreleased restoration separately from the last published baseline.
+## Website maintainers
 
-## For the website maintainer
+Pin every mirrored guide, source link, version label, Markdown endpoint and
+agent-readable index to one release tag and resolved commit. After a release:
 
-Use one exact release tag and its resolved commit for every generated guide,
-source link, version label, Markdown endpoint and agent-readable index. Preserve
-that pin until a newer release is ready; a dirty checkout is not a release.
+1. Compare source changes and account for every added/removed guide route,
+   using the guide inventory above.
+2. Regenerate guides/indexes; fix content upstream, not in mirrored copies.
+3. Review handwritten summaries, FAQ and landing copy against the same diff.
+4. Check coverage, generation drift, links and affected pages before publishing.
 
-After a release:
+Publication and tagging are explicit maintainer actions. Keep tags immutable;
+a merge or dirty checkout is not a release. A scheduled release check needs
+neither cross-repository write credentials nor automatic deployment authority.
 
-1. Compare the pinned source with the new tag, including guide and skill changes.
-2. Map every new guide to a stable route or record why it is deliberately excluded.
-   Remove obsolete routes when upstream removes a guide.
-3. Regenerate mirrored guides and indexes from that commit. Fix generated
-   content upstream; avoid hand edits to synchronized copies.
-4. Review landing copy, FAQ, handwritten summaries and the published skill
-   against the same source diff. Generation cannot validate those claims by itself.
-5. Verify source coverage, generation drift, links and the affected pages before
-   publishing. Deployment remains a separate maintainer action.
-
-A scheduled check can report a newer release without public-repository write
-access or a cross-repository credential. Keep release following and website
-deployment under the website maintainer's control. Local status should separately
-report unreleased commits and working-tree changes instead of calling them synced.
-
-## Reading the right version
-
-The [website](https://tentaflake.dev/) and
-[documentation site](https://docs.tentaflake.dev/) can lag a new release until
-the maintainer updates them. Compare a page's source commit with the release
-used by your deployment. Repository `main`, an unreleased checkout and a
-released website are different evidence boundaries.
-
-The [archive comparison](archive-comparison.md) and older changelog entries are
-historical records. The current [adapter guide](agent-adapters.md) defines
-runtime support; a stopped scaffold does not imply operational support.
-
-## Review checkpoint — 2026-10-04
-
-The seven bundled skills and current guides were reviewed against adapter,
-CLI, host-policy and example source. Skills now use short procedures and
-source/guide links instead of copied upstream catalogs. Corrections cover
-read-only Hermes/ZeroClaw configuration, Agenix recipient/runtime separation,
-host identities, environment-file verification and complete agent removal.
-The adapter status reflects implemented opt-in SSE while retaining the actual
-vendor acceptance gaps. Historical changelog links use their matching release.
-
-Local Markdown paths/anchors, skill YAML frontmatter and the Agenix example's
-Nix syntax/metadata/formatting checks passed. Fast-gate checks passed, including all
-94 Rust tests, lint/formatting, policy/adapter evaluation, read-only flake
-validation and the generated installer flake. No VM/ISO build or host activation
-was run. Live website, provider behavior, secret decryption and actual vendor
-workloads were not exercised; publication and deployment acceptance remain
-separate operations.
+Compare a page's source commit with your deployed revision. The
+[website](https://tentaflake.dev/) and [docs site](https://docs.tentaflake.dev/)
+may lag a release; `main`, a deployment and a published site are separate
+evidence boundaries. Old changelog entries are historical, not current
+acceptance claims.

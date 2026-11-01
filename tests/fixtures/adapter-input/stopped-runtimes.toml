@@ -1,0 +1,51 @@
+schemaVersion = 1
+
+[[agents]]
+adapter = "hermes"
+name = "coding"
+autoStart = false
+pidsLimit = 512
+[agents.settings.model]
+default = "example-model"
+provider = "custom"
+base_url = "http://10.203.20.1:7810/v1"
+[agents.settings.agent]
+disabled_toolsets = ["web", "browser"]
+
+[[agents]]
+adapter = "zeroclaw"
+name = "assistant"
+autoStart = false
+pidsLimit = 512
+[agents.settings]
+schema_version = 3
+[agents.settings.providers.models.custom.default]
+model = "example-model"
+uri = "http://10.203.24.1:7810/v1"
+[agents.settings.runtime_profiles.default]
+agentic = true
+max_tool_iterations = 25
+[agents.settings.risk_profiles.default]
+level = "supervised"
+[agents.settings.agents.main]
+model_provider = "custom.default"
+risk_profile = "default"
+runtime_profile = "default"
+[agents.settings.browser]
+enabled = false
+[agents.settings.http_request]
+enabled = false
+[agents.settings.web_fetch]
+enabled = false
+[agents.settings.web_search]
+enabled = false
+
+[[agents]]
+adapter = "openclaw"
+name = "preview"
+autoStart = false
+
+[[agents]]
+adapter = "pi"
+name = "scratch"
+autoStart = false

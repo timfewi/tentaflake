@@ -45,24 +45,35 @@ resolving the target. Source changes and successful builds do not authorize
 
 ## Git auto-push
 
-The agent commits inside its workspace; a host unit performs the push with a
-credential the balanced agent never receives:
+Host-side Git auto-push has been removed; `gitAutoPush` is not an accepted
+adapter argument. No publication service, timer or credential is generated.
 
-```nix
-gitAutoPush = {
-  tokenEnvFile = "/run/agenix/github-coding";
-  allowedRemotes = [
-    "https://github.com/example/coding.git"
-  ];
-  allowedBranches = [ "main" ];
-  interval = "2min";
-};
-```
+The former root service ran Git against agent-owned repository metadata with a
+host token. Git hooks, included configuration and helpers can execute programs
+with that authority. Checking the fetch URL also does not constrain `pushurl`,
+URL rewrites or credential-helper destinations. Disabling hooks alone is not
+a fix.
 
-The helper requires an exact canonical HTTPS GitHub repository and exact
-branch. It rejects altered remotes and emits `ALLOW`, `DENY`, or `ERROR` to
-journald. Use a fine-grained repository token or GitHub App credential with
-only the required contents-write permission. The token file stays on the host.
+**Existing hosts require operator action; updating source alone does not stop
+an installed service.** For each previously enabled agent:
+
+1. Stop the timer and service immediately (substitute the configured agent name):
+   `sudo systemctl stop hermes-NAME-autopush.timer hermes-NAME-autopush.service`.
+2. Revoke the old publication credential and review repository/account audit
+   logs for unexpected access. Rotate any other credentials reachable by the
+   former root service if compromise is suspected.
+3. Remove `gitAutoPush`, then rebuild and activate the host
+   configuration through your normal operator workflow. Confirm the old timer
+   and service are no longer installed or running.
+4. Remove the unused token-file provisioning if no other integration needs it.
+
+Local agent commits and `gitIdentity` remain supported. There is no automatic
+publication replacement. Publish only through an independently reviewed,
+least-privilege workflow with trusted Git metadata and an exact operator-owned
+repository/branch grant. Do not run host Git in the agent workspace or copy its
+`.git` directory into a credentialed checkout. Review exported content as
+untrusted input; neither a token kept outside the container nor a remote
+allowlist alone isolates Git execution.
 
 ## Legacy egress option
 
@@ -120,18 +131,41 @@ before relying on it.
 ## Backup and restore
 
 Back up declarative configuration separately from mutable state. Per-agent
-state defaults to `/var/lib/<runtime>-<name>`. Provider/Git/backup credentials
+state defaults to `/var/lib/tentaflake/agents/<name>`. Provider/Git/backup credentials
 must remain outside the agent and outside backup logs.
 
-The core module provides an opt-in Restic policy while keeping repository and
-password values in runtime files owned by the deployment fork:
+The optional public `storage` section of `tentaflake.toml` projects directly to
+the existing opt-in Restic module. Repository and password values stay in
+operator-provisioned runtime files, never TOML or the Nix store:
+
+```toml
+[storage]
+enable = true
+paths = ["/var/lib/tentaflake/agents/coding", "/var/lib/tentaflake-broker-llm-agent-coding"]
+repositoryFile = "/run/agenix/restic-repository"
+passwordFile = "/run/agenix/restic-password"
+```
+
+The section defaults disabled and refuses incomplete enabled declarations or
+disabled sections with additional fields. It requires 1–128 unique explicit
+sources: canonical per-agent state/workspace and broker trees, or an exact
+declared `stateDir` (including custom paths such as `/var/lib/private/kept`).
+It does not discover other host state or accept arbitrary source paths.
+Repository/password and optional `environmentFile` references are safe paths
+strictly below `/run/`; their contents are read only at runtime. Provision the
+repository and protect the files separately. No public initialization, reset,
+restore, automatic relocation or executable policy is exposed. See the
+[public contract](08-agent-cli.md#public-ordinary-backups) for exact bounds.
+
+Existing consumer Nix backup configuration remains independent, including
+reviewed sources outside that public allowlist and retention/timer policy:
 
 ```nix
 tentaflake.backup = {
   enable = true;
   paths = [
-    "/var/lib/hermes-coding"
-    "/var/lib/tentaflake-broker-llm-hermes-coding"
+    "/var/lib/tentaflake/agents/coding"
+    "/var/lib/tentaflake-broker-llm-agent-coding"
   ];
   repositoryFile =
     "/run/agenix/restic-repository";
@@ -160,13 +194,44 @@ the security doctor compares that timestamp with `lastSuccessMaxAgeHours` (36
 by default). Its default timer is persistent, scheduled around 03:00 with
 randomized delay. Alert on failed/stale `restic-backups-tentaflake.service`
 runs.
-For a restore drill: install a fresh test host, keep the agent stopped, restore
-its state, verify ownership and file permissions, start the exact unit, and run
-application-level checks. The VM test restores mounted state and a mounted
-quota workspace into a fresh directory, rejects an unavailable mount, and
-verifies recovery afterward. Production backend credentials, retention,
-capacity, and a real fresh-host drill remain operator evidence. Backup freshness and restore
-readiness beyond freshness still requires an actual restore drill.
+The ordinary Restic job and `tentaflake backup <name>` retain their existing
+filesystem-backup behavior. Neither is a cross-service consistency checkpoint:
+copying a live SQLite database without a coordinated writer boundary can omit
+WAL state, and restoring an older coherent database can still forget spend or
+dispatched operations. A successful backup timestamp is not recovery readiness.
+The existing VM restore test covers selected mounts and filesystem recovery,
+not end-to-end runtime/budget/worker reconciliation.
+
+**Consistent production recovery is BLOCKED / NOT IMPLEMENTED.** The offline
+`scripts/tentaflake-recovery.py` artifact is not registered in the backup module,
+CLI, timer or production package. Its `checkpoint` command refuses unconditionally:
+canonical writer coverage and actual runtime, broker, worker and control
+lifecycle admission holds are not yet integrated. A whole-system checkpoint also
+requires a supported checkpoint interface from every independent external
+service; no external database or replacement task registry is inferred.
+
+The helper's synthetic checkpoint core exercises stop-before-copy, private
+partial evidence, complete SQLite/WAL files, required authority receipts and a
+digest-bound manifest carrying scope, revision, runtime and schema identities.
+It rejects missing receipts and running worker claims. Its offline `restore`
+command requires an externally retained manifest digest and a **new, absent
+target beneath a private operator-owned directory**; an already existing empty
+directory is deliberately refused. It copies into numbered private directories,
+preserves original ownership/modes as manifest evidence rather than granting
+service ownership, and writes a quarantine hold before copying state. It does
+not provision credentials, overwrite live paths, activate services, replay work,
+clear holds, or reconcile/refund budget counters. Interrupted restores remain
+private and quarantined, without a completed restore receipt.
+
+These markers are evidence, **not yet an operational lifecycle enforcement
+mechanism**. Do not promote these artifacts into live state or start services
+against them. Even a coherent old snapshot needs explicit operator comparison
+against current provider spend, operation IDs, worker dispatch/results and
+board/runtime identities; clearing broker unsettled reservations alone does not
+prove that an older snapshot's counters are safe. Production reconciliation and
+admission integration, backend credentials, retention/capacity and a fresh-host
+restore drill remain required operator evidence. Focused synthetic coverage lives
+in `scripts/test_backup_recovery.py`; it does not establish production readiness.
 
 ## Incident response and kill switch
 
@@ -206,20 +271,9 @@ delivery remains an explicit deployment-fork integration.
 
 ## Continuous-runtime follow-ups (2026-10-03)
 
-The source review for a modular 24/7 host identified these remaining issue
-candidates. Restart backoff, broker health, quota-aware backups and optional
-metrics already exist; the gaps below should not be described as missing all
-supervision or backup support.
-
-| Priority / proposed issue | Current limitation | Acceptance criteria |
-| --- | --- | --- |
-| [P1: Application readiness and bounded hang recovery](https://github.com/timfewi/tentaflake/issues/112) | `on-failure` recovers crashes, but a running hung agent remains running. Broker `/healthz` is not an end-to-end agent or Research probe. | Add adapter-defined, non-billable readiness/liveness checks with bounded timeouts, cooldown and explicit restart authority. Exercise hung processes, dependency recovery and operator stop without replaying operations. |
-| [P1: Actual vendor-agent acceptance](https://github.com/timfewi/tentaflake/issues/111) | The Research integration VM uses a synthetic probe, not the pinned Hermes/ZeroClaw applications. Worker automatic routing and state survival also need real runtime evidence. | Run each reviewed image through model, Research discovery, isolated execution, restart/reboot and persistence scenarios with synthetic upstreams. Keep unsupported adapters stopped. See `16-research.md` and `agent-adapters.md`. |
-| [P1: Worker queue crash recovery and capacity](https://github.com/timfewi/tentaflake/issues/113) | The selective archive review already identifies atomic claims, abandoned-work recovery and bounded pending/inbox capacity as follow-ups. | Implement queue lifecycle and negative crash/overload tests together, define migration, and retain quota-aware backup/restore. See `archive-comparison.md`. |
-| [P2: Research/management metrics and tested alert delivery](https://github.com/timfewi/tentaflake/issues/114) | Optional observability covers host and broker metrics; notification destinations are deployment-owned. No source proof of end-to-end paging or shared Research/VPN readiness metrics was found. | Export categorical readiness/staleness/renewal/restart and usage metrics without queries, credentials or source text. Test a configured generic notification route in a deployment fixture. |
-
-Private management and Headscale issue candidates are recorded in
+Crash recovery is not [application hang/readiness acceptance](https://github.com/timfewi/tentaflake/issues/112).
+[Real vendor acceptance](https://github.com/timfewi/tentaflake/issues/111) and
+[tested alert delivery](https://github.com/timfewi/tentaflake/issues/114) remain
+separate from source fixtures. Follow current [worker recovery](13-disposable-worker.md),
+not historical queue proposals. Management/Headscale evidence limits are in
 [the management review](11-tailscale-management.md#modular-management-review-2026-10-03).
-The linked tracking issues record scope, acceptance criteria and dependencies.
-The reviewed Research input update is tracked in
-[issue #110](https://github.com/timfewi/tentaflake/issues/110).

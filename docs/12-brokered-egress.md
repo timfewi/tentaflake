@@ -20,14 +20,56 @@ Each enabled agent gets:
 - optional LLM and fetch broker processes with separate state and budgets.
 
 The OCI container key must exactly match the generated container name, for
-example `hermes-coding` or `zeroclaw-research`.
+example `agent-coding` or `agent-research`, independently of adapter.
+
+## Optional minimized collector activity
+
+Host policy may set `tentaflake.broker.agents.<container>.activity` (default
+`null`) and `activityUser`. The activity object has exact `socket`, `server_uid`,
+`producer_uid`, `producer_id`, `tenant_id`, `run_id`, `workload_id`, `generation`
+and `policy_revision` fields. IDs are bounded safe identifiers; sockets are
+canonical paths below `/run`. The module binds `agent_id` to the existing
+container key, never to a request header or model payload. The configuration
+file must be root-owned and not group/world writable. `activityUser` must be an
+existing dedicated static non-root host user whose UID equals `producer_uid`;
+this replaces the LLM service's dynamic UID, including its operator-only strict
+budget units. Provision/migrate state ownership explicitly before enabling it.
+Fetch brokers do not publish model activity.
+
+Configure the external collector's matching producer grant with that exact UID and context,
+plus the exact broker unit/cgroup. The client checks the collector's kernel
+`SO_PEERCRED` against `server_uid` on every publication. `run_id` is explicitly
+host-fixed context: it is **not** inferred native session/run evidence.
+Declared workload/unit association remains distinct from observed mapping.
+
+Actual admission denials and provider response paths emit minimized model
+outcomes. A random restart-independent operation ID is included in the existing
+mandatory `authorized` audit record when telemetry is enabled; event IDs are
+independently unique. Telemetry adds no earlier audit admission gate: strict
+reservations retain their daily charge when the existing pre-dispatch audit
+fails, while known-undispatched uncertainty is cleared. Denials before that
+audit still carry unique telemetry operation IDs. Deferred streaming owns the
+same operation through terminal delivery.
+Disconnects, truncated streams and unconfirmed responses remain uncertain.
+Provider rejection is failure, not successful model completion. No credentials,
+prompts, URLs, model output, tool arguments or session-affinity headers enter
+activity. Numeric usage is currently zero (not inferred provider accounting).
+
+One nonblocking publication has a 100ms absolute deadline covering connect,
+write and reply, with bounded framing and no retry. Unavailable or rejected
+telemetry writes only the static `telemetry_gap` diagnostic; it cannot turn
+provider success into failure or authorize another dispatch. Mandatory audit,
+reservations and durable budget settlement remain authoritative. Tests include
+collector stalls/closure, forged peers/context, minimized denial/uncertainty,
+and existing single-dispatch/SDK-disconnect fixtures with an unavailable
+collector. Synthetic coverage is not live collector/provider acceptance.
 
 ## Declaration
 
 ```nix
-tentaflake.broker.agents.hermes-coding = {
+tentaflake.broker.agents.agent-coding = {
   enable = true;
-  networkName = "tf-hermes-coding";
+  networkName = "tf-agent-coding";
   subnet = "10.203.20.0/30";
   gateway = "10.203.20.1";
 
@@ -87,10 +129,9 @@ host-held provider credential. Session values are not written to audit logs.
 
 The client owns this opaque conversation-affinity value. The broker neither
 generates it nor verifies conversation ownership; it grants no authorization
-and must not contain secrets or personal data. Older Hermes images or clients
-configured against the local broker may need a client-side integration to emit
-it, including on auxiliary calls. Broker forwarding alone does not establish
-Hermes session propagation or provider acceptance.
+and must not contain secrets or personal data. Clients may need an integration
+to emit it, including on auxiliary calls. Broker forwarding alone establishes
+neither client session propagation nor provider acceptance.
 
 Use a unique `/30` per agent. The network address must end on a four-address
 boundary and `gateway` must be its first usable address. Evaluation rejects
@@ -183,6 +224,13 @@ the upstream call, disables environment proxies and redirects, resolves the
 configured provider on the host, rejects non-public addresses, pins the
 validated DNS answer into the TLS client, and rebuilds the Authorization
 header from the host credential.
+
+Chat Completions requests support exactly one completion choice in ordinary
+and strict profiles, with or without streaming. Omit `n` or set it to the JSON
+integer `1`; multiple choices and malformed values (including `null`, strings,
+booleans and fractional numbers) are rejected before budget reservation or
+provider dispatch. The token/cost reservation covers one completion, not a
+batch of choices.
 
 Audit events contain agent, route, model, outcome, status, reserved token/cost
 figures, and timestamps. They never contain request bodies, prompts, virtual
@@ -285,7 +333,7 @@ outcome and usage of the held requests, for example in the provider's usage
 console. Then run the generated one-shot unit:
 
 ```sh
-systemctl start tentaflake-broker-llm-reconcile-hermes-coding.service
+systemctl start tentaflake-broker-llm-reconcile-agent-coding.service
 ```
 
 The underlying command is `tentaflake-broker --reconcile-strict-budget
@@ -316,7 +364,7 @@ For a new, unused budget only, an operator may separately authorize and run the
 generated one-shot unit, for example:
 
 ```sh
-systemctl start tentaflake-broker-llm-initialize-hermes-coding.service
+systemctl start tentaflake-broker-llm-initialize-agent-coding.service
 ```
 
 Stop the broker and its agent first and ensure no other broker uses that state.
@@ -353,7 +401,7 @@ Enable SSE explicitly for each exact agent broker; existing declarations keep
 streaming disabled:
 
 ```nix
-tentaflake.broker.agents.hermes-coding.llm.streaming = {
+tentaflake.broker.agents.agent-coding.llm.streaming = {
   enable = true;
   maxEventBytes = 64 * 1024;
   firstEventTimeoutSeconds = 30;
@@ -435,12 +483,37 @@ characters and includes both `trust = "untrusted_external_content"` and an
 instruction boundary. This narrows exposure; it cannot prove that content is
 free of prompt injection.
 
+The legacy fetch implementation retains at most 64 MiB of logical file bytes
+and 1024 objects by default, configured through
+`fetch.maxQuarantineBytes` and `fetch.maxQuarantineEntries` (both positive).
+Binary JSON uses `max_quarantine_bytes` and `max_quarantine_entries` with the
+same defaults. These controls do not enable legacy fetch in balanced profiles.
+Admission scans the host-private directory under a process-exclusive directory
+lock and a writer mutex before creating each object. The scan is bounded by the
+entry limit; quarantine-directory/entry symlinks, nonregular files, hard links,
+foreign ownership, public permissions and already-over-limit legacy contents
+fail closed. Safe existing files count across restarts. Empty responses cost an
+entry, and the entire response length is reserved before writing so partial
+writes remain charged. No retained evidence is automatically deleted; operators
+must stop the broker and explicitly archive/remove retained files or adjust the
+limits before resuming when full. Logical byte limits do not include filesystem
+metadata/block overhead; the entry limit bounds object-count growth.
+The existing host-controlled state parent is resolved before opening a held
+directory descriptor, preserving systemd's private-state parent aliases. The
+quarantine directory itself is never followed through a symlink.
+
 ## Failure and revocation
 
 The brokers fail closed when authentication, policy, DNS, upstream TLS,
 budget-state persistence, quarantine, or audit persistence fails. Budget
 reservations are conservative and are not refunded after a failed upstream
 call.
+
+Unauthenticated ingress shares one absolute `timeout_seconds` deadline (binary
+configuration, default 60 seconds) across
+headers and body, beginning at connection admission. Every socket read uses
+only the remaining time; trickling bytes cannot renew the deadline or retain
+preauthentication concurrency slots indefinitely.
 
 `GET /healthz` verifies that the virtual key, provider credential when
 applicable, and prompt-free audit path are readable. Broker units restart on
