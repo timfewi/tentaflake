@@ -224,12 +224,17 @@ else:
     def request(self, method, path, body=None):
         connection = UnixConnection(self.socket)
         try:
-            connection.request(
-                method,
-                path,
-                json.dumps(body) if body is not None else None,
-                headers={"Content-Type": "application/json"},
-            )
+            try:
+                connection.request(
+                    method,
+                    path,
+                    json.dumps(body) if body is not None else None,
+                    headers={"Content-Type": "application/json"},
+                )
+            except BrokenPipeError:
+                # A denied peer gets its response before the server reads any
+                # request bytes; the complete response stays readable.
+                pass
             response = connection.getresponse()
             return response.status, json.loads(response.read())
         finally:
