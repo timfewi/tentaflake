@@ -22,6 +22,48 @@ Each enabled agent gets:
 The OCI container key must exactly match the generated container name, for
 example `agent-coding` or `agent-research`, independently of adapter.
 
+## Optional minimized Hostpulse activity
+
+Host policy may set `tentaflake.broker.agents.<container>.activity` (default
+`null`) and `activityUser`. The activity object has exact `socket`, `server_uid`,
+`producer_uid`, `producer_id`, `tenant_id`, `run_id`, `workload_id`, `generation`
+and `policy_revision` fields. IDs are bounded safe identifiers; sockets are
+canonical paths below `/run`. The module binds `agent_id` to the existing
+container key, never to a request header or model payload. The configuration
+file must be root-owned and not group/world writable. `activityUser` must be an
+existing dedicated static non-root host user whose UID equals `producer_uid`;
+this replaces the LLM service's dynamic UID, including its operator-only strict
+budget units. Provision/migrate state ownership explicitly before enabling it.
+Fetch brokers do not publish model activity.
+
+Configure the matching Hostpulse producer grant with that exact UID and context,
+plus the exact broker unit/cgroup. The client checks the collector's kernel
+`SO_PEERCRED` against `server_uid` on every publication. `run_id` is explicitly
+host-fixed context: it is **not** inferred native session/run evidence.
+Declared workload/unit association remains distinct from observed mapping.
+
+Actual admission denials and provider response paths emit minimized model
+outcomes. A random restart-independent operation ID is included in the existing
+mandatory `authorized` audit record when telemetry is enabled; event IDs are
+independently unique. Telemetry adds no earlier audit admission gate: strict
+reservations retain their daily charge when the existing pre-dispatch audit
+fails, while known-undispatched uncertainty is cleared. Denials before that
+audit still carry unique telemetry operation IDs. Deferred streaming owns the
+same operation through terminal delivery.
+Disconnects, truncated streams and unconfirmed responses remain uncertain.
+Provider rejection is failure, not successful model completion. No credentials,
+prompts, URLs, model output, tool arguments or session-affinity headers enter
+activity. Numeric usage is currently zero (not inferred provider accounting).
+
+One nonblocking publication has a 100ms absolute deadline covering connect,
+write and reply, with bounded framing and no retry. Unavailable or rejected
+telemetry writes only the static `telemetry_gap` diagnostic; it cannot turn
+provider success into failure or authorize another dispatch. Mandatory audit,
+reservations and durable budget settlement remain authoritative. Tests include
+collector stalls/closure, forged peers/context, minimized denial/uncertainty,
+and existing single-dispatch/SDK-disconnect fixtures with an unavailable
+collector. Synthetic coverage is not live Hostpulse/provider acceptance.
+
 ## Declaration
 
 ```nix

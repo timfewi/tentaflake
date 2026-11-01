@@ -56,7 +56,10 @@ fn runtime_discovery_is_configuration_free_and_reports_scaffolds() {
         catalog["presets"]["pi"]["artifact"]["reference"],
         serde_json::Value::Null
     );
-    assert_eq!(catalog["presets"]["pi"]["research"]["supported"], false);
+    // Implemented opt-in mediation is a capability, not runtime admission:
+    // the default preset must still have no selected/reviewed artifact.
+    assert_eq!(catalog["presets"]["pi"]["artifact"]["reviewed"], false);
+    assert_eq!(catalog["presets"]["pi"]["research"]["supported"], true);
     assert_eq!(
         catalog["presets"]["pi"]["capabilities"],
         serde_json::json!([])

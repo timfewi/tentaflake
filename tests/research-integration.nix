@@ -8,7 +8,10 @@ let
     tag = "test";
     contents = pkgs.buildEnv {
       name = "research-fixture-root";
-      paths = [ pkgs.python3 ];
+      paths = [
+        pkgs.python3
+        pkgs.nodejs_24
+      ];
       pathsToLink = [ "/bin" ];
     };
   };
@@ -75,6 +78,41 @@ let
             child.kill()
             child.wait()
   '';
+  piProbe = pkgs.writeText "pi-research-probe.mjs" ''
+    import assert from 'node:assert/strict';
+    import { Research } from '/pi-runner/mediation.mjs';
+    assert.equal(process.getuid(), Number(process.argv[2]));
+    const research = new Research(process.argv[3]);
+    try {
+      await research.initialize();
+      const started = await research.request('tools/call', { name: 'research_job', arguments: { operation: 'start' } });
+      assert.equal(started.isError ?? false, false);
+      const job_id = started.structuredContent.job.id;
+      const denied = await research.request('tools/call', {
+        name: 'research_fetch', arguments: { job_id, urls: ['https://example.com/'], mode: 'http' },
+      });
+      assert.equal(denied.isError, true);
+      assert.equal(denied.structuredContent.error, 'egress_unavailable');
+      const finished = await research.request('tools/call', { name: 'research_job', arguments: { operation: 'finish', job_id } });
+      assert.equal(finished.isError ?? false, false);
+    } finally { research.close(); }
+    await assert.rejects(research.request('tools/list', {}), /unavailable/);
+  '';
+  stockRuntimeProbe = pkgs.writeText "stock-runtime-research-denial.py" ''
+    import os
+    import socket
+    import stat
+
+    target = "/run/tentaflake-research/socket"
+    assert stat.S_ISSOCK(os.stat(target).st_mode), "exact relay mount is missing"
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
+        try:
+            connection.connect(target)
+        except OSError:
+            print("stock runsc denies opening the mounted host relay")
+        else:
+            raise AssertionError("stock runsc unexpectedly opened a host Unix socket")
+  '';
 in
 pkgs.testers.runNixOSTest {
   name = "tentaflake-exclusive-research";
@@ -101,9 +139,20 @@ pkgs.testers.runNixOSTest {
       })
     ];
     virtualisation = {
+      cores = 2;
       memorySize = 2048;
+      qemu.networkingOptions = lib.mkForce [ "-nic none" ];
+      vlans = lib.mkForce [ ];
+      interfaces = lib.mkForce { };
       docker.enable = true;
       oci-containers.backend = "docker";
+    };
+    networking = {
+      useDHCP = lib.mkForce false;
+      nameservers = lib.mkForce [ "198.18.0.1" ];
+      defaultGateway = lib.mkForce null;
+      defaultGateway6 = lib.mkForce null;
+      networkmanager.enable = lib.mkForce false;
     };
     tentaflake = {
       hostName = "research-fixture";
@@ -186,12 +235,18 @@ pkgs.testers.runNixOSTest {
         uid, gid = instance["uid"], instance["gid"]
         machine.wait_for_unit(f"tentaflake-research-{name}.socket")
         client = policies[name]["mcp_servers"]["secure-research-tool"]["command"] if instance["adapter"] == "hermes" else policies[name]["mcp"]["servers"][0]["command"]
-        argv = ["docker", "run", "--rm", "--runtime=runsc", "--network=none", "--read-only", "--user", f"{uid}:{gid}",
+        argv = ["docker", "run", "--rm", "--runtime=runsc-research", "--network=none", "--read-only", "--user", f"{uid}:{gid}",
                 "--cap-drop=ALL", "--security-opt=no-new-privileges:true", "--security-opt=apparmor=docker-default",
                 "--pids-limit=128", "--memory=256m", "--tmpfs=/run:rw,nosuid,nodev,noexec,size=16m"]
-        for mount in mounts[name] + ["${probe}:/research-probe.py:ro"]:
+        for mount in mounts[name] + ["${probe}:/research-probe.py:ro", "${stockRuntimeProbe}:/stock-runtime-probe.py:ro", "${piProbe}:/pi-research-probe.mjs:ro", "${../pkgs/tentaflake-pi}:/pi-runner:ro"]:
             argv += ["--volume", mount]
         argv += ["tentaflake-research-fixture:test", "/bin/python3", "/research-probe.py", str(uid), client]
+        stock = argv.copy()
+        stock[3] = "--runtime=runsc"
+        stock[-4:] = ["/bin/python3", "/stock-runtime-probe.py", str(uid), client]
+        machine.succeed(shlex.join(stock))
+        machine.succeed(shlex.join(argv))
+        argv[-4:] = ["/bin/node", "/pi-research-probe.mjs", str(uid), client]
         machine.succeed(shlex.join(argv))
   '';
 }

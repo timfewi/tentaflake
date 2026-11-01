@@ -1,6 +1,6 @@
 { pkgs, lib }:
 {
   runtimeCatalog = import ./runtimeCatalog.nix;
-  agentsFromData = { file }: (import ./agentsFromData.nix { inherit pkgs lib; }) { inherit file; };
+  systemFromData = import ./systemFromData.nix { inherit pkgs lib; };
   constants = import ./constants.nix;
 }

@@ -13,11 +13,14 @@ import subprocess
 ROOT = Path(__file__).resolve().parents[1]
 RULES = json.loads((ROOT / ".github/ci-paths.json").read_text())
 CHECKS = {"runtime", "research", "evaluate", "generated", "rust", "cli", "broker",
-          "worker", "devcontainer", "static", "selection"}
+          "worker", "control", "integrations", "activity", "workloads", "pi",
+          "devcontainer", "static", "selection"}
 assert all(set(rule["checks"]) <= CHECKS for rule in RULES.values())
-FAST_CHECKS = {"rust", "cli", "broker", "worker", "static", "selection"}
+FAST_CHECKS = {"rust", "cli", "broker", "worker", "control", "integrations",
+               "activity", "workloads", "static", "selection"}
 BUILD_CHECKS = {"runtime", "research", "evaluate", "generated", "cli", "broker",
-                "worker", "devcontainer"}
+                "worker", "control", "integrations", "activity", "workloads",
+                "pi", "devcontainer"}
 
 
 def git(repository, *arguments):

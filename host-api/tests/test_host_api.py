@@ -10,7 +10,8 @@ import threading
 import time
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
+from types import SimpleNamespace
 
 SOURCE = Path(__file__).resolve().parents[1] / "tentaflake_host_api.py"
 SPEC = importlib.util.spec_from_file_location("host_api", SOURCE)
@@ -31,7 +32,8 @@ class UnixConnection(http.client.HTTPConnection):
 
 class HostAPI(unittest.TestCase):
     def setUp(self):
-        self.temp = tempfile.TemporaryDirectory(prefix="tentaflake-api-test-")
+        # AF_UNIX paths must remain short under the launcher's long TMPDIR.
+        self.temp = tempfile.TemporaryDirectory(prefix="tfa-", dir="/tmp")
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
         self.calls = self.root / "calls.jsonl"
@@ -854,6 +856,430 @@ else:
             self.assertEqual(len(json.loads(payload)["entries"]), 32)
         finally:
             connection.close()
+
+    def test_unsigned_linux_peer_uid_keeps_exact_grant(self):
+        for uid in (2**31, 2**32 - 2):
+            with self.subTest(uid=uid):
+                service = api.Service({
+                    **self.config,
+                    "peer_grants": [{"uid": uid, "agents": ["agent-coding"], "permissions": ["read"]}],
+                })
+                try:
+                    connection = Mock()
+                    connection.getsockopt.return_value = api.struct.pack("iII", 123, uid, 2**32 - 2)
+                    with patch.object(api, "receive", return_value=("GET", "/v1/info", None)), \
+                         patch.object(api, "respond") as respond:
+                        api.Handler(connection, None, SimpleNamespace(service=service))
+                    self.assertEqual(respond.call_args.args[1], 200)
+                    self.assertEqual(respond.call_args.args[2]["authorization"]["mode"], "exact-peer")
+                finally:
+                    service.close()
+
+    def test_exact_peer_filters_inventory_and_denies_ungranted_operations(self):
+        uid = api.os.geteuid()
+        self.assertGreater(uid, 0, "Unix peer fixture requires an unprivileged test UID")
+        self.start(
+            allow_actions=True,
+            allow_logs=True,
+            peer_grants=[{"uid": uid, "agents": ["agent-coding"], "permissions": ["read"]}],
+        )
+        status, info = self.request("GET", "/v1/info")
+        self.assertEqual(status, 200)
+        self.assertEqual(info["authorization"], {"mode": "exact-peer", "resource_scoped": True})
+        self.assertFalse(info["capabilities"]["actions"])
+        self.assertFalse(info["capabilities"]["logs"])
+        self.assertFalse(info["capabilities"]["config_proposals"])
+        status, inventory = self.request("GET", "/v1/agents")
+        self.assertEqual(status, 200)
+        self.assertEqual([row["id"] for row in inventory["agents"]], ["agent-coding"])
+        self.assertNotIn("agent-assistant", json.dumps(inventory))
+        self.assertEqual(inventory["agents"][0]["capabilities"]["actions"], [])
+        self.assertEqual(self.request("GET", "/v1/agents/agent-assistant/details")[0], 403)
+        self.assertEqual(self.request("GET", "/v1/health")[0], 403)
+        self.assertEqual(self.request("GET", "/v1/agents/agent-coding/logs")[0], 403)
+        self.assertEqual(
+            self.request("POST", "/v1/agents/agent-coding/actions",
+                         {"action": "start", "request_id": "denied-peer"})[0],
+            403,
+        )
+        self.assertEqual(self.mutations(), [])
+        self.assertEqual(Path(self.socket).stat().st_mode & 0o777, 0o622)
+
+    def test_exact_peer_permissions_have_no_inheritance_or_root_bypass(self):
+        uid = api.os.geteuid()
+        self.assertGreater(uid, 0, "Unix peer fixture requires an unprivileged test UID")
+        self.start(
+            allow_actions=True,
+            allow_logs=True,
+            peer_grants=[
+                {"uid": uid, "agents": ["agent-coding"], "permissions": ["logs"]},
+                {"uid": uid + 1, "agents": ["agent-assistant"], "permissions": ["actions"]},
+            ],
+        )
+        self.assertEqual(self.request("GET", "/v1/agents")[0], 403)
+        self.assertEqual(self.request("GET", "/v1/agents/agent-coding/logs")[0], 200)
+        self.assertEqual(self.request("GET", "/v1/agents/agent-assistant/logs")[0], 403)
+        for peer in (None, 0, uid + 2):
+            with self.assertRaises(api.APIError) as denied:
+                self.service.route("GET", "/v1/agents", None, peer_uid=peer)
+            self.assertEqual(denied.exception.status, 403)
+        with self.assertRaises(api.APIError) as denied:
+            self.service.route(
+                "POST", "/v1/agents/agent-coding/actions",
+                {"action": "start", "request_id": "foreign"}, peer_uid=uid + 1,
+            )
+        self.assertEqual(denied.exception.status, 403)
+        result = self.service.route(
+            "POST", "/v1/agents/agent-assistant/actions",
+            {"action": "start", "request_id": "owned"}, peer_uid=uid + 1,
+        )
+        self.assertEqual(result["state"], "succeeded")
+        self.assertEqual(self.mutations(), [["start", "--no-ask-password", "--",
+                                            "docker-agent-assistant.service"]])
+
+    def test_empty_and_malformed_peer_grants_fail_closed(self):
+        self.start(peer_grants=[])
+        self.assertEqual(self.request("GET", "/v1/info")[0], 403)
+        self.assertEqual(self.mutations(), [])
+        self.close()
+        uid = max(1, api.os.geteuid())
+        valid = {"uid": uid, "agents": ["agent-coding"], "permissions": ["read"]}
+        invalid = [
+            "all",
+            [valid, valid],
+            [{**valid, "uid": True}],
+            [{**valid, "uid": 0}],
+            [{**valid, "agents": ["agent-absent"]}],
+            [{**valid, "agents": ["agent-coding", "agent-coding"]}],
+            [{**valid, "permissions": ["read", "root"]}],
+            [{**valid, "permissions": ["read", "read"]}],
+            [{**valid, "tenant": "self-asserted"}],
+        ]
+        for grants in invalid:
+            with self.subTest(grants=grants):
+                with self.assertRaisesRegex(ValueError, "peer grants"):
+                    api.Service({**self.config, "peer_grants": grants})
+
+    def start_runner_api(self, permissions=None):
+        self.runner_uid = max(1, api.os.geteuid())
+        inventory = Path(self.config["inventory"])
+        inventory.write_text(inventory.read_text().replace("fixture\tcoding\t", "pi\tcoding\t"))
+        self.start(
+            runners={"agent-coding": {
+                "socket": "/run/tentaflake-pi/agent-coding/control/runner.sock",
+                "token": "/run/tentaflake-pi/agent-coding/api-token",
+                "transport": "runsc-pi-v1",
+            }},
+            peer_grants=[{"uid": self.runner_uid, "agents": ["agent-coding"],
+                          "permissions": permissions or ["read", "run_read", "run_submit", "run_stop"]}],
+        )
+
+    def runner_route(self, method, operation, body=None, aid="agent-coding"):
+        return self.service.route(
+            method, f"/v1/agents/{aid}/runner/{operation}", body,
+            peer_uid=self.runner_uid,
+        )
+
+    def fake_runner(self, responses):
+        """Native Linux Unix transport, not runsc VM evidence.
+
+        Tests substitute privileged filesystem metadata and the expected outbound
+        peer constant; actual SO_PEERCRED and request-byte delivery remain real.
+        """
+        path = self.root / f"runner-{time.monotonic_ns()}.sock"
+        listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        listener.bind(str(path))
+        listener.listen()
+        listener.settimeout(1)
+        observed = []
+        def serve():
+            try:
+                for response in responses:
+                    connection, _ = listener.accept()
+                    with connection:
+                        connection.settimeout(1)
+                        raw = b""
+                        while b"\r\n\r\n" not in raw:
+                            chunk = connection.recv(4096)
+                            if not chunk:
+                                return
+                            raw += chunk
+                        header, data = raw.split(b"\r\n\r\n", 1)
+                        fields = dict(line.split(b": ", 1) for line in header.split(b"\r\n")[1:])
+                        while len(data) < int(fields[b"Content-Length"]):
+                            chunk = connection.recv(4096)
+                            if not chunk:
+                                return
+                            data += chunk
+                        observed.append((header.split(b"\r\n")[0], data))
+                        if callable(response):
+                            response(connection)
+                        elif response is not None:
+                            connection.sendall(response)
+            except (OSError, TimeoutError):
+                pass
+            finally:
+                listener.close()
+        thread = threading.Thread(target=serve)
+        thread.start()
+        self.addCleanup(thread.join)
+        def files(_path, *, token=False):
+            if token:
+                return b"synthetic-fixture-token"
+            descriptor = api.os.open(path, api.os.O_PATH | api.os.O_NOFOLLOW)
+            return descriptor, f"/proc/self/fd/{descriptor}"
+        return observed, files
+
+    @staticmethod
+    def runner_json(value, status=200):
+        data = json.dumps(value).encode()
+        return (f"HTTP/1.0 {status} Response\r\nContent-Type: application/json\r\n"
+                f"Content-Length: {len(data)}\r\n\r\n").encode() + data
+
+    def test_runner_scope_and_permissions_precede_all_io(self):
+        self.start_runner_api(["read"])
+        with patch.object(self.service, "runner_file") as files:
+            for method, operation, body, aid in [
+                ("GET", "capabilities", None, "agent-coding"),
+                ("POST", "sessions", {"title": "test", "request_id": "s"}, "agent-coding"),
+                ("POST", "runs/run-1/stop", {}, "agent-coding"),
+                ("GET", "capabilities", None, "agent-assistant"),
+            ]:
+                with self.subTest(operation=operation, aid=aid):
+                    with self.assertRaises(api.APIError) as error:
+                        self.runner_route(method, operation, body, aid)
+                    self.assertEqual(error.exception.status, 403)
+            with self.assertRaises(api.APIError) as error:
+                self.service.route("GET", "/v1/agents/agent-coding/runner/capabilities", None, peer_uid=0)
+            self.assertEqual(error.exception.status, 403)
+            files.assert_not_called()
+        listed = self.service.list_agents(self.service.peer_grant(self.runner_uid))
+        capability = listed["agents"][0]["capabilities"]["runner"]
+        self.assertEqual(capability, {"read": False, "submit": False, "stop": False,
+                                     "resource_scoped": True, "transport": "host-api"})
+        self.assertNotIn("api-token", json.dumps(listed))
+        self.assertNotIn("runner.sock", json.dumps(listed))
+
+    def test_runner_real_unix_submission_receipt_and_lookup(self):
+        self.start_runner_api()
+        capabilities = {"available": True, "features": {"runs": True}}
+        observed, files = self.fake_runner([
+            self.runner_json(capabilities), self.runner_json({"run_id": "run-1"}),
+            self.runner_json({"id": "run-1", "state": "completed"}),
+        ])
+        body = {"request_id": "request-1", "session_id": "session-1",
+                "input": "synthetic task", "context_mode": "persistent"}
+        with patch.object(self.service, "runner_file", side_effect=files), patch.object(api, "RUNSC_PI_PEER_UID", api.os.geteuid()):
+            self.assertEqual(self.runner_route("POST", "runs", body), {"run_id": "run-1"})
+            self.assertEqual(self.runner_route("POST", "runs", body), {"run_id": "run-1"})
+            self.assertEqual(self.runner_route("GET", "runs?request_id=request-1")["state"], "completed")
+            with self.assertRaises(api.APIError) as error:
+                self.runner_route("POST", "runs", {**body, "input": "changed"})
+            self.assertEqual(error.exception.status, 409)
+        self.assertEqual([row[0] for row in observed], [
+            b"GET /v1/capabilities HTTP/1.0", b"POST /v1/runs HTTP/1.0",
+            b"GET /v1/runs?request_id=request-1 HTTP/1.0",
+        ])
+
+    def test_runner_uncertain_submission_is_not_replayed_after_restart(self):
+        self.start_runner_api()
+        observed, files = self.fake_runner([
+            self.runner_json({"available": True, "features": {"runs": True}}), None,
+        ])
+        body = {"title": "synthetic session", "request_id": "session-1"}
+        with patch.object(self.service, "runner_file", side_effect=files), patch.object(api, "RUNSC_PI_PEER_UID", api.os.geteuid()):
+            with self.assertRaises(api.APIError):
+                self.runner_route("POST", "sessions", body)
+        self.close()
+        self.start_runner_api()
+        with patch.object(self.service, "runner_file") as files:
+            with self.assertRaises(api.APIError) as error:
+                self.runner_route("POST", "sessions", body)
+            self.assertEqual(error.exception.status, 409)
+            files.assert_not_called()
+        self.assertEqual(len(observed), 2)
+
+    def test_runner_rejects_paths_queries_and_bodies_before_io(self):
+        self.start_runner_api()
+        with patch.object(self.service, "runner_file") as files:
+            for method, operation, body in [
+                ("GET", "runs?request_id=x&request_id=y", None),
+                ("GET", "runs?request_id=x&url=http://evil", None),
+                ("GET", "capabilities?token=x", None),
+                ("GET", "runs/../capabilities", None),
+                ("GET", "runs%2Frun-1", None),
+                ("POST", "sessions", {"title": "missing id"}),
+                ("POST", "sessions", {"title": "test", "request_id": "x", "socket": "/evil"}),
+                ("POST", "runs/run-1/stop", {"signal": 9}),
+                ("POST", "runs", {"request_id": "x", "session_id": "s", "input": "x" * 65537, "context_mode": "persistent"}),
+                ("POST", "runs", {"request_id": "x", "session_id": "s", "input": "x", "context_mode": "stateless"}),
+            ]:
+                with self.subTest(operation=operation):
+                    with self.assertRaises(api.APIError):
+                        self.runner_route(method, operation, body)
+            files.assert_not_called()
+
+    def test_runner_transport_refuses_peer_headers_size_timeout_and_private_errors(self):
+        self.start_runner_api()
+        cases = [
+            (b"HTTP/1.0 302 Redirect\r\nLocation: http://evil\r\n\r\n", 502),
+            (b"HTTP/1.0 200 OK\r\nContent-Type: application/json\r\nContent-Length: 9999999\r\n\r\n", 502),
+            (b"HTTP/1.0 200 OK\r\nContent-Type: application/json\r\nTransfer-Encoding: chunked\r\n\r\n0\r\n\r\n", 502),
+            (b"HTTP/1.0 200 OK\r\nContent-Type: application/json\r\nContent-Length: 2\r\nContent-Length: 2\r\n\r\n{}", 502),
+            (self.runner_json({"error": "private token and path"}, 401), 502),
+            (self.runner_json({"error": "private token and path"}, 404), 404),
+            (lambda connection: time.sleep(0.1), 504),
+        ]
+        for response, status in cases:
+            observed, files = self.fake_runner([response])
+            with self.subTest(status=status), patch.object(self.service, "runner_file", side_effect=files), patch.object(api, "RUNSC_PI_PEER_UID", api.os.geteuid()), patch.object(api, "RUNNER_TIMEOUT", 0.05):
+                with self.assertRaises(api.APIError) as error:
+                    self.runner_route("GET", "capabilities")
+                self.assertEqual(error.exception.status, status)
+                self.assertNotIn("private token", str(error.exception))
+            self.assertEqual(len(observed), 1)
+        observed, files = self.fake_runner([self.runner_json({})])
+        with patch.object(self.service, "runner_file", side_effect=files), patch.object(api, "RUNSC_PI_PEER_UID", api.os.geteuid() + 1):
+            with self.assertRaises(api.APIError) as error:
+                self.runner_route("GET", "capabilities")
+            self.assertEqual(error.exception.status, 503)
+        self.assertEqual(observed, [])
+
+    def test_runner_events_are_bounded_json_frames(self):
+        self.start_runner_api()
+        observed, files = self.fake_runner([
+            b"HTTP/1.0 200 OK\r\nContent-Type: text/event-stream\r\n\r\n: waiting\n\n",
+            b'HTTP/1.0 200 OK\r\nContent-Type: text/event-stream\r\n\r\ndata: {"event":"run.completed","run_id":"run-1"}\n\n',
+        ])
+        with patch.object(self.service, "runner_file", side_effect=files), patch.object(api, "RUNSC_PI_PEER_UID", api.os.geteuid()):
+            self.assertEqual(self.runner_route("GET", "runs/run-1/events"), {"events": []})
+            self.assertEqual(self.runner_route("GET", "runs/run-1/events")["events"][0]["event"], "run.completed")
+        self.assertEqual(len(observed), 2)
+
+    def test_runner_descriptors_are_fixed_to_exact_inventory_id(self):
+        descriptor = {"socket": "/run/tentaflake-pi/agent-coding/control/runner.sock",
+                      "token": "/run/tentaflake-pi/agent-coding/api-token",
+                      "transport": "runsc-pi-v1"}
+        # Even an otherwise exact descriptor cannot admit a non-Pi inventory row.
+        with self.assertRaisesRegex(ValueError, "runner inventory"):
+            api.Service({**self.config, "runners": {"agent-coding": descriptor}})
+        inventory = Path(self.config["inventory"])
+        inventory.write_text(inventory.read_text().replace("fixture\tcoding\t", "pi\tcoding\t"))
+        for runners in [
+            {"agent-coding": {**descriptor, "socket": "/run/other.sock"}},
+            {"agent-coding": {**descriptor, "token": "/run/tentaflake-pi/agent-assistant/api-token"}},
+            {"agent-coding": {**descriptor, "transport": "native"}},
+            {"agent-coding": {key: value for key, value in descriptor.items() if key != "transport"}},
+            {"agent-coding": {**descriptor, "peer_uid": 0}},
+            {"agent-waiting": descriptor},
+            {"agent-absent": descriptor},
+        ]:
+            with self.subTest(runners=runners), self.assertRaisesRegex(ValueError, "runner inventory"):
+                api.Service({**self.config, "runners": runners})
+
+    def test_runner_credential_walk_checks_real_links_modes_and_identity(self):
+        # Unprivileged fixture: remap only root and ownership metadata.
+        # Traversal, no-follow opens, modes and hardlink counts are real.
+        directory = self.root / "run/tentaflake-pi/agent-coding"
+        directory.mkdir(parents=True, mode=0o700)
+        credential = directory / "api-token"
+        credential.write_text("a" * 64 + "\n")
+        credential.chmod(0o440)
+        original_open, original_fstat = api.os.open, api.os.fstat
+        wrong_owner = False
+        def opened(path, flags, *args, **kwargs):
+            return original_open(self.root if path == "/" else path, flags, *args, **kwargs)
+        def metadata(fd):
+            value = original_fstat(fd)
+            return SimpleNamespace(
+                st_mode=value.st_mode, st_nlink=value.st_nlink, st_size=value.st_size,
+                st_uid=123 if wrong_owner else 0, st_gid=10100,
+            )
+        path = "/run/tentaflake-pi/agent-coding/api-token"
+        with patch.object(api.os, "open", side_effect=opened), patch.object(api.os, "fstat", side_effect=metadata):
+            self.assertEqual(api.Service.runner_file(path, token=True), b"a" * 64)
+            for value in ("short", "g" * 64 + "\n"):
+                credential.chmod(0o600)
+                credential.write_text(value)
+                credential.chmod(0o440)
+                with self.assertRaises(api.APIError):
+                    api.Service.runner_file(path, token=True)
+            credential.chmod(0o600)
+            credential.write_text("a" * 64 + "\n")
+            credential.chmod(0o644)
+            with self.assertRaises(api.APIError):
+                api.Service.runner_file(path, token=True)
+            credential.chmod(0o440)
+            wrong_owner = True
+            with self.assertRaises(api.APIError):
+                api.Service.runner_file(path, token=True)
+            wrong_owner = False
+            alias = directory / "alias"
+            alias.hardlink_to(credential)
+            with self.assertRaises(api.APIError):
+                api.Service.runner_file(path, token=True)
+            alias.unlink()
+            credential.rename(alias)
+            credential.symlink_to(alias)
+            with self.assertRaises(OSError):
+                api.Service.runner_file(path, token=True)
+            credential.unlink()
+            alias.rename(credential)
+            directory.chmod(0o777)
+            with self.assertRaises(api.APIError):
+                api.Service.runner_file(path, token=True)
+            directory.chmod(0o700)
+            credential.unlink()
+            with self.assertRaises(OSError):
+                api.Service.runner_file(path, token=True)
+
+    def test_runner_socket_inode_is_pinned_against_basename_replacement(self):
+        directory = self.root / "run/tentaflake-pi/agent-coding"
+        directory.mkdir(parents=True, mode=0o700)
+        control = directory / "control"
+        control.mkdir(mode=0o710)
+        control.chmod(0o710)
+        path = control / "runner.sock"
+        listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        listener.bind(str(path))
+        listener.listen()
+        listener.settimeout(1)
+        self.addCleanup(listener.close)
+        path.chmod(0o620)
+        original_open, original_fstat = api.os.open, api.os.fstat
+        def opened(value, flags, *args, **kwargs):
+            return original_open(self.root if value == "/" else value, flags, *args, **kwargs)
+        def metadata(fd):
+            value = original_fstat(fd)
+            location = api.os.readlink(f"/proc/self/fd/{fd}")
+            return SimpleNamespace(
+                st_mode=value.st_mode, st_nlink=value.st_nlink, st_size=value.st_size,
+                st_uid=10100 if location == str(control) or location.startswith(str(control) + "/") else 0,
+                st_gid=10100,
+            )
+        with patch.object(api.os, "open", side_effect=opened), patch.object(api.os, "fstat", side_effect=metadata):
+            descriptor, address = api.Service.runner_file("/run/tentaflake-pi/agent-coding/control/runner.sock")
+            self.addCleanup(api.os.close, descriptor)
+            path.rename(control / "retained.sock")
+            path.symlink_to("/run/foreign-agent.sock")
+            with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
+                client.settimeout(1)
+                client.connect(address)
+                accepted, _ = listener.accept()
+                accepted.close()
+            with self.assertRaises(api.APIError):
+                api.Service.runner_file("/run/tentaflake-pi/agent-coding/control/runner.sock")
+
+    def test_runner_unavailable_capability_prevents_mutation(self):
+        self.start_runner_api()
+        observed, files = self.fake_runner([
+            self.runner_json({"available": False, "features": {"runs": False}}),
+        ])
+        with patch.object(self.service, "runner_file", side_effect=files), patch.object(api, "RUNSC_PI_PEER_UID", api.os.geteuid()):
+            with self.assertRaises(api.APIError) as error:
+                self.runner_route("POST", "sessions", {"title": "test", "request_id": "unavailable"})
+            self.assertEqual(error.exception.status, 409)
+        self.assertEqual([row[0] for row in observed], [b"GET /v1/capabilities HTTP/1.0"])
 
     def test_second_writer_and_unsafe_inventory_refused(self):
         self.start()

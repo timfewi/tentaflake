@@ -7,6 +7,13 @@
 let
   cfg = config.tentaflake.security;
   secure = cfg.profile != "dev";
+  piTransport = import ../lib/piTransport.nix { inherit lib pkgs; };
+  researchTransport = import ../lib/researchTransport.nix { inherit lib pkgs; };
+  adapters = import ../adapters { inherit lib pkgs; };
+  runtimes = import ../lib/gvisorRuntimes.nix { inherit lib pkgs; };
+  piTransportEnabled =
+    lib.attrByPath [ "tentaflake" "piRuntime" "enable" ] false config
+    && lib.attrByPath [ "tentaflake" "piRuntime" "transport" ] null config == piTransport.version;
   bool = value: if value then "true" else "false";
   maxMemoryBytes = 1024 * 1024 * 1024 * 1024;
   maxTmpfsBytes = 64 * 1024 * 1024 * 1024;
@@ -138,7 +145,7 @@ let
     "/var/run"
   ];
   mountSafe =
-    name: volume:
+    name: piRuntimeValid: volume:
     let
       parts = lib.splitString ":" volume;
       source = if parts == [ ] then "" else lib.head parts;
@@ -146,6 +153,15 @@ let
     (
       builtins.hasAttr name (lib.attrByPath [ "tentaflake" "research" "agents" ] { } config)
       && volume == "/run/tentaflake-research/${name}:/run/tentaflake-research:ro"
+    )
+    || (
+      # Only the fully admitted Pi runtime receives these exact per-agent binds.
+      piRuntimeValid
+      && lib.elem volume [
+        "/run/tentaflake-pi/${name}/control:/run/tentaflake-pi/control:rw"
+        "/run/tentaflake-pi/${name}/api-token:/run/tentaflake-pi/api-token:ro"
+        "/run/tentaflake-pi/${name}/broker-token:/run/tentaflake-pi/broker-token:ro"
+      ]
     )
     || (
       source != ""
@@ -166,13 +182,93 @@ let
   agentContainers = lib.filterAttrs (
     _: container: (container.labels."io.tentaflake.agent" or "false") == "true"
   ) config.virtualisation.oci-containers.containers;
+  piImageReviewed =
+    name: container:
+    let
+      policy = lib.attrByPath [ "tentaflake" "piRuntime" ] { } config;
+      bundle = policy.bundle or null;
+    in
+    lib.isDerivation bundle
+    && (bundle.imageVerificationVersion or null) == 1
+    && (bundle.runtimePackage or null) == (policy.package or null)
+    && (bundle.imageSelector or null) == container.image
+    && (policy.image or null) == container.image
+    && (container.imageFile or null) == "${bundle}/image.tar.gz"
+    && (container.pull or null) == "never"
+    &&
+      lib.elem
+        (toString (
+          import ../lib/verifyLocalImage.nix {
+            inherit lib pkgs bundle;
+            backend = config.virtualisation.oci-containers.backend;
+            inherit (container) image;
+          }
+        ))
+        (
+          map toString (
+            lib.attrByPath
+              [
+                "systemd"
+                "services"
+                "${config.virtualisation.oci-containers.backend}-${name}"
+                "serviceConfig"
+                "ExecStartPre"
+              ]
+              [ ]
+              config
+          )
+        );
+  runtimeValidity =
+    name: container:
+    let
+      selected = researchTransport.selected config.virtualisation.oci-containers.backend container;
+      registered = runtimes.configurationSupported config;
+      instance = lib.attrByPath [ name ] null config.tentaflake.agentInstances;
+      researchEnabled = builtins.hasAttr name (
+        lib.attrByPath [ "tentaflake" "research" "agents" ] { } config
+      );
+      piRuntimeValid =
+        registered
+        && selected piTransport.name
+        && piTransport.supported config
+        && instance != null
+        && instance.adapter == "pi"
+        && instance.runnable
+        && piTransport.containerSupported container
+        && piImageReviewed name container;
+      researchRuntimeValid =
+        registered
+        && researchEnabled
+        && instance != null
+        && instance.runnable
+        && instance.adapter != "pi"
+        && (adapters.${instance.adapter}.research.supported or false)
+        && researchTransport.supported config
+        && selected researchTransport.name;
+      ordinaryRuntimeValid =
+        registered
+        && !researchEnabled
+        && (instance == null || instance.adapter != "pi")
+        && selected runtimes.stock.name;
+      managed = (container.labels."io.tentaflake.agent" or "false") == "true";
+    in
+    {
+      inherit piRuntimeValid researchRuntimeValid ordinaryRuntimeValid;
+      allowed =
+        if managed then
+          piRuntimeValid || researchRuntimeValid || ordinaryRuntimeValid
+        else
+          !(lib.any (runtimes.selectorElevated config) (runtimes.selectors container));
+    };
   agentRecord =
     name: container:
     let
       user = container.user or null;
       capabilitiesEmpty =
         !(lib.any (value: value == true) (lib.attrValues (container.capabilities or { })));
-      imagePinned = lib.match ".+@sha256:[0-9a-fA-F]{64}" container.image != null;
+      runtime = runtimeValidity name container;
+      piImagePinned = runtime.piRuntimeValid;
+      imagePinned = lib.match ".+@sha256:[0-9a-fA-F]{64}" container.image != null || piImagePinned;
       brokered = (container.labels."io.tentaflake.brokered-egress" or "false") == "true";
       brokerPolicy = lib.attrByPath [ name ] null config.tentaflake.broker.agents;
       llmBrokerEnabled = brokerPolicy != null && brokerPolicy.enable && brokerPolicy.llm.enable;
@@ -194,6 +290,25 @@ let
           config.security.apparmor.enable && !hasOption "--security-opt=apparmor=unconfined" container;
       provenancePolicy = lib.attrByPath [ name ] null config.tentaflake.imageProvenance.agents;
       provenanceGateConfigured = provenancePolicy != null && provenancePolicy.enable;
+      inherit (runtime) piRuntimeValid researchRuntimeValid ordinaryRuntimeValid;
+      declaredRuntime =
+        if !secure then
+          "-"
+        else if piRuntimeValid then
+          builtins.toJSON {
+            inherit (piTransport) name path;
+          }
+        else if researchRuntimeValid then
+          builtins.toJSON {
+            inherit (researchTransport) name path;
+          }
+        else if ordinaryRuntimeValid then
+          builtins.toJSON {
+            name = "runsc";
+            path = lib.getExe' pkgs.gvisor "runsc";
+          }
+        else
+          "-";
       declaredPidsLimit = positiveOptionInt "--pids-limit=" container;
       declaredMounts = if secure then builtins.toJSON (container.volumes or [ ]) else "-";
       declaredTmpfs =
@@ -236,10 +351,8 @@ let
         (bool capabilitiesEmpty)
         (bool (hasOption "--security-opt=no-new-privileges:true" container))
         (bool (hasOption "--read-only" container))
-        (bool (lib.all (mountSafe name) (container.volumes or [ ])))
-        (bool (
-          hasOption "--runtime=runsc" container || lib.elem "runsc" (container.preRunExtraOptions or [ ])
-        ))
+        (bool (lib.all (mountSafe name piRuntimeValid) (container.volumes or [ ])))
+        (bool (piRuntimeValid || researchRuntimeValid || ordinaryRuntimeValid))
         (bool (resourcesComplete container))
         (bool imagePinned)
         (bool ((container.environmentFiles or [ ]) == [ ] || brokered))
@@ -258,6 +371,7 @@ let
         declaredTmpfs
         declaredPortsAbsent
         declaredLiveResources
+        declaredRuntime
       ];
     in
     lib.concatStringsSep "\t" fields;
@@ -398,7 +512,21 @@ in
             && validSize maxTmpfsBytes cfg.resources.runTmpfsSize;
           message = "tentaflake: secure tmpfs sizes must be positive byte sizes no greater than 64 GiB, with an optional K/M/G/T suffix.";
         }
-      ];
+      ]
+      ++ lib.optionals secure [
+        {
+          assertion = agentContainers == { } || runtimes.stockSupported config;
+          message = "tentaflake: secure agents require the exact backend-specific stock runsc registration without additional daemon runtime arguments.";
+        }
+        {
+          assertion = runtimes.aliasesSupported config;
+          message = "tentaflake: elevated gVisor runtime aliases, noncanonical registrations, and global defaults are forbidden.";
+        }
+      ]
+      ++ lib.mapAttrsToList (name: container: {
+        assertion = (runtimeValidity name container).allowed;
+        message = "tentaflake: OCI container ${name} must retain its exact admitted runtime; direct paths, aliases and ungranted Pi/Research transports cannot bypass agent admission.";
+      }) (lib.optionalAttrs secure config.virtualisation.oci-containers.containers);
 
       warnings = lib.optional (cfg.profile == "dev") ''
         tentaflake security profile "dev" preserves compatibility and is not a
@@ -411,11 +539,18 @@ in
     (lib.mkIf secure {
       environment.systemPackages = [ pkgs.gvisor ];
 
-      virtualisation.docker.daemon.settings.runtimes.runsc = {
-        path = lib.getExe' pkgs.gvisor "runsc";
+      virtualisation = {
+        docker.daemon.settings.runtimes.runsc.path = lib.getExe' pkgs.gvisor "runsc";
+        podman.extraRuntimes = [ pkgs.gvisor ];
+        containers.containersConf.settings.engine.runtimes.runsc = [ runtimes.stock.path ];
       };
-
-      virtualisation.podman.extraRuntimes = [ pkgs.gvisor ];
+    })
+    (lib.mkIf (secure && piTransportEnabled) {
+      virtualisation.docker.daemon.settings.runtimes.runsc-pi = {
+        inherit (piTransport) path;
+      };
+      # Pi retains its separately admitted bind+connect runtime.
+      virtualisation.containers.containersConf.settings.engine.runtimes.runsc-pi = [ piTransport.path ];
     })
   ];
 }

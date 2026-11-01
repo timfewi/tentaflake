@@ -408,6 +408,16 @@ pub(super) fn decide_command(
         &serde_json::to_vec(&receipt).map_err(invalid)?,
     )
     .map_err(|error| format!("uncertain: decision publication did not finish: {error}"))?;
+    super::activity_event(
+        config,
+        &receipt.job_id,
+        if decision == Decision::Deny {
+            "denied"
+        } else {
+            "approved"
+        },
+        "",
+    );
     print_json(&receipt).map_err(|error| format!("uncertain: {error}"))
 }
 

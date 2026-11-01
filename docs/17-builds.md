@@ -38,6 +38,15 @@ checks clean/dirty tracked sources, ignored/untracked exclusion, preserved
 input/lock bytes and upstream rejection of malformed outputs without builds.
 This bounds retained evaluation, not each fixture's memory or duration.
 
+`just generated-flake` also composes the actual consumer example through a
+separate real Git source with the pinned Tentaflake compiler. It asserts that
+the public commented template remains empty, consumer-local system settings and
+a stopped agent reach the effective configuration, staged/new and dirty tracked
+TOML are visible, and ignored/untracked/missing TOML refuse without substituting
+the public empty inventory. Private-file canaries remain excluded. The fixture
+injects inert Home Manager/secret modules and performs no host activation;
+its Git mutations are confined to disposable fixture repositories.
+
 Research evaluation needs exact closure derivations prepared first. The Rust
 source-isolation check also reads generated filesets, which must exist in a cold
 store before read-only evaluation. `just eval` and CI prepare these non-VM

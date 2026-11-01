@@ -17,6 +17,7 @@ use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::time::{Instant, timeout_at};
 
 pub struct StreamingResponse {
+    pub activity: Option<tentaflake_activity::Guard>,
     pub target: ResolvedTarget,
     pub credential: String,
     pub session_id: Option<String>,
@@ -95,19 +96,27 @@ async fn write_bytes(
 }
 
 impl StreamingResponse {
-    pub fn write_to(self, socket: &mut TcpStream) -> io::Result<()> {
+    pub fn write_to(mut self, socket: &mut TcpStream) -> io::Result<()> {
+        // Transfer ownership out so every early error and SDK disconnect emits
+        // uncertainty; the deferred response is never reported as completion.
+        let mut activity = self.activity.take();
+        if let Some(activity) = &mut activity {
+            activity.dispatched();
+        }
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()?;
         let cloned = socket.try_clone()?;
         cloned.set_nonblocking(true)?;
+        let mut provider_rejected = false;
+        let mut terminal_outcome = tentaflake_activity::Outcome::Uncertain;
         let result = runtime.block_on(async {
             let socket = tokio::net::TcpStream::from_std(cloned)?;
             let (mut reader, mut writer) = socket.into_split();
             let mut headers_sent = false;
             let started = Instant::now();
             let total = started + Duration::from_secs(self.policy.total_timeout_seconds);
-            let completed = match self.relay(&mut reader, &mut writer, &mut headers_sent, started).await {
+            let completed = match self.relay(&mut reader, &mut writer, &mut headers_sent, started, &mut terminal_outcome).await {
                 Ok(completed) => completed,
                 Err(failure) => {
                 // Reasons are static broker strings, never upstream error text.
@@ -127,6 +136,7 @@ impl StreamingResponse {
                         && write_bytes(&mut reader, &mut writer, deadline, &body).await.is_ok();
                 }
                 if failure.reason == PROVIDER_REJECTED && audited && delivered {
+                    provider_rejected = true;
                     return Ok(true);
                 }
                 // After headers, close a truncated chunked body. Never fabricate
@@ -136,6 +146,15 @@ impl StreamingResponse {
             };
             Ok(completed)
         });
+        if let Some(activity) = &mut activity {
+            activity.finish(if provider_rejected {
+                tentaflake_activity::Outcome::Failed
+            } else if result.is_ok() {
+                terminal_outcome
+            } else {
+                tentaflake_activity::Outcome::Uncertain
+            });
+        }
         let _ = socket.shutdown(Shutdown::Both);
         if result? && let Some(reservation) = self.settlement {
             reservation.settle().map_err(io::Error::other)?;
@@ -149,6 +168,7 @@ impl StreamingResponse {
         writer: &mut OwnedWriteHalf,
         headers_sent: &mut bool,
         started: Instant,
+        terminal_outcome: &mut tentaflake_activity::Outcome,
     ) -> Result<bool, Failure> {
         let total = started + Duration::from_secs(self.policy.total_timeout_seconds);
         let first =
@@ -289,6 +309,11 @@ impl StreamingResponse {
                 write_bytes(reader, writer, deadline, b"\r\n").await?;
                 if event.terminal.is_some() {
                     write_bytes(reader, writer, deadline, b"0\r\n\r\n").await?;
+                    *terminal_outcome = match event.terminal {
+                        Some("completed") => tentaflake_activity::Outcome::Succeeded,
+                        Some("failed") => tentaflake_activity::Outcome::Failed,
+                        _ => tentaflake_activity::Outcome::Uncertain,
+                    };
                     return Ok(event.terminal == Some("completed"));
                 }
             }

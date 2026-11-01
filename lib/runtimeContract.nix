@@ -65,7 +65,9 @@ else if !(raw ? image) || !builtins.isString raw.image then
 else if
   !builtins.isList command
   || command == [ ]
-  || !lib.all (arg: builtins.isString arg && !(lib.hasInfix "\n" arg)) command
+  || !lib.all (
+    arg: builtins.isString arg && !(lib.hasInfix "\n" arg) && !(lib.hasInfix "\r" arg)
+  ) command
   || lib.head command == ""
 then
   fail "command must be a non-empty argument vector."

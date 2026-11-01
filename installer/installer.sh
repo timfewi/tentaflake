@@ -198,7 +198,7 @@ if has_feature tmux; then
   TF_TOGGLES+="            tentaflake.shell.tmux.enable = true;"$'\n'
 fi
 if ! has_feature tools; then
-  TF_TOGGLES+="            tentaflake.shell.tools.enable = false;"$'\n'
+  TF_TOGGLES+="            tentaflake.shell.tools.enable = lib.mkDefault false;"$'\n'
 fi
 if [[ -n "$FEATURES" ]]; then
   FEATURE_SUMMARY=$FEATURES
@@ -244,23 +244,27 @@ dialog --infobox "Creating system configuration ..." 4 50
 TARGET_NIXOS="/mnt/etc/nixos"
 
 # Never enable bundled examples or replace an existing instance inventory.
+if [ -e "$TARGET_NIXOS/agents.toml" ] || [ -L "$TARGET_NIXOS/agents.toml" ]; then
+  die "Legacy agents.toml exists. Explicitly migrate to tentaflake.toml and remove the legacy source; no inventory was replaced."
+fi
 if [ -e "$TARGET_NIXOS/agents.json" ] || [ -L "$TARGET_NIXOS/agents.json" ]; then
-  die "Legacy agents.json exists. Manually migrate declarations to agents.toml and remove agents.json; no inventory was replaced."
+  die "Legacy agents.json exists. Manually migrate declarations to tentaflake.toml and remove agents.json; no inventory was replaced."
 fi
-if [ -L "$TARGET_NIXOS/agents.toml" ] || { [ -e "$TARGET_NIXOS/agents.toml" ] && [ ! -f "$TARGET_NIXOS/agents.toml" ]; }; then
-  die "Refusing unsafe agents.toml: expected a regular file, not a symlink or other file type."
+if [ -L "$TARGET_NIXOS/tentaflake.toml" ] || { [ -e "$TARGET_NIXOS/tentaflake.toml" ] && [ ! -f "$TARGET_NIXOS/tentaflake.toml" ]; }; then
+  die "Refusing unsafe tentaflake.toml: expected a regular file, not a symlink or other file type."
 fi
-if [ ! -e "$TARGET_NIXOS/agents.toml" ]; then
+if [ ! -e "$TARGET_NIXOS/tentaflake.toml" ]; then
   (
     set -C
-    printf '%s\n' 'schemaVersion = 1' 'agents = []' >"$TARGET_NIXOS/agents.toml"
-  ) || die "Could not exclusively create agents.toml; existing files are never replaced."
+    printf '%s\n' 'schemaVersion = 1' 'agents = []' >"$TARGET_NIXOS/tentaflake.toml"
+  ) || die "Could not exclusively create tentaflake.toml; existing files are never replaced."
 fi
 
 # Copy the declarative system and Rust CLI workspace from the embedded repo.
 cp -r "$REPO_DIR/modules" "$TARGET_NIXOS/modules"
 cp -r "$REPO_DIR/lib" "$TARGET_NIXOS/lib"
 cp -r "$REPO_DIR/adapters" "$TARGET_NIXOS/adapters"
+cp -r "$REPO_DIR/schema" "$TARGET_NIXOS/schema"
 cp -r "$REPO_DIR/pkgs" "$TARGET_NIXOS/pkgs"
 cp -r "$REPO_DIR/crates" "$TARGET_NIXOS/crates"
 cp "$REPO_DIR/Cargo.toml" "$TARGET_NIXOS/Cargo.toml"
@@ -304,7 +308,7 @@ cat >"$TARGET_NIXOS/flake.nix" <<FLAKEEOF
       pkgs      = nixpkgs.legacyPackages.\${system};
       lib       = nixpkgs.lib;
       uc        = import ./user-config.nix;
-      # Pass the complete public helper set (agentsFromData, runtimeCatalog,
+      # Pass the complete public helper set (systemFromData, runtimeCatalog,
       # constants) instead of listing helpers by hand, so this
       # generated flake cannot drift out of sync with what configuration.nix
       # asks for. Drift does not fail loudly: configuration.nix consumes these
@@ -320,10 +324,12 @@ cat >"$TARGET_NIXOS/flake.nix" <<FLAKEEOF
         };
         modules = [
           {
-            tentaflake.hostName   = uc.hostName;
+            # Installer answers bootstrap the host; desired TOML takes precedence.
+            tentaflake.configurationName = uc.hostName;
+            tentaflake.hostName   = lib.mkDefault uc.hostName;
             tentaflake.adminUser  = uc.userName;
             tentaflake.adminShell = ${ADMIN_SHELL};
-            tentaflake.timeZone   = uc.timeZone;
+            tentaflake.timeZone   = lib.mkDefault uc.timeZone;
 ${TF_TOGGLES}          }
           (import ./modules { researchFlake = inputs.tentaflake-research; })
           ./configuration.nix
@@ -417,7 +423,7 @@ dialog --title "Installation Complete" --msgbox \
 AFTER REBOOT:
   1. Log in as '$USERNAME'
   2. Read /etc/nixos/docs/01-quickstart.md to get started
-  3. Add reviewed declarations to agents.toml (initially empty)
+  3. Add reviewed declarations to tentaflake.toml (initially empty)
   4. Configure host-held broker credentials:
      See /etc/nixos/docs/12-brokered-egress.md
   5. Rebuild: sudo nixos-rebuild switch --flake /etc/nixos#$HOSTNAME

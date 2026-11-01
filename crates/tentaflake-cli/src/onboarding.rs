@@ -144,33 +144,31 @@ fn serialize_import(existing: Option<&[u8]>, incoming: &Value) -> Result<Vec<u8>
 }
 
 fn refuse_legacy(directory: &Path) -> Result<(), String> {
-    match fs::symlink_metadata(directory.join("agents.json")) {
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Ok(_) => Err(
-            "legacy agents.json exists; explicitly migrate it to agents.toml and remove the JSON file before onboarding; no files changed".into(),
-        ),
-        Err(_) => Err("cannot inspect legacy agents.json; no files changed".into()),
+    for name in ["agents.toml", "agents.json"] {
+        match fs::symlink_metadata(directory.join(name)) {
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Ok(_) => return Err("legacy inventory exists; explicitly migrate and archive it before onboarding; no files changed".into()),
+            Err(_) => return Err("cannot inspect legacy inventory; no files changed".into()),
+        }
     }
+    Ok(())
 }
 
 fn schema_entries(value: &Value) -> Result<&Vec<Value>, String> {
-    let object = value.as_object().ok_or("agent input must be an object")?;
-    if value["schemaVersion"] != 1
-        || object
-            .keys()
-            .any(|key| !["schemaVersion", "agents", "_securityNote"].contains(&key.as_str()))
-    {
-        return Err(
-            "agent input requires schemaVersion 1 and agents; unknown or legacy fields are refused"
-                .into(),
-        );
-    }
+    super::desired_system::validate(value)?;
     value["agents"]
         .as_array()
         .ok_or("agents must be an array".into())
 }
 
 fn additions(value: &Value) -> Result<&Vec<Value>, String> {
+    if value.as_object().is_some_and(|object| {
+        object
+            .keys()
+            .any(|key| !["schemaVersion", "agents", "_securityNote"].contains(&key.as_str()))
+    }) {
+        return Err("onboarding fragments may contain only schemaVersion, agents and optional _securityNote metadata; edit the desired system separately".into());
+    }
     let entries = schema_entries(value)?;
     if entries.is_empty() || entries.len() > MAX_AGENTS {
         return Err("onboarding requires between 1 and 128 agent additions".into());
@@ -269,8 +267,8 @@ fn validate(config: &Config, bytes: &[u8]) -> Result<Value, String> {
             "backend",
             &config.backend,
             "--argstr",
-            "hostName",
-            &config.host_name,
+            "configurationName",
+            &config.configuration_name,
         ]);
     let output = output_with_timeout(&mut command, Duration::from_secs(60))
         .map_err(|_| "bounded Nix validation failed; no files changed")?;
@@ -303,7 +301,8 @@ fn publish(path: &Path, bytes: &[u8], expected: Option<&[u8]>) -> Result<(), Str
             .map_err(|_| "cannot persist staged import")?;
         if read_optional(path)?.as_deref() != expected {
             return Err(
-                "agents.toml changed during validation; retry after reviewing the conflict".into(),
+                "tentaflake.toml changed during validation; retry after reviewing the conflict"
+                    .into(),
             );
         }
         refuse_legacy(
@@ -336,8 +335,8 @@ pub(super) fn run(
     let incoming = parse(&bytes)?;
     additions(&incoming)?;
     refuse_legacy(&config.flake_dir)?;
-    let destination = config.flake_dir.join("agents.toml");
-    let lock_path = config.flake_dir.join(".agents.toml.lock");
+    let destination = config.flake_dir.join("tentaflake.toml");
+    let lock_path = config.flake_dir.join(".tentaflake.toml.lock");
     // Imports from this CLI cooperate on one lock. Manual changes are checked
     // again before rename; an administrator can still edit after that check.
     let _lock = if action == "import" {
@@ -359,6 +358,9 @@ pub(super) fn run(
         None
     };
     let existing = read_optional(&destination)?;
+    if existing.is_none() {
+        return Err("tentaflake.toml is missing; explicitly initialize the desired system before onboarding".into());
+    }
     check_conflicts(existing.as_deref(), &incoming, agents)?;
     let validation_bytes =
         serde_json::to_vec(&incoming).map_err(|_| "cannot encode internal validation input")?;
@@ -368,8 +370,9 @@ pub(super) fn run(
     if imported {
         let merged_bytes = serialize_import(existing.as_deref(), &incoming)?;
         if merged_bytes.len() as u64 > MAX_INPUT {
-            return Err("combined agents.toml exceeds 1 MiB; no files changed".into());
+            return Err("combined tentaflake.toml exceeds 1 MiB; no files changed".into());
         }
+        super::desired_system::parse(&merged_bytes)?;
         publish(&destination, &merged_bytes, existing.as_deref())?;
     }
     plan["imported"] = json!(imported);
@@ -429,11 +432,12 @@ mod tests {
 
     #[test]
     fn additions_preserve_metadata_and_detect_cross_adapter_collisions() {
-        let existing = b"schemaVersion = 1\n_securityNote = 'keep operator note'\n[[agents]]\nadapter = 'hermes'\nname = 'original'\nautoStart = false\n";
-        let incoming = json!({"schemaVersion":1,"agents":[{"adapter":"zeroclaw","name":"new","autoStart":false}]});
+        let existing = b"schemaVersion = 1\n_securityNote = 'keep note'\n[system]\nhostName = 'keep-host'\n[[agents]]\nadapter = 'hermes'\nname = 'original'\nautoStart = false\n";
+        let incoming = json!({"schemaVersion":1,"_securityNote":"fragment note","agents":[{"adapter":"zeroclaw","name":"new","autoStart":false}]});
         check_conflicts(Some(existing), &incoming, &[]).unwrap();
         let result = parse(&serialize_import(Some(existing), &incoming).unwrap()).unwrap();
-        assert_eq!(result["_securityNote"], "keep operator note");
+        assert_eq!(result["system"]["hostName"], "keep-host");
+        assert_eq!(result["_securityNote"], "keep note");
         assert_eq!(result["agents"][1], incoming["agents"][0]);
         let collision = json!({"schemaVersion":1,"agents":[{"adapter":"zeroclaw","name":"original","autoStart":false}]});
         assert!(
@@ -456,6 +460,7 @@ mod tests {
             json!({"hermes":[]}),
             json!({"schemaVersion":1,"agents":[],"zeroclaw":[]}),
             json!({"schemaVersion":1,"agents":[],"unknown":true}),
+            json!({"schemaVersion":1,"agents":[],"_securityNote":true}),
             json!({"agents":[]}),
         ] {
             let bytes = toml_edit::ser::to_document(&invalid)
@@ -493,16 +498,12 @@ mod tests {
                 "name": "new",
                 "definition": {
                     "schemaVersion": 1,
-                    "image": "example.invalid/image@sha256:abc",
-                    "command": ["/bin/sh", "-c", "printf 'hello\\n'"],
+                    "image": "example.invalid/image@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                    "command": ["/bin/sh", "-c", "printf 'hello\\n'; printf '${literal} \"quoted\"'"],
                     "lifecycle": "stopped",
-                    "settings": {
-                        "quoted.key": "quotes: \"value\" and \\ paths",
-                        "enabled": true,
-                        "count": 42,
-                        "ratio": 1.25,
-                        "nested": [{"name": "one", "values": [1, 2]}]
-                    }
+                    "ownership": {"uid": 1234, "gid": 1234},
+                    "resources": {"cpus": "1.25", "memory": "128m", "nofile": 42},
+                    "capabilities": ["files", "shell"]
                 }
             }]
         });
@@ -511,7 +512,7 @@ mod tests {
         for existing in [
             "# operator note\nschemaVersion = 1\nagents = [] # keep empty-array comment\n",
             "# operator note\nschemaVersion = 1\nagents = [{ name = 'old', adapter = 'pi', autoStart = false }] # keep inline comment\n",
-            "# operator note\nschemaVersion = 1\n[[agents]] # keep table comment\nname = 'old'\nadapter = 'pi'\nautoStart = false\n[agents.settings]\ntext = 'literal setting' # keep setting comment\n",
+            "# operator note\nschemaVersion = 1\n[[agents]] # keep table comment\nname = 'old'\nadapter = 'pi'\nautoStart = false\n[system]\nhostName = 'kept' # keep setting comment\n",
         ] {
             let rendered = serialize_import(Some(existing.as_bytes()), &incoming).unwrap();
             let text = std::str::from_utf8(&rendered).unwrap();
@@ -549,7 +550,7 @@ mod tests {
     #[test]
     fn legacy_inventory_blocks_publication_without_changing_inventory() {
         let work = PrivateInput::new(b"private input").unwrap();
-        let path = work.0.join("agents.toml");
+        let path = work.0.join("tentaflake.toml");
         let original = b"schemaVersion = 1\nagents = []\n";
         fs::write(&path, original).unwrap();
         let legacy = work.0.join("agents.json");

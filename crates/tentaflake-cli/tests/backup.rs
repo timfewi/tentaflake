@@ -74,7 +74,7 @@ exit "$FIXTURE_TAR_EXIT""#,
         fs::write(
             root.join("cli.conf"),
             format!(
-                "backend=docker\nflake_dir=/tmp\nhost_name=fixture-host\nagents_file={}\n",
+                "backend=docker\nflake_dir=/tmp\nhost_name=fixture-host\nconfiguration_name=fixture\nagents_file={}\n",
                 root.join("agents.tsv").display()
             ),
         )

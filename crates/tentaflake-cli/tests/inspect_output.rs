@@ -71,6 +71,7 @@ esac
     let mut fields = vec!["agent", "agent-inspect-fixture", "balanced"];
     fields.extend(std::iter::repeat_n("true", 18));
     fields.extend(["false", "-", "true", "-", "tf-inspect"]);
+    fields.extend(["-", "-", "-", "-", "-"]);
     fs::write(
         root.join("security.tsv"),
         format!(
@@ -82,7 +83,7 @@ esac
 
     for backend in ["docker", "podman"] {
         fs::write(root.join("cli.conf"), format!(
-            "backend={backend}\nflake_dir=/fixture\nhost_name=fixture\nsecurity_profile=balanced\nagents_file={}\nsecurity_file={}\n",
+            "backend={backend}\nflake_dir=/fixture\nhost_name=fixture\nconfiguration_name=fixture\nsecurity_profile=balanced\nagents_file={}\nsecurity_file={}\n",
             root.join("agents.tsv").display(), root.join("security.tsv").display()
         )).unwrap();
         for flags in [vec!["--json"], vec!["--hide"], vec!["--json", "--hide"]] {
@@ -149,7 +150,7 @@ printf '%s' "$TAILSCALE_FIXTURE"
     fs::write(
         root.join("cli.conf"),
         format!(
-            "backend=docker\nflake_dir=/fixture\nhost_name=private-host-fixture\nsecurity_profile=balanced\nagents_file={}\nsecurity_file={}\n",
+            "backend=docker\nflake_dir=/fixture\nhost_name=private-host-fixture\nconfiguration_name=fixture\nsecurity_profile=balanced\nagents_file={}\nsecurity_file={}\n",
             root.join("agents.tsv").display(), root.join("security.tsv").display()
         ),
     )

@@ -964,6 +964,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "tentaflake-activity"
+version = "0.4.0"
+dependencies = [
+ "libc",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "tentaflake-broker"
 version = "0.4.0"
 dependencies = [
@@ -972,6 +981,7 @@ dependencies = [
  "ring",
  "serde",
  "serde_json",
+ "tentaflake-activity",
  "tokio",
 ]
 
@@ -979,8 +989,30 @@ dependencies = [
 name = "tentaflake-cli"
 version = "0.4.0"
 dependencies = [
+ "serde",
  "serde_json",
  "toml_edit",
+]
+
+[[package]]
+name = "tentaflake-control"
+version = "0.4.0"
+dependencies = [
+ "libc",
+ "serde",
+ "serde_json",
+ "sha2",
+ "toml_edit",
+]
+
+[[package]]
+name = "tentaflake-integrations"
+version = "0.4.0"
+dependencies = [
+ "libc",
+ "reqwest",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -992,6 +1024,16 @@ dependencies = [
  "serde_json",
  "sha2",
  "tar",
+ "tentaflake-activity",
+]
+
+[[package]]
+name = "tentaflake-workloads"
+version = "0.4.0"
+dependencies = [
+ "libc",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

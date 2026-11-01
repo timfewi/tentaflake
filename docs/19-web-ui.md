@@ -6,7 +6,7 @@ still describe an earlier release.
 
 Tentaflake works without a web UI or control service. The optional host API
 lets an operator UI inspect the same declared agents and control their current
-systemd lifecycle. `agents.toml` owns instance definitions; Nix owns host
+systemd lifecycle. `tentaflake.toml` owns instance definitions; Nix owns host
 security policy and credentials and evaluates automatic-startup gates. The API
 does not edit TOML or Nix, import agents, activate configurations or provide
 arbitrary commands.
@@ -49,13 +49,24 @@ service effect until explicitly enabled:
 | `tentaflake.hostApi.allowLogs` | `false` | Permit bounded agent journal reads |
 | `tentaflake.hostApi.allowToolRequests` | `false` | Permit reading captured private worker requests, which may contain sensitive arguments |
 | `tentaflake.hostApi.allowToolDecisions` | `false` | Permit digest-bound worker decisions; requires `allowToolRequests` |
+| `tentaflake.hostApi.peers` | `null` | Exact Unix UID, canonical agent IDs and independent operation grants; `[]` denies everyone, including root |
 | `tentaflake.hostApi.package` | Shipped host API package | Override the compatible service implementation |
 
-The service uses `/run/tentaflake-api/host.sock`, owned by root with group
-`tentaflake-api` and mode `0660`. It exposes no TCP listener. Membership in that
-group grants the enabled host operations: assign it only to trusted operator
-clients, never to agent containers. The generated configuration and inventory
-do not depend on enabling the interactive shell profile.
+The service uses `/run/tentaflake-api/host.sock` and exposes no TCP listener.
+With `peers = null`, the root-owned socket has group `tentaflake-api`, mode
+`0660`, and a `0750` parent. Membership grants the enabled legacy operations;
+assign it only to trusted operator clients, never agent containers. Exact-peer
+mode instead uses a `0711` parent and `0622` socket: connection permission is
+not authority. Kernel `SO_PEERCRED` UID plus the exact resource/operation grant
+authorizes every route before any runner socket or credential access. Root has
+no bypass. `/v1/info.authorization` reports `mode: "exact-peer"` and
+`resource_scoped: true`; legacy mode reports `"legacy-group"` and `false`.
+Permissions are `read`, `actions`, `logs`, `propose`, `tool_requests`,
+`tool_decisions`, `host_health`, `run_read`, `run_submit` and `run_stop`.
+They do not inherit one another; configuration switches still gate legacy
+mutations. Inventory is filtered to the caller's exact agents. An authenticated
+multi-tenant UI bridge may receive the union of its tenants' host grants, but
+must separately enforce each browser principal's narrower ownership.
 
 ## Connect an optional UI
 
@@ -104,9 +115,10 @@ choose sockets, executable paths or systemd unit names.
 
 ## Version 1 contract
 
-Successful host responses contain `schema_version: 1`. Errors use
-`{"error":"message"}` with an appropriate HTTP status. Clients must check
-the version and advertised capabilities before offering actions.
+Successful host responses contain `schema_version: 1`, except the runner
+projections described below, which preserve their own application protocol.
+Errors use `{"error":"message"}` with an appropriate HTTP status. Clients must
+check the version and advertised capabilities before offering actions.
 
 | Method and route | Result |
 | --- | --- |
@@ -260,13 +272,85 @@ secrets or extra host rights. Forbidden requests cannot be approved. The UI does
 not create arbitrary tool commands, add runtimes or change the capsule policy.
 See [worker approval and containment](13-disposable-worker.md).
 
+## Exact-scoped Pi runner mediation
+
+Only declared Pi instances that are runnable with `tentaflake.piRuntime.enable`
+and an admitted image bundle receive internal runner descriptors. The bundle's
+verification version, exact image selector and selected runtime package must
+match, together with the supported dedicated rootful `runsc-pi` transport
+prerequisites. The internal descriptor has the exact marker
+`transport: "runsc-pi-v1"`; there is no configurable peer UID or generic native
+socket transport. Descriptors and bearer contents are never included in
+inventory or policy responses. Such agents advertise
+`capabilities.runner = {read, submit, stop, resource_scoped: true, transport: "host-api"}`;
+the three booleans reflect the exact peer's independent run grants. Legacy
+group mode does not acquire runner authority.
+
+All routes below are relative to `/v1/agents/{canonical-id}/runner`:
+
+| Route | Grant | Runner request/result |
+| --- | --- | --- |
+| `GET /capabilities` | `run_read` | Fixed `GET /v1/capabilities`; live application readiness, not host security evidence |
+| `POST /sessions` | `run_submit` | Fixed `POST /api/sessions`, exactly `{title, request_id}`; returns `{session:{id}}` |
+| `POST /runs` | `run_submit` | Exactly `{request_id, session_id, input, context_mode:"persistent"}`; returns `{run_id}` |
+| `GET /runs?request_id=…` | `run_read` | Same-ID reconciliation; returns runner projection |
+| `GET /runs/{run_id}` | `run_read` | Runner projection including `state`, `uncertain`, `output` and `error` |
+| `GET /runs/{run_id}/events` | `run_read` | One bounded SSE frame converted to `{events:[…]}`; a waiting heartbeat returns an empty array |
+| `POST /runs/{run_id}/stop` | `run_stop` | Exactly `{}`; returns runner projection, not evidence that an external effect was undone |
+
+Session titles are at most 200 characters. Request/session identifiers match
+`[A-Za-z0-9_.:-]{1,128}`; run path IDs match `[A-Za-z0-9-]{1,128}`.
+Run input is nonblank and at most 65,536 UTF-8 bytes; its entire incoming JSON
+body is bounded to 70,000 bytes. Other host bodies retain the 4,096-byte limit.
+No arbitrary path, URL, query, header, socket or credential argument is accepted.
+Encoded runner paths are rejected. Poll bounded events and run state rather than
+holding an unbounded event stream through the host API.
+
+The trusted root host API mediates an untrusted application. It retains an empty
+capability bounding set; only when descriptors exist does its service receive
+supplementary numeric group `10100`. The UI receives neither that group nor the
+runner credential. Host-derived paths are
+`/run/tentaflake-pi/{canonical-id}/control/runner.sock` and the sibling
+`api-token`. Instance ancestry remains root-owned `0700`; control is
+`10100:10100` mode `0710`, socket `10100:10100` mode `0620`, and token
+`root:10100` mode `0440`. The host uses no-follow directory-FD traversal and
+exact provenance checks, then connects the pinned socket inode via `O_PATH`
+to prevent an agent-owned basename swap. Directory traversal requires execute
+rather than directory-read access. Agent state/workspace remain `0700` and are
+not granted to the host's group.
+
+For this named transport only, the expected outbound kernel peer UID is `0`:
+source analysis of rootful, non-remapped runsc identifies its host Gofer as the
+listener creator, distinct from the socket inode's `10100:10100` ownership.
+The bearer is sent only after that exact peer check and the fixed inode,
+ancestry and credential checks. This is not an inbound root grant: root remains
+denied by exact-peer host API authorization. The dedicated `runsc-pi`
+`--host-uds=all` runtime must not broaden the existing global/Research runsc
+transport. Source-derived peer expectations require real-VM acceptance; native
+Unix fixtures alone do not establish Gofer credentials or container admission.
+
+Each runner exchange has one five-second deadline, 8 KiB headers and 768 KiB
+response bounds. Only bounded JSON or one SSE frame is accepted, with no
+redirects, transfer encoding or retries. Upstream error bodies are not exposed.
+Readiness is checked live before session/run submission, but readiness and
+returned state are application claims, never authorization or trusted host
+security evidence. Authorization is enforced before consulting them.
+
+The host persists mutation identity and uncertainty before dispatch. Matching
+successful retries return the saved response; changed intent conflicts. A lost
+response or crash leaves a durable conflict/uncertain receipt and never
+redispatches that mutation, including after daemon restart. Reconcile runs with
+the same `request_id`; do not manufacture a new ID to escape uncertainty.
+The runner-dispatch ledger is capped at 10,000 identities without automatic
+pruning. This API does not prove model acceptance, execution success or approval.
+
 ## What this interface does not claim
 
-`chat` is advertised as `false`. A started systemd unit is not a native chat
-endpoint. Runtime session/stream/cancellation protocols need their own reviewed
-application adapter, credential/relay boundary and exact-image acceptance.
-The LLM broker is outbound model policy, not an operator conversation API;
-enabling this host API grants none of those native application resources.
+`chat` remains advertised as `false`: a started systemd unit is not a native
+chat endpoint. Only the separately admitted Pi runner and exact run grants above
+enable its narrow application protocol. Other runtimes need their own reviewed
+adapter, credential/relay boundary and exact-image acceptance. The outbound LLM
+broker is model policy, not an operator conversation API.
 
 The Host view does not expose shell/exec, provider keys, file writes, arbitrary
 unit control, upgrades or NixOS rebuilds. Native task-board ownership and HQ
@@ -276,11 +360,17 @@ profile creation remain separate optional application features.
 
 Before activation, run the contributor fast checks and build the focused
 `checks.x86_64-linux.host-api` and `host-api-evaluation` outputs. Protocol tests
-use temporary Unix sockets, synthetic inventory and fake host tools. They
-exercise routing, limits, disabled capabilities and durable action recovery
-without mutating an installed host. Nix evaluation checks the inert default and
-hardened service declaration; these checks do not establish live container or
-provider acceptance.
+use temporary Unix sockets, synthetic inventory and fake host tools/runners.
+They exercise scope and permission denial before IO, fixed routing, peer checks,
+frame/deadline limits and durable no-replay recovery. Credential fixtures use
+real filesystem traversal with explicitly substituted ownership metadata because
+the tests are unprivileged. Native socket fixtures substitute only the expected
+outbound peer constant, retain real Linux peer credentials, and verify a wrong
+peer receives no request bytes. Nix evaluation checks descriptor admission,
+grants and hardened service declarations. Source/native evidence is separate
+from real-VM transport evidence. These fixtures do not establish live DAC,
+container, model/provider or vendor acceptance; those require deployment-level
+acceptance under the real identities and image.
 
 After an authorized installation, verify read-only inventory/health first.
 Check the intended agent ID before enabling lifecycle operations, then verify

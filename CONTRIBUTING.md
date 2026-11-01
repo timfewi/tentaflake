@@ -62,12 +62,15 @@ Core modules belong in `modules/` and its default import; optional profiles need
 explicit flake exports and documented trust boundaries. Consumer-specific
 editor, Hive Research and speech integrations stay in forks. Adding a runtime
 must reuse shared containment, not establish a parallel security implementation.
-Public instance examples use `agents.toml`; consumer Nix modules may only load
-that file through file-only `agentsFromData`. Keep internal builders out of the
+Public instance examples use `tentaflake.toml`; consumer Nix modules may only load
+that file through file-only `systemFromData`. Keep internal builders out of the
 public API and host policy separate from instance definitions. Keep the shipped
-inventory empty (`schemaVersion = 1`, `agents = []`); examples belong in guides,
-not a separate example inventory. Legacy JSON requires deliberate migration,
-never a silent fallback to an empty TOML inventory.
+inventory empty and commented (`schemaVersion = 1`, `agents = []`); active
+installation data belongs in a consumer/fork-owned file, not the upstream input.
+Track that file in the owning Git source; missing/untracked desired state must
+fail, never fall back to the upstream template. See
+[installation-owned configuration](docs/08-agent-cli.md#installation-owned-configuration).
+No separate example inventory is shipped. Legacy TOML/JSON requires deliberate migration.
 
 Contributions use the [MIT license](LICENSE) and [DCO](DCO.txt); name/logo terms
 are in [TRADEMARK.md](TRADEMARK.md). Report vulnerabilities privately through

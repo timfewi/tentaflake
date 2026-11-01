@@ -406,6 +406,9 @@ in
           where = mountPath agent kind;
           type = "btrfs";
           options = "loop,nodev,nosuid,noatime";
+          # If systemd must create a missing mountpoint, never expose private
+          # state through its default 0755 directory creation policy.
+          mountConfig.DirectoryMode = "0700";
           requires = [ (prepareUnit name kind) ];
           after = [
             "local-fs.target"

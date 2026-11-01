@@ -3,25 +3,17 @@
 {
   pkgs,
   backend ? "docker",
+  existingInstances ? [ ],
+  desiredAgents ? [ ],
 }:
 data:
 let
   inherit (pkgs) lib;
   runtimeCatalog = import ./runtimeCatalog.nix;
-  # Import adds ordinary stopped workloads. Operational host services, alternate
-  # mounts/users and credential files stay in the administrator's configuration.
-  allowed = [
-    "adapter"
-    "name"
-    "autoStart"
-    "definition"
-    "image"
-    "cmd"
-    "settings"
-    "containerUid"
-    "containerGid"
-    "pidsLimit"
-  ];
+  # Import adds stopped workloads only; host policy is never imported implicitly.
+  schema = builtins.fromJSON (builtins.readFile ../schema/system-v1.json);
+  allowed = builtins.attrNames schema.agent;
+  validated = (import ./systemSchema.nix { inherit lib; }) data;
   importable =
     builtins.isAttrs data
     && data ? schemaVersion
@@ -32,8 +24,8 @@ let
     && lib.all (
       entry: builtins.isAttrs entry && lib.subtractLists allowed (builtins.attrNames entry) == [ ]
     ) data.agents;
-  modules = (import ./agentsFromData.nix { inherit pkgs lib; }) { inherit data; };
-  evaluated =
+  evaluate =
+    agents:
     (import (pkgs.path + "/nixos/lib/eval-config.nix") {
       system = pkgs.stdenv.hostPlatform.system;
       specialArgs.researchFlake = null;
@@ -59,8 +51,24 @@ let
           };
         }
       ]
-      ++ modules;
+      ++ (import ./agentsFromData.nix { inherit pkgs lib; }) {
+        data = {
+          schemaVersion = 1;
+          inherit agents;
+        };
+      };
     }).config;
+  evaluated = evaluate validated.agents;
+  # Desired additions may not be active in the installed host yet. Project
+  # their metadata without applying incoming-only startup or host-policy checks.
+  desiredInstances =
+    if desiredAgents == [ ] then
+      [ ]
+    else
+      lib.attrValues (evaluate desiredAgents).tentaflake.agentInstances;
+  isolated = (import ./instanceIsolation.nix { inherit lib; }) (
+    existingInstances ++ desiredInstances ++ lib.attrValues evaluated.tentaflake.agentInstances
+  );
   containers = evaluated.virtualisation.oci-containers.containers;
   failures = map (item: item.message) (lib.filter (item: !item.assertion) evaluated.assertions);
   stopped = lib.all (container: !container.autoStart) (lib.attrValues containers);
@@ -68,7 +76,10 @@ let
     failures
     ++ lib.optional (
       !stopped
-    ) "Incoming workloads must be explicitly stopped; configure activation policy separately.";
+    ) "Incoming workloads must be explicitly stopped; configure activation policy separately."
+    ++ lib.optional (
+      !isolated
+    ) "Managed agent state and workspace paths must not overlap across instances.";
 in
 if !importable then
   throw "tentaflake: onboarding requires schema-v1 agent additions without host authority overrides."

@@ -65,6 +65,8 @@ in
     tentaflake.agentInstances =
       if builtins.length containers != builtins.length (lib.unique containers) then
         throw "tentaflake: duplicate global instance/container identity: ${lib.concatStringsSep ", " containers}."
+      else if !(import ../lib/instanceIsolation.nix { inherit lib; } declarations) then
+        throw "tentaflake: managed agent state and workspace paths must not overlap across instances."
       else
         builtins.listToAttrs (map (entry: lib.nameValuePair entry.container entry) declarations);
     # Check/create only shared parents before any tmpfiles state initialization.

@@ -95,7 +95,11 @@
   },
   "agent-data": {
     "paths": [
-      "lib/agentsFromData.nix"
+      "lib/agentsFromData.nix",
+      "lib/systemFromData.nix",
+      "lib/systemSchema.nix",
+      "schema/**",
+      "tests/system-schema.nix"
     ],
     "checks": [
       "runtime",
@@ -129,6 +133,66 @@
       "static"
     ]
   },
+  "control": {
+    "paths": [
+      "crates/tentaflake-control/**",
+      "pkgs/tentaflake-control/**"
+    ],
+    "checks": [
+      "control",
+      "rust",
+      "static"
+    ]
+  },
+  "integrations": {
+    "paths": [
+      "crates/tentaflake-integrations/**",
+      "pkgs/tentaflake-integrations/**"
+    ],
+    "checks": [
+      "integrations",
+      "rust",
+      "static"
+    ]
+  },
+  "activity": {
+    "paths": [
+      "crates/tentaflake-activity/**",
+      "pkgs/tentaflake-activity/**"
+    ],
+    "checks": [
+      "activity",
+      "broker",
+      "worker",
+      "runtime",
+      "rust",
+      "static"
+    ]
+  },
+  "workloads": {
+    "paths": [
+      "crates/tentaflake-workloads/**",
+      "pkgs/tentaflake-workloads/**"
+    ],
+    "checks": [
+      "workloads",
+      "rust",
+      "static"
+    ]
+  },
+  "pi": {
+    "paths": [
+      "pkgs/tentaflake-pi/**",
+      "lib/piTransport.nix",
+      "tests/pi-runtime-*.nix",
+      "tests/local-image-proof.nix"
+    ],
+    "checks": [
+      "pi",
+      "evaluate",
+      "static"
+    ]
+  },
   "rust-workspace": {
     "paths": [
       "Cargo.toml",
@@ -140,6 +204,10 @@
       "cli",
       "broker",
       "worker",
+      "control",
+      "integrations",
+      "activity",
+      "workloads",
       "rust",
       "static"
     ]
@@ -218,6 +286,11 @@
       "cli",
       "broker",
       "worker",
+      "control",
+      "integrations",
+      "activity",
+      "workloads",
+      "pi",
       "rust",
       "devcontainer",
       "selection",
@@ -226,7 +299,8 @@
   },
   "generated": {
     "paths": [
-      "scripts/generated-flake-test.sh"
+      "scripts/generated-flake-test.sh",
+      "examples/consumer-flake.nix"
     ],
     "checks": [
       "generated",
@@ -236,7 +310,8 @@
   "module-fixtures": {
     "paths": [
       "tests/module-eval.nix",
-      "tests/hardening-journald.nix"
+      "tests/hardening-journald.nix",
+      "tests/control-evaluation.nix"
     ],
     "checks": [
       "evaluate",

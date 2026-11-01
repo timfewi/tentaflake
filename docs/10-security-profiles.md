@@ -37,7 +37,9 @@ There is no automatic fallback between profiles.
 `lib/containerSecurity.nix` is applied after `extraContainerConfig`, so caller
 overrides cannot bypass the final checks. It enforces:
 
-- gVisor `runsc` selected explicitly for Docker or Podman;
+- gVisor selected explicitly for Docker or Podman: stock `runsc` for ordinary
+  capsules, named `runsc-research` only with the exact agent's Research grant,
+  or separately admitted `runsc-pi` for a reviewed Pi runtime;
 - explicit non-root UID/GID and `privileged=false`;
 - `cap-drop=ALL`, `no-new-privileges`, and read-only root;
 - the runtime default seccomp policy with every unconfined override rejected;
@@ -192,6 +194,30 @@ response, and `TFSEC-037` detects inconsistent broker labels/modes/endpoints.
 manifest starts with `manifest<TAB>2` and separates host policy from its typed
 management record. Legacy enable flags never prove private operator access.
 
+Current agent records have 31 tab-separated fields. The final field declares
+the exact runtime as JSON with only `name` and its pinned store `path`, or `-`
+when it cannot be established. Docker inspection must match the declared name.
+Podman's documented `OCIRuntime` reports only a name: a different name is unsafe,
+but a matching name remains unknown without independent executable-path evidence.
+An unexpected path-shaped value is unsupported schema evidence, not proof of
+either safety or drift.
+`runsc`, `runsc-research` and `runsc-pi` are distinct capabilities, never
+interchangeable runtime aliases. Older records lacking this evidence remain
+live-state unknown (`TFSEC-033`), even if an inspected name happens to be
+`runsc`; regenerate them through an authorized host update.
+Unknown runtime evidence does not suppress other live checks: an observed
+privilege, mount, network or resource violation still yields unsafe drift.
+
+Secure agents require the canonical, argument-free stock `runsc` mapping in the
+active Docker or Podman backend. Elevated Research/Pi wrappers cannot be
+registered through aliases, selected as global defaults, or selected directly
+by an ungranted container. Runtime selectors for managed agents must retain
+their exact admitted name and instance. Independent host runtime registrations,
+defaults and unmanaged containers remain consumer policy unless they reference
+these elevated transports; their operator-supplied executable semantics are not
+certified by Tentaflake. Opaque Docker daemon `extraOptions` cannot establish the
+canonical mapping and are refused for secure managed agents.
+
 The check combines declarative desired-state evidence with narrow live probes
 for Tailscale Serve/Funnel, backup freshness, root-disk pressure, and narrow
 Docker/Podman inspect comparisons. Podman uses its documented `OCIRuntime`,
@@ -200,10 +226,11 @@ effective/bounding capabilities, AppArmor profile, and Docker-compatible
 unparseable probe is a warning, never green. Configured broker endpoints are
 also checked for credential, policy, and audit-path readiness through
 `/healthz`. The generated manifest records each capsule's exact broker-network
-name, bind mounts, tmpfs sizes, absence of ports, and exact resource limits.
-Inspection requires `State.Running=true`, the exact network set and internal
-broker bridge, no published ports, and matching mounts and limits. Missing or
-legacy manifest fields remain unknown. Each OCI subprocess has a five-second
+name, bind mounts, tmpfs sizes, absence of ports, exact resource limits and
+runtime identity. Inspection requires `State.Running=true`, the exact network
+set and internal broker bridge, no published ports, and matching mounts,
+limits and runtime. Missing or legacy manifest fields remain unknown.
+Each OCI subprocess has a five-second
 deadline and an 8 MiB combined stdout/stderr ceiling, including inherited
 output handles; overflow remains unknown. Broker
 health probes run in batches of at most 16. The check still does not prove
@@ -224,7 +251,8 @@ restart, unsafe-doctor exit status, backup/restore, and a controlled VM reboot.
 The pinned Podman/runsc fixture reports an empty AppArmor profile and `null`
 effective/bounding capability fields. Its live doctor result is therefore
 critical for absent AppArmor; the VM verifies that negative result, not full
-Podman confinement. Complete-schema Rust fixtures test parsing independently.
+Podman confinement. Complete-schema Rust fixtures use the documented runtime
+name and remain unknown without separately observed executable-path evidence.
 
 It does not emulate a real tailnet policy, upstream provider, production
 registry, or a production-host activation/reboot drill.

@@ -134,8 +134,31 @@ Back up declarative configuration separately from mutable state. Per-agent
 state defaults to `/var/lib/tentaflake/agents/<name>`. Provider/Git/backup credentials
 must remain outside the agent and outside backup logs.
 
-The core module provides an opt-in Restic policy while keeping repository and
-password values in runtime files owned by the deployment fork:
+The optional public `storage` section of `tentaflake.toml` projects directly to
+the existing opt-in Restic module. Repository and password values stay in
+operator-provisioned runtime files, never TOML or the Nix store:
+
+```toml
+[storage]
+enable = true
+paths = ["/var/lib/tentaflake/agents/coding", "/var/lib/tentaflake-broker-llm-agent-coding"]
+repositoryFile = "/run/agenix/restic-repository"
+passwordFile = "/run/agenix/restic-password"
+```
+
+The section defaults disabled and refuses incomplete enabled declarations or
+disabled sections with additional fields. It requires 1–128 unique explicit
+sources: canonical per-agent state/workspace and broker trees, or an exact
+declared `stateDir` (including custom paths such as `/var/lib/private/kept`).
+It does not discover other host state or accept arbitrary source paths.
+Repository/password and optional `environmentFile` references are safe paths
+strictly below `/run/`; their contents are read only at runtime. Provision the
+repository and protect the files separately. No public initialization, reset,
+restore, automatic relocation or executable policy is exposed. See the
+[public contract](08-agent-cli.md#public-ordinary-backups) for exact bounds.
+
+Existing consumer Nix backup configuration remains independent, including
+reviewed sources outside that public allowlist and retention/timer policy:
 
 ```nix
 tentaflake.backup = {
@@ -171,13 +194,44 @@ the security doctor compares that timestamp with `lastSuccessMaxAgeHours` (36
 by default). Its default timer is persistent, scheduled around 03:00 with
 randomized delay. Alert on failed/stale `restic-backups-tentaflake.service`
 runs.
-For a restore drill: install a fresh test host, keep the agent stopped, restore
-its state, verify ownership and file permissions, start the exact unit, and run
-application-level checks. The VM test restores mounted state and a mounted
-quota workspace into a fresh directory, rejects an unavailable mount, and
-verifies recovery afterward. Production backend credentials, retention,
-capacity, and a real fresh-host drill remain operator evidence. Backup freshness and restore
-readiness beyond freshness still requires an actual restore drill.
+The ordinary Restic job and `tentaflake backup <name>` retain their existing
+filesystem-backup behavior. Neither is a cross-service consistency checkpoint:
+copying a live SQLite database without a coordinated writer boundary can omit
+WAL state, and restoring an older coherent database can still forget spend or
+dispatched operations. A successful backup timestamp is not recovery readiness.
+The existing VM restore test covers selected mounts and filesystem recovery,
+not end-to-end runtime/budget/worker reconciliation.
+
+**Consistent production recovery is BLOCKED / NOT IMPLEMENTED.** The offline
+`scripts/tentaflake-recovery.py` artifact is not registered in the backup module,
+CLI, timer or production package. Its `checkpoint` command refuses unconditionally:
+canonical writer coverage and actual runtime, broker, worker and control
+lifecycle admission holds are not yet integrated. A whole-system checkpoint also
+requires a supported checkpoint interface from the independent board service;
+no board database or replacement task registry is inferred.
+
+The helper's synthetic checkpoint core exercises stop-before-copy, private
+partial evidence, complete SQLite/WAL files, required authority receipts and a
+digest-bound manifest carrying scope, revision, runtime and schema identities.
+It rejects missing receipts and running worker claims. Its offline `restore`
+command requires an externally retained manifest digest and a **new, absent
+target beneath a private operator-owned directory**; an already existing empty
+directory is deliberately refused. It copies into numbered private directories,
+preserves original ownership/modes as manifest evidence rather than granting
+service ownership, and writes a quarantine hold before copying state. It does
+not provision credentials, overwrite live paths, activate services, replay work,
+clear holds, or reconcile/refund budget counters. Interrupted restores remain
+private and quarantined, without a completed restore receipt.
+
+These markers are evidence, **not yet an operational lifecycle enforcement
+mechanism**. Do not promote these artifacts into live state or start services
+against them. Even a coherent old snapshot needs explicit operator comparison
+against current provider spend, operation IDs, worker dispatch/results and
+board/runtime identities; clearing broker unsettled reservations alone does not
+prove that an older snapshot's counters are safe. Production reconciliation and
+admission integration, backend credentials, retention/capacity and a fresh-host
+restore drill remain required operator evidence. Focused synthetic coverage lives
+in `scripts/test_backup_recovery.py`; it does not establish production readiness.
 
 ## Incident response and kill switch
 

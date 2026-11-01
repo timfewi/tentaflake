@@ -1,6 +1,6 @@
 # Product direction
 
-Tentaflake is a declarative, runtime-agnostic host: one `agents.toml` source,
+Tentaflake is a declarative, runtime-agnostic host: one `tentaflake.toml` source,
 one implementation per adapter, shared containment and explicit operator
 activation. It requires neither a shared agent runtime nor a mandatory web UI.
 This checkout is not a new published release; tags define released behavior.

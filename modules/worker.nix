@@ -40,6 +40,32 @@ let
     {
       options = {
         enable = lib.mkEnableOption "disposable no-egress tool worker for ${name}";
+        activity = lib.mkOption {
+          default = null;
+          description = "Optional host-owned fixed Hostpulse context, published through a dedicated root-authenticating non-root relay.";
+          type = lib.types.nullOr (
+            lib.types.submodule {
+              options =
+                (lib.genAttrs [ "producer_id" "tenant_id" "run_id" "workload_id" "policy_revision" ] (
+                  _:
+                  lib.mkOption {
+                    type = lib.types.strMatching "^[A-Za-z0-9_.-]{1,64}$";
+                  }
+                ))
+                // {
+                  socket = lib.mkOption { type = lib.types.strMatching "^/run/[A-Za-z0-9_./-]+$"; };
+                  server_uid = lib.mkOption { type = lib.types.ints.positive; };
+                  producer_uid = lib.mkOption { type = lib.types.ints.positive; };
+                  generation = lib.mkOption { type = lib.types.ints.positive; };
+                };
+            }
+          );
+        };
+        activityUser = lib.mkOption {
+          type = lib.types.str;
+          default = "";
+          description = "Dedicated existing static non-root relay user matching the Hostpulse producer grant.";
+        };
         workspace = lib.mkOption {
           type = lib.types.str;
           default = "";
@@ -146,10 +172,19 @@ let
     }
   );
 
+  activityConfig =
+    name: agent:
+    agent.activity
+    // {
+      agent_id = name;
+      relay_socket = "/run/tfw-activity-${name}/publish.sock";
+    };
+
   workerConfig =
     name: agent:
     json.generate "tentaflake-worker-${name}.json" {
       agent = name;
+      activity = if agent.activity == null then null else activityConfig name agent;
       inherit backend runtime;
       image = cfg.imageReference;
       inherit (agent) workspace;
@@ -265,6 +300,12 @@ let
 in
 {
   options.tentaflake.worker = {
+    publisherPackage = lib.mkOption {
+      type = lib.types.package;
+      default = pkgs.callPackage ../pkgs/tentaflake-activity { };
+      defaultText = lib.literalExpression "pkgs.callPackage ../pkgs/tentaflake-activity { }";
+      description = "Isolated minimized activity publisher; no worker engine access.";
+    };
     package = lib.mkOption {
       type = lib.types.package;
       default = pkgs.callPackage ../pkgs/tentaflake-worker { };
@@ -314,6 +355,37 @@ in
           group = workerGroup agent;
         in
         [
+          {
+            assertion =
+              agent.activity == null
+              || (
+                agent.activityUser != ""
+                &&
+                  (lib.attrByPath [ agent.activityUser "uid" ] null config.users.users) == agent.activity.producer_uid
+                && !(lib.elem agent.activity.producer_uid (
+                  map (instance: instance.uid) (lib.attrValues config.tentaflake.agentInstances)
+                ))
+                && (lib.attrByPath [ agent.activityUser "extraGroups" ] [ ] config.users.users) == [ ]
+                && (lib.attrByPath [ agent.activityUser "group" ] "" config.users.users) == agent.activityUser
+                && builtins.hasAttr agent.activityUser config.users.groups
+                && builtins.stringLength agent.activity.socket < 108
+                && lib.all (part: part != "" && part != "." && part != "..") (
+                  lib.tail (lib.splitString "/" agent.activity.socket)
+                )
+                && agent.activity.generation <= 9007199254740991
+                &&
+                  lib.count
+                    (
+                      other:
+                      other.enable && other.activity != null && other.activity.producer_uid == agent.activity.producer_uid
+                    )
+                    (
+                      (lib.attrValues cfg.agents)
+                      ++ (lib.attrValues (lib.attrByPath [ "tentaflake" "broker" "agents" ] { } config))
+                    ) == 1
+              );
+            message = "Worker activity requires a dedicated static non-root publisher UID, no supplementary groups, and an exact Hostpulse grant.";
+          }
           {
             assertion = lib.elem name containerNames;
             message = "tentaflake worker key ${name} must exactly match an OCI agent container name.";
@@ -380,11 +452,7 @@ in
           let
             group = workerGroup agent;
             quota = lib.attrByPath [ name ] null config.tentaflake.workspaceQuota.agents;
-            stateParent =
-              quota != null
-              && quota.enable
-              && quota.state != null
-              && (agent.workspace == quota.state.path || lib.hasPrefix "${quota.state.path}/" agent.workspace);
+            workspaceQuotaEnabled = quota != null && quota.enable;
           in
           [
             "d ${stateDir name} 0750 root ${group} -"
@@ -394,7 +462,10 @@ in
             "d ${stateDir name}/reservations 0700 root root -"
             "d ${resultDir name} 2750 root ${group} 14d"
           ]
-          ++ lib.optionals (!stateParent) [
+          # Quota ownership initializes these only after the workspace mount.
+          # Even sibling state/workspace layouts must not let tmpfiles create
+          # private instance ancestry as 0755 or populate an unmounted source.
+          ++ lib.optionals (!workspaceQuotaEnabled) [
             "d ${agent.workspace}/.tentaflake-worker 0700 ${toString agent.containerUid} ${group} -"
             "d ${agent.workspace}/.tentaflake-worker/inbox 0770 ${toString agent.containerUid} ${group} -"
           ]
@@ -403,6 +474,47 @@ in
 
       services =
         allServices
+        // lib.mapAttrs' (
+          name: agent:
+          lib.nameValuePair "tentaflake-worker-activity-${name}" {
+            description = "Minimized fixed-context activity publisher for ${name}";
+            wantedBy = [ "multi-user.target" ];
+            before = [ "tentaflake-worker-${name}.service" ];
+            serviceConfig = {
+              User = agent.activityUser;
+              Group = agent.activityUser;
+              ExecStart = "${lib.getExe cfg.publisherPackage} ${json.generate "tfw-activity-${name}.json" (activityConfig name agent)}";
+              RuntimeDirectory = "tfw-activity-${name}";
+              RuntimeDirectoryMode = "0711";
+              UMask = "0077";
+              Restart = "on-failure";
+              RestartSec = "5s";
+              NoNewPrivileges = true;
+              PrivateDevices = true;
+              PrivateTmp = true;
+              PrivateNetwork = true;
+              ProtectSystem = "strict";
+              ProtectHome = true;
+              ProtectKernelTunables = true;
+              ProtectKernelModules = true;
+              ProtectControlGroups = true;
+              RestrictAddressFamilies = [ "AF_UNIX" ];
+              CapabilityBoundingSet = "";
+              RestrictSUIDSGID = true;
+              RestrictNamespaces = true;
+              LockPersonality = true;
+              InaccessiblePaths = [
+                "-/run/docker.sock"
+                "-/run/podman"
+                "-/run/credentials"
+                "-/var/lib/tentaflake-worker-${name}"
+              ];
+              MemoryMax = "32M";
+              TasksMax = 1;
+              LimitNOFILE = 32;
+            };
+          }
+        ) (lib.filterAttrs (_: agent: agent.activity != null) enabledAgents)
         // lib.optionalAttrs (enabledAgents != { }) {
           tentaflake-worker-image = {
             description = "Load the Nix-built tentaflake disposable worker image";

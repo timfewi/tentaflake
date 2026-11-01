@@ -1,0 +1,57 @@
+schemaVersion = 1
+agents = []
+
+[system]
+hostName = "schema-host"
+timeZone = "Europe/Berlin"
+stateVersion = "26.05"
+defaultLocale = "en_US.UTF-8"
+consoleKeyMap = "us"
+
+[network]
+managementEnable = false
+transport = "tailscale"
+sshPolicy = "tailnet-policy"
+
+[sandbox]
+profile = "balanced"
+
+[shell]
+enable = false
+motd = false
+tools = true
+starship = false
+
+[container]
+backend = "docker"
+
+[storage]
+enable = false
+[llm]
+enable = false
+[ui]
+enable = false
+[board]
+enable = false
+[monitoring]
+enable = false
+[research]
+enable = false
+[connectors]
+enable = true
+configFile = "/run/tentaflake-integrations-config.json"
+advisory = true
+[securityObserver]
+enable = false
+
+[hostApi]
+enable = true
+allowActions = false
+allowLogs = false
+allowToolRequests = false
+allowToolDecisions = false
+peers = [{ uid = 10001, agents = [], permissions = ["host_health"] }]
+
+[workloadMapping]
+enable = true
+bindings = {}

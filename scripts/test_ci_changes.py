@@ -5,9 +5,12 @@ import json
 import os
 from pathlib import Path
 import re
+import shlex
 import subprocess
 import sys
 import tempfile
+import textwrap
+import tomllib
 import unittest
 from unittest.mock import patch
 
@@ -155,10 +158,70 @@ class CiSelection(unittest.TestCase):
                 self.assertEqual(select(base, self.commit(), self.repository),
                                  {"runtime", crate, "rust", "static"})
 
+    def test_new_crates_and_packages_select_their_units_and_explicit_builds(self):
+        for crate in ("control", "integrations", "activity", "workloads"):
+            expected = {crate, "rust", "static"}
+            # Activity is a path dependency of both dispatching services.
+            if crate == "activity":
+                expected.update({"broker", "worker", "runtime"})
+            for name in (f"crates/tentaflake-{crate}/src/lib.rs",
+                         f"pkgs/tentaflake-{crate}/default.nix"):
+                with self.subTest(name=name):
+                    base = self.git("rev-parse", "HEAD")
+                    self.write(name)
+                    affected = select(base, self.commit(), self.repository)
+                    self.assertEqual(affected, expected)
+                    automatic = execution(affected, "fast")
+                    self.assertTrue(automatic[crate])
+                    self.assertTrue(automatic["rust"])
+                    self.assertFalse(automatic["builds"])
+                    self.assertFalse(automatic["runtime"])
+                    explicit = execution(affected, "full")
+                    self.assertTrue(explicit[crate])
+                    self.assertTrue(explicit["builds"])
+                    self.assertFalse(explicit["research"])
+
+    def test_pi_sources_select_non_vm_gates_only_on_dispatch(self):
+        for name in ("pkgs/tentaflake-pi/default.nix", "lib/piTransport.nix",
+                     "tests/pi-runtime-evaluation.nix", "tests/pi-runtime-vm.nix",
+                     "tests/local-image-proof.nix"):
+            with self.subTest(name=name):
+                base = self.git("rev-parse", "HEAD")
+                self.write(name)
+                affected = select(base, self.commit(), self.repository)
+                self.assertEqual(affected, {"pi", "evaluate", "static"})
+                automatic = execution(affected, "fast")
+                self.assertEqual({key for key in CHECKS if automatic[key]}, {"static"})
+                self.assertFalse(automatic["builds"])
+                explicit = execution(affected, "full")
+                self.assertTrue(explicit["pi"])
+                self.assertTrue(explicit["evaluate"])
+                self.assertTrue(explicit["builds"])
+                self.assertFalse(explicit["runtime"])
+                self.assertFalse(explicit["research"])
+
+    def test_consumer_example_selects_the_actual_composition_fixture(self):
+        self.write("examples/consumer-flake.nix")
+        affected = select(self.base, self.commit(), self.repository)
+        self.assertEqual(affected, {"generated", "static"})
+        self.assertFalse(execution(affected, "fast")["generated"])
+        self.assertFalse(execution(affected, "fast")["builds"])
+        self.assertTrue(execution(affected, "full")["generated"])
+        self.assertTrue(execution(affected, "full")["builds"])
+
+    def test_control_evaluation_fixture_selects_its_explicit_build(self):
+        self.write("tests/control-evaluation.nix")
+        affected = select(self.base, self.commit(), self.repository)
+        self.assertEqual(affected, {"evaluate", "static"})
+        self.assertFalse(execution(affected, "fast")["builds"])
+        self.assertTrue(execution(affected, "full")["evaluate"])
+        self.assertTrue(execution(affected, "full")["builds"])
+
     def test_shared_rust_inputs_require_all_rust_packages_not_research(self):
         self.write("Cargo.toml")
         self.assertEqual(select(self.base, self.commit(), self.repository),
-                         {"runtime", "cli", "broker", "worker", "rust", "static"})
+                         {"runtime", "cli", "broker", "worker", "control", "integrations",
+                          "activity", "workloads", "rust", "static"})
 
     def test_worker_module_uses_runtime_and_worker_gates_without_research(self):
         self.write("modules/worker.nix", "changed\n")
@@ -202,7 +265,11 @@ class CiSelection(unittest.TestCase):
         self.assertEqual(select(self.base, head, self.repository), {"runtime", "cli", "rust", "generated", "static"})
 
     def test_shared_agent_parser_retains_runtime_coverage_without_research(self):
-        self.write("lib/agentsFromData.nix")
+        self.write("lib/systemFromData.nix")
+        self.assertEqual(select(self.base, self.commit(), self.repository), {"runtime", "generated", "static"})
+
+    def test_system_schema_retains_runtime_coverage_without_research(self):
+        self.write("schema/system-v1.json")
         self.assertEqual(select(self.base, self.commit(), self.repository), {"runtime", "generated", "static"})
 
     def test_devcontainer_changes_do_not_build_agents_or_research(self):
@@ -324,6 +391,92 @@ class CiSelection(unittest.TestCase):
 
 
 class WorkflowPolicy(unittest.TestCase):
+    def run_step(self, name, selected):
+        """Execute the real selection shell with Nix replaced by an argv recorder."""
+        workflow = (Path(__file__).resolve().parent.parent / ".github/workflows/check.yml").read_text()
+        steps = [step for step in re.split(r"(?m)^      - ", workflow)
+                 if step.startswith(f"name: {name}\n")]
+        self.assertEqual(len(steps), 1)
+        environment = os.environ.copy()
+        for variable, check in re.findall(
+                r"(?m)^          (CHECK_[A-Z_]+): \$\{\{ needs\.changes\.outputs\.([a-z]+) \}\}$",
+                steps[0]):
+            self.assertRegex(
+                workflow,
+                rf"(?m)^      {check}: \$\{{\{{ steps\.filter\.outputs\.{check} \}}\}}$",
+            )
+            environment[variable] = str(selected[check]).lower()
+        script = textwrap.dedent(steps[0].split("        run: |\n", 1)[1])
+        result = subprocess.run(
+            ["bash", "-euo", "pipefail", "-c",
+             'nix() { printf "%s\\n" "$*"; }\n' + script],
+            env=environment, check=True, capture_output=True, text=True,
+        )
+        return [shlex.split(line) for line in result.stdout.splitlines()]
+
+    def test_every_workspace_member_executes_its_cargo_unit_suite(self):
+        root = Path(__file__).resolve().parent.parent
+        members = tomllib.loads((root / "Cargo.toml").read_text())["workspace"]["members"]
+        for member in members:
+            package = Path(member).name
+            check = package.removeprefix("tentaflake-")
+            with self.subTest(package=package):
+                self.assertIn(check, FAST_CHECKS)
+                for mode in ("fast", "full"):
+                    calls = self.run_step(
+                        "Rust lint and unit tests", execution({check, "rust"}, mode))
+                    self.assertEqual(calls, [
+                        ["develop", "--command", "cargo", "clippy", "--package", package,
+                         "--all-targets", "--", "-D", "warnings"],
+                        ["develop", "--command", "cargo", "test", "--package", package],
+                    ])
+
+    def test_each_rust_package_executes_its_explicit_build(self):
+        for crate in ("cli", "broker", "worker", "control", "integrations", "activity", "workloads"):
+            with self.subTest(crate=crate):
+                calls = self.run_step(
+                    "nix build (non-VM checks)", execution({crate, "rust"}, "full"))
+                expected = {f".#checks.x86_64-linux.tentaflake-{crate}",
+                            ".#checks.x86_64-linux.rust-package-sources"}
+                if crate == "worker":
+                    expected.add(".#checks.x86_64-linux.tentaflake-worker-image")
+                self.assertEqual({arg for call in calls for arg in call[2:]}, expected)
+                self.assertTrue(all(call[:2] == ["build", "--no-link"] for call in calls))
+                self.assertTrue(all(len(call[2:]) <= 4 for call in calls))
+
+    def test_pi_dispatch_executes_recovery_module_graph_and_image_builds(self):
+        calls = self.run_step(
+            "nix build (non-VM checks)", execution({"pi", "evaluate", "static"}, "full"))
+        targets = {arg for call in calls for arg in call[2:]}
+        self.assertTrue({
+            ".#checks.x86_64-linux.tentaflake-pi",
+            ".#checks.x86_64-linux.tentaflake-pi-recovery",
+            ".#checks.x86_64-linux.pi-runtime-evaluation",
+            ".#checks.x86_64-linux.pi-runtime-module-graph",
+            ".#checks.x86_64-linux.local-image-proof",
+            ".#packages.x86_64-linux.tentaflake-pi-image",
+        } <= targets)
+        self.assertTrue(all(len(call[2:]) <= 4 for call in calls))
+
+    def test_full_dispatch_executes_complete_non_vm_inventory_in_bounded_groups(self):
+        selected = execution(CHECKS, "full")
+        calls = self.run_step("Prepare exact evaluation closures and source filesets", selected)
+        calls += self.run_step("nix build (non-VM checks)", selected)
+        self.assertTrue(all(call[:2] == ["build", "--no-link"] for call in calls))
+        self.assertTrue(all(1 <= len(call[2:]) <= 4 for call in calls))
+        actual = {arg.rsplit(".", 1)[-1] for call in calls for arg in call[2:]}
+        self.assertEqual(actual, {
+            "tentaflake-cli", "tentaflake-broker", "tentaflake-worker",
+            "tentaflake-control", "tentaflake-integrations", "tentaflake-activity",
+            "tentaflake-workloads", "tentaflake-worker-image", "tentaflake-pi",
+            "tentaflake-pi-recovery", "tentaflake-pi-image",
+            "pi-runtime-evaluation", "pi-runtime-module-graph",
+            "local-image-proof", "host-api", "host-api-evaluation", "control-evaluation",
+            "devcontainer-cli", "ci-vm-selection", "rust-package-sources", "system-schema",
+            "image-pinning", "hardening-journald", "agent-adapters", "module-evaluation",
+            "research-policy",
+        })
+
     def test_optional_cache_setup_is_bounded_and_nonfatal(self):
         workflow = (Path(__file__).resolve().parent.parent / ".github/workflows/check.yml").read_text()
         # Inspect the small step block; actionlint separately validates YAML.

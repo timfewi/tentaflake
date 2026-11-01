@@ -1,4 +1,4 @@
-# Internal versioned, non-secret parser shared by file loading and onboarding.
+# Internal adapter parser for trusted fixtures/builders, not a desired-state API.
 {
   lib,
   pkgs ? null,
@@ -21,7 +21,7 @@ let
     else if builtins.pathExists (builtins.dirOf (toString file) + "/agents.json") then
       fail "legacy agents.json conflicts with the TOML inventory; manually migrate it and remove agents.json before loading."
     else
-      builtins.fromTOML (builtins.readFile file);
+      fromTOML (builtins.readFile file);
   checkFields =
     location: allowed: value:
     let

@@ -26,6 +26,11 @@ else
   {
     imports = [ (selected.build options) ];
     tentaflake.agentDeclarations = [
-      (selected.metadata options config.virtualisation.oci-containers.backend)
+      (
+        selected.metadata options config.virtualisation.oci-containers.backend
+        // lib.optionalAttrs (selected ? admitted) {
+          runnable = selected.admitted config options;
+        }
+      )
     ];
   }

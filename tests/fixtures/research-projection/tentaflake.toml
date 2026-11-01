@@ -1,0 +1,25 @@
+schemaVersion = 1
+
+[[agents]]
+name = "researcher"
+adapter = "hermes"
+autoStart = false
+
+[[agents]]
+name = "legal"
+adapter = "zeroclaw"
+autoStart = false
+
+[[agents]]
+name = "offline"
+adapter = "hermes"
+autoStart = false
+
+[research]
+enable = true
+
+[research.agents.agent-researcher]
+uid = 62111
+
+[research.agents.agent-legal]
+uid = 62112

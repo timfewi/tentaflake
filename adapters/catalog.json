@@ -222,7 +222,7 @@
         "uid": 10100
       },
       "research": {
-        "supported": false
+        "supported": true
       },
       "schemaVersion": 1
     },

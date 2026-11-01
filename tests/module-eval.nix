@@ -951,7 +951,7 @@ assert
     fields = lib.splitString "\t" (builtins.unsafeDiscardStringContext (lib.head agentLines));
     resources = builtins.fromJSON (lib.elemAt fields 29);
   in
-  lib.length fields == 30
+  lib.length fields == 31
   && builtins.fromJSON (lib.elemAt fields 26) == hermesCapsule.volumes
   &&
     builtins.fromJSON (lib.elemAt fields 27) == {
@@ -960,6 +960,11 @@ assert
       "/var/tmp" = 256 * 1024 * 1024;
     }
   && lib.elemAt fields 28 == "true"
+  &&
+    builtins.fromJSON (lib.elemAt fields 30) == {
+      name = "runsc";
+      path = lib.getExe' pkgs.gvisor "runsc";
+    }
   && resources.memoryBytes == 2 * 1024 * 1024 * 1024
   && resources.memorySwapBytes == resources.memoryBytes
   && resources.nanoCpus == 2000000000
@@ -1207,9 +1212,10 @@ assert
     "CAP_DAC_OVERRIDE"
     "CAP_FOWNER"
   ];
-assert lib.elem
-  "d /var/lib/tentaflake/agents/worker/workspace/.tentaflake-worker/inbox 0770 10000 tfw-gid-10000 -"
-  workerCapsule.config.systemd.tmpfiles.rules;
+assert
+  !(lib.elem "d /var/lib/tentaflake/agents/worker/workspace/.tentaflake-worker/inbox 0770 10000 tfw-gid-10000 -" workerCapsule.config.systemd.tmpfiles.rules);
+assert lib.hasInfix ''inbox="$control/inbox"'' workerOwnerService.script;
+assert lib.hasInfix "install -d -m 0770" workerOwnerService.script;
 assert lib.elem "tentaflake-workspace-quota-agent-worker.service"
   workerCapsule.config.systemd.services.docker-agent-worker.requires;
 assert lib.hasInfix "refusing to hide non-empty workspace"

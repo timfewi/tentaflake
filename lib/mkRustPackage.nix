@@ -4,6 +4,7 @@
   pname,
   mainProgram ? pname,
   postInstall ? "",
+  localCrates ? [ ],
 }:
 
 let
@@ -24,7 +25,11 @@ rustPlatform.buildRustPackage {
         (lib.fileset.fileFilter (file: file.name == "Cargo.toml") ../crates)
         crate
       ]
-      ++ lib.optional (pname == "tentaflake-cli") ../adapters/catalog.json
+      ++ localCrates
+      ++ lib.optionals (pname == "tentaflake-cli") [
+        ../adapters/catalog.json
+        ../schema
+      ]
     );
   };
 

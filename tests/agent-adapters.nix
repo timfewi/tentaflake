@@ -6,7 +6,9 @@ let
   adapters = import ../adapters { inherit pkgs lib; };
   internalParser = import ../lib/agentsFromData.nix { inherit pkgs lib; };
   exampleData = builtins.fromTOML (builtins.readFile ./fixtures/adapter-input/stopped-runtimes.toml);
-  example = eval (builders.agentsFromData { file = ./fixtures/adapter-input/stopped-runtimes.toml; });
+  example = eval (internalParser {
+    data = exampleData;
+  });
   exampleContainers = example.virtualisation.oci-containers.containers;
   security = import ../lib/containerSecurity.nix { inherit lib; };
   eval =
@@ -112,10 +114,12 @@ let
   # store. toFile returns an unregistered path in that mode, masking validation.
   toml =
     file:
-    builders.agentsFromData {
+    internalParser {
       inherit file;
     };
-  genericToml = eval (toml ./fixtures/adapter-input/generic.toml);
+  genericToml = eval [
+    (builders.systemFromData { file = ./fixtures/system-generic/tentaflake.toml; })
+  ];
   dataConfig = eval (
     (toml ./fixtures/adapter-input/mixed.toml)
     ++ [ { tentaflake.security.profile = lib.mkForce "dev"; } ]
@@ -234,23 +238,24 @@ let
   hasParentGuard = service: lib.hasInfix "refusing unsafe agent parent" service.preStart;
 in
 assert !(builders ? mkAgent) && !(builders ? adapters);
-assert builtins.attrNames (builtins.functionArgs builders.agentsFromData) == [ "file" ];
+assert !(builders ? agentsFromData);
+assert builtins.attrNames (builtins.functionArgs builders.systemFromData) == [ "file" ];
 assert
   builtins.attrNames (builtins.functionArgs internalParser) == [
     "data"
     "file"
   ];
 assert rejects (internalParser {
-  file = ../agents.toml;
+  file = ../tentaflake.toml;
   data = exampleData;
 });
 assert rejects (internalParser { });
 assert
-  builtins.fromTOML (builtins.readFile ../agents.toml) == {
+  builtins.fromTOML (builtins.readFile ../tentaflake.toml) == {
     schemaVersion = 1;
     agents = [ ];
   };
-assert builders.agentsFromData { file = ../agents.toml; } == [ ];
+assert (builders.systemFromData { file = ../tentaflake.toml; }).imports == [ ];
 assert rejects (toml ./fixtures/adapter-input/legacy-only/agents.json);
 assert rejects (toml ./fixtures/adapter-input/conflicting-inventories/agents.json);
 assert rejects (toml ./fixtures/adapter-input/conflicting-inventories/agents.toml);
@@ -568,6 +573,51 @@ assert rejects
     (instance "hermes" "same")
     (instance "hermes" "same")
   ]).tentaflake.agentInstances;
+assert rejects
+  (eval [
+    (mkAgent {
+      adapter = "hermes";
+      name = "tenant-a";
+      autoStart = false;
+      stateDir = "/var/lib/shared-agent-state";
+    })
+    (mkAgent {
+      adapter = "hermes";
+      name = "tenant-b";
+      autoStart = false;
+      stateDir = "/var/lib/shared-agent-state";
+    })
+  ]).tentaflake.agentInstances;
+assert rejects
+  (eval [
+    (mkAgent {
+      adapter = "hermes";
+      name = "tenant-parent";
+      autoStart = false;
+      stateDir = "/var/lib/shared-agent-state";
+    })
+    (mkAgent {
+      adapter = "zeroclaw";
+      name = "tenant-child";
+      autoStart = false;
+      stateDir = "/var/lib/shared-agent-state/child";
+    })
+  ]).tentaflake.agentInstances;
+assert rejects
+  (eval [
+    (mkAgent {
+      adapter = "pi";
+      name = "reserved-tenant";
+      autoStart = false;
+      stateDir = "/var/lib/shared-agent-state";
+    })
+    (mkAgent {
+      adapter = "hermes";
+      name = "runnable-tenant";
+      autoStart = false;
+      stateDir = "/var/lib/shared-agent-state/workspace";
+    })
+  ]).tentaflake.agentInstances;
 assert rejects (mkAgent {
   adapter = "unknown";
   name = "invalid";
@@ -595,14 +645,20 @@ assert rejects
       autoStart = true;
     })
   ]).tentaflake.agentInstances;
-assert rejects
-  (eval [
-    (mkAgent {
-      adapter = "pi";
-      name = "invalid";
-      autoStart = true;
-    })
-  ]).tentaflake.agentInstances;
+assert
+  let
+    requested = eval [
+      (mkAgent {
+        adapter = "pi";
+        name = "invalid";
+        autoStart = true;
+      })
+    ];
+  in
+  !requested.tentaflake.agentInstances.agent-invalid.runnable
+  && !(requested.virtualisation.oci-containers.containers ? agent-invalid)
+  && requested.systemd.services.docker-agent-invalid.wantedBy == [ ]
+  && lib.any (lib.hasInfix "unadmitted Pi must keep autoStart = false.") (failures requested);
 assert denies "credential" { envFile = "/run/provider.env"; };
 assert denies "secret-like settings" { settings.model.api_key = "fixture-only"; };
 assert denies "publish container ports" { extraContainerConfig.ports = [ "8080:8080" ]; };

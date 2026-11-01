@@ -56,6 +56,10 @@ Unsupported versions/transports/policies and duplicate records fail parsing.
 Regenerate the manifest through an authorized host update; never hand-edit it
 to manufacture evidence.
 
+The current agent record also declares the exact scoped gVisor runtime. Older
+agent records without that field remain live-state unknown; see the
+[security manifest contract](10-security-profiles.md#posture-check).
+
 ## Remote authorization
 
 Tailscale connectivity is private transport, not authorization by itself. A

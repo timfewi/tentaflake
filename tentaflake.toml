@@ -1,0 +1,38 @@
+# Public, installation-independent template; keep its active inventory empty.
+# Copy this file into your consumer flake, or edit your deployment fork's copy.
+# Values enter the Nix store even in a private Git repository:
+# never put API keys, passwords, or other secrets here.
+schemaVersion = 1
+
+# This template starts with no agents. To add one, remove this line and
+# uncomment the [[agents]] example below. Names must be globally unique;
+# the resulting managed ID is agent-<name>.
+agents = []
+
+# Optional host settings (examples, not a complete list):
+# [system]
+# hostName = "tentaflake"
+# timeZone = "Europe/Berlin"
+# defaultLocale = "en_US.UTF-8"
+# consoleKeyMap = "us"
+#
+# [sandbox]
+# profile = "balanced" # Also available: strict, dev (trusted compatibility).
+#
+# [network]
+# managementEnable = true
+# transport = "tailscale"
+# sshPolicy = "tailnet-policy"
+
+# Example agent. Hermes vendor acceptance is still pending; review
+# docs/agent-adapters.md and the host prerequisites before use.
+# [[agents]]
+# name = "assistant"
+# adapter = "hermes"
+# autoStart = false
+# Default state: /var/lib/tentaflake/agents/assistant
+# stateDir = "/var/lib/tentaflake/agents/assistant"
+
+# See docs/agent-adapters.md for adapter options and custom OCI examples,
+# docs/10-security-profiles.md for profiles, and docs/11-tailscale-management.md
+# for management setup. Configuration changes do not activate the system.

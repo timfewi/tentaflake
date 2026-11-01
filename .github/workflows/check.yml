@@ -33,6 +33,11 @@ jobs:
       cli: ${{ steps.filter.outputs.cli }}
       broker: ${{ steps.filter.outputs.broker }}
       worker: ${{ steps.filter.outputs.worker }}
+      control: ${{ steps.filter.outputs.control }}
+      integrations: ${{ steps.filter.outputs.integrations }}
+      activity: ${{ steps.filter.outputs.activity }}
+      workloads: ${{ steps.filter.outputs.workloads }}
+      pi: ${{ steps.filter.outputs.pi }}
       devcontainer: ${{ steps.filter.outputs.devcontainer }}
       selection: ${{ steps.filter.outputs.selection }}
       static: ${{ steps.filter.outputs.static }}
@@ -114,9 +119,13 @@ jobs:
           CHECK_CLI: ${{ needs.changes.outputs.cli }}
           CHECK_BROKER: ${{ needs.changes.outputs.broker }}
           CHECK_WORKER: ${{ needs.changes.outputs.worker }}
+          CHECK_CONTROL: ${{ needs.changes.outputs.control }}
+          CHECK_INTEGRATIONS: ${{ needs.changes.outputs.integrations }}
+          CHECK_ACTIVITY: ${{ needs.changes.outputs.activity }}
+          CHECK_WORKLOADS: ${{ needs.changes.outputs.workloads }}
         run: |
           packages=()
-          for crate in cli broker worker; do
+          for crate in cli broker worker control integrations activity workloads; do
             variable="CHECK_${crate^^}"
             if [[ "${!variable}" == true ]]; then
               packages+=(--package "tentaflake-$crate")
@@ -181,6 +190,12 @@ jobs:
           CHECK_CLI: ${{ needs.changes.outputs.cli }}
           CHECK_BROKER: ${{ needs.changes.outputs.broker }}
           CHECK_WORKER: ${{ needs.changes.outputs.worker }}
+          CHECK_CONTROL: ${{ needs.changes.outputs.control }}
+          CHECK_INTEGRATIONS: ${{ needs.changes.outputs.integrations }}
+          CHECK_ACTIVITY: ${{ needs.changes.outputs.activity }}
+          CHECK_WORKLOADS: ${{ needs.changes.outputs.workloads }}
+          CHECK_PI: ${{ needs.changes.outputs.pi }}
+          CHECK_RUST: ${{ needs.changes.outputs.rust }}
         run: |
           selected_checks=()
           if [[ "$CHECK_DEVCONTAINER" == true ]]; then
@@ -189,17 +204,23 @@ jobs:
           if [[ "$CHECK_EVALUATE" == true ]]; then
             selected_checks+=(".#checks.x86_64-linux.image-pinning" ".#checks.x86_64-linux.agent-adapters" ".#checks.x86_64-linux.hardening-journald")
             selected_checks+=(".#checks.x86_64-linux.host-api" ".#checks.x86_64-linux.host-api-evaluation")
+            selected_checks+=(".#checks.x86_64-linux.system-schema" ".#checks.x86_64-linux.control-evaluation" ".#checks.x86_64-linux.ci-vm-selection")
+            selected_checks+=(".#checks.x86_64-linux.pi-runtime-evaluation" ".#checks.x86_64-linux.local-image-proof")
           fi
-          if [[ "$CHECK_CLI" == true ]]; then
-            selected_checks+=(".#checks.x86_64-linux.tentaflake-cli")
-          fi
-          if [[ "$CHECK_BROKER" == true ]]; then
-            selected_checks+=(".#checks.x86_64-linux.tentaflake-broker")
-          fi
+          for crate in cli broker worker control integrations activity workloads; do
+            variable="CHECK_${crate^^}"
+            if [[ "${!variable}" == true ]]; then
+              selected_checks+=(".#checks.x86_64-linux.tentaflake-$crate")
+            fi
+          done
           if [[ "$CHECK_WORKER" == true ]]; then
-            selected_checks+=(".#checks.x86_64-linux.tentaflake-worker" ".#checks.x86_64-linux.tentaflake-worker-image")
+            selected_checks+=(".#checks.x86_64-linux.tentaflake-worker-image")
           fi
-          if [[ "$CHECK_CLI" == true || "$CHECK_BROKER" == true || "$CHECK_WORKER" == true ]]; then
+          if [[ "$CHECK_PI" == true ]]; then
+            selected_checks+=(".#checks.x86_64-linux.tentaflake-pi" ".#checks.x86_64-linux.tentaflake-pi-recovery" ".#checks.x86_64-linux.pi-runtime-module-graph")
+            selected_checks+=(".#packages.x86_64-linux.tentaflake-pi-image")
+          fi
+          if [[ "$CHECK_RUST" == true ]]; then
             selected_checks+=(".#checks.x86_64-linux.rust-package-sources")
           fi
           for ((offset=0; offset<${#selected_checks[@]}; offset+=4)); do

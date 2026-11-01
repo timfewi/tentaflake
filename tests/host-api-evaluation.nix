@@ -44,6 +44,42 @@ let
       allowLogs = true;
     };
   };
+  scoped = evaluate {
+    imports = [
+      (mkAgent {
+        adapter = "hermes";
+        name = "scoped";
+        autoStart = false;
+      })
+    ];
+    tentaflake.hostApi = {
+      enable = true;
+      peers = [
+        {
+          uid = 12345;
+          agents = [ "agent-scoped" ];
+          permissions = [
+            "read"
+            "run_read"
+            "run_submit"
+            "run_stop"
+          ];
+        }
+      ];
+    };
+  };
+  unknownPeerAgent = evaluate {
+    tentaflake.hostApi = {
+      enable = true;
+      peers = [
+        {
+          uid = 12345;
+          agents = [ "agent-absent" ];
+          permissions = [ "read" ];
+        }
+      ];
+    };
+  };
   workerHost =
     decisions:
     evaluate {
@@ -76,6 +112,66 @@ let
     config = inspectedWorker;
     inherit (pkgs) lib;
   };
+  piTransport = import ../lib/piTransport.nix {
+    inherit pkgs;
+    inherit (pkgs) lib;
+  };
+  # Synthetic declarations isolate host projection admission, not runtime acceptance.
+  runnerHost =
+    adapter: runnable: enable: selector: transportEnabled: extraOptions:
+    evaluate {
+      tentaflake = {
+        hostApi.enable = true;
+        piRuntime = {
+          inherit enable;
+          transport = if transportEnabled then piTransport.version else null;
+          package = pkgs.hello;
+          image = "localhost/fixture:reviewed";
+          bundle = pkgs.runCommand "synthetic-pi-bundle" {
+            passthru = {
+              imageVerificationVersion = 1;
+              imageSelector = selector;
+              runtimePackage = pkgs.hello;
+            };
+          } "mkdir $out";
+        };
+        agentDeclarations = [
+          {
+            inherit adapter runnable;
+            name = "runner";
+            container = "agent-runner";
+            unit = "docker-agent-runner.service";
+            stateDir = "/var/lib/tentaflake/agents/runner";
+            stateStorage = "/var/lib/tentaflake/agents/runner/state";
+            workspace = "/var/lib/tentaflake/agents/runner/workspace";
+            uid = 10100;
+            gid = 10100;
+          }
+        ];
+      };
+      virtualisation = {
+        oci-containers = {
+          backend = "docker";
+          containers.agent-runner = {
+            image = "localhost/fixture:reviewed";
+            inherit extraOptions;
+          };
+        };
+        docker.daemon.settings.runtimes.runsc-pi.path = piTransport.path;
+      };
+    };
+  admittedRunner = runnerHost "pi" true true "localhost/fixture:reviewed" true [ ];
+  stoppedRunner = runnerHost "pi" false true "localhost/fixture:reviewed" true [ ];
+  disabledRunner = runnerHost "pi" true false "localhost/fixture:reviewed" true [ ];
+  otherRunner = runnerHost "hermes" true true "localhost/fixture:reviewed" true [ ];
+  unreviewedRunner = runnerHost "pi" true true "localhost/fixture:other" true [ ];
+  unsupportedRunner = runnerHost "pi" true true "localhost/fixture:reviewed" false [ ];
+  remappedRunner = runnerHost "pi" true true "localhost/fixture:reviewed" true [ "--userns=private" ];
+  generatedConfig =
+    configuration:
+    pkgs.lib.last (
+      pkgs.lib.splitString " " configuration.systemd.services.tentaflake-api.serviceConfig.ExecStart
+    );
   service = enabled.systemd.services.tentaflake-api.serviceConfig;
   failures =
     configuration:
@@ -93,6 +189,28 @@ assert pkgs.lib.assertMsg (failures controlledWorker == [ ]) (
 assert pkgs.lib.any (pkgs.lib.hasInfix "allowToolDecisions requires allowToolRequests") (
   failures invalidDecisions
 );
+assert failures scoped == [ ];
+assert scoped.systemd.services.tentaflake-api.serviceConfig.RuntimeDirectoryMode == "0711";
+assert enabled.tentaflake.hostApi.peers == null;
+assert scoped.tentaflake.hostApi.peers != null;
+assert
+  admittedRunner.systemd.services.tentaflake-api.serviceConfig.SupplementaryGroups == [ "10100" ];
+assert admittedRunner.systemd.services.tentaflake-api.serviceConfig.CapabilityBoundingSet == "";
+assert pkgs.lib.all
+  (
+    configuration:
+    configuration.systemd.services.tentaflake-api.serviceConfig.SupplementaryGroups == [ ]
+  )
+  [
+    enabled
+    stoppedRunner
+    disabledRunner
+    otherRunner
+    unreviewedRunner
+    unsupportedRunner
+    remappedRunner
+  ];
+assert pkgs.lib.any (pkgs.lib.hasInfix "exact declared agent IDs") (failures unknownPeerAgent);
 assert !(disabled.systemd.services ? tentaflake-api);
 assert !(disabled.users.groups ? tentaflake-api);
 assert !enabled.tentaflake.hostApi.allowActions;
@@ -137,5 +255,20 @@ assert service.RuntimeDirectoryMode == "0750";
 assert service.UMask == "0077";
 assert enabled.networking.firewall.allowedTCPPorts == disabled.networking.firewall.allowedTCPPorts;
 pkgs.runCommand "tentaflake-host-api-evaluation" { } ''
+  ${pkgs.python3}/bin/python3 - ${generatedConfig admittedRunner} ${generatedConfig stoppedRunner} ${generatedConfig disabledRunner} ${generatedConfig otherRunner} ${generatedConfig unreviewedRunner} ${generatedConfig unsupportedRunner} ${generatedConfig remappedRunner} <<'PY'
+  import json
+  import sys
+  with open(sys.argv[1]) as source:
+      assert json.load(source)["runners"] == {
+          "agent-runner": {
+              "socket": "/run/tentaflake-pi/agent-runner/control/runner.sock",
+              "token": "/run/tentaflake-pi/agent-runner/api-token",
+              "transport": "runsc-pi-v1",
+          }
+      }
+  for path in sys.argv[2:]:
+      with open(path) as source:
+          assert json.load(source)["runners"] == {}
+  PY
   touch "$out"
 ''

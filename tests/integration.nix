@@ -13,13 +13,14 @@
 #
 # Run just this check:
 #   nix build .#checks.x86_64-linux.vm-integration -L
-{ self, agentsFromData }:
+# TOML imports need lexical packages: node _module.args.pkgs depends on imports.
+{ self, pkgs }:
 {
   name = "tentaflake-integration";
 
   nodes = {
     machine =
-      { config, pkgs, ... }:
+      { config, ... }:
       let
         brokerPackage = pkgs.callPackage ../pkgs/tentaflake-broker { };
         networkTestImage = pkgs.dockerTools.buildLayeredImage {
@@ -47,10 +48,17 @@
         imports = [
           self.nixosModules.default
         ]
-        ++ agentsFromData { file = ./fixtures/adapter-input/integration-docker.toml; };
+        ++
+          (import ../lib/agentsFromData.nix {
+            inherit pkgs;
+            inherit (pkgs) lib;
+          })
+            {
+              file = ./fixtures/adapter-input/integration-docker.toml;
+            };
 
         # OCI backend + docker are wired in the template's configuration.nix, which
-        # we don't import here (it pulls in hardware config / agents.toml); set
+        # we don't import here (it pulls in hardware config / tentaflake.toml); set
         # the pieces the agent unit needs directly.
         virtualisation = {
           oci-containers.backend = "docker";
@@ -219,7 +227,7 @@
       };
 
     podman =
-      { pkgs, ... }:
+      _:
       let
         podmanTestImage = pkgs.dockerTools.buildLayeredImage {
           name = "tentaflake-podman-test";
@@ -245,7 +253,14 @@
         imports = [
           self.nixosModules.default
         ]
-        ++ agentsFromData { file = ./fixtures/adapter-input/integration-podman.toml; };
+        ++
+          (import ../lib/agentsFromData.nix {
+            inherit pkgs;
+            inherit (pkgs) lib;
+          })
+            {
+              file = ./fixtures/adapter-input/integration-podman.toml;
+            };
 
         virtualisation.oci-containers.backend = "podman";
         virtualisation.podman.enable = true;
@@ -300,11 +315,12 @@
         tmpfs = {path: 8388608 for path in ("/tmp", "/run", "/var/tmp")}
         fields = ["agent", name, "balanced"] + ["true"] * 17
         fields += ["true", "false", "-", "true", endpoint, network,
-                   "[]", json.dumps(tmpfs), "true", json.dumps(resources)]
+                   "[]", json.dumps(tmpfs), "true", json.dumps(resources),
+                   json.dumps(dict(name="runsc", path="${pkgs.lib.getExe' pkgs.gvisor "runsc"}"))]
         manifest = "manifest\t2\nhost\tbalanced\tfalse\ttrue\ttrue\ttrue\tfalse\t36\n"
         manifest += "management\ttailscale\ttrue\ttrue\ttailnet-policy\n"
         manifest += "\t".join(fields) + "\n"
-        config = (f"backend={backend}\nflake_dir=/fixture\nhost_name=fixture\n"
+        config = (f"backend={backend}\nflake_dir=/fixture\nhost_name=fixture\nconfiguration_name=fixture\n"
                   "agents_file=/tmp/doctor-agents.tsv\nsecurity_profile=balanced\n"
                   "security_file=/tmp/doctor-security.tsv\n")
         for path, content in (("/tmp/doctor.conf", config),
@@ -1458,6 +1474,7 @@
             "backend=docker\n"
             "flake_dir=/tmp\n"
             "host_name=unsafe-fixture\n"
+            "configuration_name=fixture\n"
             "agents_file=/etc/tentaflake/agents.tsv\n"
             "security_profile=dev\n"
             "security_file=/tmp/tentaflake-unsafe.tsv\n"

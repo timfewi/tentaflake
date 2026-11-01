@@ -32,6 +32,23 @@
         "type": "github"
       }
     },
+    "pi-upstream": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1793402276,
+        "narHash": "sha256-wq8X5a4IJBnpHRbYD2WAD/2syM4q6ba2XS1+3mCO0oM=",
+        "owner": "earendil-works",
+        "repo": "pi",
+        "rev": "35dfa757378bd7a8570670e99c2687bdd1039a06",
+        "type": "github"
+      },
+      "original": {
+        "owner": "earendil-works",
+        "repo": "pi",
+        "rev": "35dfa757378bd7a8570670e99c2687bdd1039a06",
+        "type": "github"
+      }
+    },
     "project-check": {
       "inputs": {
         "nixpkgs": [
@@ -40,23 +57,24 @@
         ]
       },
       "locked": {
-        "lastModified": 1792786492,
-        "narHash": "sha256-kdV5X1YuGIDYtMnWO5nqZ1qO4a2Hn//x+cewd8K9vK8=",
+        "lastModified": 1793358625,
+        "narHash": "sha256-a1wA32BcO1wI4TzipaXZQeBn3FZXOCEBYTIvtdJ362k=",
         "owner": "timfewi",
         "repo": "project-check-nix",
-        "rev": "56962fbd92f992938f39b44b2590adf843ebe757",
+        "rev": "8aafbb522294b507a003d94a8a3f946d8e52380b",
         "type": "github"
       },
       "original": {
         "owner": "timfewi",
         "repo": "project-check-nix",
-        "rev": "56962fbd92f992938f39b44b2590adf843ebe757",
+        "rev": "8aafbb522294b507a003d94a8a3f946d8e52380b",
         "type": "github"
       }
     },
     "root": {
       "inputs": {
         "nixpkgs": "nixpkgs",
+        "pi-upstream": "pi-upstream",
         "tentaflake-research": "tentaflake-research"
       }
     },
@@ -66,16 +84,17 @@
         "project-check": "project-check"
       },
       "locked": {
-        "lastModified": 1792968862,
-        "narHash": "sha256-fjhLin8Ty0Jt2hjpZTZl3ysFmc/wHknd/03ZxeQpwrY=",
+        "lastModified": 1793528028,
+        "narHash": "sha256-XefePhkdNLM7vHIkM/CV+9/P00FVaLKGSHe6lAITMKQ=",
         "owner": "timfewi",
         "repo": "tentaflake-research",
-        "rev": "babdca58ddada874aae22a5042cf90675a0d72eb",
+        "rev": "3503d8da7307b4795fc80baa1f142b3ef1baec7f",
         "type": "github"
       },
       "original": {
         "owner": "timfewi",
         "repo": "tentaflake-research",
+        "rev": "3503d8da7307b4795fc80baa1f142b3ef1baec7f",
         "type": "github"
       }
     }

@@ -16,6 +16,7 @@ pub struct Response {
     pub body: Vec<u8>,
     pub settlement: Option<crate::state::Reservation>,
     pub streaming: Option<Box<crate::streaming::StreamingResponse>>,
+    pub activity: Option<(tentaflake_activity::Guard, tentaflake_activity::Outcome)>,
 }
 
 impl Response {
@@ -27,6 +28,7 @@ impl Response {
                 .unwrap_or_else(|_| b"{\"error\":\"encoding\"}".to_vec()),
             settlement: None,
             streaming: None,
+            activity: None,
         }
     }
 }
@@ -174,6 +176,9 @@ pub fn write_response(stream: &mut TcpStream, response: Response) -> std::io::Re
     // writes still cannot prove remote receipt, so a later crash remains held.
     if let Some(reservation) = response.settlement {
         reservation.settle().map_err(std::io::Error::other)?;
+    }
+    if let Some((mut activity, outcome)) = response.activity {
+        activity.finish(outcome);
     }
     Ok(())
 }

@@ -13,6 +13,7 @@ use std::process::{Command, ExitCode, Output, Stdio};
 use std::time::{Duration, Instant, SystemTime};
 
 const RUNTIME_CATALOG: &str = include_str!("../../../adapters/catalog.json");
+mod desired_system;
 mod onboarding;
 
 const DEFAULT_CONFIG: &str = "/etc/tentaflake/cli.conf";
@@ -29,6 +30,7 @@ struct Config {
     backend: String,
     flake_dir: PathBuf,
     host_name: String,
+    configuration_name: String,
     agents_file: PathBuf,
     security_profile: String,
     security_file: PathBuf,
@@ -83,6 +85,11 @@ struct DeclaredLiveResources {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+struct DeclaredRuntime {
+    name: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 struct SecurityAgent {
     name: String,
     profile: String,
@@ -113,6 +120,7 @@ struct SecurityAgent {
     declared_tmpfs: Option<BTreeMap<String, u64>>,
     declared_ports_absent: Option<bool>,
     declared_live_resources: Option<DeclaredLiveResources>,
+    declared_runtime: Option<DeclaredRuntime>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -188,6 +196,7 @@ fn run(mut args: Vec<String>) -> Result<u8, String> {
     let mode = take_output_flags(&mut args);
     let command = args.first().map(String::as_str).unwrap_or("status");
     match command {
+        "config" => return desired_system::run(&args[1..], mode),
         "remote-check" => return remote_check(&args[1..]),
         "runtimes" => return runtimes(&args[1..], mode),
         "agent" if args.get(1).map(String::as_str) == Some("template") => {
@@ -347,6 +356,7 @@ fn parse_config(text: &str) -> Result<Config, String> {
     let mut backend = None;
     let mut flake_dir = None;
     let mut host_name = None;
+    let mut configuration_name = None;
     let mut agents_file = None;
     let mut security_profile = None;
     let mut security_file = None;
@@ -363,6 +373,7 @@ fn parse_config(text: &str) -> Result<Config, String> {
             "backend" => backend = Some(value.trim().to_owned()),
             "flake_dir" => flake_dir = Some(PathBuf::from(value.trim())),
             "host_name" => host_name = Some(value.trim().to_owned()),
+            "configuration_name" => configuration_name = Some(value.trim().to_owned()),
             "agents_file" => agents_file = Some(PathBuf::from(value.trim())),
             "security_profile" => security_profile = Some(value.trim().to_owned()),
             "security_file" => security_file = Some(PathBuf::from(value.trim())),
@@ -384,6 +395,7 @@ fn parse_config(text: &str) -> Result<Config, String> {
         backend,
         flake_dir: flake_dir.ok_or("missing config key `flake_dir`")?,
         host_name: host_name.ok_or("missing config key `host_name`")?,
+        configuration_name: configuration_name.ok_or("missing config key `configuration_name`")?,
         agents_file: agents_file.unwrap_or_else(|| PathBuf::from(DEFAULT_AGENTS)),
         security_profile,
         security_file: security_file
@@ -527,7 +539,7 @@ fn parse_security_state(text: &str) -> Result<SecurityState, String> {
                     ssh_policy,
                 });
             }
-            Some("agent") if (25..=30).contains(&fields.len()) => agents.push(SecurityAgent {
+            Some("agent") if (25..=31).contains(&fields.len()) => agents.push(SecurityAgent {
                 name: fields[1].into(),
                 profile: fields[2].into(),
                 network_isolated: parse_bool(fields[3], index + 1)?,
@@ -573,6 +585,11 @@ fn parse_security_state(text: &str) -> Result<SecurityState, String> {
                 declared_live_resources: fields
                     .get(29)
                     .map(|value| parse_declared_live_resources(value, index + 1))
+                    .transpose()?
+                    .flatten(),
+                declared_runtime: fields
+                    .get(30)
+                    .map(|value| parse_declared_runtime(value, index + 1))
                     .transpose()?
                     .flatten(),
             }),
@@ -761,6 +778,39 @@ fn parse_declared_live_resources(
         ));
     }
     Ok(Some(resources))
+}
+
+fn parse_declared_runtime(value: &str, line: usize) -> Result<Option<DeclaredRuntime>, String> {
+    if value == "-" {
+        return Ok(None);
+    }
+    let invalid = || format!("invalid declared runtime on security manifest line {line}");
+    let parsed: serde_json::Value = serde_json::from_str(value).map_err(|_| invalid())?;
+    let fields = parsed.as_object().ok_or_else(invalid)?;
+    let name = fields.get("name").and_then(serde_json::Value::as_str);
+    let path = fields.get("path").and_then(serde_json::Value::as_str);
+    let (Some(name), Some(path)) = (name, path) else {
+        return Err(invalid());
+    };
+    if fields.len() != 2
+        || !matches!(name, "runsc" | "runsc-research" | "runsc-pi")
+        || !path.rsplit_once("/bin/").is_some_and(|(root, binary)| {
+            binary == name
+                && root.strip_prefix("/nix/store/").is_some_and(|item| {
+                    !item.is_empty()
+                        && item
+                            .bytes()
+                            .all(|byte| byte.is_ascii_alphanumeric() || b"+._-".contains(&byte))
+                        && item != "."
+                        && item != ".."
+                })
+        })
+    {
+        return Err(invalid());
+    }
+    Ok(Some(DeclaredRuntime {
+        name: name.to_owned(),
+    }))
 }
 
 fn security_findings(state: &SecurityState) -> Vec<Finding> {
@@ -1338,13 +1388,20 @@ fn live_container_security_from_manifest(
         agent.declared_mounts.as_deref(),
         agent.declared_tmpfs.as_ref(),
         agent.declared_live_resources.as_ref(),
+        agent.declared_runtime.as_ref(),
         value,
         expected_network,
     ) {
-        (Some(false), _, _, _, _, _) => LiveContainerState::Unsafe,
-        (Some(true), Some(mounts), Some(tmpfs), Some(resources), Some(value), Some(network)) => {
-            live_container_security(value, backend, network, mounts, tmpfs, resources)
-        }
+        (Some(false), _, _, _, _, _, _) => LiveContainerState::Unsafe,
+        (
+            Some(true),
+            Some(mounts),
+            Some(tmpfs),
+            Some(resources),
+            runtime,
+            Some(value),
+            Some(network),
+        ) => live_container_security(value, backend, network, mounts, tmpfs, resources, runtime),
         _ => LiveContainerState::Unknown,
     }
 }
@@ -1356,6 +1413,7 @@ fn live_container_security(
     declared_mounts: &[DeclaredMount],
     declared_tmpfs: &BTreeMap<String, u64>,
     declared_live_resources: &DeclaredLiveResources,
+    declared_runtime: Option<&DeclaredRuntime>,
 ) -> LiveContainerState {
     let Some(containers) = value.as_array() else {
         return LiveContainerState::Unknown;
@@ -1381,6 +1439,7 @@ fn live_container_security(
         declared_mounts,
         declared_tmpfs,
         declared_live_resources,
+        declared_runtime,
     )
 }
 
@@ -1618,6 +1677,7 @@ fn live_observed_security_drift(
     declared_mounts: &[DeclaredMount],
     declared_tmpfs: &BTreeMap<String, u64>,
     declared_live_resources: &DeclaredLiveResources,
+    declared_runtime: Option<&DeclaredRuntime>,
 ) -> LiveContainerState {
     let network_settings = container
         .get("NetworkSettings")
@@ -1691,13 +1751,9 @@ fn live_observed_security_drift(
     };
     state = merge_live_state(
         state,
-        match runtime {
-            Some(runtime) if runtime == "runsc" || runtime.ends_with("/runsc") => {
-                LiveContainerState::Secure
-            }
-            Some(_) => LiveContainerState::Unsafe,
-            None => LiveContainerState::Unknown,
-        },
+        declared_runtime.map_or(LiveContainerState::Unknown, |declared| {
+            live_runtime_security(runtime, backend, declared)
+        }),
     );
     state = merge_live_state(state, live_security_options_security(host));
     state = merge_live_state(
@@ -1707,6 +1763,23 @@ fn live_observed_security_drift(
     state = merge_live_state(state, live_capabilities_security(container, host, backend));
     state = merge_live_state(state, live_apparmor_security(container, backend));
     state
+}
+
+fn live_runtime_security(
+    observed: Option<&str>,
+    backend: &str,
+    declared: &DeclaredRuntime,
+) -> LiveContainerState {
+    match (backend, observed) {
+        ("docker", Some(runtime)) if runtime == declared.name => LiveContainerState::Secure,
+        // Podman exposes the runtime name, not its executable. A matching
+        // name cannot prove the configured pinned path was actually used.
+        ("podman", Some(runtime)) if runtime == declared.name || runtime.contains('/') => {
+            LiveContainerState::Unknown
+        }
+        ("docker" | "podman", Some(_)) => LiveContainerState::Unsafe,
+        _ => LiveContainerState::Unknown,
+    }
 }
 
 fn merge_live_state(
@@ -2460,7 +2533,11 @@ fn backup(agents: &[Agent], args: &[String]) -> Result<u8, String> {
 }
 
 fn rebuild(config: &Config) -> Result<u8, String> {
-    let target = format!("{}#{}", config.flake_dir.display(), config.host_name);
+    let target = format!(
+        "{}#{}",
+        config.flake_dir.display(),
+        config.configuration_name
+    );
     let mut command = Command::new("sudo");
     command.args(["nixos-rebuild", "switch", "--flake", &target]);
     exec(command)
@@ -2685,7 +2762,9 @@ fn print_help() {
            tentaflake doctor --security [--json]\n\
            tentaflake backup <name>\n\
            tentaflake rebuild|update\n\n\
-         Agent definitions are declarative: edit agents.toml, then rebuild."
+         Desired system: edit tentaflake.toml, then rebuild.\n\
+         Offline: tentaflake config validate|normalize <file> [--json]\n\
+         Migration: tentaflake config migrate <agents.toml|agents.json> <tentaflake.toml>"
     );
 }
 
@@ -2696,9 +2775,11 @@ mod tests {
     #[test]
     fn parses_config_and_defaults_agents_path() {
         let config =
-            parse_config("backend=podman\nflake_dir=/etc/nixos\nhost_name=agent-host\n").unwrap();
+            parse_config("backend=podman\nflake_dir=/etc/nixos\nhost_name=renamed-host\nconfiguration_name=agent-host\n").unwrap();
         assert_eq!(config.backend, "podman");
         assert_eq!(config.agents_file, PathBuf::from(DEFAULT_AGENTS));
+        assert_eq!(config.host_name, "renamed-host");
+        assert_eq!(config.configuration_name, "agent-host");
     }
 
     #[test]
@@ -3295,6 +3376,8 @@ mod tests {
             r#"{"/run":67108864,"/tmp":268435456,"/var/tmp":268435456}"#,
             "\ttrue\t",
             r#"{"memoryBytes":2147483648,"memorySwapBytes":2147483648,"nanoCpus":2000000000,"pidsLimit":512,"nofile":4096,"nproc":512}"#,
+            "\t",
+            r#"{"name":"runsc","path":"/nix/store/fixture/bin/runsc"}"#,
             "\n"
         ))
         .unwrap();
@@ -3310,6 +3393,31 @@ mod tests {
         assert_eq!(
             agent.declared_live_resources,
             Some(test_declared_live_resources())
+        );
+        assert_eq!(agent.declared_runtime, Some(test_declared_runtime("runsc")));
+        let mut without_runtime = agent.clone();
+        without_runtime.declared_runtime = None;
+        assert_eq!(
+            live_container_security_from_manifest(
+                &without_runtime,
+                Some(&serde_json::json!([])),
+                "docker",
+                Some("none"),
+            ),
+            LiveContainerState::Unknown
+        );
+        let privileged = serde_json::json!([{
+            "State": {"Running": true},
+            "HostConfig": {"Privileged": true}
+        }]);
+        assert_eq!(
+            live_container_security_from_manifest(
+                &without_runtime,
+                Some(&privileged),
+                "docker",
+                Some("none"),
+            ),
+            LiveContainerState::Unsafe
         );
 
         let mut ports_declared = agent.clone();
@@ -3427,6 +3535,75 @@ mod tests {
         }
     }
 
+    fn test_declared_runtime(name: &str) -> DeclaredRuntime {
+        DeclaredRuntime { name: name.into() }
+    }
+
+    #[test]
+    fn declared_runtime_is_exact_typed_and_never_inferred_from_a_name() {
+        assert_eq!(parse_declared_runtime("-", 2).unwrap(), None);
+        for name in ["runsc", "runsc-research", "runsc-pi"] {
+            let declared = test_declared_runtime(name);
+            let path = format!("/nix/store/fixture/bin/{name}");
+            let encoded = serde_json::json!({"name":name,"path":path}).to_string();
+            assert_eq!(
+                parse_declared_runtime(&encoded, 2).unwrap(),
+                Some(declared.clone())
+            );
+            assert_eq!(
+                live_runtime_security(Some(name), "docker", &declared),
+                LiveContainerState::Secure
+            );
+            assert_eq!(
+                live_runtime_security(Some(&path), "podman", &declared),
+                LiveContainerState::Unknown
+            );
+            assert_eq!(
+                live_runtime_security(None, "docker", &declared),
+                LiveContainerState::Unknown
+            );
+            assert_eq!(
+                live_runtime_security(Some(name), "unknown", &declared),
+                LiveContainerState::Unknown
+            );
+            for other in ["runsc", "runsc-research", "runsc-pi", "runc", "arbitrary"] {
+                if other != name {
+                    assert_eq!(
+                        live_runtime_security(Some(other), "docker", &declared),
+                        LiveContainerState::Unsafe
+                    );
+                    assert_eq!(
+                        live_runtime_security(Some(other), "podman", &declared),
+                        LiveContainerState::Unsafe
+                    );
+                }
+            }
+            let unpinned = format!("/tmp/{name}");
+            assert_eq!(
+                live_runtime_security(Some(&unpinned), "podman", &declared),
+                LiveContainerState::Unknown
+            );
+            let other_store = format!("/nix/store/other/bin/{name}");
+            assert_eq!(
+                live_runtime_security(Some(&other_store), "podman", &declared),
+                LiveContainerState::Unknown
+            );
+            assert_eq!(
+                live_runtime_security(Some(name), "podman", &declared),
+                LiveContainerState::Unknown
+            );
+        }
+        for encoded in [
+            r#"{"name":"arbitrary","path":"/nix/store/fixture/bin/arbitrary"}"#,
+            r#"{"name":"runsc-research","path":"/nix/store/fixture/bin/runsc"}"#,
+            r#"{"name":"runsc","path":"/tmp/runsc"}"#,
+            r#"{"name":"runsc","path":"/nix/store/../bin/runsc"}"#,
+            r#"{"name":"runsc","path":"/nix/store/fixture/bin/runsc","args":["--host-uds=all"]}"#,
+        ] {
+            assert!(parse_declared_runtime(encoded, 2).is_err());
+        }
+    }
+
     #[test]
     fn declared_tmpfs_manifest_is_closed_and_typed() {
         assert_eq!(
@@ -3531,8 +3708,35 @@ mod tests {
                 &declared_mounts,
                 &declared_tmpfs,
                 &declared_live_resources,
+                Some(&test_declared_runtime("runsc")),
             ),
             LiveContainerState::Secure
+        );
+        assert_eq!(
+            live_container_security(
+                &inspect,
+                "docker",
+                "none",
+                &declared_mounts,
+                &declared_tmpfs,
+                &declared_live_resources,
+                None,
+            ),
+            LiveContainerState::Unknown
+        );
+        let mut privileged_without_runtime = inspect.clone();
+        privileged_without_runtime[0]["HostConfig"]["Privileged"] = serde_json::json!(true);
+        assert_eq!(
+            live_container_security(
+                &privileged_without_runtime,
+                "docker",
+                "none",
+                &declared_mounts,
+                &declared_tmpfs,
+                &declared_live_resources,
+                None,
+            ),
+            LiveContainerState::Unsafe
         );
         let mut empty_none_network = inspect.clone();
         empty_none_network[0]["NetworkSettings"]["Networks"] = serde_json::json!({});
@@ -3544,6 +3748,7 @@ mod tests {
                 &declared_mounts,
                 &declared_tmpfs,
                 &declared_live_resources,
+                Some(&test_declared_runtime("runsc")),
             ),
             LiveContainerState::Secure
         );
@@ -3561,6 +3766,7 @@ mod tests {
                 &declared_mounts,
                 &declared_tmpfs,
                 &declared_live_resources,
+                Some(&test_declared_runtime("runsc")),
             ),
             LiveContainerState::Unknown
         );
@@ -3575,6 +3781,7 @@ mod tests {
                 &declared_mounts,
                 &declared_tmpfs,
                 &declared_live_resources,
+                Some(&test_declared_runtime("runsc")),
             ),
             LiveContainerState::Unsafe
         );
@@ -3592,6 +3799,7 @@ mod tests {
                     &declared_mounts,
                     &declared_tmpfs,
                     &declared_live_resources,
+                    Some(&test_declared_runtime("runsc")),
                 ),
                 LiveContainerState::Unsafe,
                 "published port in {scope}.{field} was not rejected"
@@ -3608,6 +3816,7 @@ mod tests {
                 &declared_mounts,
                 &declared_tmpfs,
                 &declared_live_resources,
+                Some(&test_declared_runtime("runsc")),
             ),
             LiveContainerState::Secure
         );
@@ -3625,6 +3834,7 @@ mod tests {
                     &declared_mounts,
                     &declared_tmpfs,
                     &declared_live_resources,
+                    Some(&test_declared_runtime("runsc")),
                 ),
                 LiveContainerState::Unknown,
                 "missing {scope}.{field} was not treated as unknown"
@@ -3641,6 +3851,7 @@ mod tests {
                 &declared_mounts,
                 &declared_tmpfs,
                 &declared_live_resources,
+                Some(&test_declared_runtime("runsc")),
             ),
             LiveContainerState::Unknown
         );
@@ -3658,6 +3869,7 @@ mod tests {
                 &declared_mounts,
                 &declared_tmpfs,
                 &declared_live_resources,
+                Some(&test_declared_runtime("runsc")),
             ),
             LiveContainerState::Unknown
         );
@@ -3671,6 +3883,7 @@ mod tests {
                 &declared_mounts,
                 &declared_tmpfs,
                 &declared_live_resources,
+                Some(&test_declared_runtime("runsc")),
             ),
             LiveContainerState::Unsafe
         );
@@ -3691,6 +3904,7 @@ mod tests {
                     &declared_mounts,
                     &declared_tmpfs,
                     &declared_live_resources,
+                    Some(&test_declared_runtime("runsc")),
                 ),
                 LiveContainerState::Unsafe,
                 "resource drift in {field} was not rejected"
@@ -3710,6 +3924,7 @@ mod tests {
                 &declared_mounts,
                 &declared_tmpfs,
                 &declared_live_resources,
+                Some(&test_declared_runtime("runsc")),
             ),
             LiveContainerState::Unsafe
         );
@@ -3724,6 +3939,7 @@ mod tests {
                 &declared_mounts,
                 &declared_tmpfs,
                 &declared_live_resources,
+                Some(&test_declared_runtime("runsc")),
             ),
             LiveContainerState::Unsafe
         );
@@ -3740,6 +3956,7 @@ mod tests {
                 &declared_mounts,
                 &declared_tmpfs,
                 &declared_live_resources,
+                Some(&test_declared_runtime("runsc")),
             ),
             LiveContainerState::Unknown
         );
@@ -3753,6 +3970,7 @@ mod tests {
                 &declared_mounts,
                 &declared_tmpfs,
                 &declared_live_resources,
+                Some(&test_declared_runtime("runsc")),
             ),
             LiveContainerState::Unsafe
         );
@@ -3767,6 +3985,7 @@ mod tests {
                     &declared_mounts,
                     &declared_tmpfs,
                     &declared_live_resources,
+                    Some(&test_declared_runtime("runsc")),
                 ),
                 LiveContainerState::Unsafe,
                 "explicit null {field} evidence was not rejected"
@@ -3787,6 +4006,7 @@ mod tests {
                 &declared_mounts,
                 &declared_tmpfs,
                 &declared_live_resources,
+                Some(&test_declared_runtime("runsc")),
             ),
             LiveContainerState::Unsafe
         );
@@ -3800,6 +4020,7 @@ mod tests {
                 &declared_mounts,
                 &declared_tmpfs,
                 &declared_live_resources,
+                Some(&test_declared_runtime("runsc")),
             ),
             LiveContainerState::Unknown
         );
@@ -3813,6 +4034,7 @@ mod tests {
                 &declared_mounts,
                 &declared_tmpfs,
                 &declared_live_resources,
+                Some(&test_declared_runtime("runsc")),
             ),
             LiveContainerState::Unsafe
         );
@@ -3828,6 +4050,7 @@ mod tests {
                     &declared_mounts,
                     &declared_tmpfs,
                     &declared_live_resources,
+                    Some(&test_declared_runtime("runsc")),
                 ),
                 LiveContainerState::Unsafe,
                 "unsafe security option was not rejected: {option}"
@@ -3847,6 +4070,7 @@ mod tests {
                 &declared_mounts,
                 &declared_tmpfs,
                 &declared_live_resources,
+                Some(&test_declared_runtime("runsc")),
             ),
             LiveContainerState::Unsafe
         );
@@ -3861,6 +4085,7 @@ mod tests {
                 &declared_mounts,
                 &declared_tmpfs,
                 &declared_live_resources,
+                Some(&test_declared_runtime("runsc")),
             ),
             LiveContainerState::Unsafe
         );
@@ -3880,6 +4105,7 @@ mod tests {
                     &declared_mounts,
                     &declared_tmpfs,
                     &declared_live_resources,
+                    Some(&test_declared_runtime("runsc")),
                 ),
                 LiveContainerState::Unsafe,
                 "tmpfs drift was not rejected: {options}"
@@ -3896,6 +4122,7 @@ mod tests {
                 &declared_mounts,
                 &declared_tmpfs,
                 &declared_live_resources,
+                Some(&test_declared_runtime("runsc")),
             ),
             LiveContainerState::Unknown
         );
@@ -3912,6 +4139,7 @@ mod tests {
                 &declared_mounts,
                 &declared_tmpfs,
                 &declared_live_resources,
+                Some(&test_declared_runtime("runsc")),
             ),
             LiveContainerState::Unsafe
         );
@@ -3926,6 +4154,7 @@ mod tests {
                 &declared_mounts,
                 &declared_tmpfs,
                 &declared_live_resources,
+                Some(&test_declared_runtime("runsc")),
             ),
             LiveContainerState::Unsafe
         );
@@ -3939,6 +4168,7 @@ mod tests {
                 &declared_mounts,
                 &declared_tmpfs,
                 &declared_live_resources,
+                Some(&test_declared_runtime("runsc")),
             ),
             LiveContainerState::Unsafe
         );
@@ -3952,6 +4182,7 @@ mod tests {
                 &declared_mounts,
                 &declared_tmpfs,
                 &declared_live_resources,
+                Some(&test_declared_runtime("runsc")),
             ),
             LiveContainerState::Unknown
         );
@@ -3966,6 +4197,7 @@ mod tests {
                 &declared_mounts,
                 &declared_tmpfs,
                 &declared_live_resources,
+                Some(&test_declared_runtime("runsc")),
             ),
             LiveContainerState::Unknown
         );
@@ -3979,6 +4211,7 @@ mod tests {
                 &declared_mounts,
                 &declared_tmpfs,
                 &declared_live_resources,
+                Some(&test_declared_runtime("runsc")),
             ),
             LiveContainerState::Unsafe
         );
@@ -3992,6 +4225,7 @@ mod tests {
                 &declared_mounts,
                 &declared_tmpfs,
                 &declared_live_resources,
+                Some(&test_declared_runtime("runsc")),
             ),
             LiveContainerState::Unsafe
         );
@@ -4010,6 +4244,7 @@ mod tests {
                 &declared_mounts,
                 &declared_tmpfs,
                 &declared_live_resources,
+                Some(&test_declared_runtime("runsc")),
             ),
             LiveContainerState::Unsafe
         );
@@ -4023,6 +4258,7 @@ mod tests {
                 &declared_mounts,
                 &declared_tmpfs,
                 &declared_live_resources,
+                Some(&test_declared_runtime("runsc")),
             ),
             LiveContainerState::Unsafe
         );
@@ -4037,6 +4273,7 @@ mod tests {
                 &declared_mounts,
                 &declared_tmpfs,
                 &declared_live_resources,
+                Some(&test_declared_runtime("runsc")),
             ),
             LiveContainerState::Unsafe
         );
@@ -4054,6 +4291,7 @@ mod tests {
                 &declared_mounts,
                 &declared_tmpfs,
                 &declared_live_resources,
+                Some(&test_declared_runtime("runsc")),
             ),
             LiveContainerState::Unsafe
         );
@@ -4067,6 +4305,7 @@ mod tests {
                 &declared_mounts,
                 &declared_tmpfs,
                 &declared_live_resources,
+                Some(&test_declared_runtime("runsc")),
             ),
             LiveContainerState::Unsafe
         );
@@ -4081,6 +4320,7 @@ mod tests {
                 &declared_mounts,
                 &declared_tmpfs,
                 &declared_live_resources,
+                Some(&test_declared_runtime("runsc")),
             ),
             LiveContainerState::Unsafe
         );
@@ -4097,7 +4337,7 @@ mod tests {
         let declared_live_resources = test_declared_live_resources();
         let mut inspect = serde_json::json!([{
             "AppArmorProfile": "containers-default-0.57.0",
-            "OCIRuntime": "/nix/store/fixture/bin/runsc",
+            "OCIRuntime": "runsc",
             "EffectiveCaps": [],
             "BoundingCaps": [],
             "State": { "Running": true },
@@ -4148,8 +4388,9 @@ mod tests {
                 &declared_mounts,
                 &declared_tmpfs,
                 &declared_live_resources,
+                Some(&test_declared_runtime("runsc")),
             ),
-            LiveContainerState::Secure
+            LiveContainerState::Unknown
         );
         let mut missing_podman_propagation = inspect.clone();
         missing_podman_propagation[0]["HostConfig"]["Tmpfs"]["/run"] =
@@ -4162,6 +4403,7 @@ mod tests {
                 &declared_mounts,
                 &declared_tmpfs,
                 &declared_live_resources,
+                Some(&test_declared_runtime("runsc")),
             ),
             LiveContainerState::Unsafe
         );
@@ -4176,6 +4418,7 @@ mod tests {
                 &declared_mounts,
                 &declared_tmpfs,
                 &declared_live_resources,
+                Some(&test_declared_runtime("runsc")),
             ),
             LiveContainerState::Unsafe
         );
@@ -4193,6 +4436,7 @@ mod tests {
                 &declared_mounts,
                 &declared_tmpfs,
                 &declared_live_resources,
+                Some(&test_declared_runtime("runsc")),
             ),
             LiveContainerState::Unknown
         );
@@ -4207,6 +4451,7 @@ mod tests {
                 &declared_mounts,
                 &declared_tmpfs,
                 &declared_live_resources,
+                Some(&test_declared_runtime("runsc")),
             ),
             LiveContainerState::Unsafe
         );
@@ -4224,8 +4469,9 @@ mod tests {
                 &declared_mounts,
                 &declared_tmpfs,
                 &declared_live_resources,
+                Some(&test_declared_runtime("runsc")),
             ),
-            LiveContainerState::Secure
+            LiveContainerState::Unknown
         );
 
         let mut inconsistent_podman_cpu = inspect.clone();
@@ -4238,6 +4484,7 @@ mod tests {
                 &declared_mounts,
                 &declared_tmpfs,
                 &declared_live_resources,
+                Some(&test_declared_runtime("runsc")),
             ),
             LiveContainerState::Unsafe
         );
@@ -4251,6 +4498,7 @@ mod tests {
                 &declared_mounts,
                 &declared_tmpfs,
                 &declared_live_resources,
+                Some(&test_declared_runtime("runsc")),
             ),
             LiveContainerState::Unsafe
         );
@@ -4264,6 +4512,7 @@ mod tests {
                 &declared_mounts,
                 &declared_tmpfs,
                 &declared_live_resources,
+                Some(&test_declared_runtime("runsc")),
             ),
             LiveContainerState::Unsafe
         );
@@ -4280,6 +4529,7 @@ mod tests {
                 &declared_mounts,
                 &declared_tmpfs,
                 &declared_live_resources,
+                Some(&test_declared_runtime("runsc")),
             ),
             LiveContainerState::Unknown
         );

@@ -203,10 +203,20 @@ in
       workerEnabled ? false,
       workspaceQuotaEnabled ? false,
       researchPolicyEnabled ? false,
+      reviewedImage ? null,
+      runtimeName ? if researchPolicyEnabled then "runsc-research" else "runsc",
     }:
     let
       secure = isSecure profile;
       merged = lib.recursiveUpdate baseConfig overrides;
+      localImageSelected = reviewedImage != null;
+      validReviewedImage =
+        builtins.isAttrs reviewedImage
+        && lib.isDerivation (reviewedImage.bundle or null)
+        && (reviewedImage.bundle.imageVerificationVersion or null) == 1
+        && builtins.isString (reviewedImage.image or null)
+        && (reviewedImage.bundle.imageSelector or null) == reviewedImage.image
+        && lib.match "^tentaflake-pi:[0-9a-f]{64}$" reviewedImage.image != null;
       effectiveAutomaticStart = automaticStart || (merged.autoStart or false);
       extraOptions = merged.extraOptions or [ ];
       preRunExtraOptions = merged.preRunExtraOptions or [ ];
@@ -246,10 +256,10 @@ in
         "--dns-option=attempts:1"
         "--sysctl=net.ipv6.conf.all.disable_ipv6=1"
       ]
-      ++ lib.optional (backend == "docker") "--runtime=runsc";
+      ++ lib.optional (backend == "docker") "--runtime=${runtimeName}";
       securePreRunOptions = lib.optionals (backend == "podman") [
         "--runtime"
-        "runsc"
+        runtimeName
       ];
     in
     {
@@ -260,6 +270,12 @@ in
         }
       ]
       ++ lib.optionals secure [
+        {
+          assertion =
+            runtimeName == (if researchPolicyEnabled then "runsc-research" else "runsc")
+            || (runtimeName == "runsc-pi" && validReviewedImage);
+          message = "tentaflake: secure runtimes require the exact Research grant or reviewed Pi image; ordinary agents must retain stock runsc.";
+        }
         {
           assertion = !(merged.privileged or false);
           message = "tentaflake: secure agent ${name} may not be privileged.";
@@ -313,8 +329,18 @@ in
           message = "tentaflake: secure agent ${name} may receive only its runtime-generated virtual broker credential environment file.";
         }
         {
-          assertion = (merged.imageFile or null) == null && (merged.imageStream or null) == null;
-          message = "tentaflake: secure agent ${name} may not replace its reviewed registry digest with a caller-supplied image archive or stream.";
+          assertion =
+            (merged.imageStream or null) == null
+            && (
+              if localImageSelected then
+                validReviewedImage
+                && merged.image == reviewedImage.image
+                && (merged.imageFile or null) == "${reviewedImage.bundle}/image.tar.gz"
+                && (merged.pull or "never") == "never"
+              else
+                (merged.imageFile or null) == null
+            );
+          message = "tentaflake: secure agent ${name} requires either its reviewed registry digest or an exact internal immutable image bundle with after-load ID verification and no pull fallback.";
         }
         {
           assertion = !(containsSensitiveValue (merged.environment or { }));
@@ -354,7 +380,11 @@ in
         else
           merged
           // {
-            image = pinnedImage name false merged.image;
+            image =
+              if validReviewedImage && merged.image == reviewedImage.image then
+                merged.image
+              else
+                pinnedImage name false merged.image;
             user = owner;
             privileged = false;
             capabilities = capabilities // {
@@ -371,6 +401,7 @@ in
             };
             preRunExtraOptions = preRunExtraOptions ++ securePreRunOptions;
             extraOptions = extraOptions ++ secureExtraOptions;
-          };
+          }
+          // lib.optionalAttrs validReviewedImage { pull = "never"; };
     };
 }

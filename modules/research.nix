@@ -11,9 +11,7 @@ let
   instances = config.tentaflake.agentInstances;
   adapters = import ../adapters { inherit pkgs lib; };
   secure = config.tentaflake.security.profile != "dev";
-  runsc = pkgs.writeShellScriptBin "runsc" ''
-    exec ${lib.getExe' pkgs.gvisor "runsc"} --host-uds=open "$@"
-  '';
+  transport = import ../lib/researchTransport.nix { inherit lib pkgs; };
 in
 {
   imports = [ researchFlake.nixosModules.default ];
@@ -47,6 +45,10 @@ in
         message = "Tentaflake research requires a secure profile and the isolated Research service.";
       }
       {
+        assertion = transport.supported config;
+        message = "Tentaflake Research requires its exact per-agent runtime registration, never an engine-wide default or extra runtime arguments.";
+      }
+      {
         assertion =
           config.services.secureResearch.summarizeOrder == [ ]
           && !(lib.attrByPath [ "openai" "enable" ] false config.services.secureResearch.providers);
@@ -63,6 +65,7 @@ in
         assertion =
           builtins.hasAttr name containers
           && registered
+          && instance.runnable
           && adapters.${instance.adapter}.research.supported
           && !(lib.attrByPath [ name "fetch" "enable" ] false config.tentaflake.broker.agents);
         message = "Research agent ${name} must be a declared registered adapter with Research capability and disable its legacy fetch broker.";
@@ -81,10 +84,25 @@ in
         assertion = lib.all (volume: lib.elem volume (containers.${name}.volumes or [ ])) client.volumes;
         message = "Research agent ${name} must retain its exact read-only client closure and relay socket mounts.";
       }
+    ) cfg.agents
+    ++ lib.mapAttrsToList (
+      name: _:
+      let
+        instance = instances.${name} or null;
+        expected = if instance != null && instance.adapter == "pi" then "runsc-pi" else transport.name;
+      in
+      {
+        assertion =
+          builtins.hasAttr name containers
+          && transport.selected config.virtualisation.oci-containers.backend containers.${name} expected;
+        message = "Research agent ${name} must explicitly select its dedicated scoped runtime.";
+      }
     ) cfg.agents;
-    # gVisor defaults to denying host UDS. Permit opening projected sockets;
-    # creation remains disabled, and mount policy admits only each exact relay.
-    virtualisation.docker.daemon.settings.runtimes.runsc.path = lib.mkForce (lib.getExe runsc);
-    virtualisation.podman.extraRuntimes = lib.mkForce [ runsc ];
+    # Stock runsc remains unchanged. Only Research-enabled agents select this
+    # named connect-only transport; exact read-only mounts still bound access.
+    virtualisation.docker.daemon.settings.runtimes.runsc-research.path = transport.path;
+    virtualisation.containers.containersConf.settings.engine.runtimes.runsc-research = [
+      transport.path
+    ];
   };
 }

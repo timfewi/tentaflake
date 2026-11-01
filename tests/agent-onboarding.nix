@@ -2,7 +2,7 @@
 let
   inherit (pkgs) lib;
   plan = import ../lib/agentPlan.nix { inherit pkgs; };
-  generic = fromTOML (builtins.readFile ./fixtures/adapter-input/generic.toml);
+  generic = builtins.fromTOML (builtins.readFile ./fixtures/system-generic/tentaflake.toml);
   hermes = {
     schemaVersion = 1;
     agents = [
@@ -34,6 +34,47 @@ let
   };
   result = plan generic;
   rejects = value: !(builtins.tryEval (builtins.deepSeq value true)).success;
+  withState =
+    stateDir:
+    hermes
+    // {
+      agents = [ ((lib.head hermes.agents) // { inherit stateDir; }) ];
+    };
+  existing = {
+    container = "agent-existing";
+    stateDir = "/var/lib/tentaflake/agents/existing";
+    stateStorage = "/var/lib/tentaflake/agents/storage";
+    workspace = "/var/lib/tentaflake/agents/workspace";
+  };
+  againstInstalled = import ../lib/agentPlan.nix {
+    inherit pkgs;
+    existingInstances = [ existing ];
+  };
+  desired = {
+    adapter = "hermes";
+    name = "desired";
+    autoStart = true;
+    stateDir = "/var/lib/tentaflake/agents/desired/child";
+  };
+  againstDesired = import ../lib/agentPlan.nix {
+    inherit pkgs;
+    desiredAgents = [ desired ];
+  };
+  isolationRegressions = {
+    distinctNamesSharingState = !(againstInstalled (withState existing.stateDir)).valid;
+    incomingStateNestedInExisting = !(againstInstalled (withState "${existing.stateDir}/child")).valid;
+    incomingStateContainsExisting =
+      !(againstDesired (withState "/var/lib/tentaflake/agents/desired")).valid;
+    incomingStateAliasesExistingStorage = !(againstInstalled (withState existing.stateStorage)).valid;
+    incomingStateNestedInExistingStorage =
+      !(againstInstalled (withState "${existing.stateStorage}/child")).valid;
+    incomingStateAliasesExistingWorkspace = !(againstInstalled (withState existing.workspace)).valid;
+    desiredStateReservedWithoutActiveInventory = !(againstDesired (withState desired.stateDir)).valid;
+    desiredRunningAgentDoesNotNeedToBeStopped =
+      (againstDesired (withState "/var/lib/tentaflake/agents/separate")).valid;
+    adjacentStatePathsRemainSeparate =
+      (againstInstalled (withState "${existing.stateDir}-sibling")).valid;
+  };
 in
 assert result.valid && result.errors == [ ];
 assert (lib.head result.instances).container == "agent-from-json";
@@ -41,6 +82,7 @@ assert (lib.head result.instances).requiresHostUpdate;
 assert (plan hermes).valid;
 assert !(lib.head (plan scaffold).instances).runnable;
 assert !(lib.head (plan piScaffold).instances).runnable;
+assert lib.all (value: value) (lib.attrValues isolationRegressions);
 assert rejects (plan (generic // { schemaVersion = 2; }));
 assert lib.all (schemaVersion: rejects (plan (generic // { inherit schemaVersion; }))) [
   1.0
@@ -108,4 +150,6 @@ assert rejects (plan {
 assert rejects (plan (hermes // { hermes = [ ]; }));
 assert rejects (plan (hermes // { zeroclaw = [ ]; }));
 assert (plan (hermes // { _securityNote = "Public fixture metadata only."; })).valid;
+assert rejects (plan (hermes // { _securityNote = true; }));
+assert rejects (plan (hermes // { _unknownMetadata = "not admitted"; }));
 true

@@ -641,6 +641,7 @@ mod tests {
             fs::write(&runtime, format!("#!{}\nprintf '%s\\n' \"$*\" >> '{}'/calls\ncase \"$1\" in ps) exit 0;; *) exit 77;; esac\n", shell.display(), root.display())).unwrap();
             fs::set_permissions(&runtime, fs::Permissions::from_mode(0o700)).unwrap();
             let config = Config {
+                activity: None,
                 agent: "fixture".into(),
                 backend: "docker".into(),
                 runtime,
@@ -736,6 +737,38 @@ mod tests {
         assert!(!pending_path(&f.config, &request.id).exists());
         assert_eq!(f.calls(), "");
         assert!(terminal(&f.config, &request).unwrap());
+    }
+
+    #[test]
+    fn telemetry_failure_cannot_dispatch_denied_or_recovered_work() {
+        let mut f = Fixture::new("telemetry-gap");
+        f.config.activity = Some(serde_json::from_value(serde_json::json!({
+            "socket":"/run/no-hostpulse/socket","relay_socket":"/run/no-worker-publisher/socket",
+            "server_uid":1,"producer_uid":2,"producer_id":"worker-test","tenant_id":"tenant",
+            "agent_id":"agent-fixture","run_id":"fixed-host-context","workload_id":"worker",
+            "generation":1,"policy_revision":"test"
+        })).unwrap());
+        let mut request = f.request(ActionClass::Forbidden);
+        request.argv = vec!["SECRET_CANARY_ARGV".into()];
+        f.pending(&request);
+        let start = Instant::now();
+        drain(&f.config).unwrap();
+        assert!(start.elapsed() < Duration::from_secs(1));
+        assert_eq!(f.calls(), "");
+        assert!(terminal(&f.config, &request).unwrap());
+        activity_event(
+            &f.config,
+            &request.id,
+            "execution-uncertain",
+            "SECRET_CANARY_RESULT",
+        );
+        drain(&f.config).unwrap();
+        assert_eq!(f.calls(), "");
+        assert!(
+            !fs::read_to_string(f.config.state_dir.join("audit.jsonl"))
+                .unwrap_or_default()
+                .contains("SECRET_CANARY")
+        );
     }
 
     #[test]

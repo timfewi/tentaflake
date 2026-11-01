@@ -12,14 +12,32 @@ The template does not create an Internet route or obtain provider credentials.
 
 ## Configuration
 
-Declare a registered Research-capable adapter in `agents.toml`, then configure
-Nix host policy for its common container ID and globally unique instance name:
+Declare a registered Research-capable Hermes or ZeroClaw adapter in
+`tentaflake.toml`, then opt in for its exact declared container ID:
+
+```toml
+[research]
+enable = true
+
+[research.agents.agent-assistant]
+uid = 62101
+
+[research.agents.agent-research]
+uid = 62102
+```
+
+This projects the per-agent map to `tentaflake.research.agents` and enables
+`services.secureResearch`; it does not provision a VPN or provider credentials.
+Names alone confer no permission. The shared Rust/Nix validators require
+distinct non-root relay UIDs and declared runnable Research-capable adapters;
+stopped Pi/OpenClaw and generic OCI cannot opt in. See the complete
+[public permission contract](08-agent-cli.md#public-research-permissions).
+Existing consumer Nix policy may still set `tentaflake.research.agents` directly;
+disabled or omitted public Research declarations do not override it.
+
+Configure the service separately in Nix host policy:
 
 ```nix
-tentaflake.research.agents = {
-  agent-assistant.uid = 62101;
-  agent-research.uid = 62102;
-};
 services.secureResearch = {
   serviceUid = 4201;
   egressUid = 4202;
@@ -42,6 +60,12 @@ Missing or stale readiness prevents public requests. Optional search providers,
 Chromium and OCR require their own explicit configuration. Provider keys and
 data grants belong in the research service; never put keys in agent settings or
 the Nix store. Research summarization remains disabled in this topology.
+
+Offline declaration validation is not service admission: missing service/egress
+UIDs, VPN interface or public resolvers fails host evaluation. Relay UIDs must
+also be distinct from all host users and service identities. The runtime still
+requires fresh ready leases and separately configured provider/data/paid
+permissions for each requested operation; a relay grant cannot bypass them.
 
 Keep the agent's [LLM broker](12-brokered-egress.md),
 [disposable worker](13-disposable-worker.md) and
@@ -187,10 +211,26 @@ The security manifest records the declared mounts. `doctor --security` accepts
 the research socket only when its source, destination and read-only mode match
 that declaration; broad `/run`, writable and other-agent mounts remain unsafe.
 
-gVisor runs with `--host-uds=open` to connect to projected sockets; host socket
-creation remains disabled. Agent IP networking still permits only its declared
-LLM broker, or remains `network=none`. Browser, HTTP and shell networking cannot
-gain general egress by changing a tool setting.
+Research-enabled Hermes/ZeroClaw capsules explicitly select the named
+`runsc-research` wrapper with `--host-uds=open` to connect to projected sockets;
+host socket creation remains disabled. Stock `runsc` is unchanged and cannot
+open host Unix sockets, even while another agent has Research enabled.
+Docker and Podman register the additional named runtime without changing their
+defaults; a global elevated runtime default, wrapper alias, altered wrapper or
+extra runtime arguments fails host evaluation. Secure agents retain the exact
+stock runtime mapping in either backend. An ungranted container cannot select
+Research or Pi transport by name, alias or direct executable path. Unrelated
+consumer runtimes and unmanaged containers remain independent host policy.
+The separately reviewed internal Pi path retains its own `runsc-pi` transport
+and admission checks; this does not admit public stopped Pi declarations.
+
+The security manifest declares the exact configured runtime. Live inspection
+compares Docker's runtime name; missing declarations are unknown and a different
+name is unsafe. Podman's `OCIRuntime` supplies only the name, so even a matching
+name remains unknown without independent executable-path evidence. Agent IP
+networking still permits only its declared LLM broker, or remains `network=none`.
+Browser, HTTP and shell networking cannot gain general egress by changing a tool
+setting.
 
 Adapter hooks generate upstream-specific settings after shared socket/closure
 projection. An arbitrary OCI container with a runtime-like prefix cannot opt

@@ -7,10 +7,11 @@ Do not replace declarative agents with a mandatory runtime, UI or control servic
 
 ## Ownership
 
-- `agents.toml` is the only public instance-definition source. Public
-  `agentsFromData { file = ./agents.toml; }` is file-only; `mkAgent` and adapter
-  builds are internal. Each `adapters/<id>.nix` owns one runtime implementation
-  and pure `preset` facts. `lib/runtimeCatalog.nix`
+- `tentaflake.toml` is the sole public desired-system source. Public
+  `systemFromData { file = ./tentaflake.toml; }` is file-only and returns one
+  NixOS module; `mkAgent` and adapter builds are internal. Each
+  `adapters/<id>.nix` owns its runtime implementation and pure `preset` facts.
+  `lib/runtimeCatalog.nix`
   projects presets; `adapters/catalog.json` and the marked adapter-doc table are
   generated with `python3 scripts/runtime-catalog-docs.py`, never edited as
   independent runtime sources.
@@ -23,9 +24,11 @@ Do not replace declarative agents with a mandatory runtime, UI or control servic
   for effective paths, `stateStorage`, workspace, numeric owners and `runnable`.
   Inventory retains unmanaged OCI fallback. TOML requires `schemaVersion = 1`
   and `agents`; optional `_securityNote` is metadata. No legacy wrapper/data APIs.
-  Ship only the empty inventory (`schemaVersion = 1`, `agents = []`), without
-  an example file. Remaining `agents.json` requires explicit migration and must
-  never be silently ignored, including when TOML also exists.
+  Ship only the empty, commented inventory (`schemaVersion = 1`, `agents = []`),
+  without a separate example file. Real desired state belongs in a consumer/fork
+  Git source, loaded with its own explicit file path; never import or fall back
+  to the upstream template for an installation. Missing/Git-filtered sources
+  fail. Remaining `agents.toml` or `agents.json` requires explicit migration.
 - Hermes/ZeroClaw real vendor acceptance is pending. OpenClaw/Pi are stopped
   refusal units only: no OCI artifact, state, credentials or sockets. Generic
   custom OCI is offline, with no accepted model/Research integration. Synthetic

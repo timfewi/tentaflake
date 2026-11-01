@@ -2,6 +2,86 @@
 
 Tentaflake exposes two independent profiles. Neither is imported by the core.
 
+## Scoped workload resource identity
+
+`modules/workload-mapping.nix` is an opt-in, fixed root observer, separate from
+the host-wide dashboards below. `tentaflake.workloadMapping.enable = true`
+enables it; `bindings.<canonical-agent-id>` contains exactly `tenant_id`,
+`workload_id`, and `policy_revision`. These bindings are host authorization
+policy, not another instance registry: only runnable `agentInstances` backed
+by the exact declared Docker container and unit are accepted. The helper
+package is `pkgs/tentaflake-workloads`.
+
+The first implementation supports **rootful Docker with systemd cgroups only**.
+The exact kernel path must be `/system.slice/docker-<full-container-id>.scope`.
+Podman, rootless/user-namespaced/remapped containers, custom cgroup parents,
+hybrid cgroups, stopped scaffolds and ambiguous declarations are refused, not
+guessed. Configure Docker's `native.cgroupdriver=systemd` explicitly when the
+host default differs. The root operator, Docker daemon, immutable helper and
+host policy are trusted. Docker socket access is inherently privileged; only
+this fixed helper receives it, never Hostpulse or an agent. Its only engine
+operation is a bounded inspect template returning ID, PID and running state;
+there is no command API, environment inspection, log access or namespace entry.
+`CAP_SYS_PTRACE` is retained solely to verify the target's initial user
+namespace through procfs; no network-administration/BPF/mount capability is
+granted. The observer has a private network and only Unix address-family
+access.
+
+After deployment, bootstrap **once on a genuinely new host**:
+
+```console
+systemctl stop tentaflake-workloads.service
+systemctl start tentaflake-workloads-initialize.service
+systemctl start tentaflake-workloads.service
+```
+
+Initialization is never a dependency of the normal service. It refuses an
+existing authority file, including a corrupt one. Normal execution refuses
+missing/corrupt authority. Preserve and back up
+`/var/lib/tentaflake-workloads/authority.json` (root-only) without rolling its
+generation counter back; loss requires explicit operator reconciliation, not
+deleting state and rerunning bootstrap. An interrupted `.pending` publication
+also fails closed and requires operator inspection/reconciliation. Do not
+remove it while the observer is running. Direct helper modes are precisely
+`--initialize`, `--run`, and `--once`; policy, state and runtime locations are
+fixed, not command-line inputs.
+
+The observer atomically publishes root-owned `0444`
+`/run/tentaflake-workloads/<agent-id>.json` in a root-owned `0755` directory.
+The closed version-1 schema contains `state`, `tenant_id`, `agent_id`,
+`workload_id`, `policy_revision`, `unit`, `generation`, `verified_at_ms`,
+`kernel_boot_id`, `container_id`, `pid`, `start_ticks`, `cgroup`, and
+`cgroup_inode`. `cgroup` is the absolute unified-hierarchy path, not a path
+prefixed with `/sys/fs/cgroup`. In `unavailable` state all six kernel/process
+fields are null. No SDK run identity is asserted. Global monotonically
+allocated generations advance on policy, boot, process, cgroup identity or
+live/unavailable transitions; unchanged facts survive observer restarts.
+Identity is checked before and after inspection against procfs and the
+cgroup-v2 filesystem/inode. Observations repeat after a two-second sleep;
+each engine/unit command has a one-second deadline and 4096-byte output cap.
+A slow or denied observation is unavailable, never a zero resource value.
+
+Hostpulse needs only metadata and kernel-counter read access, with independent
+exact UID/tenant/agent reader grants. Consumers must enforce a maximum
+10-second manifest lease, current policy scope, boot/inode/process identity
+and before/after sampling checks; clear rates on identity change. Service
+death or a blocked poll expires rather than retaining live authority.
+Policy removal unlinks the prior manifest on restart; the Nix service restarts
+when the generated policy changes. Runtime files are not an authorization
+grant to read other tenants, and host-wide metadata is never a fallback.
+
+`tests/workload-mapping-vm.nix` is the explicit isolated integration seam:
+`{ pkgs, extraModules ? [], extraTestScript ? "" }`. It runs two local,
+synthetic Docker workloads without external networking, within two CPUs and
+2048 MiB; it compares manifests to kernel membership/inodes and exercises
+stop/restart, read permissions and corrupt/missing authority. Parent
+integration can add Hostpulse/UI configuration through `extraModules` and
+counter comparison/cross-tenant assertions through `extraTestScript`, before
+the final authority-corruption checks. This fixture is not native vendor/SDK
+runtime attestation. The focused Rust command after workspace registration is
+`cargo test -p tentaflake-workloads`; run the VM as a separate explicit gate,
+not as part of fast checks.
+
 ## Observability profile
 
 `nixosModules.observability` enables:

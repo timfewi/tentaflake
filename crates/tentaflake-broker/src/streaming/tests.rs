@@ -58,6 +58,14 @@ impl Drop for Directory {
 fn config(directory: &Directory, upstream: std::net::SocketAddr) -> Config {
     serde_json::from_value(json!({
         "agent": "stream-fixture", "listen": "127.0.0.1:7810",
+        // All non-root stream fixtures also exercise telemetry failure without
+        // changing provider dispatch counts, SDK-disconnect or audit semantics.
+        "activity": if unsafe { libc::geteuid() } == 0 { Value::Null } else { json!({
+            "socket":"/run/tentaflake-no-collector/socket","server_uid":1,
+            "producer_uid":unsafe {libc::geteuid()},"producer_id":"stream-test",
+            "tenant_id":"tenant","agent_id":"agent-stream-fixture","run_id":"host-context",
+            "workload_id":"stream-broker","generation":1,"policy_revision":"test"
+        }) },
         "token_file": directory.0.join("token"),
         "audit_file": directory.0.join("audit"),
         "budget_state_file": directory.0.join("budget"),

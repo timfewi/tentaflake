@@ -50,6 +50,8 @@ struct OpenHow {
 #[serde(deny_unknown_fields)]
 struct Config {
     agent: String,
+    #[serde(default)]
+    activity: Option<tentaflake_activity::Config>,
     backend: String,
     runtime: PathBuf,
     image: String,
@@ -197,10 +199,12 @@ fn run() -> Result<()> {
     let command = args
         .next()
         .ok_or_else(|| "missing drain, approve, or deny command".to_string())?;
-    let config: Config = serde_json::from_reader(
-        File::open(&config_path).map_err(|error| format!("open {config_path}: {error}"))?,
-    )
-    .map_err(|error| format!("parse {config_path}: {error}"))?;
+    let file = File::open(&config_path).map_err(|error| format!("open {config_path}: {error}"))?;
+    let config: Config =
+        serde_json::from_reader(&file).map_err(|error| format!("parse {config_path}: {error}"))?;
+    if config.activity.is_some() {
+        tentaflake_activity::require_root_config(&file)?;
+    }
     validate_config(&config)?;
     // Inspection and recorded decisions never adopt the capsule group, create
     // queue/workspace state, recover jobs, or dispatch an OCI command.
@@ -285,6 +289,12 @@ fn reject_extra_args(mut args: impl Iterator<Item = String>) -> Result<()> {
 
 fn validate_config(config: &Config) -> Result<()> {
     validate_identifier("agent", &config.agent, 48)?;
+    if let Some(activity) = &config.activity {
+        activity.validate(&config.agent)?;
+        if activity.relay_socket.is_none() {
+            return Err("worker activity requires isolated publisher relay".into());
+        }
+    }
     if !matches!(config.backend.as_str(), "docker" | "podman") {
         return Err("backend must be docker or podman".into());
     }
@@ -602,7 +612,10 @@ fn process_ready(config: &Config, workspace_fd: RawFd) -> Result<()> {
             // Its presence is ambiguous; never retry that execution silently.
             queue::recover(config)?;
         } else {
-            execute(config, workspace_fd, &request)?;
+            if let Err(error) = execute(config, workspace_fd, &request) {
+                activity_event(config, &request.id, "execution-uncertain", "");
+                return Err(error);
+            }
             queue::retire(config, "running", &request)?;
         }
     }
@@ -840,7 +853,18 @@ fn execute(config: &Config, workspace_fd: RawFd, request: &JobRequest) -> Result
         "completed",
         Some(request.action_class),
         &result.status,
-    )
+    )?;
+    activity_event(
+        config,
+        &request.id,
+        "execution",
+        if result.exit_code.is_none() {
+            "unknown"
+        } else {
+            &result.status
+        },
+    );
+    Ok(())
 }
 
 fn read_completion_marker(
@@ -1325,7 +1349,9 @@ fn finish_without_run(
         message: message.chars().take(2048).collect(),
     };
     write_json(staging.join("result.json"), &result)?;
-    queue::publish_result(&staging, &final_result)
+    queue::publish_result(&staging, &final_result)?;
+    activity_event(config, &request.id, status, "");
+    Ok(())
 }
 
 fn write_json(path: PathBuf, value: &impl Serialize) -> Result<()> {
@@ -1374,7 +1400,40 @@ fn audit(
     {
         return Err("worker audit capacity is full; operator archival required".into());
     }
-    file.write_all(&record).map_err(|error| error.to_string())
+    file.write_all(&record).map_err(|error| error.to_string())?;
+    activity_event(config, job, event, detail);
+    Ok(())
+}
+
+fn activity_event(config: &Config, job: &str, event: &str, detail: &str) {
+    use tentaflake_activity::{Operation, Outcome};
+    let Some(activity) = &config.activity else {
+        return;
+    };
+    let (operation, outcome) = match event {
+        "denied" | "rejected" | "request-rejected" | "queue-overload" => {
+            (Operation::Enforcement, Outcome::Denied)
+        }
+        "execution" => (
+            Operation::Tool,
+            match detail {
+                "succeeded" => Outcome::Succeeded,
+                "failed" => Outcome::Failed,
+                _ => Outcome::Uncertain,
+            },
+        ),
+        "execution-uncertain" | "recovered" => (Operation::Tool, Outcome::Uncertain),
+        "approved" | "request-accepted" | "approval-required" => {
+            (Operation::Enforcement, Outcome::Succeeded)
+        }
+        _ => return,
+    };
+    if activity
+        .emit(job, operation, outcome, Duration::ZERO, 0)
+        .is_err()
+    {
+        eprintln!("tentaflake activity telemetry_gap");
+    }
 }
 
 fn unix_seconds() -> u64 {

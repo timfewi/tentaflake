@@ -2,12 +2,13 @@ result
 result-*
 *.tmp
 *.bak
-.agents.toml.lock
-agents.toml.pending
+.tentaflake.toml.lock
+tentaflake.toml.pending
 
 # Local overrides — user secrets and home-manager config.
-# Note: agents.toml is intentionally NOT ignored — the flake must evaluate it,
-# and flakes only see git-tracked files (run `git add agents.toml`).
+# The public tentaflake.toml stays an empty commented template. Deployment data
+# belongs in a consumer/fork's tracked TOML, not an ignored upstream override.
+# It is intentionally NOT ignored: ordinary flakes omit untracked/ignored files.
 home.nix
 secrets/*.env
 

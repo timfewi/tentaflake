@@ -39,6 +39,32 @@ let
     {
       options = {
         enable = lib.mkEnableOption "isolated brokers for OCI container ${name}";
+        activity = lib.mkOption {
+          default = null;
+          description = "Optional host-only fixed Hostpulse context; native run identity is not inferred.";
+          type = lib.types.nullOr (
+            lib.types.submodule {
+              options =
+                (lib.genAttrs [ "producer_id" "tenant_id" "run_id" "workload_id" "policy_revision" ] (
+                  _:
+                  lib.mkOption {
+                    type = lib.types.strMatching "^[A-Za-z0-9_.-]{1,64}$";
+                  }
+                ))
+                // {
+                  socket = lib.mkOption { type = lib.types.strMatching "^/run/[A-Za-z0-9_./-]+$"; };
+                  server_uid = lib.mkOption { type = lib.types.ints.positive; };
+                  producer_uid = lib.mkOption { type = lib.types.ints.positive; };
+                  generation = lib.mkOption { type = lib.types.ints.positive; };
+                };
+            }
+          );
+        };
+        activityUser = lib.mkOption {
+          type = lib.types.str;
+          default = "";
+          description = "Existing dedicated static host user matching activity.producer_uid; never an agent/container identity.";
+        };
         networkName = lib.mkOption {
           type = lib.types.str;
           default = "tf-${name}";
@@ -174,6 +200,8 @@ let
 
   commonConfig = name: agent: mode: {
     agent = name;
+    activity =
+      if mode == "llm" && agent.activity != null then agent.activity // { agent_id = name; } else null;
     listen = "${agent.gateway}:${toString agent.${mode}.port}";
     token_file = "$CREDENTIALS_DIRECTORY/agent-token";
     audit_file = "/var/lib/tentaflake-broker-${mode}-${name}/audit.jsonl";
@@ -367,7 +395,7 @@ let
         Type = "simple";
         # Retry in place so a transient broker failure does not stop controllers.
         RestartMode = "direct";
-        DynamicUser = true;
+        DynamicUser = !(mode == "llm" && cfg.agents.${name}.activity != null);
         StateDirectory = "tentaflake-broker-${mode}-${name}";
         StateDirectoryMode = "0700";
         LoadCredential = loadCredential;
@@ -401,6 +429,9 @@ let
       }
       // lib.optionalAttrs strict {
         User = bridgeName name;
+      }
+      // lib.optionalAttrs (mode == "llm" && cfg.agents.${name}.activity != null) {
+        User = cfg.agents.${name}.activityUser;
       };
     };
 
@@ -411,8 +442,9 @@ let
     inherit description;
     serviceConfig = {
       Type = "oneshot";
-      DynamicUser = true;
-      User = bridgeName name;
+      DynamicUser = cfg.agents.${name}.activity == null;
+      User =
+        if cfg.agents.${name}.activity == null then bridgeName name else cfg.agents.${name}.activityUser;
       StateDirectory = "tentaflake-broker-llm-${name}";
       StateDirectoryMode = "0700";
       ExecStart = "${lib.getExe brokerPackage} --${operation}-strict-budget /var/lib/tentaflake-broker-llm-${name}/budget.json";
@@ -622,6 +654,35 @@ in
     ]
     ++ lib.concatLists (
       lib.mapAttrsToList (name: agent: [
+        {
+          assertion =
+            agent.activity == null
+            || (
+              agent.llm.enable
+              && agent.activityUser != ""
+              &&
+                (lib.attrByPath [ agent.activityUser "uid" ] null config.users.users) == agent.activity.producer_uid
+              && builtins.stringLength agent.activity.socket < 108
+              && lib.all (part: part != "" && part != "." && part != "..") (
+                lib.tail (lib.splitString "/" agent.activity.socket)
+              )
+              && agent.activity.generation <= 9007199254740991
+              &&
+                lib.count
+                  (
+                    other:
+                    other.enable && other.activity != null && other.activity.producer_uid == agent.activity.producer_uid
+                  )
+                  (
+                    (lib.attrValues cfg.agents)
+                    ++ (lib.attrValues (lib.attrByPath [ "tentaflake" "worker" "agents" ] { } config))
+                  ) == 1
+              && !(lib.elem agent.activity.producer_uid (
+                map (instance: instance.uid) (lib.attrValues config.tentaflake.agentInstances)
+              ))
+            );
+          message = "Broker activity requires a dedicated existing static non-root host UID matching the exact Hostpulse grant.";
+        }
         {
           assertion = lib.elem name containerNames;
           message = "tentaflake broker key ${name} must exactly match an OCI agent container name.";

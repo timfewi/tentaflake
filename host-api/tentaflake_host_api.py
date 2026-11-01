@@ -1,4 +1,4 @@
-"""Optional local operator API. No model, guest, shell, or configuration authority."""
+"""Local operator API with exact-scoped runner mediation; no shell or activation."""
 
 import argparse
 import fcntl
@@ -8,9 +8,11 @@ import os
 import re
 import selectors
 import signal
+import socket
 import socketserver
 import sqlite3
 import stat
+import struct
 import subprocess
 import threading
 import time
@@ -24,6 +26,23 @@ MAX_HEADERS = 8192
 MAX_OUTPUT = 512 * 1024
 MAX_RESPONSE = 768 * 1024
 MAX_RECEIPTS = 10000
+RUNNER_UID = 10100
+# Rootful runsc Gofer creates the host listener; this is not an inbound grant.
+RUNSC_PI_PEER_UID = 0
+RUNNER_TIMEOUT = 5
+RUNNER_ID = re.compile(r"[A-Za-z0-9_.:-]{1,128}\Z")
+PEER_PERMISSIONS = {
+    "read",
+    "actions",
+    "logs",
+    "propose",
+    "tool_requests",
+    "tool_decisions",
+    "host_health",
+    "run_read",
+    "run_submit",
+    "run_stop",
+}
 JOB_ID = re.compile(r"[a-z0-9][a-z0-9_-]{0,63}\Z")
 DIGEST = re.compile(r"[a-f0-9]{64}\Z")
 MODEL = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/+-]{0,199}\Z")
@@ -237,6 +256,51 @@ class Service:
             }
         if len(self.agents) > 256:
             raise ValueError("Host inventory exceeds its agent limit")
+        self.runners = config.get("runners", {})
+        if not isinstance(self.runners, dict):
+            raise ValueError("Invalid runner inventory")
+        for aid, descriptor in self.runners.items():
+            if (
+                aid not in self.agents or not self.agents[aid]["runnable"]
+                or self.agents[aid]["runtime"] != "pi"
+                or not isinstance(descriptor, dict)
+                or set(descriptor) != {"socket", "token", "transport"}
+                or descriptor != {
+                    "socket": f"/run/tentaflake-pi/{aid}/control/runner.sock",
+                    "token": f"/run/tentaflake-pi/{aid}/api-token",
+                    "transport": "runsc-pi-v1",
+                }
+            ):
+                raise ValueError("Invalid runner inventory")
+        self.peer_grants = None
+        peers = config.get("peer_grants")
+        if peers is not None:
+            if not isinstance(peers, list) or len(peers) > 64:
+                raise ValueError("Invalid host API peer grants")
+            self.peer_grants = {}
+            for peer in peers:
+                if (
+                    not isinstance(peer, dict)
+                    or set(peer) != {"uid", "agents", "permissions"}
+                    or type(peer["uid"]) is not int
+                    or not 1 <= peer["uid"] <= 4294967294
+                    or peer["uid"] in self.peer_grants
+                    or not isinstance(peer["agents"], list)
+                    or len(peer["agents"]) > 256
+                    or any(not isinstance(aid, str) or aid not in self.agents for aid in peer["agents"])
+                    or len(peer["agents"]) != len(set(peer["agents"]))
+                    or not isinstance(peer["permissions"], list)
+                    or any(
+                        not isinstance(permission, str) or permission not in PEER_PERMISSIONS
+                        for permission in peer["permissions"]
+                    )
+                    or len(peer["permissions"]) != len(set(peer["permissions"]))
+                ):
+                    raise ValueError("Invalid host API peer grants")
+                self.peer_grants[peer["uid"]] = {
+                    "agents": frozenset(peer["agents"]),
+                    "permissions": frozenset(peer["permissions"]),
+                }
         self.policies = config.get("policies", {})
         self.worker_configs = config.get("worker_configs", {})
         if (
@@ -322,6 +386,9 @@ class Service:
             self.db.execute(
                 "CREATE TABLE IF NOT EXISTS tool_decisions (request_id TEXT PRIMARY KEY, intent TEXT NOT NULL, response TEXT NOT NULL)"
             )
+            self.db.execute(
+                "CREATE TABLE IF NOT EXISTS runner_dispatch (identity TEXT PRIMARY KEY, digest TEXT NOT NULL, status INTEGER NOT NULL, response TEXT NOT NULL)"
+            )
         except BaseException:
             self.close()
             raise
@@ -341,13 +408,52 @@ class Service:
         except OSError as exc:
             raise APIError("Host operation is unavailable", 503) from exc
 
-    def info(self):
+    def peer_grant(self, uid):
+        if self.peer_grants is None:
+            return None
+        grant = self.peer_grants.get(uid)
+        if grant is None:
+            raise APIError("Host peer is not authorized", 403)
+        return grant
+
+    @staticmethod
+    def require_permission(grant, permission):
+        if grant is not None and permission not in grant["permissions"]:
+            raise APIError("Host operation is not granted", 403)
+
+    @staticmethod
+    def scoped_capabilities(capabilities, grant):
+        result = dict(capabilities)
+        if grant is None:
+            return result
+        permissions = {
+            "actions": "actions",
+            "logs": "logs",
+            "details": "read",
+            "config_proposals": "propose",
+            "tool_requests": "tool_requests",
+            "tool_decisions": "tool_decisions",
+        }
+        for capability, permission in permissions.items():
+            if capability in result and permission not in grant["permissions"]:
+                result[capability] = [] if isinstance(result[capability], list) else False
+        if "runner" in result:
+            result["runner"] = dict(result["runner"])
+            for operation in ("read", "submit", "stop"):
+                result["runner"][operation] &= "run_" + operation in grant["permissions"]
+        return result
+
+    def info(self, grant=None):
         return {
             "schema_version": 1,
             "host": self.config["host"],
             "backend": self.config["backend"],
             "security_profile": self.config["security_profile"],
-            "capabilities": {
+            "authorization": {
+                "mode": "exact-peer" if self.peer_grants is not None else "legacy-group",
+                "resource_scoped": self.peer_grants is not None,
+            },
+            "capabilities": self.scoped_capabilities({
                 "actions": self.config["allow_actions"],
                 "logs": self.config["allow_logs"],
                 "chat": False,
@@ -355,7 +461,7 @@ class Service:
                 "config_proposals": True,
                 "tool_requests": self.config["allow_tool_requests"],
                 "tool_decisions": self.config["allow_tool_decisions"],
-            },
+            }, grant),
         }
 
     def states(self, agents):
@@ -387,15 +493,19 @@ class Service:
             )
         return {agent["id"]: states.get(agent["unit"], "unknown") for agent in agents}
 
-    def list_agents(self):
-        states = self.states(list(self.agents.values()))
+    def list_agents(self, grant=None):
+        agents = [
+            agent for agent in self.agents.values()
+            if grant is None or agent["id"] in grant["agents"]
+        ]
+        states = self.states(agents)
         return {
             "schema_version": 1,
             "agents": [
                 {key: agent[key] for key in ("id", "name", "runtime", "runnable")}
                 | {
                     "state": states[agent["id"]],
-                    "capabilities": {
+                    "capabilities": self.scoped_capabilities({
                         "actions": (
                             ["start", "stop", "restart"]
                             if agent["runnable"]
@@ -406,9 +516,9 @@ class Service:
                         "logs": self.config["allow_logs"],
                         "chat": False,
                     }
-                    | self.management_capabilities(agent),
+                    | self.management_capabilities(agent), grant),
                 }
-                for agent in self.agents.values()
+                for agent in agents
             ],
         }
 
@@ -439,9 +549,14 @@ class Service:
             "config_proposals": bool(self.editable_fields(agent)),
             "tool_requests": worker and self.config["allow_tool_requests"],
             "tool_decisions": worker and self.config["allow_tool_decisions"],
-        }
+        } | ({"runner": {
+            "read": self.peer_grants is not None,
+            "submit": self.peer_grants is not None,
+            "stop": self.peer_grants is not None,
+            "resource_scoped": True, "transport": "host-api",
+        }} if agent["id"] in self.runners else {})
 
-    def details(self, agent):
+    def details(self, agent, grant=None):
         policy = self.policy(agent)
         revision = hashlib.sha256(
             json.dumps(
@@ -456,8 +571,11 @@ class Service:
             "agent_id": agent["id"],
             "policy_revision": revision,
             "policy": policy,
-            "editable_fields": self.editable_fields(agent),
-            "capabilities": self.management_capabilities(agent),
+            "editable_fields": (
+                self.editable_fields(agent)
+                if grant is None or "propose" in grant["permissions"] else []
+            ),
+            "capabilities": self.scoped_capabilities(self.management_capabilities(agent), grant),
         }
 
     def proposal(self, agent, body):
@@ -957,7 +1075,204 @@ class Service:
         finally:
             self.action_lock.release()
 
-    def route(self, method, target, body):
+    @staticmethod
+    def runner_file(path, *, token=False):
+        """Pin every ancestor without following links; return an owned descriptor."""
+        fd = os.open("/", os.O_PATH | os.O_DIRECTORY)
+        try:
+            parts = Path(path).parts[1:]
+            for index, part in enumerate(parts):
+                final = index == len(parts) - 1
+                if final and not token:
+                    child = os.open(part, os.O_PATH | os.O_NOFOLLOW, dir_fd=fd)
+                    os.close(fd)
+                    fd = child
+                    metadata = os.fstat(fd)
+                    if (not stat.S_ISSOCK(metadata.st_mode) or metadata.st_uid != RUNNER_UID
+                            or metadata.st_gid != RUNNER_UID or stat.S_IMODE(metadata.st_mode) != 0o620):
+                        raise APIError("Invalid runner endpoint provenance", 503)
+                    result, fd = fd, None
+                    # Connect the pinned inode, not a mutable agent-owned basename.
+                    return result, f"/proc/self/fd/{result}"
+                child = os.open(part, os.O_NOFOLLOW | (os.O_RDONLY | os.O_NONBLOCK if final else os.O_PATH | os.O_DIRECTORY), dir_fd=fd)
+                os.close(fd)
+                fd = child
+                metadata = os.fstat(fd)
+                expected_uid = RUNNER_UID if not token and index == len(parts) - 2 else 0
+                if metadata.st_uid != expected_uid or metadata.st_mode & 0o022:
+                    raise APIError("Invalid runner file provenance", 503)
+                if not final and (
+                    (index == 2 and stat.S_IMODE(metadata.st_mode) != 0o700)
+                    or (expected_uid == RUNNER_UID and (
+                        metadata.st_gid != RUNNER_UID or stat.S_IMODE(metadata.st_mode) != 0o710
+                    ))
+                ):
+                    raise APIError("Invalid runner directory permissions", 503)
+                if final:
+                    if (not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1 or metadata.st_size != 65
+                            or metadata.st_gid != RUNNER_UID or stat.S_IMODE(metadata.st_mode) != 0o440):
+                        raise APIError("Invalid runner credential provenance", 503)
+                    raw = os.read(fd, 66)
+                    if not re.fullmatch(rb"[a-f0-9]{64}\n", raw):
+                        raise APIError("Invalid runner credential", 503)
+                    return raw[:-1]
+        finally:
+            if fd is not None:
+                os.close(fd)
+
+    def runner_exchange(self, descriptor, method, target, body=None, *, events=False):
+        deadline = time.monotonic() + RUNNER_TIMEOUT
+        parent = None
+        try:
+            credential = self.runner_file(descriptor["token"], token=True)
+            parent, address = self.runner_file(descriptor["socket"])
+            with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
+                def remaining():
+                    value = deadline - time.monotonic()
+                    if value <= 0:
+                        raise TimeoutError()
+                    connection.settimeout(value)
+                remaining()
+                connection.connect(address)
+                _, uid, _ = struct.unpack("iII", connection.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, 12))
+                if descriptor["transport"] != "runsc-pi-v1" or uid != RUNSC_PI_PEER_UID:
+                    raise APIError("Runner peer identity is invalid", 503)
+                data = b"" if body is None else json.dumps(body, ensure_ascii=False, separators=(",", ":")).encode()
+                # HTTP/1.0 requests avoid chunked framing; never redirect or retry.
+                request = (
+                    f"{method} {target} HTTP/1.0\r\nHost: localhost\r\nConnection: close\r\n"
+                    f"Content-Type: application/json\r\nContent-Length: {len(data)}\r\nAuthorization: Bearer "
+                ).encode() + credential + b"\r\n\r\n" + data
+                remaining()
+                connection.sendall(request)
+                raw = bytearray()
+                while b"\r\n\r\n" not in raw:
+                    remaining()
+                    chunk = connection.recv(1)
+                    if not chunk or len(raw) >= MAX_HEADERS:
+                        raise APIError("Invalid runner response headers", 502)
+                    raw.extend(chunk)
+                lines = bytes(raw[:-4]).decode("ascii").split("\r\n")
+                match = re.fullmatch(r"HTTP/1\.[01] ([0-9]{3}) [^\r\n]*", lines[0])
+                if not match:
+                    raise APIError("Invalid runner response status", 502)
+                status = int(match[1])
+                headers = {}
+                for line in lines[1:]:
+                    key, value = line.split(":", 1)
+                    key = key.lower()
+                    if not re.fullmatch(r"[a-z0-9-]+", key) or key in headers or any(ord(c) < 32 for c in value):
+                        raise APIError("Invalid runner response headers", 502)
+                    headers[key] = value.strip()
+                if "transfer-encoding" in headers or status not in {200, 400, 401, 403, 404, 405, 409, 413, 429, 500, 503}:
+                    raise APIError("Unsupported runner response", 502)
+                if headers.get("content-type", "").split(";")[0] != ("text/event-stream" if events and status == 200 else "application/json"):
+                    raise APIError("Invalid runner response type", 502)
+                length = headers.get("content-length")
+                if length is not None and (not re.fullmatch(r"[0-9]{1,9}", length) or int(length) > MAX_RESPONSE):
+                    raise APIError("Runner response exceeds limit", 502)
+                raw = bytearray()
+                while length is None or len(raw) < int(length):
+                    remaining()
+                    chunk = connection.recv(min(4096, MAX_RESPONSE + 1 - len(raw)))
+                    if not chunk:
+                        break
+                    raw.extend(chunk)
+                    if len(raw) > MAX_RESPONSE:
+                        raise APIError("Runner response exceeds limit", 502)
+                    if events and status == 200 and b"\n\n" in raw:
+                        frame = bytes(raw).split(b"\n\n", 1)[0]
+                        return {"events": [decode(line[6:]) for line in frame.splitlines() if line.startswith(b"data: ")]}
+                if length is not None and len(raw) != int(length):
+                    raise APIError("Incomplete runner response", 502)
+                value = decode(raw)
+                if not isinstance(value, dict):
+                    raise APIError("Invalid runner JSON response", 502)
+                if status != 200:
+                    messages = {400: "Runner rejected request", 401: "Runner authentication failed",
+                                403: "Runner refused operation", 404: "Runner resource not found",
+                                405: "Runner operation unavailable", 409: "Runner request conflict",
+                                413: "Runner request exceeds limit", 429: "Runner capacity reached"}
+                    raise APIError(messages.get(status, "Runner unavailable"), 502 if status in {401, 500} else status)
+                return value
+        except TimeoutError as exc:
+            raise APIError("Runner deadline exceeded; mutation outcome may be uncertain", 504) from exc
+        except (OSError, ValueError, UnicodeError) as exc:
+            raise APIError("Runner transport unavailable; mutation outcome may be uncertain", 502) from exc
+        finally:
+            if parent is not None:
+                os.close(parent)
+
+    def runner_route(self, grant, aid, method, operation, query, body):
+        if grant is None or aid not in grant["agents"]:
+            raise APIError("Exact agent runner grant required", 403)
+        permission = "run_read" if method == "GET" else "run_stop" if operation.endswith("/stop") else "run_submit"
+        self.require_permission(grant, permission)
+        descriptor = self.runners.get(aid)
+        if descriptor is None:
+            raise APIError("Agent runner is not admitted", 404)
+        target = "/v1/" + operation
+        if method == "GET":
+            if body is not None or operation == "sessions" or operation.endswith("/stop"):
+                raise APIError("Invalid runner read")
+            if operation == "runs":
+                values = parse_qs(query, keep_blank_values=True)
+                if set(values) != {"request_id"} or len(values["request_id"]) != 1 or not RUNNER_ID.fullmatch(values["request_id"][0]):
+                    raise APIError("A single runner request_id is required")
+                target += "?request_id=" + values["request_id"][0]
+            elif query:
+                raise APIError("Runner query is not supported")
+            return self.runner_exchange(descriptor, method, target, events=operation.endswith("/events"))
+        if method != "POST" or query or not isinstance(body, dict):
+            raise APIError("Invalid runner mutation")
+        try:
+            size = len(json.dumps(body, ensure_ascii=False, separators=(",", ":"), allow_nan=False).encode())
+        except (ValueError, UnicodeError) as exc:
+            raise APIError("Invalid runner JSON body") from exc
+        if size > (70000 if operation == "runs" else MAX_BODY):
+            raise APIError("Runner request exceeds limit", 413)
+        if operation == "sessions":
+            if set(body) != {"title", "request_id"} or not isinstance(body["title"], str) or len(body["title"]) > 200:
+                raise APIError("Invalid runner session request")
+            target = "/api/sessions"
+        elif operation == "runs":
+            if (set(body) != {"request_id", "session_id", "input", "context_mode"}
+                    or not isinstance(body["session_id"], str) or not RUNNER_ID.fullmatch(body["session_id"])
+                    or body["context_mode"] != "persistent" or not isinstance(body["input"], str)
+                    or not body["input"].strip() or len(body["input"].encode()) > 65536):
+                raise APIError("Invalid persistent run request")
+        elif not operation.endswith("/stop") or body:
+            raise APIError("Invalid runner mutation")
+        rid = operation if operation.endswith("/stop") else body.get("request_id")
+        if not operation.endswith("/stop") and (not isinstance(rid, str) or not RUNNER_ID.fullmatch(rid)):
+            raise APIError("Stable runner request_id required")
+        identity = json.dumps([aid, operation, rid])
+        digest = hashlib.sha256(json.dumps(body, sort_keys=True).encode()).hexdigest()
+        with self.lock:
+            previous = self.db.execute("SELECT digest,status,response FROM runner_dispatch WHERE identity=?", (identity,)).fetchone()
+            if previous:
+                if previous[0] != digest:
+                    raise APIError("Runner request identity conflict", 409)
+                if previous[1] != 200:
+                    raise APIError(previous[2], previous[1])
+                return decode(previous[2])
+            if self.db.execute("SELECT COUNT(*) FROM runner_dispatch").fetchone()[0] >= MAX_RECEIPTS:
+                raise APIError("Runner dispatch capacity reached", 503)
+            self.db.execute("INSERT INTO runner_dispatch VALUES (?,?,?,?)",
+                            (identity, digest, 409, "Runner dispatch outcome uncertain; reconcile using the same request_id"))
+        if operation in {"sessions", "runs"}:
+            capabilities = self.runner_exchange(descriptor, "GET", "/v1/capabilities")
+            if capabilities.get("available") is not True or not isinstance(capabilities.get("features"), dict) or capabilities["features"].get("runs") is not True:
+                raise APIError("Runner submission is unavailable", 409)
+        # Never reissue a mutation after uncertainty, even across daemon restarts.
+        result = self.runner_exchange(descriptor, method, target, body)
+        with self.lock:
+            self.db.execute("UPDATE runner_dispatch SET status=200,response=? WHERE identity=?",
+                            (json.dumps(result), identity))
+        return result
+
+    def route(self, method, target, body, peer_uid=None):
+        grant = self.peer_grant(peer_uid)
         parsed = urlsplit(target)
         path = unquote(parsed.path)
         if (
@@ -967,18 +1282,43 @@ class Service:
             or not target.startswith("/")
         ):
             raise APIError("Invalid request target")
+        runner = re.fullmatch(
+            r"/v1/agents/([A-Za-z0-9][A-Za-z0-9_.-]{0,127})/runner/(capabilities|sessions|runs(?:/[A-Za-z0-9-]{1,128}(?:/(?:events|stop))?)?)",
+            path,
+        )
+        if runner:
+            if path != parsed.path:
+                raise APIError("Encoded runner paths are not accepted")
+            return self.runner_route(grant, runner[1], method, runner[2], parsed.query, body)
         if method == "GET" and not parsed.query:
             if path == "/v1/info":
-                return self.info()
+                self.require_permission(grant, "read")
+                return self.info(grant)
             if path == "/v1/agents":
-                return self.list_agents()
+                self.require_permission(grant, "read")
+                return self.list_agents(grant)
             if path == "/v1/health":
+                self.require_permission(grant, "host_health")
                 return self.health()
         match = re.fullmatch(
             r"/v1/agents/([A-Za-z0-9][A-Za-z0-9_.-]{0,127})/(logs|actions|details|config-proposals|tool-requests|tool-decisions)",
             path,
         )
         if match:
+            if grant is not None:
+                if match[1] not in grant["agents"]:
+                    raise APIError("Agent access is not granted", 403)
+                permission = {
+                    ("GET", "logs"): "logs",
+                    ("POST", "actions"): "actions",
+                    ("GET", "details"): "read",
+                    ("POST", "config-proposals"): "propose",
+                    ("GET", "tool-requests"): "tool_requests",
+                    ("POST", "tool-decisions"): "tool_decisions",
+                }.get((method, match[2]))
+                if permission is None:
+                    raise APIError("Host operation is not granted", 403)
+                self.require_permission(grant, permission)
             agent = self.agents.get(match[1])
             if agent is None:
                 raise APIError("Unknown host agent", 404)
@@ -988,7 +1328,7 @@ class Service:
                 return self.action(agent, body)
             if not parsed.query:
                 handlers = {
-                    ("GET", "details"): lambda: self.details(agent),
+                    ("GET", "details"): lambda: self.details(agent, grant),
                     ("POST", "config-proposals"): lambda: self.proposal(agent, body),
                     ("GET", "tool-requests"): lambda: self.tool_requests(agent),
                     ("POST", "tool-decisions"): lambda: self.tool_decision(agent, body),
@@ -1010,7 +1350,7 @@ def receive(connection):
         if not chunk:
             raise APIError("Incomplete request")
         raw.extend(chunk)
-        if len(raw) > MAX_HEADERS + MAX_BODY:
+        if len(raw) > MAX_HEADERS + 70000:
             raise APIError("Request exceeds size limit", 413)
     header, raw = bytes(raw).split(b"\r\n\r\n", 1)
     if len(header) > MAX_HEADERS:
@@ -1037,7 +1377,8 @@ def receive(connection):
         if not re.fullmatch(r"[0-9]{1,6}", length_text):
             raise ValueError("Invalid content length")
         length = int(length_text)
-        if length > MAX_BODY or len(raw) > length:
+        maximum = 70000 if re.fullmatch(r"/v1/agents/[A-Za-z0-9][A-Za-z0-9_.-]{0,127}/runner/runs", target) else MAX_BODY
+        if length > maximum or len(raw) > length:
             raise APIError("Invalid request body length", 413)
         if (
             method == "GET"
@@ -1076,8 +1417,14 @@ def respond(connection, status, body):
 class Handler(socketserver.BaseRequestHandler):
     def handle(self):
         try:
+            peer_uid = None
+            if self.server.service.peer_grants is not None:
+                _, peer_uid, _ = struct.unpack(
+                    "iII", self.request.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, 12)
+                )
+                self.server.service.peer_grant(peer_uid)
             method, target, body = receive(self.request)
-            response = self.server.service.route(method, target, body)
+            response = self.server.service.route(method, target, body, peer_uid=peer_uid)
             respond(self.request, 200, response)
         except APIError as exc:
             try:
@@ -1109,7 +1456,7 @@ class Server(socketserver.ThreadingMixIn, socketserver.UnixStreamServer):
             # Service's exclusive state lock already excludes another owner.
             self.path.unlink()
         super().__init__(str(path), Handler)
-        os.chmod(path, 0o660)
+        os.chmod(path, 0o622 if service.peer_grants is not None else 0o660)
         self.identity = self.path.stat().st_ino
 
     def process_request(self, request, client_address):

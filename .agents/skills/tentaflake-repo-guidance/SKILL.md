@@ -11,16 +11,18 @@ Read `AGENTS.md` and `CONTRIBUTING.md`, then inspect only the relevant owners:
 | Area | Source | Guide |
 |---|---|---|
 | Runtime definition | `adapters/<id>.nix`, `lib/mkAgent.nix`, `lib/runtimeContract.nix` | [Adapters](../../../docs/agent-adapters.md) |
-| Onboarding/inventory | `lib/agentsFromData.nix`, `lib/agentPlan.nix`, CLI | [Configuration](../../../docs/08-agent-cli.md) |
+| Onboarding/inventory | `lib/systemFromData.nix`, `lib/agentPlan.nix`, CLI | [Configuration](../../../docs/08-agent-cli.md) |
 | Containment | `lib/containerSecurity.nix`, `modules/security.nix` | [Profiles](../../../docs/10-security-profiles.md) |
 | Host services | `modules/{broker,research,worker,workspace-quota,backup}.nix` | [Operations](../../../docs/07-operations.md) and linked policy guides |
 | Management | `modules/management.nix`, `modules/tailscale.nix` | [Management](../../../docs/11-tailscale-management.md) |
 | CLI/API | `crates/tentaflake-cli/`, `host-api/` | [CLI](../../../docs/06-shell.md), [API](../../../docs/19-web-ui.md) |
 | Installer/builds | `installer/disk.sh`, `lib/mkRustPackage.nix`, `scripts/eval_flake.py` | [Install](../../../docs/00-install.md), [Builds](../../../docs/17-builds.md) |
 
-Define instances only in `agents.toml`; public `agentsFromData` accepts only
-`{ file = ./agents.toml; }`. Ship an empty schema-v1 inventory without an example
-file; refuse leftover `agents.json` until consciously migrated, never ignore it.
+Define instances only in `tentaflake.toml`; public `systemFromData` accepts only
+`{ file = ./tentaflake.toml; }`. Keep the public inventory empty and commented.
+Load real TOML from the consumer/fork's tracked Git source, never an upstream
+template fallback or `path:.` filtering bypass; see the configuration guide.
+Refuse legacy `agents.toml`/`agents.json` and missing/Git-filtered desired sources.
 `mkAgent` and adapter builds are internal. Keep
 native behavior in the selected adapter and host authority in Nix policy,
 which may consume metadata but must not define more instances.

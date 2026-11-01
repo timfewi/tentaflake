@@ -1,30 +1,28 @@
 {
   config,
   lib,
-  agentsFromData,
+  systemFromData,
   profile ? "installed",
   ...
 }:
 let
   cfg = config.tentaflake;
-  # agents.toml is the only instance input; a missing file defines an empty host.
-  # Never evaluate removed declarations or silently drop existing instances.
-  dataAgents =
+  # This checkout owns its desired source (template, deployment fork or installer
+  # copy). Input-based consumers import their own file, not this configuration.
+  # Missing or Git-filtered desired state is never replaced by the public default.
+  desiredSystem =
     if builtins.pathExists ./my-agents.nix then
-      throw "tentaflake: my-agents.nix is no longer supported. Manually migrate declarations to agents.toml and host policy to Nix modules, preserving names, state paths and ownership; then remove my-agents.nix. No automatic migration is performed."
-    else if builtins.pathExists ./agents.json then
-      throw "tentaflake: legacy agents.json is no longer supported, including alongside agents.toml. Manually migrate all declarations to agents.toml, preserving names, state paths and ownership; then remove agents.json. No automatic migration is performed."
+      throw "tentaflake: manually migrate my-agents.nix to tentaflake.toml and remove the legacy file."
     else
-      lib.optionals (builtins.pathExists ./agents.toml) (agentsFromData {
-        file = ./agents.toml;
-      });
+      systemFromData { file = ./tentaflake.toml; };
 in
 {
-  imports =
-    dataAgents
-    ++ lib.optionals (profile == "installed") [
-      ./hardware-configuration.nix
-    ];
+  imports = [
+    desiredSystem
+  ]
+  ++ lib.optionals (profile == "installed") [
+    ./hardware-configuration.nix
+  ];
 
   # ── OCI container backend (required for agent containers) ──
   virtualisation.oci-containers.backend = cfg.containerBackend;

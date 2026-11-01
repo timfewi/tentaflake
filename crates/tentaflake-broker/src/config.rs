@@ -9,6 +9,8 @@ use std::path::{Path, PathBuf};
 #[serde(deny_unknown_fields)]
 pub struct Config {
     pub agent: String,
+    #[serde(default)]
+    pub activity: Option<tentaflake_activity::Config>,
     pub listen: SocketAddr,
     pub token_file: PathBuf,
     pub audit_file: PathBuf,
@@ -116,10 +118,13 @@ fn default_quarantine_entries() -> usize {
 
 impl Config {
     pub fn load(path: &Path) -> Result<Self, String> {
-        let text = fs::read_to_string(path)
+        let file = fs::File::open(path)
             .map_err(|error| format!("cannot read broker config {}: {error}", path.display()))?;
-        let mut config: Self = serde_json::from_str(&text)
+        let mut config: Self = serde_json::from_reader(&file)
             .map_err(|error| format!("invalid broker config {}: {error}", path.display()))?;
+        if config.activity.is_some() {
+            tentaflake_activity::require_root_config(&file)?;
+        }
         config.expand_credential_paths()?;
         config.validate()?;
         Ok(config)
@@ -134,6 +139,14 @@ impl Config {
     }
 
     pub fn validate(&self) -> Result<(), String> {
+        if let Some(activity) = &self.activity {
+            activity.validate(&self.agent)?;
+            if activity.relay_socket.is_some()
+                || unsafe { libc::geteuid() } != activity.producer_uid
+            {
+                return Err("broker activity requires its fixed non-root service UID".into());
+            }
+        }
         if !valid_agent_name(&self.agent) {
             return Err(
                 "agent must contain only lowercase ASCII letters, digits, and hyphens".into(),
@@ -389,6 +402,7 @@ mod tests {
 
     fn base_config() -> Config {
         Config {
+            activity: None,
             agent: "coding".into(),
             listen: "127.0.0.1:7810".parse().unwrap(),
             token_file: "/run/tentaflake/token".into(),

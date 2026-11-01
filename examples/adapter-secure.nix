@@ -1,9 +1,11 @@
-# Load instances once from JSON; attach separate operator-reviewed host policy.
+# Load instances once from TOML; attach separate operator-reviewed host policy.
+# systemFile must name the consumer/fork's tracked tentaflake.toml, never the
+# public input's empty template. A missing source is an error, not a fallback.
 # The operator supplies VPN configuration/readiness and runtime credentials.
 # Select a runnable adapter with model/Research hooks and matching broker settings.
 {
-  agentsFromData,
-  agentsFile,
+  systemFromData,
+  systemFile,
   agentName ? "coding",
   # Must match the selected TOML instance's native model configuration.
   model,
@@ -15,7 +17,7 @@
   researchPolicy,
 }:
 let
-  agentModules = agentsFromData { file = agentsFile; };
+  systemModule = systemFromData { file = systemFile; };
   hostPolicy =
     { config, lib, ... }:
     let
@@ -26,7 +28,7 @@ let
       assertions = [
         {
           assertion = instance.runnable;
-          message = "The secure example requires a runnable JSON instance named ${agentName}, not a refusal scaffold.";
+          message = "The secure example requires a runnable TOML instance named ${agentName}, not a refusal scaffold.";
         }
       ];
       tentaflake = {
@@ -75,5 +77,8 @@ let
     };
 in
 {
-  imports = agentModules ++ [ hostPolicy ];
+  imports = [
+    systemModule
+    hostPolicy
+  ];
 }

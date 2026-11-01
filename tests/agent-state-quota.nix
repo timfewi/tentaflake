@@ -16,6 +16,7 @@ let
             schemaVersion = 1;
             image = "registry.example.invalid/fixture@sha256:${lib.concatStrings (lib.replicate 64 "a")}";
             command = [ "fixture" ];
+            capabilities = [ "worker" ];
           };
         })
         (mkAgent {
@@ -63,6 +64,10 @@ let
                 };
               };
             };
+            worker.agents.agent-generic-quota = {
+              enable = true;
+              workspace = "/var/lib/tentaflake/agents/generic-quota/workspace";
+            };
             worker.agents.agent-hermes-quota = {
               enable = true;
               workspace = "/var/lib/tentaflake/agents/hermes-quota/workspace";
@@ -89,6 +94,9 @@ let
   ];
   small = fixture [
     { tentaflake.workspaceQuota.agents.agent-generic-quota.state.sizeMiB = lib.mkForce 32; }
+  ];
+  noWorkspaceQuota = fixture [
+    { tentaflake.workspaceQuota.agents.agent-generic-quota.enable = lib.mkForce false; }
   ];
   backupPaths = [
     "/var/lib/tentaflake/agents/generic-quota"
@@ -123,6 +131,19 @@ assert
 assert
   (mount "/var/lib/tentaflake/agents/generic-quota/workspace").what
   == "/var/lib/tentaflake-workspace-volumes/agent-generic-quota.img";
+assert (mount "/var/lib/tentaflake/agents/generic-quota/state").mountConfig.DirectoryMode == "0700";
+assert
+  (mount "/var/lib/tentaflake/agents/generic-quota/workspace").mountConfig.DirectoryMode == "0700";
+assert
+  !(lib.any (
+    rule: lib.hasInfix "/var/lib/tentaflake/agents/generic-quota/workspace/.tentaflake-worker" rule
+  ) config.systemd.tmpfiles.rules);
+assert lib.any (
+  rule:
+  lib.hasInfix "/var/lib/tentaflake/agents/generic-quota/workspace/.tentaflake-worker/inbox " rule
+) noWorkspaceQuota.systemd.tmpfiles.rules;
+assert lib.hasInfix ''inbox="$control/inbox"''
+  services.tentaflake-workspace-quota-agent-generic-quota.script;
 assert lib.elem "tentaflake-state-quota-agent-generic-quota.service"
   services.tentaflake-workspace-quota-agent-generic-quota.requires;
 assert

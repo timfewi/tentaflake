@@ -1,12 +1,16 @@
 # Fork checklist
 
-Change deployment-specific values in a fork, never in the generic template.
+Prefer a separate consumer flake that pins Tentaflake as an input. Keep the
+public `tentaflake.toml` empty and commented; real desired state belongs in the
+consumer's root TOML or your deployment fork's root TOML. Follow
+[installation-owned configuration](08-agent-cli.md#installation-owned-configuration)
+for the layout, file-only `systemFromData` import and evaluation commands.
 
 | What | Template location |
 |---|---|
 | Host and admin defaults | `lib/constants.nix` |
 | Host modules | `flake.nix` |
-| Agent definitions | `agents.toml` (empty default; examples only in guides) |
+| Agent definitions | Consumer/fork-owned `tentaflake.toml`; never the upstream input's empty template |
 | Runtime secret paths | Host broker, backup and optional profile declarations; direct-agent paths are dev-only |
 | SSH keys | `tentaflake.adminAuthorizedKeys` |
 | Timezone and locale | `tentaflake.*` options |
@@ -14,6 +18,13 @@ Change deployment-specific values in a fork, never in the generic template.
 The Rust package name and workspace live in `Cargo.toml` and
 `crates/tentaflake-cli/Cargo.toml`. If a fork renames the project, update those
 manifests, the Nix package wrapper, CLI paths, documentation, and tests together.
+
+Track the deployment TOML and referenced modules in that repository, together
+with the reviewed `flake.lock`. Ordinary Git flakes omit untracked/ignored files;
+offline TOML validation alone does not prove they reach Nix evaluation. Do not
+ignore the desired source, use `path:.` to bypass filtering, or fall back to the
+upstream empty file. A missing source must fail. Keep deployment changes out of
+upstream contributions and preserve the fork's real inventory when merging.
 
 ## Pinning
 

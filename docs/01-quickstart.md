@@ -8,10 +8,14 @@ a stopped declaration, not vendor-runtime acceptance.
    in [the policy example](tailscale-policy.example.json). Install restricted
    network/SSH grants before relying on the tailnet alone. No allow-all policy,
    Funnel or public agent API; protect identity and recovery access.
-2. **Declare or import a stopped agent.** Follow [configuration](08-agent-cli.md)
-   with schema-v1 `agents.toml` and adapter selection. Names are globally
-   unique; use `agent-<name>` for all host services. For a custom reviewed OCI
-   image use the [generic definition](agent-adapters.md#generic-isolated-workload).
+2. **Select your installation's source and declare a stopped agent.** Use your
+   [consumer/fork-owned TOML](08-agent-cli.md#installation-owned-configuration),
+   not the public input's empty template. Track it in the owning Git repository
+   before evaluation; missing or untracked desired state is an error. Follow
+   [configuration](08-agent-cli.md) for manual editing or the installer-layout
+   `agent plan|import` workflow, with schema-v1 TOML and adapter selection. Names are globally
+   unique; use `agent-<name>` for all host services. Reviewed generic OCI images
+   and in-capsule argv are supported; arbitrary host commands are not.
    OpenClaw/Pi are refusal scaffolds, not containers.
 3. **Review storage before activation.** Default state is
    `/var/lib/tentaflake/agents/<name>`; effective workspace/owner come from
@@ -20,11 +24,14 @@ a stopped declaration, not vendor-runtime acceptance.
    explicit [quota migration](14-workspace-quota.md), never automatic hiding or
    conversion. Existing deployments also need [identity migration](agent-adapters.md#breaking-migration).
 4. **Evaluate and build without activation.** From the resolved flake directory,
-   build `.#nixosConfigurations.<hostname>.config.system.build.toplevel` with
+   build `.#nixosConfigurations.<configurationName>.config.system.build.toplevel` with
    `nix build --no-link`. Review assertions and changes. A closure is not live
    host evidence. [Build guidance](17-builds.md) describes the separate gates.
+   The selector is the bootstrap flake attribute (`tentaflake.configurationName`),
+   not the mutable TOML `[system].hostName`. Consumer flakes must set it to their
+   exported attribute, as shown in `examples/consumer-flake.nix`.
 5. **Activate deliberately.** Only after target/build review and operator
-   authorization, use `sudo nixos-rebuild switch --flake <directory>#<hostname>`.
+   authorization, use `sudo nixos-rebuild switch --flake <directory>#<configurationName>`.
    Import, evaluation and builds never imply permission to activate.
 6. **Inspect the active host.** Run `tentaflake status` and `tentaflake doctor
    --security`; inspect the exact inventory unit, such as
