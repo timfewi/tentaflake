@@ -8,6 +8,8 @@ pkgs.runCommand "tentaflake-ci-vm-selection"
     src = pkgs.lib.fileset.toSource {
       root = ../.;
       fileset = pkgs.lib.fileset.unions [
+        # Workflow tests enumerate the workspace members.
+        ../Cargo.toml
         ../.github/ci-paths.json
         ../.github/workflows/check.yml
         ../scripts/ci_changes.py
