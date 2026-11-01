@@ -46,7 +46,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   resource grants and runtime-only credential provisioning, plus evidence-linked
   advisory proposals without remediation authority. Live account acceptance
   remains separate.
-- Add opt-in minimized Hostpulse activity from broker, worker and connector
+- Add opt-in minimized external-collector activity from broker, worker and connector
   boundaries, and a rootful-Docker workload identity observer with leased
   manifests. Declared context is not native run attribution or live acceptance.
 - Add opt-in schema-v1 `research` relay permissions for exact declared runnable
@@ -129,6 +129,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Synchronize Research with published canonical `main` revision `babdca5`,
   including its project-check pin; no feature-branch input or runtime acceptance
   is implied by the dependency refresh.
+- Run every affected gate on each PR and push again, including evaluation,
+  generated-flake, package/image/system builds and VM tests; manual dispatch
+  remains for re-runs and full inventories. Route `schema/**` to the CLI Rust
+  corpus and schema evaluation, and Nix schema parser changes to evaluation.
+- Align the offline worker with Pi's `offline_worker` tool: empty arguments are
+  valid, arguments are bounded to 4096 UTF-16 code units, and the default
+  `maxTimeoutSeconds` rises from 900 to 3600. Pi admission now requires a worker
+  admitting 3600-second timeouts and 65536-byte requests, so a call Pi accepts
+  can no longer be silently discarded. Deployments relying on the old 900-second
+  default must set it explicitly; the host API applies the same argument bounds.
+- Copy `host-api/` into installer-created systems so an enabled host API builds;
+  the generated-flake fixture now executes the installer's real copy block and
+  enables the API.
+- Observe all workload bindings with four batched bounded commands per cycle,
+  independent of the binding count, paced to two seconds and stamped at the
+  second verification. Even with every command at its one-second deadline, all
+  64 bindings are re-stamped inside the 10-second lease; a compile-time budget
+  check and a 64-binding latency regression keep it that way.
+- Keep `docs/` to inventoried product guides (checked by `just fast` and CI);
+  move planning, backlog, prompt and archive-comparison notes and a private
+  consumer's integration test out of the repository. Working notes belong in
+  the ignored `.scratch/` directory. Describe optional Pi admission accurately.
 
 ## [0.5.0] - Archived unreleased development
 

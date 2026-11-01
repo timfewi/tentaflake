@@ -11,8 +11,9 @@ This checkout is not a new published release; tags define released behavior.
    changing defaults or silently relocating state/accounting.
 2. Complete actual vendor startup, model transport, Research discovery,
    execution mediation, lifecycle and restore acceptance for each runtime.
-   Source fixtures alone do not establish support. OpenClaw/Pi remain refusal
-   scaffolds; generic OCI remains offline without accepted model/Research hooks.
+   Source fixtures alone do not establish support. OpenClaw remains a refusal
+   scaffold, and Pi one unless explicitly admitted; generic OCI remains offline
+   without accepted model/Research hooks.
 3. Improve bounded application readiness and diagnostics without replaying work
    or overriding explicit operator stops.
 4. Add adapters through their own reviewed image, native hooks and evidence,
@@ -32,5 +33,4 @@ Historical work in [v0.4-final](https://github.com/timfewi/tentaflake/tree/v0.4-
 and [earlier development](https://github.com/timfewi/tentaflake/tree/ad28cc0e890df7b6653bfe99e03749237613fdd5)
 is reference material, not a dependency or delivery commitment. Reuse only
 pieces that solve a current requirement without importing obsolete authority.
-See [archive comparison](archive-comparison.md). Issue status alone proves
-neither runtime acceptance nor released support.
+Issue status alone proves neither runtime acceptance nor released support.

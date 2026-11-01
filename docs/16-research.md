@@ -235,8 +235,8 @@ setting.
 Adapter hooks generate upstream-specific settings after shared socket/closure
 projection. An arbitrary OCI container with a runtime-like prefix cannot opt
 into Research; validation checks explicit registered instance metadata and the
-adapter's accepted capability. The OpenClaw and Pi scaffolds have no accepted
-Research discovery integration. See [agent adapters](agent-adapters.md).
+adapter's accepted capability. The OpenClaw scaffold has no accepted Research
+discovery integration; Pi uses its exact relay only after explicit host admission. See [agent adapters](agent-adapters.md).
 
 Native tool disabling and stdio settings are owned by the
 [adapter hooks](agent-adapters.md#native-configuration-and-state), applied after

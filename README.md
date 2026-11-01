@@ -43,8 +43,10 @@ host broker, worker, quota and Research policy stays in Nix.
 ## Scope and support
 
 Hermes and ZeroClaw have native adapters; real vendor acceptance remains
-pending. OpenClaw and Pi are **stopped refusal scaffolds**, not runnable
-integrations. Generic workloads support reviewed digest-pinned OCI images and
+pending. OpenClaw is a **stopped refusal scaffold**, not a runnable
+integration. Pi is the same refusal scaffold by default; only explicit host
+admission of the reviewed runtime (`tentaflake.piRuntime`) runs it, and real
+provider acceptance is pending. Generic workloads support reviewed digest-pinned OCI images and
 in-capsule argv, offline only with no accepted provider/model or Research
 integration. Discover fixed presets with `tentaflake runtimes --json`; the
 [adapter catalog](docs/agent-adapters.md#support-and-upstream-evidence) records

@@ -19,7 +19,7 @@ hybrid cgroups, stopped scaffolds and ambiguous declarations are refused, not
 guessed. Configure Docker's `native.cgroupdriver=systemd` explicitly when the
 host default differs. The root operator, Docker daemon, immutable helper and
 host policy are trusted. Docker socket access is inherently privileged; only
-this fixed helper receives it, never Hostpulse or an agent. Its only engine
+this fixed helper receives it, never the metrics consumer or an agent. Its only engine
 operation is a bounded inspect template returning ID, PID and running state;
 there is no command API, environment inspection, log access or namespace entry.
 `CAP_SYS_PTRACE` is retained solely to verify the target's initial user
@@ -57,11 +57,17 @@ fields are null. No SDK run identity is asserted. Global monotonically
 allocated generations advance on policy, boot, process, cgroup identity or
 live/unavailable transitions; unchanged facts survive observer restarts.
 Identity is checked before and after inspection against procfs and the
-cgroup-v2 filesystem/inode. Observations repeat after a two-second sleep;
-each engine/unit command has a one-second deadline and 4096-byte output cap.
-A slow or denied observation is unavailable, never a zero resource value.
+cgroup-v2 filesystem/inode. Each cycle observes all bindings with exactly four
+batched commands (unit state and container inspection, each before and after
+the kernel checks), so its cost does not grow with the up to 64 bindings. Each
+command has a one-second deadline and a 256-byte-per-binding output cap; cycles
+start at most every two seconds. Even when every command runs to its deadline,
+a binding is re-stamped within about six seconds plus publication time, inside
+the 10-second lease; a compile-time check keeps that budget. A manifest's
+timestamp is the end of its second verification. A slow, missing or denied
+observation is unavailable, never a zero resource value.
 
-Hostpulse needs only metadata and kernel-counter read access, with independent
+A metrics consumer needs only metadata and kernel-counter read access, with independent
 exact UID/tenant/agent reader grants. Consumers must enforce a maximum
 10-second manifest lease, current policy scope, boot/inode/process identity
 and before/after sampling checks; clear rates on identity change. Service
@@ -75,7 +81,7 @@ grant to read other tenants, and host-wide metadata is never a fallback.
 synthetic Docker workloads without external networking, within two CPUs and
 2048 MiB; it compares manifests to kernel membership/inodes and exercises
 stop/restart, read permissions and corrupt/missing authority. Parent
-integration can add Hostpulse/UI configuration through `extraModules` and
+integration can add its consumer/UI configuration through `extraModules` and
 counter comparison/cross-tenant assertions through `extraTestScript`, before
 the final authority-corruption checks. This fixture is not native vendor/SDK
 runtime attestation. The focused Rust command after workspace registration is

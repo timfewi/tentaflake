@@ -12,6 +12,23 @@ use std::time::{Duration, Instant};
 pub const MAX_GENERATION: u64 = 9_007_199_254_740_991;
 pub const STATE: &str = "/var/lib/tentaflake-workloads";
 pub const RUNTIME: &str = "/run/tentaflake-workloads";
+pub const MAX_BINDINGS: usize = 64;
+/// Consumers' maximum manifest lease.
+pub const MANIFEST_LEASE: Duration = Duration::from_secs(10);
+/// Cycles start at most this often.
+pub const CYCLE: Duration = Duration::from_secs(2);
+pub const COMMAND_TIMEOUT: Duration = Duration::from_secs(1);
+/// Bounded commands per cycle, whatever the binding count: unit state and
+/// container identity, each read before and after the kernel checks.
+pub const OBSERVATION_COMMANDS: u32 = 4;
+/// Output cap per binding for one batched command (one inspect line or unit block).
+const BYTES_PER_BINDING: usize = 256;
+// Even when every command runs to its deadline, a cycle plus the pacing delay
+// stays inside the lease; slow commands make bindings unavailable, never stale.
+const _: () = assert!(
+    OBSERVATION_COMMANDS as u64 * COMMAND_TIMEOUT.as_secs() + CYCLE.as_secs()
+        < MANIFEST_LEASE.as_secs()
+);
 pub type Result<T, E = io::Error> = std::result::Result<T, E>;
 pub fn invalid() -> io::Error {
     io::Error::other("workload authority unavailable")
@@ -94,7 +111,7 @@ pub fn valid_id(s: &str) -> bool {
         && s != ".."
 }
 pub fn validate_policy(p: &Policy) -> Result<()> {
-    if p.version != 1 || p.bindings.len() > 64 {
+    if p.version != 1 || p.bindings.len() > MAX_BINDINGS {
         return Err(invalid());
     }
     for executable in [&p.docker, &p.systemctl] {
@@ -243,29 +260,82 @@ pub fn parse_cgroup(text: &str, container: &str) -> Result<String> {
     }
     Ok(path.into())
 }
-pub fn parse_inspect(text: &str) -> Result<(String, u32)> {
-    let mut values = text.split_whitespace();
-    let id = values.next().ok_or_else(invalid)?;
-    let pid = values
-        .next()
-        .ok_or_else(invalid)?
-        .parse::<u32>()
-        .map_err(|_| invalid())?;
-    if id.len() != 64
-        || !id
+fn valid_container_id(id: &str) -> bool {
+    id.len() == 64
+        && id
             .bytes()
             .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
-        || values.next() != Some("true")
-        || values.next().is_some()
-        || pid <= 1
-    {
+}
+/// One batched `container inspect` line per found container:
+/// `/<name> <id> <pid> <running>`. Missing containers are simply absent; any
+/// malformed, foreign, duplicate or truncated line rejects the whole batch.
+pub fn parse_inspect_all(text: &str, names: &[&str]) -> Result<BTreeMap<String, (String, u32)>> {
+    if !text.is_empty() && !text.ends_with('\n') {
         return Err(invalid());
     }
-    Ok((id.into(), pid))
+    let mut seen = std::collections::BTreeSet::new();
+    let mut running = BTreeMap::new();
+    for line in text.lines() {
+        let values: Vec<&str> = line.split(' ').collect();
+        let [name, id, pid, state] = values[..] else {
+            return Err(invalid());
+        };
+        let name = name.strip_prefix('/').ok_or_else(invalid)?;
+        if !names.contains(&name) || !seen.insert(name) || !valid_container_id(id) {
+            return Err(invalid());
+        }
+        let pid = pid.parse::<u32>().map_err(|_| invalid())?;
+        match state {
+            "true" if pid > 1 => {
+                running.insert(name.to_owned(), (id.to_owned(), pid));
+            }
+            "false" => (),
+            _ => return Err(invalid()),
+        }
+    }
+    Ok(running)
+}
+/// Batched `systemctl show --property=Id,ActiveState`: blank-line separated
+/// blocks. Returns the active requested units; anything unexpected rejects all.
+pub fn parse_active_units(
+    text: &str,
+    units: &[&str],
+) -> Result<std::collections::BTreeSet<String>> {
+    let mut seen = std::collections::BTreeSet::new();
+    let mut active = std::collections::BTreeSet::new();
+    for block in text.split("\n\n").filter(|block| !block.trim().is_empty()) {
+        let (mut id, mut state) = (None, None);
+        for line in block.lines() {
+            let slot = match line.split_once('=') {
+                Some(("Id", value)) => (&mut id, value),
+                Some(("ActiveState", value)) => (&mut state, value),
+                _ => return Err(invalid()),
+            };
+            if slot.0.replace(slot.1).is_some() {
+                return Err(invalid());
+            }
+        }
+        let (Some(id), Some(state)) = (id, state) else {
+            return Err(invalid());
+        };
+        if !units.contains(&id) || !seen.insert(id) {
+            return Err(invalid());
+        }
+        if state == "active" {
+            active.insert(id.to_owned());
+        }
+    }
+    Ok(active)
 }
 
 // No caller-controlled command or argument surface. Only the two observer operations use this.
-fn bounded_command(executable: &str, args: &[&str], timeout: Duration) -> Result<String> {
+fn bounded_command(
+    executable: &str,
+    args: &[&str],
+    timeout: Duration,
+    limit: usize,
+    require_success: bool,
+) -> Result<String> {
     let mut child = Command::new(executable)
         .args(args)
         .env_clear()
@@ -292,7 +362,7 @@ fn bounded_command(executable: &str, args: &[&str], timeout: Duration) -> Result
             match pipe.read(&mut buffer) {
                 Ok(n) => {
                     bytes.extend_from_slice(&buffer[..n]);
-                    if bytes.len() > 4096 {
+                    if bytes.len() > limit {
                         return Err(invalid());
                     }
                 }
@@ -300,7 +370,7 @@ fn bounded_command(executable: &str, args: &[&str], timeout: Duration) -> Result
                 Err(e) => return Err(e),
             }
             if let Some(status) = child.try_wait()? {
-                if !status.success() {
+                if require_success && !status.success() {
                     return Err(invalid());
                 }
                 // Drain only bounded bytes, including output delivered just before exit.
@@ -309,7 +379,7 @@ fn bounded_command(executable: &str, args: &[&str], timeout: Duration) -> Result
                         Ok(0) => break,
                         Ok(n) => {
                             bytes.extend_from_slice(&buffer[..n]);
-                            if bytes.len() > 4096 {
+                            if bytes.len() > limit {
                                 return Err(invalid());
                             }
                         }
@@ -333,33 +403,42 @@ fn bounded_command(executable: &str, args: &[&str], timeout: Duration) -> Result
     }
     result
 }
-fn inspect(p: &Policy, b: &Binding) -> Result<(String, u32)> {
-    parse_inspect(&bounded_command(
-        &p.docker,
-        &[
-            "--host=unix:///run/docker.sock",
-            "container",
-            "inspect",
-            "--format",
-            "{{.Id}} {{.State.Pid}} {{.State.Running}}",
-            "--",
-            &b.agent_id,
-        ],
-        Duration::from_secs(1),
-    )?)
+fn output_limit(bindings: usize) -> usize {
+    BYTES_PER_BINDING * bindings.max(1)
 }
-fn unit_active(p: &Policy, b: &Binding) -> Result<()> {
-    if bounded_command(
+fn inspect_all(p: &Policy) -> Result<BTreeMap<String, (String, u32)>> {
+    let names: Vec<&str> = p.bindings.iter().map(|b| b.agent_id.as_str()).collect();
+    let mut args = vec![
+        "--host=unix:///run/docker.sock",
+        "container",
+        "inspect",
+        "--format",
+        "{{.Name}} {{.Id}} {{.State.Pid}} {{.State.Running}}",
+        "--",
+    ];
+    args.extend(&names);
+    // Docker exits non-zero when any name is missing but still reports the rest.
+    let output = bounded_command(
+        &p.docker,
+        &args,
+        COMMAND_TIMEOUT,
+        output_limit(names.len()),
+        false,
+    )?;
+    parse_inspect_all(&output, &names)
+}
+fn active_units(p: &Policy) -> Result<std::collections::BTreeSet<String>> {
+    let units: Vec<&str> = p.bindings.iter().map(|b| b.unit.as_str()).collect();
+    let mut args = vec!["show", "--property=Id,ActiveState", "--"];
+    args.extend(&units);
+    let output = bounded_command(
         &p.systemctl,
-        &["show", "--property=ActiveState", "--value", "--", &b.unit],
-        Duration::from_secs(1),
-    )?
-    .trim()
-        != "active"
-    {
-        return Err(invalid());
-    }
-    Ok(())
+        &args,
+        COMMAND_TIMEOUT,
+        output_limit(units.len()),
+        true,
+    )?;
+    parse_active_units(&output, &units)
 }
 fn proc_text(path: &str) -> Result<String> {
     let file = File::open(path)?;
@@ -422,18 +501,42 @@ fn kernel_identity(container_id: String, pid: u32) -> Result<Identity> {
         cgroup_inode,
     })
 }
-pub fn observe(p: &Policy, b: &Binding) -> Result<Identity> {
-    unit_active(p, b)?;
-    let (container, pid) = inspect(p, b)?;
-    let first = kernel_identity(container.clone(), pid)?;
-    if inspect(p, b)? != (container.clone(), pid) {
-        return Err(invalid());
+/// Observe every binding with exactly `OBSERVATION_COMMANDS` bounded commands,
+/// independent of the binding count. Unit state and container identity are read
+/// before and after the kernel checks; any failure makes the binding unavailable.
+pub fn observe_all(p: &Policy) -> Vec<Option<Identity>> {
+    observe_batch(p).unwrap_or_else(|_| vec![None; p.bindings.len()])
+}
+fn observe_batch(p: &Policy) -> Result<Vec<Option<Identity>>> {
+    if p.bindings.is_empty() {
+        return Ok(Vec::new());
     }
-    unit_active(p, b)?;
-    if kernel_identity(container, pid)? != first {
-        return Err(invalid());
-    }
-    Ok(first)
+    let active = active_units(p)?;
+    let containers = inspect_all(p)?;
+    let first: Vec<_> = p
+        .bindings
+        .iter()
+        .map(|b| {
+            let (id, pid) = containers
+                .get(&b.agent_id)
+                .filter(|_| active.contains(&b.unit))?;
+            let identity = kernel_identity(id.clone(), *pid).ok()?;
+            Some((id.clone(), *pid, identity))
+        })
+        .collect();
+    let containers = inspect_all(p)?;
+    let active = active_units(p)?;
+    Ok(p.bindings
+        .iter()
+        .zip(first)
+        .map(|(b, first)| {
+            let (id, pid, identity) = first?;
+            let unchanged = active.contains(&b.unit)
+                && containers.get(&b.agent_id) == Some(&(id.clone(), pid))
+                && kernel_identity(id, pid).ok().as_ref() == Some(&identity);
+            unchanged.then_some(identity)
+        })
+        .collect())
 }
 
 #[derive(Serialize, Deserialize)]
@@ -460,7 +563,7 @@ impl Authority {
     pub fn validate(&self) -> Result<()> {
         if self.version != 1
             || self.counter > MAX_GENERATION
-            || self.entries.len() > 64
+            || self.entries.len() > MAX_BINDINGS
             || self.entries.iter().any(|(id, e)| {
                 !valid_id(id)
                     || e.generation == 0
@@ -533,17 +636,113 @@ mod tests {
         }
     }
     #[test]
-    fn inspect_closed() {
+    fn batched_inspect_is_closed() {
         let id = "a".repeat(64);
-        assert_eq!(parse_inspect(&format!("{id} 42 true\n")).unwrap().1, 42);
+        let names = ["agent-a", "agent-b", "agent-c"];
+        // agent-b stopped, agent-c missing (Docker still reports the others).
+        let found = parse_inspect_all(
+            &format!("/agent-a {id} 42 true\n/agent-b {id} 0 false\n"),
+            &names,
+        )
+        .unwrap();
+        assert_eq!(found.len(), 1);
+        assert_eq!(found["agent-a"], (id.clone(), 42));
+        assert!(parse_inspect_all("", &names).unwrap().is_empty());
         for s in [
-            format!("{id} 42 false"),
-            format!("{id} 0 true"),
-            format!("{id} 42 true secret"),
-            "short 42 true".into(),
+            format!("/agent-a {id} 42 true"),
+            format!("/agent-a {id} 0 true\n"),
+            format!("/agent-a {id} 42 maybe\n"),
+            format!("/agent-a {id} 42 true secret\n"),
+            format!("/agent-x {id} 42 true\n"),
+            format!("agent-a {id} 42 true\n"),
+            format!("/agent-a {id} 42 true\n/agent-a {id} 43 true\n"),
+            "/agent-a short 42 true\n".into(),
         ] {
-            assert!(parse_inspect(&s).is_err());
+            assert!(parse_inspect_all(&s, &names).is_err(), "{s:?}");
         }
+    }
+    #[test]
+    fn batched_unit_state_is_closed() {
+        let units = ["docker-agent-a.service", "docker-agent-b.service"];
+        let active = parse_active_units(
+            "Id=docker-agent-a.service\nActiveState=active\n\nActiveState=failed\nId=docker-agent-b.service\n",
+            &units,
+        )
+        .unwrap();
+        assert_eq!(
+            active.into_iter().collect::<Vec<_>>(),
+            ["docker-agent-a.service"]
+        );
+        for s in [
+            "Id=docker-agent-a.service\n",
+            "Id=docker-other.service\nActiveState=active\n",
+            "Id=docker-agent-a.service\nActiveState=active\nMainPID=1\n",
+            "Id=docker-agent-a.service\nActiveState=active\nActiveState=active\n",
+            "Id=docker-agent-a.service\nActiveState=active\n\nId=docker-agent-a.service\nActiveState=active\n",
+        ] {
+            assert!(parse_active_units(s, &units).is_err(), "{s:?}");
+        }
+    }
+    fn on_path(name: &str) -> String {
+        std::env::split_paths(&std::env::var_os("PATH").unwrap())
+            .map(|p| p.join(name))
+            .find(|p| p.is_file())
+            .expect("test tools include bash and coreutils")
+            .to_str()
+            .unwrap()
+            .to_owned()
+    }
+    #[test]
+    fn sixty_four_bindings_cost_four_commands_inside_the_lease() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../target/test-tmp")
+            .join(format!("workloads-batch-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let log = root.join("calls");
+        let (bash, sleep) = (on_path("bash"), on_path("sleep"));
+        // Each fake command takes 200 ms; a per-binding design needs 51 s here.
+        let tool = |name: &str, line: &str| {
+            let path = root.join(name);
+            fs::write(
+                &path,
+                format!(
+                    "#!{bash}\nprintf '%s\\n' {name} >> '{}'\n'{sleep}' 0.2\nseen=\nfor a in \"$@\"; do\n  if [ -n \"$seen\" ]; then printf '{line}' \"$a\"; fi\n  if [ \"$a\" = -- ]; then seen=1; fi\ndone\n",
+                    log.display()
+                ),
+            )
+            .unwrap();
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o700)).unwrap();
+            path.to_str().unwrap().to_owned()
+        };
+        let policy = Policy {
+            version: 1,
+            docker: tool("docker", &format!("/%s {} 4242 true\\n", "0".repeat(64))),
+            systemctl: tool("systemctl", "Id=%s\\nActiveState=active\\n\\n"),
+            bindings: (0..MAX_BINDINGS)
+                .map(|i| Binding {
+                    agent_id: format!("agent-{i}"),
+                    unit: format!("docker-agent-{i}.service"),
+                    workload_id: format!("w{i}"),
+                    ..binding()
+                })
+                .collect(),
+        };
+        let started = Instant::now();
+        let identities = observe_all(&policy);
+        let elapsed = started.elapsed();
+        let calls = fs::read_to_string(&log).unwrap();
+        fs::remove_dir_all(&root).unwrap();
+        assert_eq!(identities.len(), MAX_BINDINGS);
+        // The fake PID is not a Docker scope, so kernel verification refuses it.
+        assert!(identities.iter().all(Option::is_none));
+        assert_eq!(
+            calls.lines().count(),
+            OBSERVATION_COMMANDS as usize,
+            "{calls}"
+        );
+        assert!(elapsed >= Duration::from_millis(800), "{elapsed:?}");
+        assert!(elapsed + CYCLE < MANIFEST_LEASE / 2, "{elapsed:?}");
     }
     #[test]
     fn membership_is_exact() {
@@ -595,7 +794,9 @@ mod tests {
             bounded_command(
                 executable.to_str().unwrap(),
                 &["--exact", "tests::timeout_child", "--ignored"],
-                Duration::from_millis(40)
+                Duration::from_millis(40),
+                4096,
+                true,
             )
             .is_err()
         );

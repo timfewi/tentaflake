@@ -40,3 +40,6 @@ age.key
 
 # Logs
 *.log
+
+# Local agent/contributor working notes; never committed or published.
+.scratch/

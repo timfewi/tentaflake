@@ -29,8 +29,11 @@ Do not replace declarative agents with a mandatory runtime, UI or control servic
   Git source, loaded with its own explicit file path; never import or fall back
   to the upstream template for an installation. Missing/Git-filtered sources
   fail. Remaining `agents.toml` or `agents.json` requires explicit migration.
-- Hermes/ZeroClaw real vendor acceptance is pending. OpenClaw/Pi are stopped
-  refusal units only: no OCI artifact, state, credentials or sockets. Generic
+- Hermes/ZeroClaw real vendor acceptance is pending. OpenClaw is a stopped
+  refusal unit only: no OCI artifact, state, credentials or sockets. Pi is the
+  same refusal unit unless the host explicitly admits the reviewed runtime
+  (`tentaflake.piRuntime`: exact package/image proof, `runsc-pi-v1`, broker,
+  Research, worker and quotas); never relax that admission. Generic
   custom OCI is offline, with no accepted model/Research integration. Synthetic
   fixtures are not vendor acceptance. See [adapters](docs/agent-adapters.md).
 - `crates/` owns CLI/broker/worker. Shared Rust packaging in `lib/mkRustPackage.nix`
@@ -117,10 +120,11 @@ success. See [API contract](docs/19-web-ui.md).
 
 Read [CONTRIBUTING](CONTRIBUTING.md) and [build boundaries](docs/17-builds.md).
 `just` loads pinned tools; direct Cargo/lint commands need `nix develop`.
-Start with `just fast` (including pure-preset `catalog-check`); host configuration
-evaluation, generated flakes, packages and VM/runtime acceptance are separate
-explicit gates. CI routing uses `.github/ci-paths.json`; unknown paths/history
-select all fast checks/full dispatch inventory. Skipped builds are not evidence.
+Start with `just fast` (including pure-preset `catalog-check`); locally, host
+configuration evaluation, generated flakes, packages and VM/runtime acceptance
+are separate gates. CI runs every affected gate, builds and VMs included, on
+each PR/push via `.github/ci-paths.json`; unknown paths/history select the full
+inventory. Every selected job must pass; skipped builds are not evidence.
 Keep the sequential `scripts/eval_flake.py` projections and Git source filtering;
 prepare exact Research closures without mounting the whole store. VM/system/ISO
 workloads and activation need their own authorization. Read-only formatting is
@@ -129,6 +133,14 @@ workloads and activation need their own authorization. Read-only formatting is
 Synchronize affected guides/examples/shared skills in the same change. Keep
 skills procedural and compact; detailed options belong to owning guides. The
 public repo owns docs; the website mirrors a pinned release, not this checkout.
+
+`docs/` holds only maintained product documentation that describes Tentaflake
+and is published on the website; every file is listed in the
+[guide inventory](docs/18-documentation.md#guide-inventory). Never put plans,
+backlogs, goals, prompts, review/session/investigation notes or private
+deployment facts (private repositories, revisions, hosts, infrastructure,
+workspace state) in `docs/` or anywhere else in Git. Write working notes to the
+ignored `.scratch/` directory; never commit it or treat it as a source of truth.
 Report actual checks and evidence gaps. No build authorizes activation.
 Use Conventional Commits and DCO sign-off with the human's configured identity;
 preserve unrelated work. Complete every applicable PR-template section and

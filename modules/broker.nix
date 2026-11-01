@@ -41,7 +41,7 @@ let
         enable = lib.mkEnableOption "isolated brokers for OCI container ${name}";
         activity = lib.mkOption {
           default = null;
-          description = "Optional host-only fixed Hostpulse context; native run identity is not inferred.";
+          description = "Optional host-only fixed external-collector activity context; native run identity is not inferred.";
           type = lib.types.nullOr (
             lib.types.submodule {
               options =
@@ -681,7 +681,7 @@ in
                 map (instance: instance.uid) (lib.attrValues config.tentaflake.agentInstances)
               ))
             );
-          message = "Broker activity requires a dedicated existing static non-root host UID matching the exact Hostpulse grant.";
+          message = "Broker activity requires a dedicated existing static non-root host UID matching the collector's exact producer grant.";
         }
         {
           assertion = lib.elem name containerNames;

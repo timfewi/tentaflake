@@ -170,6 +170,12 @@ in
       message = "tentaflake: Pi requires its exact offline worker workspace and numeric owner.";
     }
     {
+      # Pi's offline_worker tool advertises these maxima; a narrower worker
+      # would silently discard admitted calls and quarantine the instance.
+      assertion = !workerEnabled || (worker.maxTimeoutSeconds >= 3600 && worker.maxRequestBytes >= 65536);
+      message = "tentaflake: Pi requires its offline worker to admit 3600-second timeouts and 65536-byte requests.";
+    }
+    {
       assertion = quotaEnabled && quota.workspace == workspace && quota.state.path == state;
       message = "tentaflake: Pi requires its exact workspace and durable-state quotas.";
     }

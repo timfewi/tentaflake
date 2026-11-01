@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Select affected checks and apply the automatic/explicit workload boundary."""
+"""Select the checks, builds and VM suites affected by a change."""
 
 import argparse
 import fnmatch
@@ -16,8 +16,6 @@ CHECKS = {"runtime", "research", "evaluate", "generated", "rust", "cli", "broker
           "worker", "control", "integrations", "activity", "workloads", "pi",
           "devcontainer", "static", "selection"}
 assert all(set(rule["checks"]) <= CHECKS for rule in RULES.values())
-FAST_CHECKS = {"rust", "cli", "broker", "worker", "control", "integrations",
-               "activity", "workloads", "static", "selection"}
 BUILD_CHECKS = {"runtime", "research", "evaluate", "generated", "cli", "broker",
                 "worker", "control", "integrations", "activity", "workloads",
                 "pi", "devcontainer"}
@@ -69,13 +67,11 @@ def select(base, head, repository=ROOT):
         return CHECKS.copy()
 
 
-def execution(affected, mode):
-    if mode not in {"fast", "full"}:
-        raise ValueError("mode must be fast or full")
-    selected = affected if mode == "full" else affected & FAST_CHECKS
-    return {check: check in selected for check in sorted(CHECKS)} | {
-        "nix": bool(selected - {"selection"}),
-        "builds": mode == "full" and bool(affected & BUILD_CHECKS),
+def execution(affected):
+    # Every run, automatic or dispatched, executes all affected gates.
+    return {check: check in affected for check in sorted(CHECKS)} | {
+        "nix": bool(affected - {"selection"}),
+        "builds": bool(affected & BUILD_CHECKS),
     }
 
 
@@ -83,24 +79,20 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("base")
     parser.add_argument("head")
-    parser.add_argument("--mode", choices=("fast", "full"), default="fast")
     parser.add_argument("--summary", type=Path)
     arguments = parser.parse_args()
     affected = select(arguments.base, arguments.head)
-    for check, enabled in execution(affected, arguments.mode).items():
+    for check, enabled in execution(affected).items():
         print(f"{check}={str(enabled).lower()}")
     if arguments.summary:
         with arguments.summary.open("a") as summary:
-            summary.write(f"## Check workload: {arguments.mode}\n\n")
+            summary.write("## Affected checks\n\n")
             summary.write("Affected inventory: " + (", ".join(sorted(affected)) or "none") + ".\n\n")
             summary.write(
-                "PR/push runs only routing, whitespace, selected lint and Rust unit checks. "
-                "Configuration/generated-flake evaluation, Research closure preparation, "
-                "package/image/system builds and VM tests require an explicit dispatch.\n\n"
-                "An explicit run uses the comparison SHA; missing or invalid comparison "
-                "history selects the full inventory. Skipped builds are not runtime evidence. "
-                "Before merging, obtain the build/runtime evidence required by the change "
-                "for the current revision. Selection alone does not prove a check passed.\n"
+                "Every PR, push and dispatch runs the affected lint, unit, evaluation, "
+                "generated-flake, package/image/system build and VM gates. Missing or "
+                "invalid comparison history selects the full inventory. Skipped builds "
+                "are not runtime evidence; selection alone does not prove a check passed.\n"
             )
 
 

@@ -23,7 +23,7 @@ arbitrary commands.
 | Decide tool requests | Additionally set `allowToolDecisions = true` | Record approve/deny for an exact reviewed request, then request a worker drain |
 
 The shipped host contract works with the Host view in a compatible operator UI.
-It is independent of native chat connections or the UI's optional HQ task model.
+It is independent of native chat connections or any client-side task model.
 All adapters use the same host inventory; stopped scaffold entries remain
 visible but cannot be started or restarted through this interface.
 
@@ -353,8 +353,8 @@ adapter, credential/relay boundary and exact-image acceptance. The outbound LLM
 broker is model policy, not an operator conversation API.
 
 The Host view does not expose shell/exec, provider keys, file writes, arbitrary
-unit control, upgrades or NixOS rebuilds. Native task-board ownership and HQ
-profile creation remain separate optional application features.
+unit control, upgrades or NixOS rebuilds. Task boards, profiles and other
+client-side features remain separate optional application features.
 
 ## Verification and recovery
 

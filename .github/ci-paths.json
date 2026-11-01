@@ -93,16 +93,29 @@
       "static"
     ]
   },
+  "system-schema": {
+    "paths": [
+      "schema/**"
+    ],
+    "checks": [
+      "runtime",
+      "evaluate",
+      "generated",
+      "cli",
+      "rust",
+      "static"
+    ]
+  },
   "agent-data": {
     "paths": [
       "lib/agentsFromData.nix",
       "lib/systemFromData.nix",
       "lib/systemSchema.nix",
-      "schema/**",
       "tests/system-schema.nix"
     ],
     "checks": [
       "runtime",
+      "evaluate",
       "generated",
       "static"
     ]
@@ -244,6 +257,7 @@
       "scripts/ci_vm_changes.py",
       "scripts/test_ci_changes.py",
       "scripts/test_ci_vm_changes.py",
+      "scripts/test_docs_inventory.py",
       "tests/ci-vm-selection.nix"
     ],
     "checks": [

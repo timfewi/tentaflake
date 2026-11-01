@@ -712,6 +712,28 @@ mod tests {
     }
 
     #[test]
+    fn request_validation_admits_every_pi_tool_argument() {
+        let f = Fixture::new("pi-arguments");
+        let mut request = f.request(ActionClass::LocalReversible);
+        // Pi admits empty strings and counts UTF-16 code units, not bytes.
+        request.argv = vec![
+            "printf".into(),
+            String::new(),
+            "☃".repeat(MAX_ARGUMENT_UTF16_UNITS),
+            "😀".repeat(MAX_ARGUMENT_UTF16_UNITS / 2),
+        ];
+        validate_request(&f.config, &request).unwrap();
+        for overlong in [
+            "x".repeat(MAX_ARGUMENT_UTF16_UNITS + 1),
+            format!("{}x", "😀".repeat(MAX_ARGUMENT_UTF16_UNITS / 2)),
+            "nul\0".into(),
+        ] {
+            request.argv = vec!["printf".into(), overlong];
+            assert!(validate_request(&f.config, &request).is_err());
+        }
+    }
+
+    #[test]
     fn incomplete_private_staging_never_replaces_a_published_request() {
         let f = Fixture::new("staging");
         let path = pending_path(&f.config, "job_1");
@@ -743,7 +765,7 @@ mod tests {
     fn telemetry_failure_cannot_dispatch_denied_or_recovered_work() {
         let mut f = Fixture::new("telemetry-gap");
         f.config.activity = Some(serde_json::from_value(serde_json::json!({
-            "socket":"/run/no-hostpulse/socket","relay_socket":"/run/no-worker-publisher/socket",
+            "socket":"/run/no-collector/socket","relay_socket":"/run/no-worker-publisher/socket",
             "server_uid":1,"producer_uid":2,"producer_id":"worker-test","tenant_id":"tenant",
             "agent_id":"agent-fixture","run_id":"fixed-host-context","workload_id":"worker",
             "generation":1,"policy_revision":"test"

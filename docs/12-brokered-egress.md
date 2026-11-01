@@ -22,7 +22,7 @@ Each enabled agent gets:
 The OCI container key must exactly match the generated container name, for
 example `agent-coding` or `agent-research`, independently of adapter.
 
-## Optional minimized Hostpulse activity
+## Optional minimized collector activity
 
 Host policy may set `tentaflake.broker.agents.<container>.activity` (default
 `null`) and `activityUser`. The activity object has exact `socket`, `server_uid`,
@@ -36,7 +36,7 @@ this replaces the LLM service's dynamic UID, including its operator-only strict
 budget units. Provision/migrate state ownership explicitly before enabling it.
 Fetch brokers do not publish model activity.
 
-Configure the matching Hostpulse producer grant with that exact UID and context,
+Configure the external collector's matching producer grant with that exact UID and context,
 plus the exact broker unit/cgroup. The client checks the collector's kernel
 `SO_PEERCRED` against `server_uid` on every publication. `run_id` is explicitly
 host-fixed context: it is **not** inferred native session/run evidence.
@@ -62,7 +62,7 @@ provider success into failure or authorize another dispatch. Mandatory audit,
 reservations and durable budget settlement remain authoritative. Tests include
 collector stalls/closure, forged peers/context, minimized denial/uncertainty,
 and existing single-dispatch/SDK-disconnect fixtures with an unavailable
-collector. Synthetic coverage is not live Hostpulse/provider acceptance.
+collector. Synthetic coverage is not live collector/provider acceptance.
 
 ## Declaration
 

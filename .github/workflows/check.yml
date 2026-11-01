@@ -10,7 +10,7 @@ on:
   workflow_dispatch:
     inputs:
       base_sha:
-        description: 'Comparison commit (40-char SHA); empty or unavailable history runs full inventory'
+        description: 'Comparison commit (40-char SHA) for a manual re-run; empty or unavailable history runs full inventory'
         type: string
         required: false
         default: ''
@@ -51,17 +51,19 @@ jobs:
           python3 scripts/test_ci_changes.py
           python3 scripts/test_eval_flake.py
 
-      # One path policy; only an explicit dispatch can select expensive work.
-      # Unknown history selects all fast checks or the full explicit inventory.
+      - name: Documentation inventory and untracked working notes
+        run: python3 scripts/test_docs_inventory.py
+
+      # One path policy for PRs, pushes and manual dispatch: every affected
+      # lint, unit, evaluation, build and VM gate runs. Unknown history runs all.
       - name: Detect affected checks
         id: filter
         env:
           BASE_SHA: ${{ inputs.base_sha || github.event.pull_request.base.sha || github.event.before }}
           HEAD_SHA: ${{ github.sha }}
-          CHECK_MODE: ${{ github.event_name == 'workflow_dispatch' && 'full' || 'fast' }}
         run: |
           python3 scripts/ci_changes.py "$BASE_SHA" "$HEAD_SHA" \
-            --mode "$CHECK_MODE" --summary "$GITHUB_STEP_SUMMARY" >> "$GITHUB_OUTPUT"
+            --summary "$GITHUB_STEP_SUMMARY" >> "$GITHUB_OUTPUT"
 
   check:
     needs: changes
@@ -81,7 +83,7 @@ jobs:
             accept-flake-config = true
 
       # Contributor tools use the pinned binary cache. Uploading that store
-      # again costs more than these source checks; cache only explicit builds.
+      # again costs more than these source checks; cache only the build job.
       - name: nix fmt check
         if: needs.changes.outputs.static == 'true'
         run: nix develop --command just formatter-test
@@ -144,7 +146,7 @@ jobs:
         if: needs.changes.outputs.static == 'true'
         run: nix develop --command shellcheck installer/*.sh scripts/*.sh
 
-  # Share one store across explicit builds and VMs; automatic runs never enter.
+  # Share one store across affected builds and VMs on every PR and push.
   build:
     needs: changes
     if: needs.changes.outputs.builds == 'true'

@@ -2,7 +2,7 @@ use std::fs::{self, OpenOptions};
 use std::os::fd::AsRawFd;
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::path::Path;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use tentaflake_workloads::*;
 
 fn load_policy() -> Result<Policy> {
@@ -92,30 +92,30 @@ fn run() -> Result<()> {
     }
     atomic_json(STATE, "authority.json", &authority, 0o600)?;
     loop {
-        for b in &p.bindings {
-            let identity = observe(&p, b).ok();
+        let started = Instant::now();
+        // OBSERVATION_COMMANDS bounded commands for all bindings; the lease is
+        // stamped after the second verification, not at the later publication.
+        let identities = observe_all(&p);
+        let observed = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_err(|_| invalid())?
+            .as_millis();
+        let observed = u64::try_from(observed).map_err(|_| invalid())?;
+        for (b, identity) in p.bindings.iter().zip(identities) {
             let previous_counter = authority.counter;
             let generation = authority.assign(b, &identity)?;
             // Persist the allocation before exposing it, including an unavailable transition.
             if authority.counter != previous_counter {
                 atomic_json(STATE, "authority.json", &authority, 0o600)?;
             }
-            let now = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .map_err(|_| invalid())?
-                .as_millis();
-            let manifest = Manifest::new(
-                b,
-                generation,
-                u64::try_from(now).map_err(|_| invalid())?,
-                identity,
-            );
+            let manifest = Manifest::new(b, generation, observed, identity);
             atomic_json(RUNTIME, &format!("{}.json", b.agent_id), &manifest, 0o444)?;
         }
         if args[0] == "--once" {
             return Ok(());
         }
-        std::thread::sleep(Duration::from_secs(2));
+        // Cycles start at most every CYCLE; a slow cycle starts the next at once.
+        std::thread::sleep(CYCLE.saturating_sub(started.elapsed()));
     }
 }
 fn main() {

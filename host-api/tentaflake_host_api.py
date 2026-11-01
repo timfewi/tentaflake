@@ -750,7 +750,8 @@ class Service:
                     or not 1 <= len(row["argv"]) <= 128
                     or any(
                         not isinstance(arg, str)
-                        or not 1 <= len(arg.encode()) <= 4096
+                        # Worker/Pi bound: empty allowed, 4096 UTF-16 code units.
+                        or len(arg.encode("utf-16-le")) // 2 > 4096
                         or "\0" in arg
                         for arg in row["argv"]
                     )

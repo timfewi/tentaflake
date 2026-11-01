@@ -17,17 +17,17 @@ Edit runtime facts in `adapters/<id>.nix`, then run
 `python3 scripts/runtime-catalog-docs.py` to regenerate CLI JSON and the docs
 catalog. Generated projections are not independently editable inputs.
 
-Run the relevant explicit gates for the change: `just eval` for host
+Run the relevant local gates for the change: `just eval` for host
 configuration, `just generated-flake` for installer output, and affected package,
 ISO or VM builds when authorized. `just host-api-test` covers Unix API protocol
 fixtures. See [build boundaries](docs/17-builds.md) for exact commands, sequential
-projection/Research closure preparation, CI dispatch routing and end-to-end
-recipes. `just ci`/`just e2e` are larger workloads, not aliases for fast checks.
+projection/Research closure preparation, CI routing and end-to-end recipes.
+`just ci`/`just e2e` are larger workloads, not aliases for fast checks.
 
-PR/push CI selects affected fast checks; explicit dispatch selects affected
-build/runtime gates too. Unknown paths/history select the full relevant set.
-Before merge, obtain required build/runtime evidence for this revision: green
-static checks, skipped builds and synthetic probes are not vendor acceptance.
+Every PR/push CI run executes all affected gates, including package/system
+builds and VM tests; unknown paths/history select the full inventory. Every
+selected job must pass for this revision before merge. Synthetic probes are
+not vendor acceptance.
 Evaluation, build, activation and live acceptance are distinct; tests never
 implicitly deploy or authorize activation.
 
@@ -54,9 +54,12 @@ inapplicable checklist entries unchecked. Preserve unrelated dirty work.
 ## Documentation, modules and disclosure
 
 The public repository owns guides; the website mirrors a pinned release.
-Identify guide additions/removals for maintainers, without requiring private
-website access or claiming unreleased changes are published. See
-[documentation ownership](docs/18-documentation.md).
+`docs/` contains only product documentation listed in the
+[guide inventory](docs/18-documentation.md#guide-inventory) (checked by
+`just fast` and CI). Plans, backlogs, prompts, review or session notes and
+private deployment facts never enter Git; keep them in the ignored `.scratch/`
+directory. Identify guide additions/removals for maintainers, without requiring
+private website access or claiming unreleased changes are published.
 
 Core modules belong in `modules/` and its default import; optional profiles need
 explicit flake exports and documented trust boundaries. Consumer-specific

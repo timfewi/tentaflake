@@ -17,7 +17,7 @@ alias list := default
 ci: formatter-test catalog-check lint shellcheck rust host-api-test ci-policy check generated-flake iso-installer
     @echo "==> all green"
 
-# Fast source checks; evaluation and all Nix package/runtime builds are explicit
+# Fast local source checks; evaluation, package and VM gates are separate recipes (CI runs affected ones)
 fast: formatter-test catalog-check lint shellcheck rust host-api-test ci-policy
 
 # Exercise the optional local host API with isolated Unix sockets and fake host tools
@@ -32,6 +32,7 @@ catalog-check:
 # Test routing with real Git histories and validate workflow syntax
 ci-policy:
     python3 scripts/test_ci_changes.py
+    python3 scripts/test_docs_inventory.py
     python3 scripts/test_eval_flake.py
     python3 scripts/test_eval_flake_nix.py
     actionlint .github/workflows/*.yml

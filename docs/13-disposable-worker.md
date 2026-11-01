@@ -18,7 +18,7 @@ OCI daemon, kernel, gVisor, worker toolchain, or submitted code trustworthy.
 It is optional for a deliberately stopped scaffold, but an automatically
 started balanced controller fails evaluation without its matching worker.
 
-## Optional minimized Hostpulse activity
+## Optional minimized collector activity
 
 Set host policy `tentaflake.worker.agents.<container>.activity` (default `null`)
 and `activityUser` to publish worker request admission, approval/denial,
@@ -42,7 +42,7 @@ binding supplies that association. Agents must never receive these sockets.
 The relay has no engine socket, credentials, capabilities or IP networking.
 Its dedicated existing static `activityUser` must have a same-named primary
 group, no supplementary groups, and match `activity.producer_uid`; configure
-Hostpulse's exact producer grant for that relay UID/unit/cgroup and fixed
+The external collector's exact producer grant for that relay UID/unit/cgroup and fixed
 context. Declared association is distinct from observed workload mapping.
 
 The relay serves one connection at a time, with a 1KiB closed input schema and
@@ -54,7 +54,7 @@ job/decision results or permits replay. Existing queue claims, audit and result
 records remain mandatory. There is no telemetry retry queue. Tests cover
 denied work with unavailable telemetry and zero additional OCI dispatch,
 uncertain outcomes, collector stalls/disconnection and forged peers/context.
-These are synthetic checks, not live worker/Hostpulse acceptance.
+These are synthetic checks, not live worker/collector acceptance.
 
 ## Enable one worker
 
@@ -71,7 +71,7 @@ tentaflake.worker.agents.agent-coding = {
 
   maxSnapshotBytes = 1024 * 1024 * 1024;
   maxSnapshotEntries = 200000;
-  maxTimeoutSeconds = 900;
+  maxTimeoutSeconds = 3600;
   memory = "2g";
   memorySwap = "2g";
   cpus = "2.0";
@@ -119,8 +119,12 @@ The path is:
 ```
 
 IDs are bounded lowercase ASCII identifiers. The parser rejects unknown
-fields, oversized requests, empty or oversized argument lists, NUL bytes,
-unsupported versions, duplicate IDs, and timeouts above policy.
+fields, oversized requests, argument lists outside 1–128 entries, arguments
+longer than 4096 UTF-16 code units, NUL bytes, unsupported versions, duplicate
+IDs, and timeouts above policy. Empty individual arguments are valid. These
+bounds equal Pi's `offline_worker` tool schema; Pi admission additionally
+requires `maxTimeoutSeconds >= 3600` and `maxRequestBytes >= 65536` (the
+defaults), so every call Pi accepts is also admissible by its worker.
 
 The snapshot walker opens the configured workspace through Linux `openat2`
 with `RESOLVE_NO_MAGICLINKS | RESOLVE_NO_SYMLINKS`. On kernels or filtered VM

@@ -246,7 +246,7 @@ assert policies.agent-operator.managed;
 assert !policies.agent-operator.research.enabled;
 assert policies.agent-operator.research.readiness == "unverified";
 assert policies.agent-operator.worker.enabled;
-assert policies.agent-operator.worker.limits.max_timeout_seconds == 900;
+assert policies.agent-operator.worker.limits.max_timeout_seconds == 3600;
 assert policies.agent-operator.auto_start == false;
 assert !(pkgs.lib.hasInfix "/var/lib" (builtins.toJSON policies));
 assert !(pkgs.lib.hasInfix "Credential" (builtins.toJSON policies));

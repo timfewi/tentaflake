@@ -9,7 +9,7 @@ No check or successful build authorizes host activation.
 
 | Gate | Evidence |
 |---|---|
-| `just fast` | Formatting/lint, ShellCheck, Rust format/Clippy/unit checks, optional Unix host API tests, routing/workflow checks, small no-build fixtures and catalog drift |
+| `just fast` | Formatting/lint, ShellCheck, Rust format/Clippy/unit checks, optional Unix host API tests, routing/workflow checks, documentation inventory, small no-build fixtures and catalog drift |
 | `just catalog-check` | Pure adapter presets agree with generated CLI JSON/docs, using read-only `nix-instantiate --eval --strict --json --readonly-mode`; no nixpkgs/host build |
 | `just fmt-check` | Pinned `nixfmt --check` over Git-selected regular Nix files, no writes |
 | `just eval` | Sequential complete flake projections after exact non-VM Research closure and Rust source-fileset preparation |
@@ -76,26 +76,26 @@ nix build .#installer-iso
 Component paths take precedence over Markdown suffixes. Include deleted paths
 and both rename sides from NUL-delimited Git output.
 
-Automatic PR/push checks always cover routing/whitespace, then affected static
-and Rust checks. Unknown paths, invalid lock data or missing history select all
-fast checks. They do not select host evaluation, closure preparation, runtime
-builds or VMs. DCO and secret scanning are separate.
+Every PR, push to `main` and manual `workflow_dispatch` runs the same policy:
+routing/whitespace and the documentation inventory always, then every affected
+static, Rust unit, package/worker-image, installed-onboarding, generated-flake,
+configuration-evaluation and VM gate. Unknown paths, invalid lock data or
+missing/malformed comparison history select the full inventory. Shared security
+paths select their combined gates; a Rust-only change need not build Research.
+Non-VM package builds run in groups of at most four; Research closure
+preparation and configuration projections remain sequential. DCO and secret
+scanning are separate.
 
-Use `workflow_dispatch` for required build/runtime evidence, selecting the
-revision and optional full 40-character comparison `base_sha`. Empty, malformed
-or unavailable comparison history selects the full inventory. With usable
-history, affected package/worker-image, installed-onboarding, generated-flake,
-configuration and VM gates are added according to that same policy. Shared
-security paths select their combined gates; a Rust-only change need not build
-Research. Non-VM package builds run in groups of at most four; Research closure
-preparation and configuration projections remain sequential.
+A manual dispatch re-runs the checks for a chosen revision with an optional
+full 40-character comparison `base_sha`; an empty one selects the full
+inventory. Dispatch has a separate concurrency group so a push does not cancel
+requested verification.
 
-Docs-only routing requires no Nix installation. Fast checks consume contributor
-tool caches; explicit builds may upload build cache. Optional cache setup has a
-three-minute timeout and its failure never skips the checks. Dispatch has a
-separate concurrency group so a push does not cancel requested verification.
-Before merge, obtain the required evidence for this revision; a green fast run
-or skipped expensive gate is not runtime acceptance.
+Docs-only routing requires no Nix installation. Source checks consume
+contributor tool caches; the build job may upload build cache. Optional cache
+setup has a three-minute timeout and its failure never skips the checks.
+Before merge, every selected job must pass for this revision; a skipped gate
+or synthetic probe is not runtime acceptance.
 
 ## Packaging and larger workloads
 

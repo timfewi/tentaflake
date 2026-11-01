@@ -207,8 +207,8 @@ not end-to-end runtime/budget/worker reconciliation.
 CLI, timer or production package. Its `checkpoint` command refuses unconditionally:
 canonical writer coverage and actual runtime, broker, worker and control
 lifecycle admission holds are not yet integrated. A whole-system checkpoint also
-requires a supported checkpoint interface from the independent board service;
-no board database or replacement task registry is inferred.
+requires a supported checkpoint interface from every independent external
+service; no external database or replacement task registry is inferred.
 
 The helper's synthetic checkpoint core exercises stop-before-copy, private
 partial evidence, complete SQLite/WAL files, required authority receipts and a

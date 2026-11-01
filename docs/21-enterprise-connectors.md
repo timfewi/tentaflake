@@ -118,9 +118,9 @@ preserving arbitrary bytes without interpreting markup or UTF-8. Decoding does
 not confer permission to execute a file.
 
 Optional `activity` is `{socket,server_uid,producer_id,run_id,workload_id,
-policy_revision}`. The service verifies the Hostpulse Unix peer and publishes
+policy_revision}`. The service verifies the activity collector's Unix peer and publishes
 version-one `publish_activity` frames using four-byte big-endian lengths.
-Hostpulse must independently configure the exact service UID/producer/tenant/
+The collector must independently configure the exact service UID/producer/tenant/
 agent/run/workload/generation/policy grant. Events have random session-qualified
 IDs and omit provider content, tokens, URLs and resource/account IDs. Projection
 failure emits only `connector_activity_gap`; it never retries provider work.

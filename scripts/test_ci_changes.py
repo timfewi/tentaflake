@@ -14,7 +14,7 @@ import tomllib
 import unittest
 from unittest.mock import patch
 
-from ci_changes import CHECKS, FAST_CHECKS, execution, select
+from ci_changes import CHECKS, execution, select
 
 
 class CiSelection(unittest.TestCase):
@@ -65,36 +65,32 @@ class CiSelection(unittest.TestCase):
         self.write("scripts/test_format_check.py")
         affected = select(self.base, self.commit(), self.repository)
         self.assertEqual(affected, {"static"})
-        self.assertFalse(execution(affected, "full")["builds"])
+        self.assertFalse(execution(affected)["builds"])
 
 
-    def test_evaluator_changes_preserve_explicit_evaluation_without_automatic_builds(self):
+    def test_evaluator_changes_run_evaluation_builds(self):
         self.write("scripts/eval_flake.py")
         self.write("scripts/test_eval_flake.py")
         self.write("scripts/test_eval_flake_nix.py")
         affected = select(self.base, self.commit(), self.repository)
         self.assertEqual(affected, {"evaluate", "selection", "static"})
-        self.assertFalse(execution(affected, "fast")["builds"])
-        self.assertTrue(execution(affected, "full")["evaluate"])
-        self.assertTrue(execution(affected, "full")["builds"])
+        self.assertTrue(execution(affected)["evaluate"])
+        self.assertTrue(execution(affected)["builds"])
 
-    def test_catalog_generator_changes_preserve_metadata_gates_without_automatic_builds(self):
+    def test_catalog_generator_changes_run_metadata_and_evaluation_gates(self):
         for name in ("scripts/runtime-catalog-docs.py", "scripts/test_runtime_catalog.py"):
             with self.subTest(name=name):
                 base = self.git("rev-parse", "HEAD")
                 self.write(name)
                 affected = select(base, self.commit(), self.repository)
                 self.assertEqual(affected, {"static", "selection", "evaluate", "cli", "rust"})
-                automatic = execution(affected, "fast")
-                self.assertTrue(automatic["static"])
-                self.assertTrue(automatic["cli"])
-                self.assertFalse(automatic["builds"])
-                self.assertFalse(automatic["evaluate"])
-                explicit = execution(affected, "full")
-                self.assertTrue(explicit["evaluate"])
-                self.assertTrue(explicit["builds"])
-                self.assertFalse(explicit["runtime"])
-                self.assertFalse(explicit["research"])
+                selected = execution(affected)
+                self.assertTrue(selected["static"])
+                self.assertTrue(selected["cli"])
+                self.assertTrue(selected["evaluate"])
+                self.assertTrue(selected["builds"])
+                self.assertFalse(selected["runtime"])
+                self.assertFalse(selected["research"])
 
 
     def test_runtime_and_research_changes_select_only_their_suite(self):
@@ -158,7 +154,7 @@ class CiSelection(unittest.TestCase):
                 self.assertEqual(select(base, self.commit(), self.repository),
                                  {"runtime", crate, "rust", "static"})
 
-    def test_new_crates_and_packages_select_their_units_and_explicit_builds(self):
+    def test_new_crates_and_packages_select_their_units_and_builds(self):
         for crate in ("control", "integrations", "activity", "workloads"):
             expected = {crate, "rust", "static"}
             # Activity is a path dependency of both dispatching services.
@@ -171,17 +167,14 @@ class CiSelection(unittest.TestCase):
                     self.write(name)
                     affected = select(base, self.commit(), self.repository)
                     self.assertEqual(affected, expected)
-                    automatic = execution(affected, "fast")
-                    self.assertTrue(automatic[crate])
-                    self.assertTrue(automatic["rust"])
-                    self.assertFalse(automatic["builds"])
-                    self.assertFalse(automatic["runtime"])
-                    explicit = execution(affected, "full")
-                    self.assertTrue(explicit[crate])
-                    self.assertTrue(explicit["builds"])
-                    self.assertFalse(explicit["research"])
+                    selected = execution(affected)
+                    self.assertTrue(selected[crate])
+                    self.assertTrue(selected["rust"])
+                    self.assertTrue(selected["builds"])
+                    self.assertEqual(selected["runtime"], crate == "activity")
+                    self.assertFalse(selected["research"])
 
-    def test_pi_sources_select_non_vm_gates_only_on_dispatch(self):
+    def test_pi_sources_select_non_vm_gates(self):
         for name in ("pkgs/tentaflake-pi/default.nix", "lib/piTransport.nix",
                      "tests/pi-runtime-evaluation.nix", "tests/pi-runtime-vm.nix",
                      "tests/local-image-proof.nix"):
@@ -190,32 +183,26 @@ class CiSelection(unittest.TestCase):
                 self.write(name)
                 affected = select(base, self.commit(), self.repository)
                 self.assertEqual(affected, {"pi", "evaluate", "static"})
-                automatic = execution(affected, "fast")
-                self.assertEqual({key for key in CHECKS if automatic[key]}, {"static"})
-                self.assertFalse(automatic["builds"])
-                explicit = execution(affected, "full")
-                self.assertTrue(explicit["pi"])
-                self.assertTrue(explicit["evaluate"])
-                self.assertTrue(explicit["builds"])
-                self.assertFalse(explicit["runtime"])
-                self.assertFalse(explicit["research"])
+                selected = execution(affected)
+                self.assertTrue(selected["pi"])
+                self.assertTrue(selected["evaluate"])
+                self.assertTrue(selected["builds"])
+                self.assertFalse(selected["runtime"])
+                self.assertFalse(selected["research"])
 
     def test_consumer_example_selects_the_actual_composition_fixture(self):
         self.write("examples/consumer-flake.nix")
         affected = select(self.base, self.commit(), self.repository)
         self.assertEqual(affected, {"generated", "static"})
-        self.assertFalse(execution(affected, "fast")["generated"])
-        self.assertFalse(execution(affected, "fast")["builds"])
-        self.assertTrue(execution(affected, "full")["generated"])
-        self.assertTrue(execution(affected, "full")["builds"])
+        self.assertTrue(execution(affected)["generated"])
+        self.assertTrue(execution(affected)["builds"])
 
-    def test_control_evaluation_fixture_selects_its_explicit_build(self):
+    def test_control_evaluation_fixture_selects_its_build(self):
         self.write("tests/control-evaluation.nix")
         affected = select(self.base, self.commit(), self.repository)
         self.assertEqual(affected, {"evaluate", "static"})
-        self.assertFalse(execution(affected, "fast")["builds"])
-        self.assertTrue(execution(affected, "full")["evaluate"])
-        self.assertTrue(execution(affected, "full")["builds"])
+        self.assertTrue(execution(affected)["evaluate"])
+        self.assertTrue(execution(affected)["builds"])
 
     def test_shared_rust_inputs_require_all_rust_packages_not_research(self):
         self.write("Cargo.toml")
@@ -241,7 +228,7 @@ class CiSelection(unittest.TestCase):
         for name in (".github/ci-paths.json", ".github/vm-paths.json", ".github/workflows/check.yml",
                      "scripts/ci_changes.py", "scripts/ci_vm_changes.py",
                      "scripts/test_ci_changes.py", "scripts/test_ci_vm_changes.py",
-                     "tests/ci-vm-selection.nix"):
+                     "scripts/test_docs_inventory.py", "tests/ci-vm-selection.nix"):
             with self.subTest(name=name):
                 base = self.git("rev-parse", "HEAD")
                 self.write(name)
@@ -264,13 +251,16 @@ class CiSelection(unittest.TestCase):
         self.assertEqual(select(base, head, self.repository), {"runtime", "cli", "rust", "static"})
         self.assertEqual(select(self.base, head, self.repository), {"runtime", "cli", "rust", "generated", "static"})
 
-    def test_shared_agent_parser_retains_runtime_coverage_without_research(self):
+    def test_shared_agent_parser_retains_runtime_and_schema_evaluation_without_research(self):
         self.write("lib/systemFromData.nix")
-        self.assertEqual(select(self.base, self.commit(), self.repository), {"runtime", "generated", "static"})
+        self.assertEqual(select(self.base, self.commit(), self.repository),
+                         {"runtime", "evaluate", "generated", "static"})
 
-    def test_system_schema_retains_runtime_coverage_without_research(self):
+    def test_system_schema_selects_cli_corpus_and_schema_evaluation(self):
+        # The CLI embeds schema/system-v1*.json; the Nix parser reads it too.
         self.write("schema/system-v1.json")
-        self.assertEqual(select(self.base, self.commit(), self.repository), {"runtime", "generated", "static"})
+        self.assertEqual(select(self.base, self.commit(), self.repository),
+                         {"runtime", "evaluate", "generated", "cli", "rust", "static"})
 
     def test_devcontainer_changes_do_not_build_agents_or_research(self):
         self.write(".devcontainer/devcontainer.json")
@@ -284,9 +274,9 @@ class CiSelection(unittest.TestCase):
                 self.write(name)
                 affected = select(base, self.commit(), self.repository)
                 self.assertEqual(affected, {"evaluate", "static"})
-                self.assertTrue(execution(affected, "fast")["static"])
-                self.assertFalse(execution(affected, "fast")["builds"])
-                self.assertTrue(execution(affected, "full")["builds"])
+                self.assertTrue(execution(affected)["static"])
+                self.assertTrue(execution(affected)["evaluate"])
+                self.assertTrue(execution(affected)["builds"])
 
     def test_research_only_changes_do_not_build_rust_packages(self):
         self.lock["nodes"]["tentaflake-research"]["locked"]["rev"] = "new"
@@ -315,70 +305,57 @@ class CiSelection(unittest.TestCase):
         self.assertEqual(actual, {check: "false" for check in CHECKS} |
                          {"nix": "false", "builds": "false"})
 
-    def test_automatic_unknown_history_never_selects_expensive_work(self):
+    def test_unknown_history_selects_the_full_inventory(self):
         affected = select("", self.base, self.repository)
-        automatic = execution(affected, "fast")
-        self.assertEqual({key for key in CHECKS if automatic[key]}, FAST_CHECKS)
-        self.assertFalse(automatic["builds"])
-        explicit = execution(affected, "full")
-        self.assertTrue(all(explicit.values()))
+        self.assertTrue(all(execution(affected).values()))
 
-    def test_explicit_comparison_selects_only_affected_builds(self):
+    def test_comparison_selects_only_affected_builds(self):
         self.write("modules/research.nix")
         affected = select(self.base, self.commit(), self.repository)
-        automatic = execution(affected, "fast")
-        self.assertEqual({key for key in CHECKS if automatic[key]}, {"static"})
-        self.assertFalse(automatic["builds"])
-        explicit = execution(affected, "full")
-        self.assertEqual({key for key in CHECKS if explicit[key]},
+        selected = execution(affected)
+        self.assertEqual({key for key in CHECKS if selected[key]},
                          {"research", "evaluate", "generated", "static"})
-        self.assertTrue(explicit["builds"])
+        self.assertTrue(selected["builds"])
 
-    def test_crate_units_are_selected_in_both_modes_builds_only_explicit(self):
+    def test_crate_changes_select_unit_build_and_runtime_gates(self):
         self.write("crates/tentaflake-broker/src/main.rs")
-        affected = select(self.base, self.commit(), self.repository)
-        for mode in ("fast", "full"):
-            with self.subTest(mode=mode):
-                selected = execution(affected, mode)
-                self.assertTrue(selected["broker"])
-                self.assertTrue(selected["rust"])
-                self.assertFalse(selected["cli"])
-                self.assertFalse(selected["worker"])
-                self.assertEqual(selected["builds"], mode == "full")
-                self.assertEqual(selected["runtime"], mode == "full")
+        selected = execution(select(self.base, self.commit(), self.repository))
+        self.assertTrue(selected["broker"])
+        self.assertTrue(selected["rust"])
+        self.assertFalse(selected["cli"])
+        self.assertFalse(selected["worker"])
+        self.assertTrue(selected["builds"])
+        self.assertTrue(selected["runtime"])
 
-    def test_unknown_paths_and_rename_require_full_explicit_inventory(self):
+    def test_unknown_paths_and_rename_require_full_inventory(self):
         self.git("mv", "modules/security.nix", "security.md")
         self.write("new-component/config")
         affected = select(self.base, self.commit(), self.repository)
-        self.assertTrue(all(execution(affected, "full").values()))
-        self.assertFalse(execution(affected, "fast")["builds"])
+        self.assertTrue(all(execution(affected).values()))
 
-    def test_docs_and_ci_metadata_never_build_even_on_dispatch(self):
+    def test_docs_and_ci_metadata_never_build(self):
         for name in ("README.md", ".github/workflows/check.yml", "justfile", "lib/devshell.nix"):
             base = self.git("rev-parse", "HEAD")
             self.write(name)
             affected = select(base, self.commit(), self.repository)
-            for mode in ("fast", "full"):
-                self.assertFalse(execution(affected, mode)["builds"])
+            self.assertFalse(execution(affected)["builds"])
 
-    def test_cli_default_is_fast_and_explicit_fallback_is_full(self):
+    def test_cli_unknown_history_selects_builds_and_writes_summary(self):
         script = Path(__file__).with_name("ci_changes.py")
         summary = self.repository / "summary.md"
-        for arguments, full in (([], False), (["--mode", "full"], True)):
-            result = subprocess.run(
-                [sys.executable, str(script), "", "0" * 40, *arguments,
-                 "--summary", str(summary)], check=True, capture_output=True, text=True)
-            actual = dict(line.split("=", 1) for line in result.stdout.splitlines())
-            self.assertEqual(actual["builds"], str(full).lower())
-            self.assertEqual(actual["evaluate"], str(full).lower())
-            self.assertEqual(actual["runtime"], str(full).lower())
-            self.assertEqual(actual["research"], str(full).lower())
+        result = subprocess.run(
+            [sys.executable, str(script), "", "0" * 40, "--summary", str(summary)],
+            check=True, capture_output=True, text=True)
+        actual = dict(line.split("=", 1) for line in result.stdout.splitlines())
+        for output in ("builds", "evaluate", "runtime", "research"):
+            self.assertEqual(actual[output], "true")
         self.assertIn("Skipped builds are not runtime evidence", summary.read_text())
 
-    def test_invalid_execution_mode_is_rejected(self):
-        with self.assertRaises(ValueError):
-            execution(CHECKS, "automatic-full")
+    def test_removed_mode_option_is_rejected(self):
+        script = Path(__file__).with_name("ci_changes.py")
+        result = subprocess.run([sys.executable, str(script), "", "0" * 40, "--mode", "fast"],
+                                capture_output=True, text=True)
+        self.assertNotEqual(result.returncode, 0)
 
     def test_first_parent_whitespace_check_detects_a_bad_docs_merge(self):
         self.git("checkout", "-b", "docs-change")
@@ -421,21 +398,19 @@ class WorkflowPolicy(unittest.TestCase):
             package = Path(member).name
             check = package.removeprefix("tentaflake-")
             with self.subTest(package=package):
-                self.assertIn(check, FAST_CHECKS)
-                for mode in ("fast", "full"):
-                    calls = self.run_step(
-                        "Rust lint and unit tests", execution({check, "rust"}, mode))
-                    self.assertEqual(calls, [
-                        ["develop", "--command", "cargo", "clippy", "--package", package,
-                         "--all-targets", "--", "-D", "warnings"],
-                        ["develop", "--command", "cargo", "test", "--package", package],
-                    ])
+                self.assertIn(check, CHECKS)
+                calls = self.run_step("Rust lint and unit tests", execution({check, "rust"}))
+                self.assertEqual(calls, [
+                    ["develop", "--command", "cargo", "clippy", "--package", package,
+                     "--all-targets", "--", "-D", "warnings"],
+                    ["develop", "--command", "cargo", "test", "--package", package],
+                ])
 
     def test_each_rust_package_executes_its_explicit_build(self):
         for crate in ("cli", "broker", "worker", "control", "integrations", "activity", "workloads"):
             with self.subTest(crate=crate):
                 calls = self.run_step(
-                    "nix build (non-VM checks)", execution({crate, "rust"}, "full"))
+                    "nix build (non-VM checks)", execution({crate, "rust"}))
                 expected = {f".#checks.x86_64-linux.tentaflake-{crate}",
                             ".#checks.x86_64-linux.rust-package-sources"}
                 if crate == "worker":
@@ -444,9 +419,9 @@ class WorkflowPolicy(unittest.TestCase):
                 self.assertTrue(all(call[:2] == ["build", "--no-link"] for call in calls))
                 self.assertTrue(all(len(call[2:]) <= 4 for call in calls))
 
-    def test_pi_dispatch_executes_recovery_module_graph_and_image_builds(self):
+    def test_pi_changes_execute_recovery_module_graph_and_image_builds(self):
         calls = self.run_step(
-            "nix build (non-VM checks)", execution({"pi", "evaluate", "static"}, "full"))
+            "nix build (non-VM checks)", execution({"pi", "evaluate", "static"}))
         targets = {arg for call in calls for arg in call[2:]}
         self.assertTrue({
             ".#checks.x86_64-linux.tentaflake-pi",
@@ -458,8 +433,8 @@ class WorkflowPolicy(unittest.TestCase):
         } <= targets)
         self.assertTrue(all(len(call[2:]) <= 4 for call in calls))
 
-    def test_full_dispatch_executes_complete_non_vm_inventory_in_bounded_groups(self):
-        selected = execution(CHECKS, "full")
+    def test_full_inventory_executes_complete_non_vm_builds_in_bounded_groups(self):
+        selected = execution(CHECKS)
         calls = self.run_step("Prepare exact evaluation closures and source filesets", selected)
         calls += self.run_step("nix build (non-VM checks)", selected)
         self.assertTrue(all(call[:2] == ["build", "--no-link"] for call in calls))

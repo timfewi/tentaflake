@@ -456,7 +456,8 @@ Evaluate and build the complete selected host, review the diff/assertions, and
 activate only with operator authorization. Balanced automatic startup requires
 the same ID's broker, worker, quota and Research declarations. `autoStart = false`
 does not prevent activation from creating declared worker services or quota
-filesystems. OpenClaw/Pi create only refusal units, not those runtime resources.
+filesystems. OpenClaw, and Pi without explicit host admission, create only
+refusal units, not those runtime resources.
 
 After authorized activation, check `tentaflake status`, `tentaflake doctor
 --security`, the exact inventory unit and actual application behavior. For

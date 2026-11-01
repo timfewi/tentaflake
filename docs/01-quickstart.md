@@ -16,7 +16,8 @@ a stopped declaration, not vendor-runtime acceptance.
    `agent plan|import` workflow, with schema-v1 TOML and adapter selection. Names are globally
    unique; use `agent-<name>` for all host services. Reviewed generic OCI images
    and in-capsule argv are supported; arbitrary host commands are not.
-   OpenClaw/Pi are refusal scaffolds, not containers.
+   OpenClaw is a refusal scaffold, not a container; Pi is too unless the host
+   explicitly admits its reviewed runtime.
 3. **Review storage before activation.** Default state is
    `/var/lib/tentaflake/agents/<name>`; effective workspace/owner come from
    adapter metadata. `autoStart = false` does not stop activation from creating

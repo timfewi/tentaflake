@@ -1,7 +1,7 @@
 ---
 name: tentaflake-repo-guidance
 description: Locate owning sources, guides and checks before changing Tentaflake.
-version: 3.0.0
+version: 3.1.0
 ---
 
 # Repository guidance
@@ -39,6 +39,11 @@ accepted model/Research integration. For authority changes read the
 [threat model](../../../docs/15-threat-model.md).
 
 Choose checks through the build guide: `just fast` includes pure catalog drift
-checks; host evaluation/build/runtime evidence remains separate. Update owning
-guides and examples with behavior, keep skills short, and report actual checks
-and remaining evidence gaps. Evaluation does not authorize activation.
+and documentation inventory checks; local host evaluation/build/runtime evidence
+remains separate, while CI runs every affected gate. Update owning guides and
+examples with behavior, keep skills short, and report actual checks and
+remaining evidence gaps. Evaluation does not authorize activation.
+
+`docs/` is product documentation only (see its guide inventory). Write plans,
+notes, prompts and investigation results to the ignored `.scratch/`; never
+commit them or private deployment facts.

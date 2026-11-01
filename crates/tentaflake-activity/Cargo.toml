@@ -3,7 +3,7 @@ name = "tentaflake-activity"
 version.workspace = true
 edition = "2024"
 license = "MIT"
-description = "Minimized fixed-context Hostpulse activity publication"
+description = "Minimized fixed-context activity publication to an external collector"
 
 [lib]
 path = "src/lib.rs"

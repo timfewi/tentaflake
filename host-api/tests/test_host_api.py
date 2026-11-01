@@ -420,7 +420,21 @@ else:
         self.assertEqual(
             self.request("GET", "/v1/agents/agent-assistant/tool-requests")[0], 403
         )
-        bad = dict(self.worker_request, argv=["x" * 4097])
+        accepted = dict(self.worker_request, argv=["printf", "", "😀" * 2048])
+        (self.root / "requests.json").write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "agent": "agent-coding",
+                    "requests": [accepted],
+                    "truncated": False,
+                }
+            )
+        )
+        status, result = self.request("GET", "/v1/agents/agent-coding/tool-requests")
+        self.assertEqual(status, 200)
+        self.assertEqual(result["requests"], [accepted])
+        bad = dict(self.worker_request, argv=["😀" * 2048 + "x"])
         (self.root / "requests.json").write_text(
             json.dumps(
                 {

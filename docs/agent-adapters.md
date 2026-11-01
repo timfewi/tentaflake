@@ -296,12 +296,12 @@ single-link and read-only in the container; the broker virtual token remains
 The bearer-authenticated native socket supports `POST /api/sessions`,
 `POST /v1/runs` (`session_id`, `input`, `context_mode: "persistent"`, `request_id`),
 `GET /v1/runs/{id}`, lookup by `request_id`, `/result`, `/events`, and
-`POST /v1/runs/{id}/stop`. Responses retain the existing UI's `run_id` and native
+`POST /v1/runs/{id}/stop`. Responses carry a client-compatible `run_id` and native
 run projection; uncertain work is `state: "interrupted", uncertain: true`.
 SSE carries terminal results only, not fabricated token deltas. Capabilities
 explicitly deny live inputs and session import. Isolated context is unsupported.
-The Board remains task authority; the runner API does not grant enterprise
-approvals, connector permissions, or standalone UI admission.
+Task ownership stays with the client's own task system; the runner API does
+not grant enterprise approvals, connector permissions, or standalone UI admission.
 
 Focused verification belongs to the integration owner:
 

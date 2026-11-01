@@ -42,7 +42,7 @@ let
         enable = lib.mkEnableOption "disposable no-egress tool worker for ${name}";
         activity = lib.mkOption {
           default = null;
-          description = "Optional host-owned fixed Hostpulse context, published through a dedicated root-authenticating non-root relay.";
+          description = "Optional host-owned fixed external-collector activity context, published through a dedicated root-authenticating non-root relay.";
           type = lib.types.nullOr (
             lib.types.submodule {
               options =
@@ -64,7 +64,7 @@ let
         activityUser = lib.mkOption {
           type = lib.types.str;
           default = "";
-          description = "Dedicated existing static non-root relay user matching the Hostpulse producer grant.";
+          description = "Dedicated existing static non-root relay user matching the collector's producer grant.";
         };
         workspace = lib.mkOption {
           type = lib.types.str;
@@ -91,6 +91,7 @@ let
         maxRequestBytes = lib.mkOption {
           type = lib.types.ints.positive;
           default = 64 * 1024;
+          description = "Largest accepted request file; Pi's offline_worker tool requires at least 65536.";
         };
         maxInboxEntries = lib.mkOption {
           type = lib.types.ints.positive;
@@ -141,7 +142,8 @@ let
         };
         maxTimeoutSeconds = lib.mkOption {
           type = lib.types.ints.positive;
-          default = 900;
+          default = 3600;
+          description = "Largest accepted job timeout; Pi's offline_worker tool requires at least 3600.";
         };
         memory = lib.mkOption {
           type = lib.types.str;
@@ -384,7 +386,7 @@ in
                       ++ (lib.attrValues (lib.attrByPath [ "tentaflake" "broker" "agents" ] { } config))
                     ) == 1
               );
-            message = "Worker activity requires a dedicated static non-root publisher UID, no supplementary groups, and an exact Hostpulse grant.";
+            message = "Worker activity requires a dedicated static non-root publisher UID, no supplementary groups, and the collector's exact producer grant.";
           }
           {
             assertion = lib.elem name containerNames;

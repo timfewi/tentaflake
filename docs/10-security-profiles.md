@@ -4,7 +4,9 @@
 
 Installed hosts default to `balanced`. TOML-defined instances use the internal
 builder and shared containment policy on final merged OCI configurations.
-OpenClaw and Pi remain stopped scaffolds without containers or operational support.
+OpenClaw remains a stopped scaffold without containers or operational support.
+Pi is the same stopped scaffold unless the host explicitly admits its reviewed
+runtime; see [Pi admission](agent-adapters.md).
 The policy rejects unsafe configurations during NixOS evaluation instead of
 silently weakening them. `strict` also fails because no tested separate-kernel boundary
 is implemented yet.

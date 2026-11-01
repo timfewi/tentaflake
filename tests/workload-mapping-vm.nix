@@ -1,4 +1,4 @@
-# Explicit slow, isolated kernel/engine test; parent may extend with Hostpulse/UI
+# Explicit slow, isolated kernel/engine test; a consumer may extend it with its own collector/UI
 # modules and assertions without replacing this resolver or its synthetic workloads.
 {
   pkgs,

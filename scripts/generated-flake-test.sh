@@ -21,14 +21,14 @@ trap 'rm -rf "$WORK"' EXIT
 TARGET_NIXOS="$WORK/nixos"
 mkdir -p "$TARGET_NIXOS"
 
-# ── Mirror installer.sh's file layout (STEP 10) ──
-cp -r "$REPO_DIR/lib" "$REPO_DIR/adapters" "$REPO_DIR/modules" \
-  "$REPO_DIR/pkgs" "$REPO_DIR/crates" "$REPO_DIR/schema" \
-  "$TARGET_NIXOS/"
-cp "$REPO_DIR/Cargo.toml" \
-  "$REPO_DIR/Cargo.lock" \
-  "$TARGET_NIXOS/"
-cp "$REPO_DIR/configuration.nix" "$TARGET_NIXOS/configuration.nix"
+# ── Run installer.sh's own source-copy block (STEP 10) ──
+# Extracted from the real installer so a new required directory cannot be
+# omitted from installed systems while this fixture still passes.
+sed -n '/^# Copy the declarative system and Rust CLI workspace/,/^# Generate user-config.nix$/p' \
+  "$REPO_DIR/installer/installer.sh" | sed '$d' >"$WORK/copy-source.sh"
+grep -q 'cp ' "$WORK/copy-source.sh" ||
+  { echo "FAIL: installer source-copy block not found — did installer.sh move?" >&2; exit 1; }
+REPO_DIR="$REPO_DIR" TARGET_NIXOS="$TARGET_NIXOS" bash -eu "$WORK/copy-source.sh"
 
 # Exercise the installer's actual guarded initialization, not a copied recipe.
 # Keep refusal ahead of all target copies, not merely ahead of inventory writes.
@@ -210,6 +210,11 @@ profile = "balanced"
 enable = false
 tools = true
 
+# The installed source must contain every package an enabled option needs.
+[hostApi]
+enable = true
+peers = []
+
 [[agents]]
 adapter = "hermes"
 name = "generic-toml"
@@ -296,11 +301,15 @@ nix eval --json --no-write-lock-file \
     sshAuthorization = c.tentaflake.management.capabilities.sshAuthorization;
     securityProfile = c.tentaflake.security.profile;
     shellConfig = c.environment.etc ? "tentaflake/cli.conf";
+    hostApi = c.tentaflake.hostApi.enable;
+    hostApiPackage = builtins.isString c.tentaflake.hostApi.package.drvPath;
+    hostApiService = c.systemd.services ? tentaflake-api;
   }' >"$WORK/projections.json"
 jq -e --arg selector "$HOSTNAME_T" '. == {
   hostName: "desired-host", timeZone: "Europe/Berlin", stateVersion: "26.05",
   configurationName: $selector,
   shell: false, tools: true, management: true, tailscale: true, shellConfig: false,
+  hostApi: true, hostApiPackage: true, hostApiService: true,
   transport: "tailscale", privateConnectivity: true,
   sshAuthorization: "tailnet-policy", securityProfile: "balanced"
 }' "$WORK/projections.json"
