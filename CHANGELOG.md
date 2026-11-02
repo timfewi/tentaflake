@@ -9,9 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Direction
 - Keep declarative TOML onboarding, installation and Nix host policy
   runtime-agnostic, with no mandatory runtime or control service.
-- Preserve earlier development in Git history; this is not a new published tag.
-- Keep release tagging explicit, as on the preceding main branch; restoring
-  the declarative product does not resume automatic patch releases.
+- Keep release tagging explicit; changes below are not a new published tag.
 - Keep the public desired-system TOML empty and commented. Document separate
   consumer/fork ownership and Git tracking, with fail-closed missing-source
   diagnostics and real-Git regressions that never substitute the upstream default.
@@ -80,19 +78,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   separately enabled bounded logs and fixed lifecycle actions. Durable request
   receipts prevent automatic replay after uncertain action outcomes. A separate
   compatible web UI can use host-only mode without task migration or Pi Durable.
-- Add an opt-in strict local-text LLM cost envelope with explicit one-time
-  budget provisioning, exclusive state ownership, checksum-protected durable
-  reservations, uncertain-hold rollover blocking and clock-rollback refusal.
-  Provider pricing or hard caps remain prerequisites for paid admission; the
-  ordinary request policy remains unchanged.
 - Retain stopped public Pi Durable declarations while adding a separately admitted,
   opt-in pinned Pi Durable runner with immutable image/transport checks,
   durable no-replay receipts and broker/Research/offline-worker mediation.
   Exact-peer host API grants separately scope runner reads, submissions and stop.
   Synthetic fixtures do not establish live model/provider or target acceptance.
-- Add `tentaflake-broker --reconcile-strict-budget` and the explicit
-  `tentaflake-broker-llm-reconcile-NAME` unit. With the broker stopped, it
-  resolves held strict reservations and orphaned usage holds without refunds.
 ### Maintenance
 - Correct maintained guides against current source: offline CLI forms and
   adapter-specific public fields, generic stopped examples, internal-only legacy
@@ -114,30 +104,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   durable queue-locked drain marker and a level-triggered systemd path watch.
 - Expose canonical IDs and runnable flags in CLI JSON status, prefer exact
   container IDs over display-name aliases, and reject ambiguous short names.
-- Settle strict reservations on complete provider error responses, finished
-  choices with empty or filtered content, and dated snapshots of the allowed
-  model; malformed outputs, partial streams and lost responses stay held.
-  Settled cross-midnight spend stays on its admission day instead of being
-  carried into the next. Durably exhaust strict daily budgets on reported usage
-  or price overages. Interrupted usage accounting blocks admission until
-  operator reconciliation; ordinary shared-state budgets retain their existing
-  limitations. Ordinary streams again accept choice chunks without a delta.
-- OpenClaw now uses the shared stopped-scaffold builder: it no longer creates
-  host state directories and gains same-identity OCI and quota assertions.
-- `agents.tsv` adds a sixth `runnable` field; CLI `stats`, `shell` and `exec`
-  use it instead of re-reading the runtime catalog.
-- Move the journald hardening regression into `checks.*.hardening-journald`.
-- Retain bounded sequential flake evaluation, explicit build/VM gates and
-  read-only formatting checks from the later 0.4 development.
-- Update libc, Tokio, Quinn and Rustls and retain the Dev Containers
-  shell-quote correction and matching cache pin. Keep security scans bounded.
-- Prevent CLI fixture collisions and avoid rereading deliberately disconnected
-  broker test clients.
-- Refresh the locked nixos-unstable input while retaining Research's independent
-  package set and digest-pinned runtime images.
-- Synchronize Research with published canonical `main` revision `babdca5`,
-  including its project-check pin; no feature-branch input or runtime acceptance
-  is implied by the dependency refresh.
 - Run every affected gate on each PR and push again, including evaluation,
   generated-flake, package/image/system builds and VM tests; manual dispatch
   remains for re-runs and full inventories. Route `schema/**` to the CLI Rust
@@ -164,6 +130,256 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   move planning, backlog, prompt and archive-comparison notes and a private
   consumer's integration test out of the repository. Working notes belong in
   the ignored `.scratch/` directory. Describe optional Pi Durable admission accurately.
+
+## [0.4.52] - 2026-10-27
+
+### Changed
+- Restore the declarative architecture with CLI onboarding, installer, broker,
+  Research, workers, quotas and backups. Release tagging remains explicit.
+
+### Added
+- Add an opt-in strict local-text LLM cost envelope with explicit one-time
+  budget provisioning, exclusive state ownership, checksum-protected durable
+  reservations, uncertain-hold rollover blocking and clock-rollback refusal.
+  Provider pricing or hard caps remain prerequisites for paid admission; the
+  ordinary request policy remains unchanged.
+- Add a stopped Pi Durable adapter scaffold with no runtime image, container,
+  host-state creation or socket access, reserving its own UID/GID 10100.
+  Runtime acceptance remains pending.
+- Add `tentaflake-broker --reconcile-strict-budget` and the explicit
+  `tentaflake-broker-llm-reconcile-NAME` unit. With the broker stopped, it
+  resolves held strict reservations and orphaned usage holds without refunds.
+### Maintenance
+- Settle strict reservations on complete provider error responses, finished
+  choices with empty or filtered content, and dated snapshots of the allowed
+  model; malformed outputs, partial streams and lost responses stay held.
+  Settled cross-midnight spend stays on its admission day instead of being
+  carried into the next. Durably exhaust strict daily budgets on reported usage
+  or price overages. Interrupted usage accounting blocks admission until
+  operator reconciliation; ordinary shared-state budgets retain their existing
+  limitations. Ordinary streams again accept choice chunks without a delta.
+- OpenClaw now uses the shared stopped-scaffold builder: it no longer creates
+  host state directories and gains same-identity OCI and quota assertions.
+- `agents.tsv` adds a sixth `runnable` field; CLI `stats`, `shell` and `exec`
+  use it instead of re-reading the runtime catalog.
+- Move the journald hardening regression into `checks.*.hardening-journald`.
+- Retain bounded sequential flake evaluation, explicit build/VM gates and
+  read-only formatting checks from the later 0.4 development.
+- Update libc, Tokio, Quinn and Rustls and retain the Dev Containers
+  shell-quote correction and matching cache pin. Keep security scans bounded.
+- Prevent CLI fixture collisions and avoid rereading deliberately disconnected
+  broker test clients.
+- Refresh the locked nixos-unstable and optional Hermes flake inputs while
+  retaining Research's independent package set and digest-pinned runtime images.
+- Synchronize Research with published canonical `main` revision `babdca5`,
+  including its project-check pin; no feature-branch input or runtime acceptance
+  is implied by the dependency refresh.
+
+### Fixed
+- Lock the selected target disk while rewriting its partition table and
+  requesting a rescan, preventing udev partition-table races during installation.
+
+## [0.4.51] - 2026-10-14
+
+### Fixed
+- Mark crashed OCI supervisors Unknown through an exact-invocation post-stop
+  hook, retaining container identity and resource charges without daemon mutation.
+- Require Docker's classic image store for admission's exact configuration-digest
+  contract, checking immutable settings and live driver status before loading an
+  image; existing stores require explicit operator migration.
+- Clear only verified quota-owner refusal counters after stopped/no-job evidence
+  in storage VM recovery; start-rate failures cannot satisfy refusal assertions.
+- Give parallel CLI test fixtures distinct directory names even when clock
+  readings coincide.
+- Verify expected missing-ledger refusals before cleaning up quota owners in
+  both initial OCI admission VM fixtures.
+- Keep the read-only shared Nix store available until admission VMs enter their
+  final shutdown ramfs, preserving ordinary runtime and persistent-volume cleanup.
+- Capture CLI refusal diagnostics from stderr in publication VM assertions.
+- Keep guest Nix's store-mutating registration out of prebuilt, read-only
+  admission VM fixtures, including publication specialisations.
+- Handle kernel PTY mounts during admission maintenance, preserve refusal of
+  unverified overlay backing, and report mount failures without raw sources.
+- Allow inert dependency-only mount entries during admission maintenance while
+  retaining strict required-unit and installed-file checks.
+- Preserve completed worker results without redispatching stale requests, and
+  retain complete inbox copies when legacy private pending state is damaged.
+- Identify the exact quota loop backing image inside systemd namespaces;
+  `ReadWritePaths` bind mounts must not bypass underlying-data checks or prove
+  quota ownership readiness.
+- Reject quota mount-source and parent symlinks before privileged permission
+  changes; generated-helper regressions preserve unrelated data and permissions.
+- Preserve optional bounded `x-opencode-session` conversation-affinity metadata
+  on both LLM broker routes for JSON and SSE. Reject malformed values before
+  budget reservation or upstream dispatch, omit session IDs from audit logs,
+  and keep arbitrary client headers excluded. Clients still own ID propagation.
+### Added
+- Experimental native Codex 0.162.1 reference image using the complete pinned
+  upstream package, persistent private state and a capsule-private app-server.
+  The wrapper selects an explicit broker model without writing credentials or
+  replacing user configuration; native runtime/provider acceptance is separate.
+- Experimental aggregate Docker admission for offline Generic workloads, with
+  durable host/daemon/supervisor/image intent, exact container-ID binding before
+  start, conservative uncertain outcomes and storage retention on stop. Local
+  Docker archives use immutable Nix descriptors and explicit image acquisition;
+  runtime and vendor acceptance remain separate gates.
+- Reviewed Debian 13 and Ubuntu 26.04 LTS base-image metadata, platform-specific
+  immutable Nix selection, and offline digest-chain regression checks. This
+  catalog does not acquire layers or establish signature/runtime acceptance.
+- Durable worker pending/running claims, conservative interrupted-job recovery,
+  per-agent operator/worker exclusion and aggregate inbox/private queue ceilings.
+- Optional fixed-size private agent state through the existing Btrfs quota
+  module, with exact adapter path/ownership, mount ordering, startup dependencies
+  and selected Restic state/workspace sources. Existing data needs explicit
+  offline migration; no automatic conversion or activation is performed.
+- Record the product roadmap for general-purpose AI employees, company workflows,
+  business connectors and shared runtime configuration, with linked GitHub milestones
+  and acceptance criteria. Existing issues are reused and missing scope is tracked
+  separately. This documents planned work; website publication remains separate.
+- Add a lazy agent adapter registry and `mkAgent`, preserving Hermes/ZeroClaw
+  public arguments, container/unit identities, ownership and existing state.
+  Explicit metadata drives CLI inventory; versioned generic JSON is additive
+  to legacy arrays and rejects unknown fields/adapters and identity collisions.
+- Investigate OpenClaw v2026.9.7 and add an explicitly stopped refusal scaffold.
+  A reviewed image, broker transport, actual Research discovery and worker tool
+  routing remain acceptance prerequisites; this is not operational support.
+  Versioned source confirms built-in OpenAI streaming requests; the opt-in
+  broker SSE transport still needs acceptance with that runtime. Default
+  rejection probes retain the existing budget and credential boundaries.
+### Changed
+- Keep automatic PR/push CI to affected static/unit checks, with routing and
+  whitespace checks on every run. Explicit workflow dispatch selects affected
+  configuration, package and VM gates; `just fast` no longer evaluates
+  configurations or builds policy packages. Relevant build/runtime evidence
+  remains required for the current revision before merge.
+- Pin the published `tentaflake-research` revision 91ce540 (replacing e31fce2):
+  independent client/service split, neutral provider defaults, streamed-HTML and
+  crawl fixes, typed failure details, constrained package sources, formatted HTML
+  text and selectable VPN readiness evidence (WireGuard handshake and peer pins,
+  egress-path evidence, planned draining; default off). No fixture or example
+  relied on an implicit search provider. The Research policy, module-evaluation and
+  adapter checks, the Research integration VM, the flake check, the CI-selection
+  checks and the generated installed flake passed; no host was activated and the
+  rest of the lockfile is unchanged. Tracked as #110.
+### Security
+- Automatic-start admission checks the effective OCI setting, closing an
+  override path that could start a stopped capsule without its required
+  broker, worker, workspace quota and Research declarations.
+- Research capability validation uses registered adapter metadata rather than
+  trusting runtime-like OCI names. Upstream settings hooks share the existing
+  exact read-only closure/socket projection; remote MCP remains rejected.
+- Research-enabled controllers use only `secure-research-tool` for web access.
+  Native web tools and legacy fetch are disabled, per-agent Unix relays preserve
+  distinct job ownership, and model requests stay on the LLM broker. The broker
+  rejects provider-hosted tools and web extensions before budget reservation.
+- Container mounts reject non-normalized path components, including `..` escapes
+  from an approved source or into a sensitive container destination.
+- Selectively adopt the archive's exact Docker/Podman posture comparisons and
+  bounded OCI subprocess capture: incomplete evidence remains unknown, while
+  changed mounts, networks, ports, tmpfs, or resource limits report drift.
+  Broker health probes run in bounded batches without serial endpoint delays.
+  OCI inspection also caps combined stdout/stderr at 8 MiB and rejects
+  overflow as unknown instead of retaining unbounded output until timeout.
+- Broker services now have memory/task/file ceilings and optional aggregate
+  admission limits. Dual-mode agents count twice for concurrency and rate.
+  Credential setup uses only its private preserved runtime directory under
+  strict filesystem protection, retaining keys across service restarts.
+  VM verification additionally caught the nested runtime directory exposing
+  its parent and empty capability lists omitting the directive; explicit
+  read-only/writable paths and empty-string capability sets close both gaps.
+- Update the broker's locked TLS dependency to `rustls 0.23.45` and its
+  required `rustls-webpki 0.103.15`, removing the affected version reported by
+  OSV for `RUSTSEC-2026-0285` without changing broker policy or adding code.
+- Updated the pinned Dev Containers CLI dependencies `@humanfs/node`,
+  `brace-expansion` (all three locked majors), `ip-address`, and `js-yaml` to
+  remove current OSV findings. The required HumanFS dependencies and offline
+  cache hash move together; the CLI release and prior security backports stay
+  unchanged.
+### Changed
+- Shorten all seven bundled skills into focused, source-linked procedures and
+  remove unverified upstream catalogs and credential-dumping instructions.
+  Correct read-only Hermes configuration guidance and Agenix recipient/runtime
+  separation, host identity setup and environment-file verification.
+- Add opt-in bounded SSE forwarding on the existing LLM broker's Chat Completions
+  and Responses routes. Streams retain model/tool allowlists and host-only keys,
+  cancel on disconnect, enforce byte/time limits and never replay dispatched
+  calls. Conservative budget reservations remain charged when usage is missing
+  or an exchange aborts; terminal audit admission precedes successful output.
+- Refresh documentation for adapter inventory, secure startup prerequisites,
+  lifecycle management, skills and credential ownership. Link the public
+  website and document authoritative-source and release synchronization rules.
+- Link the retained project artwork from the README and an asset overview,
+  making logo and wallpaper variants discoverable after removing the old
+  ASCII assets.
+- Installer and VM fixture import the same disk library, replacing fragile
+  extraction of executable code by fixed comment strings.
+- GitHub selects host/research VMs separately from an imported path policy;
+  contributor-only changes skip them, while unknown/shared changes run both.
+- Rust packages include only their own source plus workspace manifests, so
+  changes to one binary preserve the other binaries' Nix cache entries.
+- Cargo workspace metadata supplies the package/image version and package
+  descriptions. Worker image references follow image metadata; shared agent
+  UID/GID defaults now import `lib/constants.nix`.
+- New installations and fixed-size agent workspaces use Btrfs instead of ext4.
+  Workspace images require at least 128 MiB and use read-only offline checks.
+- Rust CLI, broker, and worker packages share one builder and a Cargo/crate
+  source fileset, removing repeated packaging policy and keeping unrelated
+  documentation and host-configuration edits out of their rebuild inputs.
+- Secure controllers and brokers now share systemd exponential restart
+  backoff from 10 seconds to one minute, avoiding permanent start-limit
+  exhaustion after a transient outage. Explicit stops still prevent retries.
+### Added
+- `just fast` runs the contributor checks, CI-selection regressions and flake
+  evaluation without VM suites or the installer ISO.
+- Pinned public MIT `tentaflake-research` service, `tentaflake.research.agents`,
+  policy checks and a real gVisor stdio-MCP integration fixture. Secure auto-start
+  now requires a research relay alongside the broker, worker and workspace quota.
+### Fixed
+- Keep Tailscale's up-only `--advertise-tags` out of `extraSetFlags`, allowing
+  hostname/SSH preferences to apply after manual enrollment. Auth-key enrollment
+  retains all three flags through `extraUpFlags`; manual enrollment requests the
+  tag explicitly. Regression checks parse the generated flags with the pinned CLI.
+- Pin the Dev Containers CLI's transitive `basic-ftp` dependency to 6.2.1
+  for `GHSA-c475-qrg2-pj4r`, with the patched Yarn resolution and offline-cache
+  hash updated together. The CLI release stays at 0.88.0.
+- Installer disk cleanup no longer stops swap or LVM globally. It follows the
+  selected device stack, preserves unrelated volumes and refuses cross-disk VGs
+  before mutation; encrypted target mappings are identified by device type.
+- Pin the verified research client recovery: new MCP calls reconnect after an
+  upstream session loss, without replaying interrupted operations.
+- `just` recipes load the pinned contributor tools from an ordinary shell,
+  avoiding missing Cargo/Statix errors. `just list` now lists available recipes.
+- Generated installed flakes now pin and import the research module explicitly,
+  avoiding a missing module argument and infinite recursion during installation.
+- Broker crash recovery preserves dependent controller processes with systemd
+  direct retries. Six consecutive crashes no longer interrupt the controller;
+  explicit broker stops still stop it and require a separate controller start.
+- Host diagnostics no longer report success when systemd/disk queries fail
+  or agent state is unknown. `health` shares `doctor` checks and exit codes;
+  intentionally stopped agents remain valid. Text `doctor --hide` now
+  redacts host and agent names as advertised, using shared name rendering
+  and a single agent-state snapshot instead of duplicated report logic.
+- CLI help (`help`, `--help`, `-h`) now works before host configuration is
+  installed or while generated inputs are damaged, keeping usage available
+  during setup and recovery. Management commands still require those inputs.
+- Restic backups now include enabled quota workspaces inside selected state
+  paths as separate sources instead of silently skipping their files under
+  `--one-file-system`. Required mounts and mount assertions prevent an
+  unavailable workspace from producing a misleading successful backup.
+- Corrected the Dev Containers CLI offline dependency-cache hash for its
+  committed patched lockfile, restoring the package build and full flake
+  gate without changing source or dependency versions.
+  CI now builds that non-VM check so a stale cache pin cannot pass evaluation
+  without exercising the package build.
+### Breaking
+- Existing ext4 workspace images require a verified backup/restore migration
+  before agents can start with the new Btrfs quota module; no automatic conversion.
+- Remove the optional Editor, Hive Research, and Piper TTS modules, their flake
+  exports, and Piper voice assets. Consumers must remove these imports/options
+  and own any replacement integration in their flake.
+- Secure controller resource validation now rejects memory/swap above 1 TiB,
+  tmpfs above 64 GiB, CPU above 1024, or CPU precision beyond five fractional
+  digits, keeping generated limits representable by both OCI backends.
 
 ## [0.4.0] - 2026-08-23
 
