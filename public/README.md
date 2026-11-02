@@ -5,7 +5,8 @@ the [trademark policy](../TRADEMARK.md).
 
 | Asset | Files | Purpose |
 |---|---|---|
-| README illustration | [JPEG](tentaflake-readme.jpg) | Header image in the [project README](../README.md). |
+| Animated overview | [SVG](tentaflake-overview.svg) | README banner: configuration, host policy and separate agent boundaries. Animation ends after five seconds and respects reduced motion. |
+| README illustration | [JPEG](tentaflake-readme.jpg) | Original static artwork. |
 | Shell logo | [Text](tentaflake-shell-logo.txt) | Braille artwork loaded by the [contributor shell](../lib/devshell.nix). |
 | Logo wallpaper | [PNG](tentaflake-wallpaper-16x9.png) | Standard wallpaper. |
 | Dark logo wallpaper | [PNG](tentaflake-wallpaper-16x9-dark.png) | Dark wallpaper variant. |
