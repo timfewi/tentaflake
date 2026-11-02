@@ -229,6 +229,18 @@ jobs:
             nix build --no-link "${selected_checks[@]:offset:4}"
           done
 
+      # The explicitly ignored immutable-store contract: real Unix transport,
+      # store templates and restart uncertainty. The UI adapter variant needs a
+      # selected UI checkout and stays a documented local test.
+      - name: Immutable control fixture contract
+        if: needs.changes.outputs.control == 'true'
+        run: |
+          fixture=$(nix build --no-link --print-out-paths .#control-test-fixture)
+          cli=$(nix build --no-link --print-out-paths .#tentaflake-cli)
+          TENTAFLAKE_CONTROL_FIXTURE="$fixture" TENTAFLAKE_REAL_NORMALIZER="$cli/bin/tentaflake" \
+            nix develop --command cargo test --locked -p tentaflake-control --test immutable_unix -- \
+            --ignored --exact immutable_unix_approval_build_and_recovery_contract
+
       - name: nix build (tentaflake toplevel)
         if: needs.changes.outputs.evaluate == 'true' && needs.changes.outputs.runtime == 'true'
         run: nix build .#nixosConfigurations.tentaflake.config.system.build.toplevel --no-link
@@ -246,3 +258,19 @@ jobs:
       - name: nix build (research VM integration test)
         if: needs.changes.outputs.research == 'true'
         run: nix build --no-link -L .#checks.x86_64-linux.research-integration
+
+      # Component VMs: admitted Pi capsules and the workload observer, including
+      # its 64-binding lease scale test. One VM at a time bounds runner load.
+      - name: nix build (component VM tests)
+        if: needs.changes.outputs.pi == 'true' || needs.changes.outputs.workloads == 'true'
+        env:
+          CHECK_PI: ${{ needs.changes.outputs.pi }}
+          CHECK_WORKLOADS: ${{ needs.changes.outputs.workloads }}
+        run: |
+          if [[ "$CHECK_PI" == true ]]; then
+            nix build --no-link -L .#checks.x86_64-linux.pi-runtime-vm
+          fi
+          if [[ "$CHECK_WORKLOADS" == true ]]; then
+            nix build --no-link -L .#checks.x86_64-linux.workload-mapping-vm
+            nix build --no-link -L .#checks.x86_64-linux.workload-mapping-scale-vm
+          fi

@@ -193,6 +193,8 @@ queued/running restart uncertainty without any authorization/recovery bypass:
 
 The immutable fixture tests are deliberately ignored by default because they need
 explicit immutable artifacts and a selected UI checkout; an ordinary fast pass
-does not claim they ran. The UI source is a test input only, never a production
+does not claim they ran. CI runs `immutable_unix_approval_build_and_recovery_contract`
+with the built fixture and CLI whenever control paths change; the UI adapter
+test still needs a locally selected UI checkout. The UI source is a test input only, never a production
 dependency of this OSS repository. Real Nix-daemon/host output acceptance and all
 activation remain separate operator tiers.

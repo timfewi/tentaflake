@@ -59,6 +59,12 @@ selection, metadata, scaffold refusal and quota-helper negative cases.
 `checks.*.hardening-journald` covers defaults/overrides and legacy configuration
 refusal. `checks.*.worker-drain-wakeup` uses a synthetic host and real API sandbox
 to cover queue-unlock/oneshot-completion races without executing containers.
+`checks.*.pi-runtime-vm` boots two admitted Pi capsules on the reviewed
+`runsc-pi` transport without provider calls. `checks.*.workload-mapping-vm`
+and `checks.*.workload-mapping-scale-vm` run the workload observer against real
+rootful Docker/systemd; the scale test keeps all 64 supported bindings live and
+inside the 10-second lease. CI runs these component VMs when Pi or workload
+paths change, and the immutable control-store contract when control changes.
 Host and Research VM suites exercise policy integrations, not real vendor
 startup/model/tool acceptance. Keep pending acceptance explicit in the catalog.
 
@@ -67,6 +73,8 @@ For explicitly authorized focused builds, select the actual exported check:
 ```bash
 nix build --no-link -L .#checks.x86_64-linux.vm-integration
 nix build --no-link -L .#checks.x86_64-linux.research-integration
+nix build --no-link -L .#checks.x86_64-linux.pi-runtime-vm
+nix build --no-link -L .#checks.x86_64-linux.workload-mapping-scale-vm
 nix build .#installer-iso
 ```
 
