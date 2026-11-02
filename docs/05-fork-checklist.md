@@ -54,6 +54,8 @@ policy is declared.
 Select `dev` only when a trusted development workflow explicitly needs direct
 env credentials, host networking, ports, or mutable local images. `strict`
 currently fails evaluation and must not be advertised as deployed.
+`dev` does not expand the public TOML schema: internal direct-environment,
+port and native-setting arguments are still rejected there.
 
 Enable and migrate to `tentaflake.workspaceQuota.agents.<container>` for every
 persistent controller workspace that needs a hard ceiling. The generic module

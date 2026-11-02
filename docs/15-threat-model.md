@@ -162,8 +162,11 @@ credential import. Existing installations need the explicit
 
 ### Telemetry and detection
 
-Systemd journals are the primary local audit trail; there is no custom SQLite
-audit database or web console. The optional Alloy/Loki/Prometheus/Grafana
+Systemd journals and minimized broker/worker records provide local evidence.
+Optional host API, system-control and Pi Durable services also retain private
+operation/approval receipts, including SQLite ledgers where implemented;
+these are no-replay state, not a shared audit database or web console.
+The optional Alloy/Loki/Prometheus/Grafana
 profile is loopback-only and supplies baseline metrics and rules. The separate
 Falco profile detects selected runtime behavior but does not prevent it.
 Retention, off-host evidence, notification delivery, and sensitive-log review
@@ -176,10 +179,10 @@ remain deployment responsibilities.
 | Host or peer access | gVisor capsule, mounts, capabilities, firewall | eval, build, live inspect, negative VM test |
 | Direct egress | internal per-agent bridge and broker-only rules | activated firewall plus DNS/LAN/metadata tests |
 | Credential theft | host-held credentials and virtual broker key | generated unit and live mount/environment review |
-| SSRF and rebinding | fetch allowlist, public-IP checks, pinned DNS | broker tests and target-host broker health |
+| SSRF and rebinding | isolated Research policy; legacy fetch allowlist/public-IP checks when used | policy tests, activated egress denial and exact service health |
 | Cost exhaustion | rate, concurrency, token, and cost budgets | policy review, audit output, alerts |
 | Unsafe code execution | disposable offline worker and approval classes | queue, timeout, cleanup, and no-egress tests |
-| Unauthorized Git write | exact remote and branch host helper | denial tests and least-privilege credential review |
+| Unauthorized Git write | no host publication helper or host token over agent-owned Git metadata | stop/revoke legacy publication, independently review any external workflow |
 | Mutable image substitution | digest pin and optional Cosign start gate | verified policy plus failed-signature start test |
 | Resource exhaustion | memory, CPU, PID, tmpfs, log, and workspace limits | live limits and exhaustion tests |
 | Lost state | encrypted Restic policy and success freshness | real fresh-host restore drill |

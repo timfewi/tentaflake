@@ -54,8 +54,8 @@ user-namespace remapping for the containers.
 This fragment does not configure WireGuard or VPN readiness. Select the reference
 observer below, or supply fresh, trusted observations under the same lease contract
 described in the upstream
-[operations guide](https://github.com/timfewi/tentaflake-research/blob/main/docs/operations.md)
-and [egress control](https://github.com/timfewi/tentaflake-research/blob/main/docs/egress-control.md).
+[operations guide](https://github.com/timfewi/tentaflake-research/blob/3503d8da7307b4795fc80baa1f142b3ef1baec7f/docs/operations.md)
+and [egress control](https://github.com/timfewi/tentaflake-research/blob/3503d8da7307b4795fc80baa1f142b3ef1baec7f/docs/egress-control.md).
 Missing or stale readiness prevents public requests. Optional search providers,
 Chromium and OCR require their own explicit configuration. Provider keys and
 data grants belong in the research service; never put keys in agent settings or
@@ -136,7 +136,7 @@ independent kernel firewall remains responsible for direct IPv4, IPv6 and DNS
 denial if the observer, controller or both fail.
 
 See the pinned upstream
-[VPN evidence contract](https://github.com/timfewi/tentaflake-research/blob/babdca58ddada874aae22a5042cf90675a0d72eb/docs/vpn-adapters.md)
+[VPN evidence contract](https://github.com/timfewi/tentaflake-research/blob/3503d8da7307b4795fc80baa1f142b3ef1baec7f/docs/vpn-adapters.md)
 for route evaluation and its limits. Agents cannot select exits, write
 observations or control leases, execute readiness hooks, or access VPN credentials.
 
@@ -293,14 +293,14 @@ They establish configuration wiring, not a working tunnel or live firewall.
 The pinned upstream separately records a real WireGuard observer/controller VM
 fixture; its evidence does not establish Tentaflake host integration or a
 non-WireGuard exit node. Issue [#141](https://github.com/timfewi/tentaflake/issues/141)
-retains real-tunnel integration and production acceptance. That VM work was
-explicitly excluded from the current lightweight-only run; no runtime acceptance
-or production activation is claimed here.
+tracks real-tunnel integration and production acceptance separately from these
+option and synthetic capsule fixtures. Neither configuration wiring nor a
+fixture description establishes that a deployment passed runtime acceptance.
 
 The upstream synthetic VM suite separately checks encrypted WireGuard egress,
 direct-path denial, parser credentials, rendering, resources, cross-agent
 ownership, idle sessions and socket revocation. See its
-[verification evidence](https://github.com/timfewi/tentaflake-research/blob/main/docs/verification.md).
+[verification evidence](https://github.com/timfewi/tentaflake-research/blob/3503d8da7307b4795fc80baa1f142b3ef1baec7f/docs/verification.md).
 Actual vendor-agent sessions, Podman socket transport, paid-provider billing,
 production VPN policy, ARM and arbitrary kernel escapes still require deployment
 acceptance. No production host is activated by these checks. Retrieved content
@@ -310,8 +310,10 @@ disclosure of sensitive text intentionally sent to an allowed destination.
 ## Client recovery
 
 The pinned stdio client reconnects future calls after a lost upstream Unix RPC
-session. Each fresh session repeats protocol negotiation and host peer-UID
-authorization. Interrupted calls fail without replaying dispatched operations;
+session. Each fresh session repeats protocol negotiation and the relay's
+authorization of the client's host UID. The client does not authenticate the
+server through reciprocal `SO_PEERCRED`; exact root-owned socket provenance and
+read-only projection remain required. Interrupted calls fail without replaying dispatched operations;
 caller cancellation and explicit client close remain enforced. If the service
 is unavailable, connection retries remain bounded. Socket revocation still
 closes accepted relays and prevents research access.

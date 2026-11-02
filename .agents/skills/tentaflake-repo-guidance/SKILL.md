@@ -26,6 +26,8 @@ Refuse legacy `agents.toml`/`agents.json` and missing/Git-filtered desired sourc
 `mkAgent` and adapter builds are internal. Keep
 native behavior in the selected adapter and host authority in Nix policy,
 which may consume metadata but must not define more instances.
+Public TOML accepts only descriptor-defined fields; internal adapter arguments
+such as `settings` and `seedDir` are not a second public configuration path.
 Adapter `preset` facts are the editable source;
 `python3 scripts/runtime-catalog-docs.py` regenerates the JSON/docs projections.
 Names are globally unique and host IDs are `agent-<name>`. Use metadata for

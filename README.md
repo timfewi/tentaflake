@@ -62,8 +62,12 @@ Read the [security profiles](docs/10-security-profiles.md) and
 [threat model](docs/15-threat-model.md) before deployment.
 
 Optional modules provide encrypted backup, image provenance, observability,
-runtime detection and a private Unix [operator API](docs/19-web-ui.md).
-They do not establish application readiness or native chat support.
+runtime detection, a private Unix [operator API](docs/19-web-ui.md),
+[approval-bound system control](docs/20-system-control.md) and
+[read-only enterprise connectors](docs/21-enterprise-connectors.md).
+They do not establish application readiness, native chat support or live
+provider acceptance. Their guides describe current source, not necessarily the
+website's pinned release.
 
 ## Guides
 

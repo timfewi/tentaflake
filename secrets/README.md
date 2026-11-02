@@ -31,17 +31,20 @@ agent receives only a virtual broker key. See the
 Verify paths and permissions without displaying contents:
 
 ```bash
-stat -c '%U %G %a %n' /run/agenix/provider-key
+sudo stat -Lc '%U %G %a %n' /run/agenix/provider-key
 ```
 
 ## Dev compatibility
 
-Encrypted `*.env.age` files can supply `agenixFile` directly to a runtime only
-when the host deliberately selects the `dev` profile. Balanced rejects both
-`envFile` and `agenixFile` on the agent. Keep direct-provider examples separate
-from secure deployment instructions; dev is not an untrusted 24/7 boundary.
+The public TOML schema rejects direct-agent `envFile` and `agenixFile` in every
+profile. Some internal adapter fixtures support encrypted `*.env.age` inputs
+under `dev`; they are not a public onboarding API. Balanced containment rejects
+direct credentials regardless. Keep any internal direct-provider examples
+separate from secure deployment instructions; dev is not an untrusted 24/7 boundary.
 
 Use `agenix -e <encrypted-file>` from your reviewed, pinned agenix setup to
 create or edit a secret. Keep at least one protected recovery recipient and
 rotate secret values as well as recipients when a key is compromised. See
-[secrets.nix.example](../secrets.nix.example) for the recipient template.
+[secrets.nix.example](../secrets.nix.example) for the NixOS runtime-secret module;
+the [Agenix guide](../docs/04-agenix-secrets.md#declare-encryption-recipients)
+separately defines the CLI recipient rules.

@@ -67,8 +67,9 @@ an installed service.** For each previously enabled agent:
    and service are no longer installed or running.
 4. Remove the unused token-file provisioning if no other integration needs it.
 
-Local agent commits and `gitIdentity` remain supported. There is no automatic
-publication replacement. Publish only through an independently reviewed,
+Local agent commits remain possible. The internal Hermes `gitIdentity` setting
+does not become a public TOML field. There is no automatic publication replacement.
+Publish only through an independently reviewed,
 least-privilege workflow with trusted Git metadata and an exact operator-owned
 repository/branch grant. Do not run host Git in the agent workspace or copy its
 `.git` directory into a credentialed checkout. Review exported content as
@@ -269,11 +270,11 @@ fetch-denial bursts, and near-exhausted request/token/cost budgets. Alert
 delivery remains an explicit deployment-fork integration.
 
 
-## Continuous-runtime follow-ups (2026-10-03)
+## Continuous-runtime acceptance limits
 
 Crash recovery is not [application hang/readiness acceptance](https://github.com/timfewi/tentaflake/issues/112).
 [Real vendor acceptance](https://github.com/timfewi/tentaflake/issues/111) and
 [tested alert delivery](https://github.com/timfewi/tentaflake/issues/114) remain
 separate from source fixtures. Follow current [worker recovery](13-disposable-worker.md),
 not historical queue proposals. Management/Headscale evidence limits are in
-[the management review](11-tailscale-management.md#modular-management-review-2026-10-03).
+[management acceptance limits](11-tailscale-management.md#management-acceptance-limits).

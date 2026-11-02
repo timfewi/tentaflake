@@ -1,6 +1,6 @@
-# Mirrors the CI gates (.github/workflows/) — see CONTRIBUTING.md for setup.
-# Tools (shellcheck, cargo, nix) come from the environment; only gitleaks is
-# fetched by pre-commit itself.
+# Optional local subset of CI, not a replacement for `just fast` or routed gates.
+# Run with the pinned contributor environment; the nix-fmt hook rewrites files.
+# Only gitleaks is fetched by pre-commit itself.
 repos:
   - repo: https://github.com/gitleaks/gitleaks
     rev: v8.29.1

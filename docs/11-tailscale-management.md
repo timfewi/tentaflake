@@ -111,7 +111,7 @@ follow the CLI's required flag list rather than resetting them. Local settings
 do not enroll a node or validate the remote policy. Verify the assigned tag,
 live preferences and access from a separate authorized session.
 
-## Modular management review (2026-10-03)
+## Management acceptance limits
 
 Management connectivity and Research Internet egress remain separate.
 Membership/operator reachability neither provisions nor proves an Internet

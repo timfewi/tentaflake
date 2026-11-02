@@ -17,9 +17,12 @@ identities, private context or credentials.
 
 ## Optional seeding
 
-Where an adapter supports `seedDir`, prepare public content in its native state
-layout. Seeding copies without overwriting existing files; changed seeds do not
-synchronize runtime state. Verify adapter paths and ownership before copying.
+The public `tentaflake.toml` schema does **not** accept `seedDir`, arbitrary
+native settings or private agent context. Internal adapter builders may support
+`seedDir` for reviewed public fixtures or trusted internal composition; this is
+not an additional public configuration API. Where used, seeding copies in the
+adapter's native layout without overwriting existing files; changed seeds do
+not synchronize runtime state. Verify adapter paths and ownership first.
 Repository-relative guide links need adapting to the deployment's pinned docs;
 copying a skill alone does not install the repository or grant its tools.
 

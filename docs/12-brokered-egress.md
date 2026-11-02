@@ -133,11 +133,12 @@ and must not contain secrets or personal data. Clients may need an integration
 to emit it, including on auxiliary calls. Broker forwarding alone establishes
 neither client session propagation nor provider acceptance.
 
-Use a unique `/30` per agent. The network address must end on a four-address
-boundary and `gateway` must be its first usable address. Evaluation rejects
-duplicate networks/subnets, unrelated gateways, missing modes, plain HTTP
-providers, provider files outside `/run`, duplicate models, wildcard hosts,
-wildcard media types, and deterministic bridge-interface collisions.
+Use a unique `/30` inside private `10.0.0.0/8` per agent. The network address
+must end on a four-address boundary and `gateway` must be its first usable
+address. Evaluation rejects other ranges, duplicate networks/subnets,
+unrelated gateways, missing modes, plain HTTP providers, provider files outside
+`/run`, duplicate or unpriced models, wildcard hosts/media types, and
+deterministic bridge-interface collisions.
 
 ## Host resource admission
 
@@ -292,10 +293,13 @@ is well formed: text (possibly empty or withheld by a content filter), a
 refusal, or valid local function calls. Every successful SSE completion chunk
 must carry that model and the same nonempty completion ID, and each choice must
 have a valid delta object before the real terminal event. The allowed model
-also matches its dated provider snapshot, such as `gpt-4o-2024-08-06` or
-`model-20241022`; any other suffix, such as `-mini`, stays unconfirmed. Ordinary
-(non-strict) streams do not require deltas, so choice-level metadata chunks such
-as content filter results are forwarded unchanged.
+also accepts snapshot-shaped suffixes, such as `gpt-4o-2024-08-06` or
+`model-20241022`: the suffix after the alias's hyphen may contain only digits
+and hyphens, must start/end with a digit and contain at least four digits.
+This is a syntactic match, not calendar-date or provider-release verification;
+an alphabetic suffix such as `-mini` stays unconfirmed. Ordinary (non-strict)
+streams do not require deltas, so choice-level metadata chunks such as content
+filter results are forwarded unchanged.
 
 Strict mode persists a usage-accounting hold with each reservation before
 dispatch. If provider-reported numeric usage exceeds the reserved token total

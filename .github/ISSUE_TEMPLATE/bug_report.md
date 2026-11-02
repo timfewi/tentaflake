@@ -5,6 +5,10 @@ title: "bug: "
 labels: ["bug"]
 assignees: []
 ---
+Report vulnerabilities privately through GitHub Security Advisories; see
+[SECURITY.md](../../SECURITY.md). Do not include credentials, raw container
+environments, private deployment data or unreviewed logs in a public issue.
+
 
 **Describe the bug**
 A clear and concise description of what the bug is.
@@ -22,7 +26,7 @@ What you expected to happen.
 - NixOS version: `nixos-version`
 - Nix version: `nix --version`
 - Rust version (if CLI-related): `rustc -V`
-- Docker version (if agent-related): `docker --version`
+- Selected OCI backend and version (if agent-related): `docker --version` or `podman --version`
 
 **Logs / Error output**
 ```

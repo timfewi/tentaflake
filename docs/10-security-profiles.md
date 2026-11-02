@@ -11,8 +11,9 @@ The policy rejects unsafe configurations during NixOS evaluation instead of
 silently weakening them. `strict` also fails because no tested separate-kernel boundary
 is implemented yet.
 
-Phase A provides the containment baseline. A stopped balanced scaffold may
-omit a broker and remains `network=none`. An automatically started balanced
+Shared containment provides the baseline. A stopped runnable capsule may
+omit a broker and remains `network=none`; refusal scaffolds create no container.
+An automatically started balanced
 controller must have an enabled broker policy, disposable worker, fixed
 workspace quota, and research relay or evaluation fails. Brokered capsules join one dedicated
 internal network. Neither path gives an agent a real provider credential or
@@ -29,7 +30,7 @@ tentaflake.security.profile = "balanced";
 | Profile | Intended use | Network and credentials |
 |---|---|---|
 | `dev` | trusted local development and migration | legacy host networking, env files, and loopback ports may be configured |
-| `balanced` | installed 24/7 baseline | stopped scaffolds may use `network=none`; auto-start requires one isolated LLM broker network, worker, quota, and research relay |
+| `balanced` | installed 24/7 baseline | stopped runnable capsules may use `network=none`; auto-start requires one isolated LLM broker network, worker, quota, and Research relay |
 | `strict` | future high-risk workloads | evaluation error until a tested MicroVM/separate-kernel implementation exists |
 
 There is no automatic fallback between profiles.
@@ -55,12 +56,17 @@ overrides cannot bypass the final checks. It enforces:
 - no published ports, caller networks, devices, caller-supplied host namespace
   overrides, runtime sockets, real credential files, or secret-like
   environment keys;
-- the only network/file exceptions are the module-generated internal broker
-  network, its random runtime-only virtual credential environment file, and
-  the agent's exact read-only research socket/client closure;
-- only declared state/workspace writable binds and generated Nix-store files
-  read-only; all other host paths are rejected, including other agent state;
-- digest-pinned images; the mutable-image escape hatch is dev-only;
+- narrowly generated capabilities only: the internal broker network and its
+  runtime-only virtual credential environment file, the exact read-only Research
+  socket/client closure, and the selected worker's read-only result directory;
+- an explicitly admitted Pi Durable runtime additionally receives its exact
+  writable control-socket directory and read-only API/broker virtual-token files,
+  never real provider credentials or another agent's paths;
+- only declared state/workspace writable binds (plus that admitted Pi Durable
+  control directory) and approved read-only mounts; nested bind sources below
+  another writable source are rejected;
+- registry images pinned by digest, or Pi Durable's exact reviewed local bundle
+  with after-load configuration-digest verification; mutable images are dev-only;
 - optional fail-closed Cosign verification before an OCI unit starts; publisher
   identity is a separate policy decision from digest pinning;
 - AppArmor on the host and no administrative Docker-group membership.
@@ -143,10 +149,12 @@ Choose one of two explicit paths:
    tentaflake.security.profile = "dev";
    ```
 
-The second path is not recommended for untrusted 24/7 agents. Direct credential
-files and published service ports remain dev-only adapter arguments. The required
-schema-v1 `agents` form accepts stopped balanced declarations; removed runtime
-arrays stay rejected in every profile. See [agent adapters](agent-adapters.md).
+The second path is not recommended for untrusted 24/7 agents. It does not expand
+the public schema: `envFile`, `agenixFile`, ports and native settings remain
+rejected TOML inputs in every profile. Direct credential files and published
+service ports are internal dev-only adapter capabilities, not public onboarding.
+The required schema-v1 `agents` form accepts stopped balanced declarations;
+removed runtime arrays stay rejected in every profile. See [agent adapters](agent-adapters.md).
 
 The former `tentaflake.networking.egress` option is renamed to
 `tentaflake.networking.legacyPortEgress`. It is permitted only in `dev`. It

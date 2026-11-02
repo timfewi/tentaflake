@@ -9,8 +9,9 @@ Never describe an unreleased checkout as already published.
 `docs/` contains only maintained product documentation: what Tentaflake is,
 how to install, configure, operate and secure it, and its released direction.
 Every guide is written for users and operators, is accurate for the current
-source and is published on the website. Write it as a description of the
-product, not of the work that produced it.
+source and belongs to the website's release-synchronized mirror. A guide added
+after the pinned release is not yet published there. Write guides as descriptions
+of the product, not of the work that produced it.
 
 These never belong in `docs/` (or anywhere else in Git):
 

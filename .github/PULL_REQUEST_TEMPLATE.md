@@ -21,7 +21,7 @@
 - [ ] Documentation updated in `docs/` (if user-facing change)
 - [ ] New, renamed or removed guides identified for website route review and the guide inventory updated (if applicable)
 - [ ] `docs/` and Git contain no plans, backlogs, prompts, session notes or private deployment data (working notes stay in ignored `.scratch/`)
-- [ ] Module table in `README.md` updated (if module added/removed)
+- [ ] README scope/navigation and owning guides updated (if module added/removed)
 - [ ] Commit messages follow [Conventional Commits](https://www.conventionalcommits.org/)
 - [ ] Every non-merge commit includes a DCO sign-off
 

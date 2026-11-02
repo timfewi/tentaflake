@@ -57,8 +57,9 @@ permits required builds.
 Focused adapter checks cover common IDs, TOML rejection/validation, lazy
 selection, metadata, scaffold refusal and quota-helper negative cases.
 `checks.*.hardening-journald` covers defaults/overrides and legacy configuration
-refusal. `checks.*.worker-drain-wakeup` uses a synthetic host and real API sandbox
-to cover queue-unlock/oneshot-completion races without executing containers.
+refusal. `checks.*.worker-drain-wakeup` boots a NixOS VM with a synthetic host
+and the real API sandbox to cover queue-unlock/oneshot-completion races without
+executing containers. It is a VM gate, not part of `just fast`.
 `checks.*.pi-durable-runtime-vm` boots two admitted Pi Durable capsules on the reviewed
 `runsc-pi-durable` transport without provider calls. `checks.*.workload-mapping-vm`
 and `checks.*.workload-mapping-scale-vm` run the workload observer against real
@@ -74,6 +75,7 @@ For explicitly authorized focused builds, select the actual exported check:
 nix build --no-link -L .#checks.x86_64-linux.vm-integration
 nix build --no-link -L .#checks.x86_64-linux.research-integration
 nix build --no-link -L .#checks.x86_64-linux.pi-durable-runtime-vm
+nix build --no-link -L .#checks.x86_64-linux.worker-drain-wakeup
 nix build --no-link -L .#checks.x86_64-linux.workload-mapping-scale-vm
 nix build .#installer-iso
 ```
@@ -104,6 +106,13 @@ contributor tool caches; the build job may upload build cache. Optional cache
 setup has a three-minute timeout and its failure never skips the checks.
 Before merge, every selected job must pass for this revision; a skipped gate
 or synthetic probe is not runtime acceptance.
+
+The checked-in workflows on `main` run checks and secret scanning, not release
+tagging or deployment. The separate lock-update workflow is scheduled or
+manually dispatched and opens an input-update PR; it is not triggered by a
+push to `main`. External webhooks or repository settings are not established
+by workflow source. `just tag` remains an explicit local tagging operation,
+not part of a check recipe.
 
 ## Packaging and larger workloads
 
