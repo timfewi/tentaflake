@@ -1,6 +1,6 @@
 # Tentaflake
 
-![Tentaflake logo](public/tentaflake-readme.jpg)
+[![Tentaflake animation: a stopped TOML declaration, a NixOS host and separate agent boundaries](public/tentaflake-overview.svg)](https://tentaflake.dev/#overview-animation)
 
 A runtime-agnostic NixOS flake template for isolated AI agents on one host.
 Declare agents in `tentaflake.toml`, choose an adapter, and manage them through
