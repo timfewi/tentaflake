@@ -1,6 +1,6 @@
 # Tentaflake
 
-[![Tentaflake animation: a stopped TOML declaration, a NixOS host and separate agent boundaries](public/tentaflake-overview.svg)](https://tentaflake.dev/#overview-animation)
+[![Typing a preconfigured tentaflake.toml in a Neovim-style editor with Cascadia Mono](public/tentaflake-overview.svg)](https://tentaflake.dev/#overview-animation)
 
 A runtime-agnostic NixOS flake template for isolated AI agents on one host.
 Declare agents in `tentaflake.toml`, choose an adapter, and manage them through
@@ -39,6 +39,15 @@ All managed container IDs are `agent-<name>`; names are globally unique across
 adapters. Default host state is `/var/lib/tentaflake/agents/<name>`.
 [Configuration](docs/08-agent-cli.md) uses this file as the only instance source;
 host broker, worker, quota and Research policy stays in Nix.
+
+## The operator shell
+
+![Tentaflake operator shell layout illustration](public/_compressed/tentaflake-tui-ui.png)
+
+The login shell presents host and agent status. Use `tentaflake status`,
+`tentaflake logs agent-assistant` and `tentaflake doctor --security` to inspect
+your installation. The image illustrates the layout, not a live host or vendor
+acceptance. See the [operator shell guide](docs/06-shell.md) for current commands.
 
 ## Scope and support
 
