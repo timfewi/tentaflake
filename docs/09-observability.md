@@ -57,15 +57,18 @@ fields are null. No SDK run identity is asserted. Global monotonically
 allocated generations advance on policy, boot, process, cgroup identity or
 live/unavailable transitions; unchanged facts survive observer restarts.
 Identity is checked before and after inspection against procfs and the
-cgroup-v2 filesystem/inode. Each cycle observes all bindings with exactly four
+cgroup-v2 filesystem/inode. A nonempty observation cycle uses at most four
 batched commands (unit state and container inspection, each before and after
-the kernel checks), so its cost does not grow with the up to 64 bindings. Each
-command has a one-second deadline and a 256-byte-per-binding output cap; cycles
-start at most every two seconds. Even when every command runs to its deadline,
-a binding is re-stamped within about six seconds plus publication time, inside
-the 10-second lease; a compile-time check keeps that budget. A manifest's
-timestamp is the end of its second verification. A slow, missing or denied
-observation is unavailable, never a zero resource value.
+the kernel checks), independent of the number of bindings, up to 64. This bounds
+subprocess count, not total work: engine inspection, procfs/cgroup checks and
+manifest publication still grow with the binding count. Each command has a
+one-second deadline and a 256-byte-per-binding output cap; cycles are paced to
+start no more often than every two seconds. A compile-time assertion keeps the
+four command deadlines plus that pacing interval below the 10-second lease;
+it does not bound kernel reads, scheduling or fsynced publication. A manifest's
+timestamp is taken after the second verification, before publication. Consumers
+must reject stale evidence even if the observer remains running. A failed or
+missing observation is unavailable, never a zero resource value.
 
 A metrics consumer needs only metadata and kernel-counter read access, with independent
 exact UID/tenant/agent reader grants. Consumers must enforce a maximum
@@ -80,10 +83,10 @@ grant to read other tenants, and host-wide metadata is never a fallback.
 `{ pkgs, extraModules ? [], extraTestScript ? "" }`. It runs two local,
 synthetic Docker workloads without external networking, within two CPUs and
 2048 MiB; it compares manifests to kernel membership/inodes and exercises
-stop/restart, read permissions and corrupt/missing authority. Parent
-integration can add its consumer/UI configuration through `extraModules` and
-counter comparison/cross-tenant assertions through `extraTestScript`, before
-the final authority-corruption checks. This fixture is not native vendor/SDK
+stop/restart, read permissions and corrupt/missing authority. A consumer
+integration can add configuration through `extraModules` and counter comparison
+or cross-tenant assertions through `extraTestScript`, before the final
+authority-corruption checks. This fixture is not native vendor/SDK
 runtime attestation. `tests/workload-mapping-scale-vm.nix` runs all 64
 supported bindings on the same NIC-less engine (four CPUs, 4096 MiB) and
 asserts every manifest stays live and younger than the 10-second lease over a

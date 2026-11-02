@@ -182,24 +182,33 @@ loop, or claim reliable injection classification. Hostile log fixtures demonstra
 that classifier content cannot acquire action authority, not that every malicious
 instruction can be recognized.
 
-## Documentation basis and verification
+## Contract references and verification boundaries
 
-Provider contract lookup used the configured Context7 documentation service:
+The fixed provider routes are implemented in
+[`route`](../crates/tentaflake-integrations/src/lib.rs). Provider API references:
 
-- [Drive v3 files](https://github.com/googleapis/google-api-python-client/blob/main/docs/dyn/drive_v3.files.html)
-- [Gmail v1 messages](https://github.com/googleapis/google-api-python-client/blob/main/docs/dyn/gmail_v1.users.messages.html)
-- [HubSpot CRM v3 contacts](https://github.com/hubspot/hubspot-api-python/blob/master/_autodocs/endpoints-crm-1.md)
-- [reqwest retry policy](https://docs.rs/reqwest/latest/src/reqwest/retry.rs.html)
+- [Drive v3 files](https://developers.google.com/workspace/drive/api/reference/rest/v3/files/get)
+- [Gmail v1 messages](https://developers.google.com/workspace/gmail/api/reference/rest/v1/users.messages/get)
+- [HubSpot CRM v3 contacts](https://developers.hubspot.com/docs/api-reference/crm-contacts-v3/basic/get-crm-v3-objects-contacts-contactId)
 
-Provider documentation matches the named API major versions, not a live account
-acceptance. Context7's reqwest response is current documentation rather than an
-exact 0.12.28 snapshot; parent compilation must verify that pinned API compatibility.
-Synthetic tests cover tenant/account/resource/method/generation denial, expiry,
-revocation including in-flight discard, closed request schemas, route encoding,
-response bounds/malformed IDs, redirect/private-target refusal, concurrency,
-redacted audit, absence of write/replay inputs and advisory evidence/admission.
-No checks, builds, formatter, network/provider calls or live model runs were
-performed by the source worker. Parent integration should run the owning fast
-gates and focused integrations unit tests after workspace registration. Source
-and fixtures do not establish runtime containment, enterprise readiness or live
-provider health.
+These API contracts are not live account acceptance. The exact reqwest
+dependency is pinned to `=0.12.28` in the
+[crate manifest](../crates/tentaflake-integrations/Cargo.toml) and resolved in
+[`Cargo.lock`](../Cargo.lock). `HttpsTransport` explicitly configures
+`no_proxy`, no redirects, `retry(reqwest::retry::never())` and fixed address
+resolution; documentation for another reqwest version is not compatibility
+evidence for that pin.
+
+The [gateway tests](../crates/tentaflake-integrations/src/tests.rs) cover
+tenant/account/resource/method/generation denial, expiry, in-flight revocation,
+closed request schemas, route encoding, response bounds and malformed IDs,
+redirect/private-target refusal, concurrency and redacted audit. The
+[front-door tests](../crates/tentaflake-integrations/src/front/tests.rs) cover
+exact UID roles, protocol lifecycle, runtime credential rotation/revocation and
+durable first-decision review; [activity regressions](../crates/tentaflake-integrations/src/front/tests/audit_regressions.rs)
+cover bounded publication and no provider replay on projection failure.
+Advisory fixtures cover evidence linkage and admission without action authority.
+Run `just fast` for the repository's source checks, or
+`nix develop --command cargo test -p tentaflake-integrations` for focused crate
+tests. These synthetic fixtures do not establish runtime containment,
+enterprise readiness, live provider health or model acceptance.

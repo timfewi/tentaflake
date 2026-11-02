@@ -102,7 +102,7 @@ shellcheck:
     shellcheck installer/*.sh scripts/*.sh
 
 # Evaluate the flake installer.sh generates for an installed machine with a
-# declarative JSON agent fixture.
+# declarative schema-v1 TOML agent fixture.
 generated-flake:
     ./scripts/generated-flake-test.sh
 

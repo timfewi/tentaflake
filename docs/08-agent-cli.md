@@ -250,10 +250,12 @@ files outside the capsule.
 Names are globally unique across adapters; the IDs above are `agent-assistant`
 and `agent-experiment`. Host state defaults to `/var/lib/tentaflake/agents/<name>`.
 The examples above are documentation only, not an installed inventory. Public
-agent fields are limited to `name`, `adapter`, `autoStart`, `stateDir`, `user`,
-`group`, `uid`, `gid`, `containerUid` and `containerGid`; generic agents also
-accept a validated `definition` containing their reviewed image and in-capsule
-argv. Native settings, host commands, extra mounts and environment overrides
+agent fields depend on the adapter: `name` and `adapter` are shared;
+`autoStart` and `stateDir` apply to the native/scaffold adapters, while `user`,
+`group`, `uid`, `gid`, `containerUid` and `containerGid` are Hermes-only.
+Generic agents accept only `name`, `adapter` and a validated `definition` with
+their reviewed image, in-capsule argv, ownership and lifecycle. Native settings,
+host commands, extra mounts and environment overrides
 are refused rather than interpreted.
 Examples are not turnkey integrations or evidence of vendor acceptance.
 
@@ -424,7 +426,8 @@ real-Git source and generated-consumer regressions.
 
 `tentaflake config validate`, `tentaflake config normalize` and
 `tentaflake config migrate` operate offline, without host configuration or Nix
-evaluation. See their `--help` for input/output arguments. The versioned
+evaluation. Use `tentaflake help` or the [command list](06-shell.md#commands)
+for input/output arguments; `config` has no subcommand-specific `--help`. The versioned
 `schema/system-v1.json` descriptor defines accepted sections, constraints and
 Nix projections. Unknown fields and unsupported category enables fail closed.
 The `system`, `network`, `sandbox`, `shell` and `container` sections have Nix
@@ -443,7 +446,7 @@ only supplied data, without inserting defaults.
 `config validate --json` emits `{"schemaVersion":1,"valid":true}` on success;
 invalid configuration emits
 `{"schemaVersion":1,"valid":false,"error":"invalid_configuration"}` with exit
-status 2. See command help for positional input/output arguments.
+status 2. `--hide` is refused because these commands handle desired-system data.
 
 Migration retains its source and creates its destination only if absent. It
 refuses unsupported behavior rather than silently dropping it; keep the original

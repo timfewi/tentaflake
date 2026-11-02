@@ -39,7 +39,8 @@ Do not replace declarative agents with a mandatory runtime, UI or control servic
 - `crates/` owns CLI/broker/worker. Shared Rust packaging in `lib/mkRustPackage.nix`
   includes workspace manifests and selected crate source; root versions and
   image metadata remain authoritative. Keep required root inputs explicit.
-- CLI help/catalog/templates are configuration-free. Management uses generated
+- CLI help/catalog/templates and offline `config validate|normalize|migrate`
+  do not require generated host inputs. Management uses generated
   host inputs; imports validate via the shared parser/plan, publish stopped
   additions atomically and never stage, activate or download runtime images.
   Preserve ordinary Git flake filtering and redact raw Nix source diagnostics.

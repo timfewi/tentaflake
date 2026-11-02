@@ -22,7 +22,7 @@ arbitrary commands.
 | Review tool requests | Additionally set `allowToolRequests = true` | Captured pending worker requests with complete arguments and content digests |
 | Decide tool requests | Additionally set `allowToolDecisions = true` | Record approve/deny for an exact reviewed request, then request a worker drain |
 
-The shipped host contract works with the Host view in a compatible operator UI.
+The host contract can back an independently supplied operator UI.
 It is independent of native chat connections or any client-side task model.
 All adapters use the same host inventory; stopped scaffold entries remain
 visible but cannot be started or restarted through this interface.
@@ -70,48 +70,46 @@ must separately enforce each browser principal's narrower ownership.
 
 ## Connect an optional UI
 
-Supply a compatible UI flake as a consumer-owned input named `operator-ui`.
-Its origin and deployment are the operator's choice; the Tentaflake flake does
-not download or require it. Import its NixOS module in the consumer:
+Install and pin a compatible UI in the consumer flake, not in this repository.
+Tentaflake exports neither a UI package nor `services.tentahq-ui` options.
+UI input names, authentication, browser routes and task-store options belong
+to that external implementation and must be checked at its selected revision.
+The host API itself has no board/task database and requires no agent runtime
+for host-only inventory and management.
+
+Grant the bridge's reserved Unix UID only the required agents and operations.
+For an already declared `agent-assistant`, this read-only example uses exact
+peer authorization rather than the broad legacy group:
 
 ```nix
-{ inputs, pkgs, ... }:
-{
-  imports = [ inputs.operator-ui.nixosModules.default ];
-
-  tentaflake.hostApi.enable = true;
-
-  services.tentahq-ui = {
-    enable = true;
-    webRoot = inputs.operator-ui.packages.${pkgs.stdenv.hostPlatform.system}.web;
-    operatorTokenFile = "/run/secrets/operator-ui-token";
-    hostSocket = "/run/tentaflake-api/host.sock";
-    taskAuthority = "none";
-    instances = { };
-  };
-}
+tentaflake.hostApi = {
+  enable = true;
+  peers = [
+    {
+      uid = 10001; # Replace with the bridge's reserved non-root host UID.
+      agents = [ "agent-assistant" ];
+      permissions = [ "read" "host_health" ];
+    }
+  ];
+};
 ```
 
-The compatible UI module grants its service access to the `tentaflake-api`
-group when `hostSocket` is configured. Its Python bridge checks the Unix peer
-UID before making requests; the default expected UID is root. Keep native
-application relays and host-control sockets separate.
+Provision that service identity in the consumer. The bridge must connect only
+to `/run/tentaflake-api/host.sock`, verify the kernel server UID is root, and
+enforce each authenticated browser principal's narrower agent scope. Neither
+the socket's connection permissions nor a claimed tenant ID grants authority.
+An intentionally selected legacy-group deployment instead needs membership
+in `tentaflake-api`; it does not provide resource-scoped authorization.
 
-`taskAuthority = "none"` is host-only: it opens no application database, migrates
-no task state and requires no agent runtime. Existing frontends can add
-`hostSocket` while retaining their task authority and application connections;
-their tasks and chat history remain in their existing systems.
-
-Provision the operator token in a private runtime file containing at least 24
-random characters. Serve the loopback UI through the existing authorized
-private HTTPS transport; keep Secure cookies enabled. Evaluate and build the
-consumer configuration, review it and activate it explicitly. This guide does
-not enroll a tailnet, publish a host or change SSH/firewall policy.
-
-For read-write management, deliberately enable `allowActions`. Log access is
-independent because agent journals may contain sensitive application content.
-The browser talks only to its authenticated, same-origin bridge; it cannot
-choose sockets, executable paths or systemd unit names.
+Keep browser sessions, operator credentials and application relays outside
+agent containers. Use an authenticated same-origin bridge with CSRF protection
+and protected cookies; expose it only through an explicitly authorized private
+HTTPS path. The host API does not implement browser authentication, supply
+an operator token, enroll a tailnet or publish an HTTP listener.
+For lifecycle changes, deliberately enable `allowActions` and grant `actions`;
+logs independently require `allowLogs` and `logs`. Browser data must never
+choose sockets, executable paths or systemd unit names. Evaluate/build the
+consumer and authorize activation separately.
 
 ## Version 1 contract
 
@@ -132,9 +130,9 @@ check the version and advertised capabilities before offering actions.
 | `GET /v1/agents/{id}/tool-requests` | Bounded captured pending requests; no live inbox or execution history |
 | `POST /v1/agents/{id}/tool-decisions` | Durable digest-bound authorization receipt and separate drain scheduling state |
 
-The bridge maps those routes beneath `/api/host`. The browser continues to use
-its existing operator login and HttpOnly session cookie. Both request and
-response sizes, concurrency and command duration are bounded.
+A browser-facing bridge owns any `/api/host` mapping and its login/session
+contract; these are not routes served by Tentaflake. The host service bounds
+request/response sizes, concurrency and command duration.
 
 An action accepts exactly:
 
@@ -166,8 +164,8 @@ old request IDs.
 
 ## Agent access and configuration proposals
 
-The Host view supports searching names and canonical IDs, filtering runtime and
-state, and inspecting one agent at a time. Details project declared model
+An operator UI can search and filter the inventory, then fetch one agent's
+details. Those details project declared model
 allowlists and prices, LLM budgets, Research/fetch configuration, worker limits,
 storage quotas and management policy. They expose no credential values,
 credential file paths, arbitrary environment variables or provider login state.

@@ -166,8 +166,8 @@ paths → approve exact hashes → build → status. Service startup is
 `tentaflake-control serve <deployment-config>`; this administrative argument is
 not exposed as a request route. Output is JSON and any refusal exits nonzero.
 
-The owning repository fast gate and control crate tests are the first verification
-tier after workspace registration. Unit tests cover Unix peer/role denial,
+The repository's `just fast` gate includes the control crate's ordinary unit
+tests. These cover Unix peer/role denial,
 malformed/extra/duplicate fields, revision/policy/compiler drift, no sandbox
 downgrade, stable IDs, receipt restart uncertainty, locks and symlinks, client UID
 verification, bounded synthetic subprocesses and store output paths. Synthetic

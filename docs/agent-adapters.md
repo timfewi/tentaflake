@@ -60,7 +60,6 @@ schemaVersion = 1
 [[agents]]
 adapter = "generic"
 name = "coding"
-autoStart = false
 
 [agents.definition]
 schemaVersion = 1
@@ -96,17 +95,27 @@ Native details belong here and in each adapter, not in shared host services:
 
 | Adapter | Native configuration/layout | Default numeric owner |
 |---|---|---|
-| Hermes | YAML `/state/config.yaml`, `HERMES_HOME=/state`, `/state/workspace` | 10000:10000 |
-| ZeroClaw | TOML `/zeroclaw-data/.zeroclaw/config.toml`, `data` workspace child | 65534:65534 |
+| Hermes | `HERMES_HOME=/state`, `/state/workspace`; optional generated read-only YAML at `/state/config.yaml` | 10000:10000 |
+| ZeroClaw | Generated read-only TOML `/zeroclaw-data/.zeroclaw/config.toml`; managed workspace `/zeroclaw-data/data` | 65534:65534 |
 | Generic | No generated native config; `/state` and declared workspace | 10000:10000, definition override |
 
 Native configuration is owned by the fixed adapter presets and host policy.
-Public agent fields are limited to `name`, `adapter`, `autoStart`, `stateDir`,
-`user`, `group`, `uid`, `gid`, `containerUid` and `containerGid`; generic agents
-also accept the validated `definition` above. Arbitrary `settings`, host commands,
+The public schema accepts `name`, `adapter`, `autoStart` and `stateDir` for
+native/scaffold adapters; `user`, `group`, `uid`, `gid`, `containerUid` and
+`containerGid` are Hermes-only. Generic agents accept only `name`, `adapter` and
+the validated `definition` above; use `definition.lifecycle = "stopped"`, not
+an `autoStart` field. Arbitrary `settings`, host commands,
 environment, mounts and `seedDir` are refused.
 Preserve existing unsupported native configuration during migration by stopping
 and resolving the unsupported input, never by dropping it from the candidate.
+
+Hermes generates its YAML only when internal settings or an enabled Research
+hook produce nonempty configuration; an ordinary public stopped declaration
+without Research creates no such read-only config mount. ZeroClaw always
+generates its TOML. Internal seeds are no-clobber copies run as the capsule's
+numeric owner: Hermes copies into its state root; ZeroClaw copies into
+`.zeroclaw/data`, **not** the separate `data` workspace used by worker/quota
+metadata. Seeding that native directory does not populate the managed workspace.
 
 Research hooks disable native web paths and project only the pinned stdio
 client closure and exact read-only relay socket. Hermes permits local stdio
@@ -200,7 +209,7 @@ The public seam needs care beyond these retry flags:
   catches generation-hook failures and reports `extension_error`, continuing
   unless the invocation is already aborted. A thrown journal/fsync failure in
   `beforeRequest` or `beforeProviderRequest` is not an authorization barrier.
-- [`harness/types.ts`, lines 970–987](https://github.com/earendil-works/pi/blob/35dfa757378bd7a8570670e99c2687bdd1039a06/packages/durable/src/harness/types.ts#L970-L987)
+- [`harness/types.ts`, lines 945–987](https://github.com/earendil-works/pi/blob/35dfa757378bd7a8570670e99c2687bdd1039a06/packages/durable/src/harness/types.ts#L945-L987)
   supplies hooks with stable task/conversation identities, but `afterResponse`
   runs before classification. Clearing an outer intent there loses protection
   if the process dies before the SDK commits its result.
@@ -271,9 +280,10 @@ startup checks the exact immutable **configuration digest**, not merely an image
 tag. Classic engine IDs provide that digest directly. Docker's containerd image
 store may instead report a manifest ID: only for Docker, a differing well-formed
 ID triggers a strictly local fixed-selector export and hashing of the exact raw
-config bytes. The export is limited to 2 GiB/150 seconds, the complete fallback
-to 180 seconds, its parser to 256 MiB, the manifest to 64 KiB and the config to
-4 MiB. Ambiguous members, links, malformed paths, mismatches and export failures
+config bytes. Export uses a 2 GiB file-size limit and 150-second subprocess
+timeout; the outer fallback has a 180-second timeout plus five seconds before
+forced kill. Parser address space is limited to 256 MiB, the manifest to 64 KiB
+and config to 4 MiB. Ambiguous members, links, malformed paths, mismatches and export failures
 refuse startup; no registry/pull fallback exists. Podman retains direct-ID-only
 verification. User image/stream, native command and arbitrary mount overrides
 remain prohibited.
@@ -312,7 +322,7 @@ explicitly deny live inputs and session import. Isolated context is unsupported.
 Task ownership stays with the client's own task system; the runner API does
 not grant enterprise approvals, connector permissions, or standalone UI admission.
 
-Focused verification belongs to the integration owner:
+Focused verification uses separate package, evaluation and VM gates:
 
 - Build `.#tentaflake-pi-durable-sdk`, `.#tentaflake-pi-durable` and `.#tentaflake-pi-durable-image`.
 - Run the packaged `bin/tentaflake-pi-durable-test`: exclusive ownership, duplicate and
@@ -325,9 +335,9 @@ Focused verification belongs to the integration owner:
   and real relay with an offline-denied fetch, not a generic MCP mock.
 - Evaluate `tests/pi-durable-runtime-evaluation.nix { inherit pkgs; }` for exact
   configured transport and wrong-path/flags/rootless/user-mapping negatives.
-- Build/run `tests/pi-durable-runtime-vm.nix { inherit self pkgs; runtimePackage = ...;
-  bundle = ...; }` through its separate `.driver`, under the bounded agent
-  launcher. It is not part of the fast gate. The disposable two-agent VM is
+- Build `.#checks.x86_64-linux.pi-durable-runtime-vm` when VM verification is
+  authorized; it exports the two-agent fixture from
+  `tests/pi-durable-runtime-vm.nix`. It is not part of the fast gate. The VM is
   limited to two cores, 4096 MiB and 900 seconds, with synthetic credentials,
   loopback-only unused provider configuration, real pinned runner/SDK and
   offline Research. It exercises listener-versus-inode identity, empty-capability

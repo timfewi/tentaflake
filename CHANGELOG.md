@@ -94,6 +94,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `tentaflake-broker-llm-reconcile-NAME` unit. With the broker stopped, it
   resolves held strict reservations and orphaned usage holds without refunds.
 ### Maintenance
+- Correct maintained guides against current source: offline CLI forms and
+  adapter-specific public fields, generic stopped examples, internal-only legacy
+  arguments, admitted mount/image exceptions and bounded observer work. Separate
+  product/test contracts from session reports, external UI ownership and
+  release-pinned website publication; keep historical entries unchanged.
 - Scope negative Research fixture evaluation to the expected policy assertion,
   avoiding unrelated NixOS duplicate-ID traces while preserving collision
   rejection and complete assertion checks for valid configurations.
@@ -816,7 +821,7 @@ declarative line is now resumed as described above.
 - `docs/` — quickstart guide, agent tips, skill index, and 4 bundled Hermes skills
 - GitHub Actions CI: `nix flake check` on PR and push to main
 
-[Unreleased]: https://github.com/timfewi/tentaflake/compare/v0.4.0...main
+[Unreleased]: https://github.com/timfewi/tentaflake/compare/v0.4.52...main
 [0.4.0]: https://github.com/timfewi/tentaflake/compare/v0.3.9...v0.4.0
 [0.3.1]: https://github.com/timfewi/tentaflake/compare/v0.2.0...v0.3.1
 [0.2.0]: https://github.com/timfewi/tentaflake/compare/v0.1.0...v0.2.0

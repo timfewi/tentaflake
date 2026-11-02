@@ -17,7 +17,7 @@ agents = []
 # consoleKeyMap = "us"
 #
 # [sandbox]
-# profile = "balanced" # Also available: strict, dev (trusted compatibility).
+# profile = "balanced" # dev is trusted compatibility; strict currently refuses.
 #
 # [network]
 # managementEnable = true

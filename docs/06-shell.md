@@ -25,6 +25,9 @@ Do not hand-edit them. Change the Nix configuration and rebuild explicitly.
 tentaflake help
 tentaflake runtimes [--json]
 tentaflake agent template <preset> <name>
+tentaflake config validate <tentaflake.toml> [--json]
+tentaflake config normalize <tentaflake.toml> [--json]
+tentaflake config migrate <agents.toml|agents.json> <tentaflake.toml> [--json]
 tentaflake agent validate|plan|import <file> [--json] [--hide]
 tentaflake status [--json] [--hide]
 tentaflake health [--json] [--hide]
@@ -43,6 +46,14 @@ tentaflake rebuild
 tentaflake update
 ```
 
+The offline `config` commands read explicit local files, not generated host
+inputs, and never evaluate Nix or activate services. `validate` reports validity;
+`normalize` writes TOML to stdout, or the validated data object with `--json`;
+`migrate` creates a new mode-0600 destination without overwriting and retains
+the legacy source. `--hide` is refused for desired-system data. See
+[offline configuration](08-agent-cli.md#offline-desired-system-commands) for
+filename, legacy-sibling and migration restrictions.
+
 `status` is the default command. `--json` provides machine-readable status;
 `--hide` redacts the host and agent names. `tentaflake-status` invokes the same
 status renderer and is used by the login banner.
@@ -57,9 +68,11 @@ can expose this inventory to an independently installed web interface.
 `--json` emits the complete schema-v1 catalog. It performs no host reads or
 image downloads. See [generic workloads](agent-adapters.md#generic-isolated-workload).
 
-`help`, `--help`, and `-h` display usage even when the generated host
-configuration or inventory is missing or invalid. `agent template` is also
-configuration-free; other management commands require the generated inputs.
+Top-level `help`, `--help`, and `-h` display usage even when the generated host
+configuration or inventory is missing or invalid. `runtimes`, `agent template`
+and `config validate|normalize|migrate` are also independent of those inputs;
+other management commands require them. Use `tentaflake help` for the command
+summary: `config` does not implement subcommand-specific `--help`.
 See [installed-host onboarding](08-agent-cli.md#add-an-agent-on-an-installed-host)
 for generic image/command templates, additive imports and explicit host updates.
 

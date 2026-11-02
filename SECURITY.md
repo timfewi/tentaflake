@@ -62,6 +62,8 @@ The detailed security model is split between the
 5. Rotate runtime secrets and build the repaired configuration.
 6. Activate only after reviewing the target and build result.
 
-Tentaflake does not maintain a private SQLite audit database or custom web
-console. Host and container-unit evidence is available through journald;
-the optional Loki/Alloy profile can retain and query it.
+Journald and minimized broker/worker records provide local evidence; the optional
+Loki/Alloy profile can retain and query journal logs. Optional host API and Pi Durable
+services also keep private SQLite operation receipts for no-replay recovery.
+Those ledgers are not a shared security-audit database, and an optional
+[operator UI](docs/19-web-ui.md) does not establish live security acceptance.

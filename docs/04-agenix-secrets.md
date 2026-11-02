@@ -131,10 +131,16 @@ data for verification.
 
 ## Dev-only direct environment files
 
-A trusted host may explicitly choose `tentaflake.security.profile = "dev"`
-and use `agenixFile` where the selected adapter supports it. Declare an encrypted environment
-file containing the pinned runtime's supported variables; use the same
-recipient/module separation and restrict its host reader.
+The public `tentaflake.toml` schema rejects `envFile` and `agenixFile` in every
+profile, including `dev`. Selecting `dev` does not expose internal adapter
+arguments or provide a direct-provider onboarding path. Public declarations
+needing the managed LLM broker must use `balanced` and host-held credentials;
+the broker module itself refuses `dev`.
+
+Internal adapter fixtures or reviewed implementation changes may use direct
+environment files only under `dev`, where the selected adapter supports them.
+They require the pinned runtime's supported variables, the same separate
+recipient/runtime declarations and a restricted host reader.
 
 The OCI runtime consumes this file at container creation; it is not a bind
 mount and will not appear in `docker inspect .Mounts`. Verify its runtime path,
