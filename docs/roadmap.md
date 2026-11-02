@@ -29,8 +29,7 @@ The common design separates agent commands from trusted policy/credentials.
 OpenShell is not a required backend: its NixOS/gVisor/broker/Research compatibility
 has not been accepted. A future backend requires its own isolation evidence.
 
-Historical work in [v0.4-final](https://github.com/timfewi/tentaflake/tree/v0.4-final)
-and [earlier development](https://github.com/timfewi/tentaflake/tree/ad28cc0e890df7b6653bfe99e03749237613fdd5)
+Historical work in [earlier development](https://github.com/timfewi/tentaflake/tree/ad28cc0e890df7b6653bfe99e03749237613fdd5)
 is reference material, not a dependency or delivery commitment. Reuse only
 pieces that solve a current requirement without importing obsolete authority.
 Issue status alone proves neither runtime acceptance nor released support.
