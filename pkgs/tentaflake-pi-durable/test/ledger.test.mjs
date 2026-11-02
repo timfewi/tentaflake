@@ -7,7 +7,7 @@ import { Ledger, privateDirectory } from '../ledger.mjs';
 
 const input = { request_id: 'stable-request', session_id: 'session', input: 'hello', context_mode: 'persistent' };
 function fixture(t, close = () => {}) {
-  const root = mkdtempSync(join(tmpdir(), 'pi-ledger-'));
+  const root = mkdtempSync(join(tmpdir(), 'pi-durable-ledger-'));
   chmodSync(root, 0o700);
   t.after(() => { try { close(); } finally { rmSync(root, { recursive: true, force: true }); } });
   return root;

@@ -454,8 +454,7 @@ mod tests {
 
     #[test]
     fn imports_refuse_legacy_and_unknown_root_fields() {
-        let incoming =
-            json!({"schemaVersion":1,"agents":[{"adapter":"pi","name":"new","autoStart":false}]});
+        let incoming = json!({"schemaVersion":1,"agents":[{"adapter":"pi-durable","name":"new","autoStart":false}]});
         for invalid in [
             json!({"hermes":[]}),
             json!({"schemaVersion":1,"agents":[],"zeroclaw":[]}),
@@ -511,8 +510,8 @@ mod tests {
         assert_eq!(parse(template.as_bytes()).unwrap(), incoming);
         for existing in [
             "# operator note\nschemaVersion = 1\nagents = [] # keep empty-array comment\n",
-            "# operator note\nschemaVersion = 1\nagents = [{ name = 'old', adapter = 'pi', autoStart = false }] # keep inline comment\n",
-            "# operator note\nschemaVersion = 1\n[[agents]] # keep table comment\nname = 'old'\nadapter = 'pi'\nautoStart = false\n[system]\nhostName = 'kept' # keep setting comment\n",
+            "# operator note\nschemaVersion = 1\nagents = [{ name = 'old', adapter = 'pi-durable', autoStart = false }] # keep inline comment\n",
+            "# operator note\nschemaVersion = 1\n[[agents]] # keep table comment\nname = 'old'\nadapter = 'pi-durable'\nautoStart = false\n[system]\nhostName = 'kept' # keep setting comment\n",
         ] {
             let rendered = serialize_import(Some(existing.as_bytes()), &incoming).unwrap();
             let text = std::str::from_utf8(&rendered).unwrap();

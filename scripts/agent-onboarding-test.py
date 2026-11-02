@@ -116,7 +116,7 @@ def main():
 
         # Host-owned unmanaged OCI containers also reserve identities, even
         # without any matching declaration in TOML or the active TSV inventory.
-        unmanaged = tomllib.loads(run("agent", "template", "pi", "unmanaged-fixture").stdout)
+        unmanaged = tomllib.loads(run("agent", "template", "pi-durable", "unmanaged-fixture").stdout)
         denied = json.loads(run("agent", "plan", candidate(unmanaged), "--json", success=False).stdout)
         assert not denied["valid"] and "already exists" in denied["errors"][0]
         assert destination.read_bytes() == before
@@ -244,7 +244,7 @@ def main():
 
         # Unknown adapters in active inventory still reserve their common identity.
         inventory.write_text("future-runtime\treserved\tagent-reserved\tcustom.service\t/custom/state\ttrue\n")
-        collision = tomllib.loads(run("agent", "template", "pi", "reserved").stdout)
+        collision = tomllib.loads(run("agent", "template", "pi-durable", "reserved").stdout)
         run("agent", "import", candidate(collision), success=False)
         assert destination.read_bytes() == before
         inventory.write_text("")

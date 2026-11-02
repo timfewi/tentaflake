@@ -89,7 +89,8 @@ in
       name: _:
       let
         instance = instances.${name} or null;
-        expected = if instance != null && instance.adapter == "pi" then "runsc-pi" else transport.name;
+        expected =
+          if instance != null && instance.adapter == "pi-durable" then "runsc-pi-durable" else transport.name;
       in
       {
         assertion =

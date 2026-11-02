@@ -30,9 +30,9 @@ Do not replace declarative agents with a mandatory runtime, UI or control servic
   to the upstream template for an installation. Missing/Git-filtered sources
   fail. Remaining `agents.toml` or `agents.json` requires explicit migration.
 - Hermes/ZeroClaw real vendor acceptance is pending. OpenClaw is a stopped
-  refusal unit only: no OCI artifact, state, credentials or sockets. Pi is the
+  refusal unit only: no OCI artifact, state, credentials or sockets. Pi Durable is the
   same refusal unit unless the host explicitly admits the reviewed runtime
-  (`tentaflake.piRuntime`: exact package/image proof, `runsc-pi-v1`, broker,
+  (`tentaflake.piDurableRuntime`: exact package/image proof, `runsc-pi-durable-v1`, broker,
   Research, worker and quotas); never relax that admission. Generic
   custom OCI is offline, with no accepted model/Research integration. Synthetic
   fixtures are not vendor acceptance. See [adapters](docs/agent-adapters.md).

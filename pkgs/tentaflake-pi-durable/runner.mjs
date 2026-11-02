@@ -43,7 +43,7 @@ export async function serve(config) {
       if (closing) throw new Refusal('Runner is stopping', 503);
       const url = new URL(request.url, 'http://localhost');
       if (request.method === 'GET' && url.pathname === '/v1/capabilities') {
-        json(200, { runtime: 'pi', version: 1, available: !ledger.quarantined,
+        json(200, { runtime: 'pi-durable', version: 1, available: !ledger.quarantined,
           quarantined: ledger.quarantined, features: { runs: !ledger.quarantined, persistent_sessions: true,
             live_inputs: false, session_import: false, streaming: false, cancellation: true } }); return;
       }
@@ -150,12 +150,12 @@ function configuration(path) {
 }
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   process.umask(0o077);
-  if (process.argv.length !== 3) { console.error('Usage: tentaflake-pi CONFIG'); process.exitCode = 2; }
+  if (process.argv.length !== 3) { console.error('Usage: tentaflake-pi-durable CONFIG'); process.exitCode = 2; }
   else {
     try {
       const runtime = await serve(configuration(process.argv[2]));
       const stop = () => { runtime.close().then(() => { process.exitCode = 0; }, () => { process.exitCode = 1; }); };
       process.once('SIGTERM', stop); process.once('SIGINT', stop);
-    } catch { console.error('Pi runtime refused startup'); process.exitCode = 1; }
+    } catch { console.error('Pi Durable runtime refused startup'); process.exitCode = 1; }
   }
 }

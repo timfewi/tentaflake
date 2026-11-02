@@ -177,7 +177,7 @@ Combined finding/telemetry bytes and at most 64 evidence references are bounded.
 
 Real Pi Durable observer admission remains **blocked** by unverified upstream
 recovery/no-replay controls. Keep `Policy.admitted = false` in production until
-that separate boundary is accepted. This crate does not replace Pi, run a model
+that separate boundary is accepted. This crate does not replace Pi Durable, run a model
 loop, or claim reliable injection classification. Hostile log fixtures demonstrate
 that classifier content cannot acquire action authority, not that every malicious
 instruction can be recognized.

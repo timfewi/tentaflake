@@ -181,7 +181,7 @@
       },
       "schemaVersion": 1
     },
-    "pi": {
+    "pi-durable": {
       "artifact": {
         "kind": "unselected",
         "reference": null,
@@ -202,7 +202,7 @@
         "interface": "unverified"
       },
       "identity": {
-        "id": "pi",
+        "id": "pi-durable",
         "status": "scaffold",
         "version": "1.4.0"
       },

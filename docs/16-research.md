@@ -30,7 +30,7 @@ This projects the per-agent map to `tentaflake.research.agents` and enables
 `services.secureResearch`; it does not provision a VPN or provider credentials.
 Names alone confer no permission. The shared Rust/Nix validators require
 distinct non-root relay UIDs and declared runnable Research-capable adapters;
-stopped Pi/OpenClaw and generic OCI cannot opt in. See the complete
+stopped Pi Durable/OpenClaw and generic OCI cannot opt in. See the complete
 [public permission contract](08-agent-cli.md#public-research-permissions).
 Existing consumer Nix policy may still set `tentaflake.research.agents` directly;
 disabled or omitted public Research declarations do not override it.
@@ -219,10 +219,10 @@ Docker and Podman register the additional named runtime without changing their
 defaults; a global elevated runtime default, wrapper alias, altered wrapper or
 extra runtime arguments fails host evaluation. Secure agents retain the exact
 stock runtime mapping in either backend. An ungranted container cannot select
-Research or Pi transport by name, alias or direct executable path. Unrelated
+Research or Pi Durable transport by name, alias or direct executable path. Unrelated
 consumer runtimes and unmanaged containers remain independent host policy.
-The separately reviewed internal Pi path retains its own `runsc-pi` transport
-and admission checks; this does not admit public stopped Pi declarations.
+The separately reviewed internal Pi Durable path retains its own `runsc-pi-durable` transport
+and admission checks; this does not admit public stopped Pi Durable declarations.
 
 The security manifest declares the exact configured runtime. Live inspection
 compares Docker's runtime name; missing declarations are unknown and a different
@@ -236,7 +236,7 @@ Adapter hooks generate upstream-specific settings after shared socket/closure
 projection. An arbitrary OCI container with a runtime-like prefix cannot opt
 into Research; validation checks explicit registered instance metadata and the
 adapter's accepted capability. The OpenClaw scaffold has no accepted Research
-discovery integration; Pi uses its exact relay only after explicit host admission. See [agent adapters](agent-adapters.md).
+discovery integration; Pi Durable uses its exact relay only after explicit host admission. See [agent adapters](agent-adapters.md).
 
 Native tool disabling and stdio settings are owned by the
 [adapter hooks](agent-adapters.md#native-configuration-and-state), applied after

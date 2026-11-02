@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { modelBoundary, secret, worker } from '../mediation.mjs';
 
 async function fixture(run) {
-  const root = mkdtempSync(join(tmpdir(), 'pi-mediation-'));
+  const root = mkdtempSync(join(tmpdir(), 'pi-durable-mediation-'));
   const key = join(root, 'token'); writeFileSync(key, 'synthetic', { mode: 0o600 });
   const saved = globalThis.fetch;
   const events = []; let uncertain = false;
@@ -65,7 +65,7 @@ test('failed durable barrier and wrong-origin traffic never send bytes', async (
   });
 });
 test('credential reads reject broad permissions, symlinks and hard links', t => {
-  const root = mkdtempSync(join(tmpdir(), 'pi-secret-'));
+  const root = mkdtempSync(join(tmpdir(), 'pi-durable-secret-'));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const path = join(root, 'token'); writeFileSync(path, 'synthetic', { mode: 0o600 });
   assert.equal(secret(path), 'synthetic');
@@ -75,9 +75,9 @@ test('credential reads reject broad permissions, symlinks and hard links', t => 
   linkSync(path, join(root, 'hardlink')); assert.throws(() => secret(path), /Unsafe/);
 });
 test('offline worker refuses pre-cancelled, symlinked and duplicate publications', async t => {
-  const root = mkdtempSync(join(tmpdir(), 'pi-worker-'));
+  const root = mkdtempSync(join(tmpdir(), 'pi-durable-worker-'));
   t.after(() => rmSync(root, { recursive: true, force: true }));
-  const request = { workspace: root, id: `pi_${'a'.repeat(32)}`, argv: ['true'], timeout_seconds: 1 };
+  const request = { workspace: root, id: `pi_durable_${'a'.repeat(32)}`, argv: ['true'], timeout_seconds: 1 };
   await assert.rejects(worker({ ...request, signal: AbortSignal.abort() }));
   assert.equal(existsSync(join(root, '.tentaflake-worker')), false);
   mkdirSync(join(root, '.tentaflake-worker'));

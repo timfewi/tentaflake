@@ -712,10 +712,10 @@ mod tests {
     }
 
     #[test]
-    fn request_validation_admits_every_pi_tool_argument() {
-        let f = Fixture::new("pi-arguments");
+    fn request_validation_admits_every_pi_durable_tool_argument() {
+        let f = Fixture::new("pi-durable-arguments");
         let mut request = f.request(ActionClass::LocalReversible);
-        // Pi admits empty strings and counts UTF-16 code units, not bytes.
+        // Pi Durable admits empty strings and counts UTF-16 code units, not bytes.
         request.argv = vec![
             "printf".into(),
             String::new(),

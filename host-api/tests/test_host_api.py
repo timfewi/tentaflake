@@ -88,7 +88,7 @@ sys.exit(int(failed))
         inventory.write_text(
             "fixture\tcoding\tagent-coding\tdocker-agent-coding.service\t/var/lib/tentaflake/agents/coding\ttrue\n"
             "fixture\tassistant\tagent-assistant\tdocker-agent-assistant.service\t/var/lib/tentaflake/agents/assistant\ttrue\n"
-            "pi\twaiting\tagent-waiting\tdocker-agent-waiting.service\t/var/lib/unused\tfalse\n"
+            "pi-durable\twaiting\tagent-waiting\tdocker-agent-waiting.service\t/var/lib/unused\tfalse\n"
         )
         self.config = {
             "systemctl": str(systemctl),
@@ -982,12 +982,12 @@ else:
     def start_runner_api(self, permissions=None):
         self.runner_uid = max(1, api.os.geteuid())
         inventory = Path(self.config["inventory"])
-        inventory.write_text(inventory.read_text().replace("fixture\tcoding\t", "pi\tcoding\t"))
+        inventory.write_text(inventory.read_text().replace("fixture\tcoding\t", "pi-durable\tcoding\t"))
         self.start(
             runners={"agent-coding": {
-                "socket": "/run/tentaflake-pi/agent-coding/control/runner.sock",
-                "token": "/run/tentaflake-pi/agent-coding/api-token",
-                "transport": "runsc-pi-v1",
+                "socket": "/run/tentaflake-pi-durable/agent-coding/control/runner.sock",
+                "token": "/run/tentaflake-pi-durable/agent-coding/api-token",
+                "transport": "runsc-pi-durable-v1",
             }},
             peer_grants=[{"uid": self.runner_uid, "agents": ["agent-coding"],
                           "permissions": permissions or ["read", "run_read", "run_submit", "run_stop"]}],
@@ -1088,7 +1088,7 @@ else:
         ])
         body = {"request_id": "request-1", "session_id": "session-1",
                 "input": "synthetic task", "context_mode": "persistent"}
-        with patch.object(self.service, "runner_file", side_effect=files), patch.object(api, "RUNSC_PI_PEER_UID", api.os.geteuid()):
+        with patch.object(self.service, "runner_file", side_effect=files), patch.object(api, "RUNSC_PI_DURABLE_PEER_UID", api.os.geteuid()):
             self.assertEqual(self.runner_route("POST", "runs", body), {"run_id": "run-1"})
             self.assertEqual(self.runner_route("POST", "runs", body), {"run_id": "run-1"})
             self.assertEqual(self.runner_route("GET", "runs?request_id=request-1")["state"], "completed")
@@ -1106,7 +1106,7 @@ else:
             self.runner_json({"available": True, "features": {"runs": True}}), None,
         ])
         body = {"title": "synthetic session", "request_id": "session-1"}
-        with patch.object(self.service, "runner_file", side_effect=files), patch.object(api, "RUNSC_PI_PEER_UID", api.os.geteuid()):
+        with patch.object(self.service, "runner_file", side_effect=files), patch.object(api, "RUNSC_PI_DURABLE_PEER_UID", api.os.geteuid()):
             with self.assertRaises(api.APIError):
                 self.runner_route("POST", "sessions", body)
         self.close()
@@ -1151,14 +1151,14 @@ else:
         ]
         for response, status in cases:
             observed, files = self.fake_runner([response])
-            with self.subTest(status=status), patch.object(self.service, "runner_file", side_effect=files), patch.object(api, "RUNSC_PI_PEER_UID", api.os.geteuid()), patch.object(api, "RUNNER_TIMEOUT", 0.05):
+            with self.subTest(status=status), patch.object(self.service, "runner_file", side_effect=files), patch.object(api, "RUNSC_PI_DURABLE_PEER_UID", api.os.geteuid()), patch.object(api, "RUNNER_TIMEOUT", 0.05):
                 with self.assertRaises(api.APIError) as error:
                     self.runner_route("GET", "capabilities")
                 self.assertEqual(error.exception.status, status)
                 self.assertNotIn("private token", str(error.exception))
             self.assertEqual(len(observed), 1)
         observed, files = self.fake_runner([self.runner_json({})])
-        with patch.object(self.service, "runner_file", side_effect=files), patch.object(api, "RUNSC_PI_PEER_UID", api.os.geteuid() + 1):
+        with patch.object(self.service, "runner_file", side_effect=files), patch.object(api, "RUNSC_PI_DURABLE_PEER_UID", api.os.geteuid() + 1):
             with self.assertRaises(api.APIError) as error:
                 self.runner_route("GET", "capabilities")
             self.assertEqual(error.exception.status, 503)
@@ -1170,23 +1170,23 @@ else:
             b"HTTP/1.0 200 OK\r\nContent-Type: text/event-stream\r\n\r\n: waiting\n\n",
             b'HTTP/1.0 200 OK\r\nContent-Type: text/event-stream\r\n\r\ndata: {"event":"run.completed","run_id":"run-1"}\n\n',
         ])
-        with patch.object(self.service, "runner_file", side_effect=files), patch.object(api, "RUNSC_PI_PEER_UID", api.os.geteuid()):
+        with patch.object(self.service, "runner_file", side_effect=files), patch.object(api, "RUNSC_PI_DURABLE_PEER_UID", api.os.geteuid()):
             self.assertEqual(self.runner_route("GET", "runs/run-1/events"), {"events": []})
             self.assertEqual(self.runner_route("GET", "runs/run-1/events")["events"][0]["event"], "run.completed")
         self.assertEqual(len(observed), 2)
 
     def test_runner_descriptors_are_fixed_to_exact_inventory_id(self):
-        descriptor = {"socket": "/run/tentaflake-pi/agent-coding/control/runner.sock",
-                      "token": "/run/tentaflake-pi/agent-coding/api-token",
-                      "transport": "runsc-pi-v1"}
-        # Even an otherwise exact descriptor cannot admit a non-Pi inventory row.
+        descriptor = {"socket": "/run/tentaflake-pi-durable/agent-coding/control/runner.sock",
+                      "token": "/run/tentaflake-pi-durable/agent-coding/api-token",
+                      "transport": "runsc-pi-durable-v1"}
+        # Even an otherwise exact descriptor cannot admit a non-Pi Durable inventory row.
         with self.assertRaisesRegex(ValueError, "runner inventory"):
             api.Service({**self.config, "runners": {"agent-coding": descriptor}})
         inventory = Path(self.config["inventory"])
-        inventory.write_text(inventory.read_text().replace("fixture\tcoding\t", "pi\tcoding\t"))
+        inventory.write_text(inventory.read_text().replace("fixture\tcoding\t", "pi-durable\tcoding\t"))
         for runners in [
             {"agent-coding": {**descriptor, "socket": "/run/other.sock"}},
-            {"agent-coding": {**descriptor, "token": "/run/tentaflake-pi/agent-assistant/api-token"}},
+            {"agent-coding": {**descriptor, "token": "/run/tentaflake-pi-durable/agent-assistant/api-token"}},
             {"agent-coding": {**descriptor, "transport": "native"}},
             {"agent-coding": {key: value for key, value in descriptor.items() if key != "transport"}},
             {"agent-coding": {**descriptor, "peer_uid": 0}},
@@ -1199,7 +1199,7 @@ else:
     def test_runner_credential_walk_checks_real_links_modes_and_identity(self):
         # Unprivileged fixture: remap only root and ownership metadata.
         # Traversal, no-follow opens, modes and hardlink counts are real.
-        directory = self.root / "run/tentaflake-pi/agent-coding"
+        directory = self.root / "run/tentaflake-pi-durable/agent-coding"
         directory.mkdir(parents=True, mode=0o700)
         credential = directory / "api-token"
         credential.write_text("a" * 64 + "\n")
@@ -1214,7 +1214,7 @@ else:
                 st_mode=value.st_mode, st_nlink=value.st_nlink, st_size=value.st_size,
                 st_uid=123 if wrong_owner else 0, st_gid=10100,
             )
-        path = "/run/tentaflake-pi/agent-coding/api-token"
+        path = "/run/tentaflake-pi-durable/agent-coding/api-token"
         with patch.object(api.os, "open", side_effect=opened), patch.object(api.os, "fstat", side_effect=metadata):
             self.assertEqual(api.Service.runner_file(path, token=True), b"a" * 64)
             for value in ("short", "g" * 64 + "\n"):
@@ -1253,7 +1253,7 @@ else:
                 api.Service.runner_file(path, token=True)
 
     def test_runner_socket_inode_is_pinned_against_basename_replacement(self):
-        directory = self.root / "run/tentaflake-pi/agent-coding"
+        directory = self.root / "run/tentaflake-pi-durable/agent-coding"
         directory.mkdir(parents=True, mode=0o700)
         control = directory / "control"
         control.mkdir(mode=0o710)
@@ -1277,7 +1277,7 @@ else:
                 st_gid=10100,
             )
         with patch.object(api.os, "open", side_effect=opened), patch.object(api.os, "fstat", side_effect=metadata):
-            descriptor, address = api.Service.runner_file("/run/tentaflake-pi/agent-coding/control/runner.sock")
+            descriptor, address = api.Service.runner_file("/run/tentaflake-pi-durable/agent-coding/control/runner.sock")
             self.addCleanup(api.os.close, descriptor)
             path.rename(control / "retained.sock")
             path.symlink_to("/run/foreign-agent.sock")
@@ -1287,14 +1287,14 @@ else:
                 accepted, _ = listener.accept()
                 accepted.close()
             with self.assertRaises(api.APIError):
-                api.Service.runner_file("/run/tentaflake-pi/agent-coding/control/runner.sock")
+                api.Service.runner_file("/run/tentaflake-pi-durable/agent-coding/control/runner.sock")
 
     def test_runner_unavailable_capability_prevents_mutation(self):
         self.start_runner_api()
         observed, files = self.fake_runner([
             self.runner_json({"available": False, "features": {"runs": False}}),
         ])
-        with patch.object(self.service, "runner_file", side_effect=files), patch.object(api, "RUNSC_PI_PEER_UID", api.os.geteuid()):
+        with patch.object(self.service, "runner_file", side_effect=files), patch.object(api, "RUNSC_PI_DURABLE_PEER_UID", api.os.geteuid()):
             with self.assertRaises(api.APIError) as error:
                 self.runner_route("POST", "sessions", {"title": "test", "request_id": "unavailable"})
             self.assertEqual(error.exception.status, 409)

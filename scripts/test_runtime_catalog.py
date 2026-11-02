@@ -15,6 +15,12 @@ SPEC.loader.exec_module(catalog_docs)
 
 
 class RuntimeCatalog(unittest.TestCase):
+    def test_pi_durable_is_the_only_public_adapter_identity(self):
+        root = SCRIPT.parent.parent
+        catalog = catalog_docs.catalog_from_adapters(root)
+        self.assertNotIn("pi", catalog["presets"])
+        self.assertEqual(catalog["presets"]["pi-durable"]["identity"]["id"], "pi-durable")
+
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory(prefix="tentaflake-catalog-")
         self.addCleanup(self.temporary.cleanup)

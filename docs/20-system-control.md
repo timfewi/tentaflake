@@ -18,7 +18,7 @@ a direct UID grant is not evidence that a human actually reviewed a proposal.
 
 System-control grants are separate from the host API's resource-scoped
 `run_read`, `run_submit` and `run_stop` permissions. The
-[Pi runner mediator](19-web-ui.md#exact-scoped-pi-runner-mediation) remains in the
+[Pi Durable runner mediator](19-web-ui.md#exact-scoped-pi-durable-runner-mediation) remains in the
 trusted root host API; neither this controller nor the authenticated browser
 bridge receives runner bearer files or the runner's numeric group. A successful
 run, application readiness or saved board state is not system approval,

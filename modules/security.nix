@@ -7,13 +7,15 @@
 let
   cfg = config.tentaflake.security;
   secure = cfg.profile != "dev";
-  piTransport = import ../lib/piTransport.nix { inherit lib pkgs; };
+  piDurableTransport = import ../lib/piDurableTransport.nix { inherit lib pkgs; };
   researchTransport = import ../lib/researchTransport.nix { inherit lib pkgs; };
   adapters = import ../adapters { inherit lib pkgs; };
   runtimes = import ../lib/gvisorRuntimes.nix { inherit lib pkgs; };
-  piTransportEnabled =
-    lib.attrByPath [ "tentaflake" "piRuntime" "enable" ] false config
-    && lib.attrByPath [ "tentaflake" "piRuntime" "transport" ] null config == piTransport.version;
+  piDurableTransportEnabled =
+    lib.attrByPath [ "tentaflake" "piDurableRuntime" "enable" ] false config
+    &&
+      lib.attrByPath [ "tentaflake" "piDurableRuntime" "transport" ] null config
+      == piDurableTransport.version;
   bool = value: if value then "true" else "false";
   maxMemoryBytes = 1024 * 1024 * 1024 * 1024;
   maxTmpfsBytes = 64 * 1024 * 1024 * 1024;
@@ -145,7 +147,7 @@ let
     "/var/run"
   ];
   mountSafe =
-    name: piRuntimeValid: volume:
+    name: piDurableRuntimeValid: volume:
     let
       parts = lib.splitString ":" volume;
       source = if parts == [ ] then "" else lib.head parts;
@@ -155,12 +157,12 @@ let
       && volume == "/run/tentaflake-research/${name}:/run/tentaflake-research:ro"
     )
     || (
-      # Only the fully admitted Pi runtime receives these exact per-agent binds.
-      piRuntimeValid
+      # Only the fully admitted Pi Durable runtime receives these exact per-agent binds.
+      piDurableRuntimeValid
       && lib.elem volume [
-        "/run/tentaflake-pi/${name}/control:/run/tentaflake-pi/control:rw"
-        "/run/tentaflake-pi/${name}/api-token:/run/tentaflake-pi/api-token:ro"
-        "/run/tentaflake-pi/${name}/broker-token:/run/tentaflake-pi/broker-token:ro"
+        "/run/tentaflake-pi-durable/${name}/control:/run/tentaflake-pi-durable/control:rw"
+        "/run/tentaflake-pi-durable/${name}/api-token:/run/tentaflake-pi-durable/api-token:ro"
+        "/run/tentaflake-pi-durable/${name}/broker-token:/run/tentaflake-pi-durable/broker-token:ro"
       ]
     )
     || (
@@ -182,10 +184,10 @@ let
   agentContainers = lib.filterAttrs (
     _: container: (container.labels."io.tentaflake.agent" or "false") == "true"
   ) config.virtualisation.oci-containers.containers;
-  piImageReviewed =
+  piDurableImageReviewed =
     name: container:
     let
-      policy = lib.attrByPath [ "tentaflake" "piRuntime" ] { } config;
+      policy = lib.attrByPath [ "tentaflake" "piDurableRuntime" ] { } config;
       bundle = policy.bundle or null;
     in
     lib.isDerivation bundle
@@ -227,36 +229,36 @@ let
       researchEnabled = builtins.hasAttr name (
         lib.attrByPath [ "tentaflake" "research" "agents" ] { } config
       );
-      piRuntimeValid =
+      piDurableRuntimeValid =
         registered
-        && selected piTransport.name
-        && piTransport.supported config
+        && selected piDurableTransport.name
+        && piDurableTransport.supported config
         && instance != null
-        && instance.adapter == "pi"
+        && instance.adapter == "pi-durable"
         && instance.runnable
-        && piTransport.containerSupported container
-        && piImageReviewed name container;
+        && piDurableTransport.containerSupported container
+        && piDurableImageReviewed name container;
       researchRuntimeValid =
         registered
         && researchEnabled
         && instance != null
         && instance.runnable
-        && instance.adapter != "pi"
+        && instance.adapter != "pi-durable"
         && (adapters.${instance.adapter}.research.supported or false)
         && researchTransport.supported config
         && selected researchTransport.name;
       ordinaryRuntimeValid =
         registered
         && !researchEnabled
-        && (instance == null || instance.adapter != "pi")
+        && (instance == null || instance.adapter != "pi-durable")
         && selected runtimes.stock.name;
       managed = (container.labels."io.tentaflake.agent" or "false") == "true";
     in
     {
-      inherit piRuntimeValid researchRuntimeValid ordinaryRuntimeValid;
+      inherit piDurableRuntimeValid researchRuntimeValid ordinaryRuntimeValid;
       allowed =
         if managed then
-          piRuntimeValid || researchRuntimeValid || ordinaryRuntimeValid
+          piDurableRuntimeValid || researchRuntimeValid || ordinaryRuntimeValid
         else
           !(lib.any (runtimes.selectorElevated config) (runtimes.selectors container));
     };
@@ -267,8 +269,8 @@ let
       capabilitiesEmpty =
         !(lib.any (value: value == true) (lib.attrValues (container.capabilities or { })));
       runtime = runtimeValidity name container;
-      piImagePinned = runtime.piRuntimeValid;
-      imagePinned = lib.match ".+@sha256:[0-9a-fA-F]{64}" container.image != null || piImagePinned;
+      piDurableImagePinned = runtime.piDurableRuntimeValid;
+      imagePinned = lib.match ".+@sha256:[0-9a-fA-F]{64}" container.image != null || piDurableImagePinned;
       brokered = (container.labels."io.tentaflake.brokered-egress" or "false") == "true";
       brokerPolicy = lib.attrByPath [ name ] null config.tentaflake.broker.agents;
       llmBrokerEnabled = brokerPolicy != null && brokerPolicy.enable && brokerPolicy.llm.enable;
@@ -290,13 +292,13 @@ let
           config.security.apparmor.enable && !hasOption "--security-opt=apparmor=unconfined" container;
       provenancePolicy = lib.attrByPath [ name ] null config.tentaflake.imageProvenance.agents;
       provenanceGateConfigured = provenancePolicy != null && provenancePolicy.enable;
-      inherit (runtime) piRuntimeValid researchRuntimeValid ordinaryRuntimeValid;
+      inherit (runtime) piDurableRuntimeValid researchRuntimeValid ordinaryRuntimeValid;
       declaredRuntime =
         if !secure then
           "-"
-        else if piRuntimeValid then
+        else if piDurableRuntimeValid then
           builtins.toJSON {
-            inherit (piTransport) name path;
+            inherit (piDurableTransport) name path;
           }
         else if researchRuntimeValid then
           builtins.toJSON {
@@ -351,8 +353,8 @@ let
         (bool capabilitiesEmpty)
         (bool (hasOption "--security-opt=no-new-privileges:true" container))
         (bool (hasOption "--read-only" container))
-        (bool (lib.all (mountSafe name piRuntimeValid) (container.volumes or [ ])))
-        (bool (piRuntimeValid || researchRuntimeValid || ordinaryRuntimeValid))
+        (bool (lib.all (mountSafe name piDurableRuntimeValid) (container.volumes or [ ])))
+        (bool (piDurableRuntimeValid || researchRuntimeValid || ordinaryRuntimeValid))
         (bool (resourcesComplete container))
         (bool imagePinned)
         (bool ((container.environmentFiles or [ ]) == [ ] || brokered))
@@ -525,7 +527,7 @@ in
       ]
       ++ lib.mapAttrsToList (name: container: {
         assertion = (runtimeValidity name container).allowed;
-        message = "tentaflake: OCI container ${name} must retain its exact admitted runtime; direct paths, aliases and ungranted Pi/Research transports cannot bypass agent admission.";
+        message = "tentaflake: OCI container ${name} must retain its exact admitted runtime; direct paths, aliases and ungranted Pi Durable/Research transports cannot bypass agent admission.";
       }) (lib.optionalAttrs secure config.virtualisation.oci-containers.containers);
 
       warnings = lib.optional (cfg.profile == "dev") ''
@@ -545,12 +547,14 @@ in
         containers.containersConf.settings.engine.runtimes.runsc = [ runtimes.stock.path ];
       };
     })
-    (lib.mkIf (secure && piTransportEnabled) {
-      virtualisation.docker.daemon.settings.runtimes.runsc-pi = {
-        inherit (piTransport) path;
+    (lib.mkIf (secure && piDurableTransportEnabled) {
+      virtualisation.docker.daemon.settings.runtimes.runsc-pi-durable = {
+        inherit (piDurableTransport) path;
       };
-      # Pi retains its separately admitted bind+connect runtime.
-      virtualisation.containers.containersConf.settings.engine.runtimes.runsc-pi = [ piTransport.path ];
+      # Pi Durable retains its separately admitted bind+connect runtime.
+      virtualisation.containers.containersConf.settings.engine.runtimes.runsc-pi-durable = [
+        piDurableTransport.path
+      ];
     })
   ];
 }

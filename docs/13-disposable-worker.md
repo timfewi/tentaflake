@@ -122,9 +122,9 @@ IDs are bounded lowercase ASCII identifiers. The parser rejects unknown
 fields, oversized requests, argument lists outside 1–128 entries, arguments
 longer than 4096 UTF-16 code units, NUL bytes, unsupported versions, duplicate
 IDs, and timeouts above policy. Empty individual arguments are valid. These
-bounds equal Pi's `offline_worker` tool schema; Pi admission additionally
+bounds equal Pi Durable's `offline_worker` tool schema; Pi Durable admission additionally
 requires `maxTimeoutSeconds >= 3600` and `maxRequestBytes >= 65536` (the
-defaults), so every call Pi accepts is also admissible by its worker.
+defaults), so every call Pi Durable accepts is also admissible by its worker.
 
 The snapshot walker opens the configured workspace through Linux `openat2`
 with `RESOLVE_NO_MAGICLINKS | RESOLVE_NO_SYMLINKS`. On kernels or filtered VM

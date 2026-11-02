@@ -1,5 +1,5 @@
 {
-  "name": "@tentaflake/pi-runner",
+  "name": "@tentaflake/pi-durable-runner",
   "version": "0.1.0",
   "private": true,
   "type": "module",

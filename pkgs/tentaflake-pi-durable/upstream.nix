@@ -34,7 +34,7 @@ let
     "esbuild"
   ] original.devDependencies;
   package = {
-    name = "tentaflake-pi-sdk";
+    name = "tentaflake-pi-durable-sdk";
     version = "1.4.0";
     private = true;
     type = "module";
@@ -89,7 +89,7 @@ let
           else if builtins.hasAttr name optional then
             [ ]
           else
-            throw "Pi SDK lock is missing a required dependency; refusing to resolve a new version."
+            throw "Pi Durable SDK lock is missing a required dependency; refusing to resolve a new version."
         ) (builtins.attrNames dependencies);
   };
   retained = lib.genAttrs (map (node: node.key) closure) (
@@ -106,10 +106,10 @@ let
     };
   };
   manifestFiles = lib.genAttrs selected (
-    name: pkgs.writeText "pi-${name}-package.json" (builtins.toJSON manifests.${name})
+    name: pkgs.writeText "pi-durable-${name}-package.json" (builtins.toJSON manifests.${name})
   );
   preparedSource =
-    pkgs.runCommand "tentaflake-pi-sdk-source"
+    pkgs.runCommand "tentaflake-pi-durable-sdk-source"
       {
         nativeBuildInputs = [
           pkgs.gnutar
@@ -118,8 +118,8 @@ let
       }
       ''
         mkdir -p "$out/packages"
-        cp ${pkgs.writeText "pi-sdk-package.json" (builtins.toJSON package)} "$out/package.json"
-        cp ${pkgs.writeText "pi-sdk-package-lock.json" (builtins.toJSON packageLock)} "$out/package-lock.json"
+        cp ${pkgs.writeText "pi-durable-sdk-package.json" (builtins.toJSON package)} "$out/package.json"
+        cp ${pkgs.writeText "pi-durable-sdk-package-lock.json" (builtins.toJSON packageLock)} "$out/package-lock.json"
         cp ${source}/tsconfig.base.json "$out/tsconfig.base.json"
         cp ${source}/LICENSE "$out/LICENSE"
         ${lib.concatMapStringsSep "\n" (name: ''
@@ -133,7 +133,7 @@ let
           package/dist/providers/data
       '';
   runtime = pkgs.buildNpmPackage {
-    pname = "tentaflake-pi-sdk";
+    pname = "tentaflake-pi-durable-sdk";
     version = "1.4.0";
     src = preparedSource;
     nodejs = pkgs.nodejs_24;
@@ -165,18 +165,18 @@ let
     '';
     installPhase = ''
       runHook preInstall
-      mkdir -p "$out/lib/pi/packages" "$out/share/doc/tentaflake-pi-sdk"
-      cp -a node_modules "$out/lib/pi/node_modules"
+      mkdir -p "$out/lib/pi-durable/packages" "$out/share/doc/tentaflake-pi-durable-sdk"
+      cp -a node_modules "$out/lib/pi-durable/node_modules"
       ${lib.concatMapStringsSep "\n" (name: ''
-        cp -r packages/${name} "$out/lib/pi/packages/${name}"
+        cp -r packages/${name} "$out/lib/pi-durable/packages/${name}"
       '') selected}
-      cp LICENSE "$out/share/doc/tentaflake-pi-sdk/LICENSE"
+      cp LICENSE "$out/share/doc/tentaflake-pi-durable-sdk/LICENSE"
       runHook postInstall
     '';
     doInstallCheck = true;
     installCheckPhase = ''
       runHook preInstallCheck
-      cd "$out/lib/pi"
+      cd "$out/lib/pi-durable"
       node --input-type=module -e 'await import("@earendil-works/pi-durable"); await import("@earendil-works/pi-durable/storage/sqlite/node");'
       runHook postInstallCheck
     '';
@@ -191,5 +191,5 @@ assert (source.rev or null) == sourceRevision;
 assert originalLock.lockfileVersion == 3;
 {
   inherit sourceRevision runtime;
-  nodeModules = "${runtime}/lib/pi/node_modules";
+  nodeModules = "${runtime}/lib/pi-durable/node_modules";
 }

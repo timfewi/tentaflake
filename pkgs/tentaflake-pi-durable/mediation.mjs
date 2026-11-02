@@ -123,7 +123,7 @@ export class Research {
     } finally { clearTimeout(timer); signal?.removeEventListener('abort', abort); this.pending.delete(id); }
   }
   async initialize() {
-    const result = await this.request('initialize', { protocolVersion: '2025-11-25', capabilities: {}, clientInfo: { name: 'tentaflake-pi', version: '1' } });
+    const result = await this.request('initialize', { protocolVersion: '2025-11-25', capabilities: {}, clientInfo: { name: 'tentaflake-pi-durable', version: '1' } });
     if (result?.protocolVersion !== '2025-11-25') throw new Refusal('Research protocol mismatch');
     this.child.stdin.write(JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' }) + '\n');
     const resultTools = await this.request('tools/list', {});
@@ -158,7 +158,7 @@ export async function worker({ workspace, id, argv, timeout_seconds, signal }) {
       argv.some(a => typeof a !== 'string' || a.length > 4096 || a.includes('\0')) ||
       !Number.isInteger(timeout_seconds) || timeout_seconds < 1 || timeout_seconds > 3600)
     throw new Refusal('Invalid offline worker request');
-  if (!/^pi_[a-f0-9]{32}$/.test(id)) throw new Refusal('Invalid worker operation identity');
+  if (!/^pi_durable_[a-f0-9]{32}$/.test(id)) throw new Refusal('Invalid worker operation identity');
   const directory = openDirectory(join(workspace, '.tentaflake-worker/inbox'));
   try {
     const inbox = `/proc/self/fd/${directory}`;

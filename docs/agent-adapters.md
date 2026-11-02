@@ -24,7 +24,7 @@ for the consumer/fork layout, Git filtering and missing-source refusal:
 Pass `tentaflake.lib.${system}.systemFromData` through `specialArgs`.
 Inline `data`, `mkAgent` and adapter `.build` functions are not public APIs.
 
-Choose `hermes`, `zeroclaw`, `generic`, `openclaw` or `pi`. Unsupported adapter
+Choose `hermes`, `zeroclaw`, `generic`, `openclaw` or `pi-durable`. Unsupported adapter
 arguments fail evaluation. The registry is lazy: discovery does not download
 images or instantiate services. See [configuration](08-agent-cli.md) for TOML
 and installed-host onboarding, and [the secure consumer example](../examples/adapter-secure.nix)
@@ -131,12 +131,21 @@ real vendor acceptance.
 | generic | 1 | definition | source-regression | operator-owned |
 | hermes | image-snapshot-2026-07-18 | compatibility | source-regression | pending |
 | openclaw | 2026.9.7 | scaffold | refusal-regression | pending |
-| pi | 1.4.0 | scaffold | refusal-regression | pending |
+| pi-durable | 1.4.0 | scaffold | refusal-regression | pending |
 | zeroclaw | 0.8.2 | compatibility | source-regression | pending |
 
 <!-- runtime-catalog:end -->
 
 ### Pi Durable: pinned thin runner with fail-closed admission
+
+The adapter ID is `pi-durable`. It embeds the Pi Durable SDK through Tentaflake's
+mediated runner; it does not launch the interactive Pi terminal coding agent.
+When upgrading from `pi`, change declarations to `adapter = "pi-durable"` and
+host admission options to `tentaflake.piDurableRuntime`. Package/command names
+start with `tentaflake-pi-durable`; the transport is `runsc-pi-durable-v1`.
+Old names are not aliases. Stop admitted runners before the operator changes
+the runtime/socket configuration; retain existing private state and workspace
+paths and review uncertain work before restarting.
 
 The runner compiles the reviewed, immutable **upstream source**
 [`earendil-works/pi` revision `35dfa757378bd7a8570670e99c2687bdd1039a06`](https://github.com/earendil-works/pi/tree/35dfa757378bd7a8570670e99c2687bdd1039a06).
@@ -148,13 +157,13 @@ permission notice. The package declares MIT too. This is not a dependency-wide
 license audit or proof that a published tarball matches this source revision.
 Declared upstream runtime dependencies are Chord, Pi AI, Pi Codemode and Pi
 Telemetry 1.4.0, Photon 0.3.3, diff 8.0.4 and typebox 1.3.27.
-`pkgs/tentaflake-pi/upstream.nix` builds the selected workspace closure with the
+`pkgs/tentaflake-pi-durable/upstream.nix` builds the selected workspace closure with the
 upstream lock, not a global npm installation. The runner uses pinned Nixpkgs
 Node 24. Generated provider JSON and its manifest come from the separately hashed
 MIT `@earendil-works/pi-ai` 1.4.0 archive
 (`sha256-tA4rqLtvwzKQj4uW6DfcLR/ftF65zTgvWu0RFGKYHjw=`); packaged JavaScript is
 not substituted for reviewed source. Upstream model-data checks remain enabled.
-The retained upstream notice is `pkgs/tentaflake-pi/UPSTREAM-LICENSE`.
+The retained upstream notice is `pkgs/tentaflake-pi-durable/UPSTREAM-LICENSE`.
 
 The exact **default upstream recovery hazard**, avoided by the runner, is graceful
 close followed by resume:
@@ -206,7 +215,7 @@ The public seam needs care beyond these retry flags:
   outside the allowed protocol. Model options carry conversation session
   identity, not the SDK task ID.
 
-`pkgs/tentaflake-pi/{ledger,mediation,engine,runner}.mjs` implements the outer
+`pkgs/tentaflake-pi-durable/{ledger,mediation,engine,runner}.mjs` implements the outer
 single-writer receipt ledger and whole-instance quarantine around the real SDK;
 it is not a replacement scheduler. An exclusive SQLite owner transaction holds
 the process lease. FULL-synchronous admission and operation receipts precede
@@ -252,7 +261,7 @@ Execution publishes only versioned `local-reversible` requests to the existing
 offline worker queue; native bash, arbitrary extension loading, direct execution,
 direct internet access and unrelated host/engine sockets are unavailable.
 
-`adapters/pi/options.nix` keeps host admission disabled by default. Enabling it
+`adapters/pi-durable/options.nix` keeps host admission disabled by default. Enabling it
 requires the exact runner package and local OCI bundle, their matching immutable
 image selector/proof, shared balanced containment, one Responses-compatible
 SSE-enabled broker model, the exact Research relay, and the exact offline-worker
@@ -269,8 +278,8 @@ refuse startup; no registry/pull fallback exists. Podman retains direct-ID-only
 verification. User image/stream, native command and arbitrary mount overrides
 remain prohibited.
 
-Admission also requires explicit `tentaflake.piRuntime.transport = "runsc-pi-v1"`.
-The dedicated `runsc-pi` wrapper alone enables `--host-uds=all`; ordinary runsc
+Admission also requires explicit `tentaflake.piDurableRuntime.transport = "runsc-pi-durable-v1"`.
+The dedicated `runsc-pi-durable` wrapper alone enables `--host-uds=all`; ordinary runsc
 is unchanged, including Research's existing open-only override. Docker uses
 the exact canonical wrapper without runtime arguments; Podman uses its exact
 containers.conf mapping. Rootless engines, user mappings, alternate wrapper
@@ -305,8 +314,8 @@ not grant enterprise approvals, connector permissions, or standalone UI admissio
 
 Focused verification belongs to the integration owner:
 
-- Build `.#tentaflake-pi-sdk`, `.#tentaflake-pi` and `.#tentaflake-pi-image`.
-- Run the packaged `bin/tentaflake-pi-test`: exclusive ownership, duplicate and
+- Build `.#tentaflake-pi-durable-sdk`, `.#tentaflake-pi-durable` and `.#tentaflake-pi-durable-image`.
+- Run the packaged `bin/tentaflake-pi-durable-test`: exclusive ownership, duplicate and
   conflicting requests, stop/reopen, durable barriers, denied provider paths,
   credential permissions, and real pinned-SDK kill/close-after-send fixtures.
   Restored-receipt mismatch cases must stay quarantined with zero redispatch.
@@ -314,9 +323,9 @@ Focused verification belongs to the integration owner:
 - Run `tests/research-integration.nix` when VM verification is authorized; its
   added Node probe uses this runner's actual Research class, pinned real client
   and real relay with an offline-denied fetch, not a generic MCP mock.
-- Evaluate `tests/pi-runtime-evaluation.nix { inherit pkgs; }` for exact
+- Evaluate `tests/pi-durable-runtime-evaluation.nix { inherit pkgs; }` for exact
   configured transport and wrong-path/flags/rootless/user-mapping negatives.
-- Build/run `tests/pi-runtime-vm.nix { inherit self pkgs; runtimePackage = ...;
+- Build/run `tests/pi-durable-runtime-vm.nix { inherit self pkgs; runtimePackage = ...;
   bundle = ...; }` through its separate `.driver`, under the bounded agent
   launcher. It is not part of the fast gate. The disposable two-agent VM is
   limited to two cores, 4096 MiB and 900 seconds, with synthetic credentials,

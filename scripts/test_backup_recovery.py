@@ -42,7 +42,7 @@ class RecoveryTests(unittest.TestCase):
         self.snapshot = self.root / 'snapshot'
         self.target = self.root / 'restored'
         self.plan = {'version': 1, 'coverage': 'selected', 'scope': 'tenant:agent-a',
-                     'revision': 'policy-revision-1', 'runtime': 'pi:pinned-runtime-1',
+                     'revision': 'policy-revision-1', 'runtime': 'pi-durable:pinned-runtime-1',
                      'units': ['synthetic.service'],
                      'sources': [{'path': str(self.source), 'role': 'workspace', 'schema': 1}]}
 
@@ -90,7 +90,7 @@ class RecoveryTests(unittest.TestCase):
         self.assertFalse(self.target.exists())
 
     def test_missing_authority_receipts_refuse_commit(self):
-        self.plan['sources'][0]['role'] = 'pi'
+        self.plan['sources'][0]['role'] = 'pi-durable'
         with self.assertRaisesRegex(recovery.Refusal, 'missing authoritative receipt'):
             self.capture()
         self.assertTrue(self.hold.exists())

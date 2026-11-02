@@ -3,8 +3,8 @@
 
   inputs = {
     tentaflake-research.url = "github:timfewi/tentaflake-research/3503d8da7307b4795fc80baa1f142b3ef1baec7f";
-    # Real Pi SDK source; runtime admission still requires the mediated runner.
-    pi-upstream = {
+    # Real Pi Durable SDK source; runtime admission still requires the mediated runner.
+    pi-durable-upstream = {
       url = "github:earendil-works/pi/35dfa757378bd7a8570670e99c2687bdd1039a06";
       flake = false;
     };
@@ -52,9 +52,9 @@
       system = "x86_64-linux";
       pkgs = nixpkgs.legacyPackages.${system};
       inherit (nixpkgs) lib;
-      piRuntime = import ./pkgs/tentaflake-pi/upstream.nix {
+      piDurableRuntime = import ./pkgs/tentaflake-pi-durable/upstream.nix {
         inherit pkgs;
-        source = inputs.pi-upstream;
+        source = inputs.pi-durable-upstream;
       };
 
       # Root of the repo — used by installer ISO to embed source
@@ -174,25 +174,25 @@
         tentaflake-integrations = self.packages.${system}.tentaflake-integrations;
         tentaflake-activity = self.packages.${system}.tentaflake-activity;
         tentaflake-workloads = self.packages.${system}.tentaflake-workloads;
-        tentaflake-pi = self.packages.${system}.tentaflake-pi;
-        tentaflake-pi-recovery =
-          pkgs.runCommand "tentaflake-pi-recovery"
-            { nativeBuildInputs = [ self.packages.${system}.tentaflake-pi ]; }
+        tentaflake-pi-durable = self.packages.${system}.tentaflake-pi-durable;
+        tentaflake-pi-durable-recovery =
+          pkgs.runCommand "tentaflake-pi-durable-recovery"
+            { nativeBuildInputs = [ self.packages.${system}.tentaflake-pi-durable ]; }
             ''
               export HOME="$TMPDIR"
-              tentaflake-pi-test
+              tentaflake-pi-durable-test
               touch "$out"
             '';
         tentaflake-worker-image = self.packages.${system}.tentaflake-worker-image;
         host-api = self.packages.${system}.tentaflake-host-api;
         host-api-evaluation = import ./tests/host-api-evaluation.nix { inherit pkgs; };
-        pi-runtime-evaluation = import ./tests/pi-runtime-evaluation.nix { inherit pkgs; };
+        pi-durable-runtime-evaluation = import ./tests/pi-durable-runtime-evaluation.nix { inherit pkgs; };
         # Force the complete two-instance fixture's module graph, including
         # runnable declarations and generated OCI/systemd units, without building
         # or booting a VM. This catches config-dependent imports/recursion.
-        pi-runtime-module-graph =
-          assert builtins.isString self.packages.${system}.tentaflake-pi-vm-driver.drvPath;
-          pkgs.runCommand "tentaflake-pi-runtime-module-graph" { } "touch $out";
+        pi-durable-runtime-module-graph =
+          assert builtins.isString self.packages.${system}.tentaflake-pi-durable-vm-driver.drvPath;
+          pkgs.runCommand "tentaflake-pi-durable-runtime-module-graph" { } "touch $out";
         control-evaluation = import ./tests/control-evaluation.nix { inherit pkgs; };
         devcontainer-cli = self.packages.${system}.devcontainer-cli;
         ci-vm-selection = import ./tests/ci-vm-selection.nix { inherit pkgs; };
@@ -251,11 +251,11 @@
         vm-integration = pkgs.testers.runNixOSTest (import ./tests/integration.nix { inherit self pkgs; });
         research-integration = import ./tests/research-integration.nix { inherit self pkgs; };
         worker-drain-wakeup = import ./tests/worker-drain-wakeup.nix { inherit self pkgs; };
-        # Two admitted Pi capsules on the reviewed runsc-pi transport; no provider calls.
-        pi-runtime-vm = import ./tests/pi-runtime-vm.nix {
+        # Two admitted Pi Durable capsules on the reviewed runsc-pi-durable transport; no provider calls.
+        pi-durable-runtime-vm = import ./tests/pi-durable-runtime-vm.nix {
           inherit self pkgs;
-          runtimePackage = self.packages.${system}.tentaflake-pi;
-          bundle = self.packages.${system}.tentaflake-pi-image;
+          runtimePackage = self.packages.${system}.tentaflake-pi-durable;
+          bundle = self.packages.${system}.tentaflake-pi-durable-image;
         };
         workload-mapping-vm = import ./tests/workload-mapping-vm.nix { inherit pkgs; };
         workload-mapping-scale-vm = import ./tests/workload-mapping-scale-vm.nix { inherit pkgs; };
@@ -338,18 +338,18 @@
         tentaflake-integrations = pkgs.callPackage ./pkgs/tentaflake-integrations { };
         tentaflake-activity = pkgs.callPackage ./pkgs/tentaflake-activity { };
         tentaflake-workloads = pkgs.callPackage ./pkgs/tentaflake-workloads { };
-        tentaflake-pi-sdk = piRuntime.runtime;
-        tentaflake-pi = pkgs.callPackage ./pkgs/tentaflake-pi { inherit piRuntime; };
-        tentaflake-pi-image = pkgs.callPackage ./pkgs/tentaflake-pi/image.nix {
-          runtimePackage = tentaflake-pi;
+        tentaflake-pi-durable-sdk = piDurableRuntime.runtime;
+        tentaflake-pi-durable = pkgs.callPackage ./pkgs/tentaflake-pi-durable { inherit piDurableRuntime; };
+        tentaflake-pi-durable-image = pkgs.callPackage ./pkgs/tentaflake-pi-durable/image.nix {
+          runtimePackage = tentaflake-pi-durable;
         };
         # Building this package only prepares the driver/guest closures. Running
         # it is a separate, explicitly selected bounded disposable-VM workload.
-        tentaflake-pi-vm-driver =
-          (import ./tests/pi-runtime-vm.nix {
+        tentaflake-pi-durable-vm-driver =
+          (import ./tests/pi-durable-runtime-vm.nix {
             inherit self pkgs;
-            runtimePackage = tentaflake-pi;
-            bundle = tentaflake-pi-image;
+            runtimePackage = tentaflake-pi-durable;
+            bundle = tentaflake-pi-durable-image;
           }).driver;
         # Resolver/collector runtime verification remains an explicit VM workload.
         tentaflake-workload-mapping-vm-driver =

@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "stoppedAdapters": ["pi", "openclaw"],
+  "stoppedAdapters": ["pi-durable", "openclaw"],
   "sections": {
     "system": {
       "hostName": { "type": "hostName", "path": ["tentaflake", "hostName"] },
@@ -89,9 +89,9 @@
   },
   "agent": {
     "name": { "type": "name" },
-    "adapter": { "type": "enum", "values": ["hermes", "zeroclaw", "pi", "openclaw", "generic"] },
-    "autoStart": { "type": "bool", "adapters": ["hermes", "zeroclaw", "pi", "openclaw"] },
-    "stateDir": { "type": "statePath", "excludedRoots": ["/var/lib/docker", "/var/lib/containers"], "adapters": ["hermes", "zeroclaw", "pi", "openclaw"] },
+    "adapter": { "type": "enum", "values": ["hermes", "zeroclaw", "pi-durable", "openclaw", "generic"] },
+    "autoStart": { "type": "bool", "adapters": ["hermes", "zeroclaw", "pi-durable", "openclaw"] },
+    "stateDir": { "type": "statePath", "excludedRoots": ["/var/lib/docker", "/var/lib/containers"], "adapters": ["hermes", "zeroclaw", "pi-durable", "openclaw"] },
     "definition": {
       "type": "runtimeDefinition",
       "adapters": ["generic"],

@@ -272,14 +272,14 @@ secrets or extra host rights. Forbidden requests cannot be approved. The UI does
 not create arbitrary tool commands, add runtimes or change the capsule policy.
 See [worker approval and containment](13-disposable-worker.md).
 
-## Exact-scoped Pi runner mediation
+## Exact-scoped Pi Durable runner mediation
 
-Only declared Pi instances that are runnable with `tentaflake.piRuntime.enable`
+Only declared Pi Durable instances that are runnable with `tentaflake.piDurableRuntime.enable`
 and an admitted image bundle receive internal runner descriptors. The bundle's
 verification version, exact image selector and selected runtime package must
-match, together with the supported dedicated rootful `runsc-pi` transport
+match, together with the supported dedicated rootful `runsc-pi-durable` transport
 prerequisites. The internal descriptor has the exact marker
-`transport: "runsc-pi-v1"`; there is no configurable peer UID or generic native
+`transport: "runsc-pi-durable-v1"`; there is no configurable peer UID or generic native
 socket transport. Descriptors and bearer contents are never included in
 inventory or policy responses. Such agents advertise
 `capabilities.runner = {read, submit, stop, resource_scoped: true, transport: "host-api"}`;
@@ -310,7 +310,7 @@ The trusted root host API mediates an untrusted application. It retains an empty
 capability bounding set; only when descriptors exist does its service receive
 supplementary numeric group `10100`. The UI receives neither that group nor the
 runner credential. Host-derived paths are
-`/run/tentaflake-pi/{canonical-id}/control/runner.sock` and the sibling
+`/run/tentaflake-pi-durable/{canonical-id}/control/runner.sock` and the sibling
 `api-token`. Instance ancestry remains root-owned `0700`; control is
 `10100:10100` mode `0710`, socket `10100:10100` mode `0620`, and token
 `root:10100` mode `0440`. The host uses no-follow directory-FD traversal and
@@ -324,7 +324,7 @@ source analysis of rootful, non-remapped runsc identifies its host Gofer as the
 listener creator, distinct from the socket inode's `10100:10100` ownership.
 The bearer is sent only after that exact peer check and the fixed inode,
 ancestry and credential checks. This is not an inbound root grant: root remains
-denied by exact-peer host API authorization. The dedicated `runsc-pi`
+denied by exact-peer host API authorization. The dedicated `runsc-pi-durable`
 `--host-uds=all` runtime must not broaden the existing global/Research runsc
 transport. Source-derived peer expectations require real-VM acceptance; native
 Unix fixtures alone do not establish Gofer credentials or container admission.
@@ -347,7 +347,7 @@ pruning. This API does not prove model acceptance, execution success or approval
 ## What this interface does not claim
 
 `chat` remains advertised as `false`: a started systemd unit is not a native
-chat endpoint. Only the separately admitted Pi runner and exact run grants above
+chat endpoint. Only the separately admitted Pi Durable runner and exact run grants above
 enable its narrow application protocol. Other runtimes need their own reviewed
 adapter, credential/relay boundary and exact-image acceptance. The outbound LLM
 broker is model policy, not an operator conversation API.

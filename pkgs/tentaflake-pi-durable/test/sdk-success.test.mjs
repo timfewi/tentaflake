@@ -10,7 +10,7 @@ import { tmpdir } from 'node:os';
 // The child isolates global fetch/builtin transport interception from other tests.
 test('production Engine commits synthetic SDK success, reopens isolated sessions and never replays uncertain input',
   { timeout: 30000 }, async t => {
-    const directory = mkdtempSync(join(tmpdir(), 'pi-sdk-success-'));
+    const directory = mkdtempSync(join(tmpdir(), 'pi-durable-sdk-success-'));
     chmodSync(directory, 0o700);
     writeFileSync(join(directory, 'virtual-key'), 'synthetic-virtual-key', { mode: 0o600 });
     const child = fork(new URL('./sdk-success-fixture.mjs', import.meta.url), [directory],

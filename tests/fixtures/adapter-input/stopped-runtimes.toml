@@ -46,6 +46,6 @@ name = "preview"
 autoStart = false
 
 [[agents]]
-adapter = "pi"
+adapter = "pi-durable"
 name = "scratch"
 autoStart = false

@@ -1,6 +1,17 @@
 use std::process::Command;
 
 #[test]
+fn ambiguous_old_pi_template_is_rejected() {
+    let output = Command::new(env!("CARGO_BIN_EXE_tentaflake"))
+        .args(["agent", "template", "pi", "research"])
+        .env("TENTAFLAKE_CONFIG", "/dev/null")
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    assert!(output.stdout.is_empty());
+}
+
+#[test]
 fn help_works_without_a_valid_host_configuration() {
     let missing = std::env::temp_dir().join(format!(
         "tentaflake-missing-help-config-{}",
@@ -51,17 +62,26 @@ fn runtime_discovery_is_configuration_free_and_reports_scaffolds() {
         catalog["presets"]["openclaw"]["artifact"]["reference"],
         serde_json::Value::Null
     );
-    assert_eq!(catalog["presets"]["pi"]["identity"]["status"], "scaffold");
     assert_eq!(
-        catalog["presets"]["pi"]["artifact"]["reference"],
+        catalog["presets"]["pi-durable"]["identity"]["status"],
+        "scaffold"
+    );
+    assert_eq!(
+        catalog["presets"]["pi-durable"]["artifact"]["reference"],
         serde_json::Value::Null
     );
     // Implemented opt-in mediation is a capability, not runtime admission:
     // the default preset must still have no selected/reviewed artifact.
-    assert_eq!(catalog["presets"]["pi"]["artifact"]["reviewed"], false);
-    assert_eq!(catalog["presets"]["pi"]["research"]["supported"], true);
     assert_eq!(
-        catalog["presets"]["pi"]["capabilities"],
+        catalog["presets"]["pi-durable"]["artifact"]["reviewed"],
+        false
+    );
+    assert_eq!(
+        catalog["presets"]["pi-durable"]["research"]["supported"],
+        true
+    );
+    assert_eq!(
+        catalog["presets"]["pi-durable"]["capabilities"],
         serde_json::json!([])
     );
     assert_eq!(
@@ -103,15 +123,15 @@ fn templates_are_configuration_free_and_preserve_vendor_arguments_after_separato
         definition["agents"][0]["definition"]["lifecycle"],
         "stopped"
     );
-    let pi = Command::new(env!("CARGO_BIN_EXE_tentaflake"))
-        .args(["agent", "template", "pi", "research"])
+    let pi_durable = Command::new(env!("CARGO_BIN_EXE_tentaflake"))
+        .args(["agent", "template", "pi-durable", "research"])
         .env("TENTAFLAKE_CONFIG", "/dev/null")
         .output()
         .unwrap();
-    assert!(pi.status.success());
+    assert!(pi_durable.status.success());
     let template: serde_json::Value =
-        toml_edit::de::from_str(std::str::from_utf8(&pi.stdout).unwrap()).unwrap();
-    assert_eq!(template["agents"][0]["adapter"], "pi");
+        toml_edit::de::from_str(std::str::from_utf8(&pi_durable.stdout).unwrap()).unwrap();
+    assert_eq!(template["agents"][0]["adapter"], "pi-durable");
     assert_eq!(template["agents"][0]["name"], "research");
     assert_eq!(template["agents"][0]["autoStart"], false);
 }

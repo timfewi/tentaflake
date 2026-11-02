@@ -1,17 +1,17 @@
 { pkgs }:
 let
   inherit (pkgs) lib;
-  transport = import ../lib/piTransport.nix { inherit pkgs lib; };
+  transport = import ../lib/piDurableTransport.nix { inherit pkgs lib; };
   security = import ../lib/containerSecurity.nix { inherit lib; };
   docker = {
-    tentaflake.piRuntime = {
+    tentaflake.piDurableRuntime = {
       enable = true;
       transport = transport.version;
     };
     virtualisation = {
       oci-containers.backend = "docker";
       docker.daemon.settings.runtimes.runsc.path = lib.getExe' pkgs.gvisor "runsc";
-      docker.daemon.settings.runtimes.runsc-pi.path = transport.path;
+      docker.daemon.settings.runtimes.runsc-pi-durable.path = transport.path;
     };
   };
   podman = lib.recursiveUpdate docker {
@@ -20,12 +20,12 @@ let
       containers.containersConf.settings.engine.runtimes.runsc = [
         (lib.getExe' pkgs.gvisor "runsc")
       ];
-      containers.containersConf.settings.engine.runtimes.runsc-pi = [ transport.path ];
+      containers.containersConf.settings.engine.runtimes.runsc-pi-durable = [ transport.path ];
     };
   };
   rejects = base: change: !(transport.supported (lib.recursiveUpdate base change));
-  image = "tentaflake-pi:${lib.concatStrings (lib.replicate 64 "a")}";
-  bundle = pkgs.runCommand "pi-evaluation-only-image-proof" {
+  image = "tentaflake-pi-durable:${lib.concatStrings (lib.replicate 64 "a")}";
+  bundle = pkgs.runCommand "pi-durable-evaluation-only-image-proof" {
     passthru = {
       imageVerificationVersion = 1;
       imageSelector = image;
@@ -84,21 +84,21 @@ let
       ];
     }).config;
   defaultHost = evaluate { };
-  piHost = evaluate {
-    tentaflake.piRuntime = {
+  piDurableHost = evaluate {
+    tentaflake.piDurableRuntime = {
       enable = true;
       transport = transport.version;
     };
   };
   wrongHost = evaluate {
-    tentaflake.piRuntime = {
+    tentaflake.piDurableRuntime = {
       enable = true;
       transport = transport.version;
     };
-    virtualisation.docker.daemon.settings.runtimes.runsc-pi.path = lib.mkForce "/bin/runsc";
+    virtualisation.docker.daemon.settings.runtimes.runsc-pi-durable.path = lib.mkForce "/bin/runsc";
   };
   podmanHost = evaluate {
-    tentaflake.piRuntime = {
+    tentaflake.piDurableRuntime = {
       enable = true;
       transport = transport.version;
     };
@@ -106,16 +106,16 @@ let
   };
   # Synthetic reviewed image admission exercises the actual security manifest,
   # not vendor/runtime acceptance or a duplicate of the mount predicate.
-  piMounts = [
-    "/run/tentaflake-pi/agent-fixture/control:/run/tentaflake-pi/control:rw"
-    "/run/tentaflake-pi/agent-fixture/api-token:/run/tentaflake-pi/api-token:ro"
-    "/run/tentaflake-pi/agent-fixture/broker-token:/run/tentaflake-pi/broker-token:ro"
+  piDurableMounts = [
+    "/run/tentaflake-pi-durable/agent-fixture/control:/run/tentaflake-pi-durable/control:rw"
+    "/run/tentaflake-pi-durable/agent-fixture/api-token:/run/tentaflake-pi-durable/api-token:ro"
+    "/run/tentaflake-pi-durable/agent-fixture/broker-token:/run/tentaflake-pi-durable/broker-token:ro"
   ];
   manifestHost =
     runnable: volumes:
     evaluate {
       tentaflake = {
-        piRuntime = {
+        piDurableRuntime = {
           enable = true;
           transport = transport.version;
           package = pkgs.hello;
@@ -124,7 +124,7 @@ let
         agentDeclarations = [
           {
             inherit runnable;
-            adapter = "pi";
+            adapter = "pi-durable";
             name = "fixture";
             container = "agent-fixture";
             unit = "docker-agent-fixture.service";
@@ -155,28 +155,29 @@ let
     configuration:
     lib.splitString "\t" (
       lib.findFirst (line: lib.hasPrefix "agent\tagent-fixture\t" line)
-        (throw "Pi security manifest is missing agent-fixture")
+        (throw "Pi Durable security manifest is missing agent-fixture")
         (lib.splitString "\n" configuration.environment.etc."tentaflake/security.tsv".text)
     );
   mountsSafe = configuration: lib.elemAt (manifestAgent configuration) 10 == "true";
-  admittedManifest = manifestHost true piMounts;
-  stoppedManifest = manifestHost false piMounts;
-  changedMounts = from: to: map (lib.replaceStrings [ from ] [ to ]) piMounts;
+  admittedManifest = manifestHost true piDurableMounts;
+  stoppedManifest = manifestHost false piDurableMounts;
+  changedMounts = from: to: map (lib.replaceStrings [ from ] [ to ]) piDurableMounts;
   otherAgentMounts = changedMounts "/agent-fixture/" "/agent-other/";
   destinationDriftMounts = map (
-    mount: lib.replaceStrings [ ":/run/tentaflake-pi/" ] [ ":/run/tentaflake-pi/drift/" ] mount
-  ) piMounts;
-  writableTokenMounts = lib.tail piMounts;
+    mount:
+    lib.replaceStrings [ ":/run/tentaflake-pi-durable/" ] [ ":/run/tentaflake-pi-durable/drift/" ] mount
+  ) piDurableMounts;
+  writableTokenMounts = lib.tail piDurableMounts;
 in
 assert !(transport.supported defaultHost);
-assert !(defaultHost.virtualisation.docker.daemon.settings.runtimes ? runsc-pi);
+assert !(defaultHost.virtualisation.docker.daemon.settings.runtimes ? runsc-pi-durable);
 assert
   defaultHost.virtualisation.docker.daemon.settings.runtimes.runsc.path
   == lib.getExe' pkgs.gvisor "runsc";
 assert
-  piHost.virtualisation.docker.daemon.settings.runtimes.runsc
+  piDurableHost.virtualisation.docker.daemon.settings.runtimes.runsc
   == defaultHost.virtualisation.docker.daemon.settings.runtimes.runsc;
-assert transport.supported piHost;
+assert transport.supported piDurableHost;
 assert transport.supported podmanHost;
 assert !(transport.supported wrongHost);
 assert transport.supported docker;
@@ -194,18 +195,20 @@ assert
       "0:100000:65536"
     ];
   });
-assert rejects docker { tentaflake.piRuntime.transport = null; };
+assert rejects docker { tentaflake.piDurableRuntime.transport = null; };
 assert rejects docker {
-  virtualisation.docker.daemon.settings.runtimes.runsc-pi.path = "/bin/runsc";
+  virtualisation.docker.daemon.settings.runtimes.runsc-pi-durable.path = "/bin/runsc";
 };
 assert rejects docker {
-  virtualisation.docker.daemon.settings.runtimes.runsc-pi.runtimeArgs = [ "--host-uds=all" ];
+  virtualisation.docker.daemon.settings.runtimes.runsc-pi-durable.runtimeArgs = [ "--host-uds=all" ];
 };
 assert rejects docker { virtualisation.docker.daemon.settings."userns-remap" = "default"; };
 assert rejects docker { virtualisation.docker.rootless.enable = true; };
 assert rejects docker { virtualisation.docker.extraOptions = "--userns-remap=default"; };
 assert rejects docker { systemd.services.docker.serviceConfig.User = "operator"; };
-assert rejects docker { virtualisation.docker.daemon.settings."default-runtime" = "runsc-pi"; };
+assert rejects docker {
+  virtualisation.docker.daemon.settings."default-runtime" = "runsc-pi-durable";
+};
 assert rejects docker {
   virtualisation.docker.daemon.settings.runtimes.runsc.path = transport.path;
 };
@@ -225,7 +228,7 @@ assert rejects docker {
   };
 };
 assert rejects podman {
-  virtualisation.containers.containersConf.settings.engine.runtimes.runsc-pi = [
+  virtualisation.containers.containersConf.settings.engine.runtimes.runsc-pi-durable = [
     "/bin/runsc"
     "--host-uds=all"
   ];
@@ -234,7 +237,7 @@ assert rejects podman {
   virtualisation.containers.containersConf.settings.containers.userns = "auto";
 };
 assert rejects podman {
-  virtualisation.containers.containersConf.settings.engine.runtime = "runsc-pi";
+  virtualisation.containers.containersConf.settings.engine.runtime = "runsc-pi-durable";
 };
 assert rejects podman {
   virtualisation.containers.containersConf.settings.engine.runtimes.runsc = [ transport.path ];
@@ -247,11 +250,11 @@ assert rejects podman {
 };
 assert valid selected && valid selectedPodman;
 assert !(valid (apply "docker" "arbitrary"));
-assert lib.elem "--runtime=runsc-pi" selected.container.extraOptions;
+assert lib.elem "--runtime=runsc-pi-durable" selected.container.extraOptions;
 assert
   selectedPodman.container.preRunExtraOptions == [
     "--runtime"
-    "runsc-pi"
+    "runsc-pi-durable"
   ];
 assert lib.elem "--runtime=runsc" ordinary.container.extraOptions;
 assert selected.container.pull == "never";
@@ -266,29 +269,29 @@ assert lib.all (option: lib.elem option selected.container.extraOptions) [
 ];
 assert lib.assertMsg (
   lib.elemAt (manifestAgent admittedManifest) 11 == "true"
-) "Pi manifest fixture must satisfy the full runtime admission predicate";
+) "Pi Durable manifest fixture must satisfy the full runtime admission predicate";
 assert lib.assertMsg (mountsSafe admittedManifest)
-  "admitted Pi control and read-only token mounts must project mounts_safe=true";
+  "admitted Pi Durable control and read-only token mounts must project mounts_safe=true";
 assert lib.assertMsg (
   lib.elemAt (manifestAgent stoppedManifest) 11 == "false" && !mountsSafe stoppedManifest
-) "stopped Pi declarations must not receive runtime mount grants";
+) "stopped Pi Durable declarations must not receive runtime mount grants";
 assert lib.assertMsg (lib.all (
   mount: !mountsSafe (manifestHost true [ mount ])
-) otherAgentMounts) "Pi manifest must reject every other-agent control or token source";
-assert lib.assertMsg (lib.all (
-  mount: !mountsSafe (manifestHost true [ mount ])
-) destinationDriftMounts) "Pi manifest must reject destination drift for control and both tokens";
+) otherAgentMounts) "Pi Durable manifest must reject every other-agent control or token source";
+assert lib.assertMsg (lib.all (mount: !mountsSafe (manifestHost true [ mount ]))
+  destinationDriftMounts
+) "Pi Durable manifest must reject destination drift for control and both tokens";
 assert lib.assertMsg (lib.all (
   mount: !mountsSafe (manifestHost true [ (lib.replaceStrings [ ":ro" ] [ ":rw" ] mount) ])
-) writableTokenMounts) "Pi manifest must reject writable API and broker token mounts";
+) writableTokenMounts) "Pi Durable manifest must reject writable API and broker token mounts";
 assert lib.assertMsg (
   !mountsSafe (
     manifestHost true [
-      "/run/tentaflake-pi/agent-fixture/control:/run/tentaflake-pi/control:ro"
+      "/run/tentaflake-pi-durable/agent-fixture/control:/run/tentaflake-pi-durable/control:ro"
     ]
   )
-) "Pi manifest control mount grant must retain its exact writable mode";
-pkgs.runCommand "pi-runtime-evaluation" { } ''
+) "Pi Durable manifest control mount grant must retain its exact writable mode";
+pkgs.runCommand "pi-durable-runtime-evaluation" { } ''
   mkdir "$out"
   echo 'Configured transport only; disposable VM acceptance is separate.' > "$out/scope"
 ''

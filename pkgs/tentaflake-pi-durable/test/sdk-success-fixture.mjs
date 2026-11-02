@@ -16,7 +16,7 @@ import { Ledger } from '../ledger.mjs';
 process.umask(0o077);
 const [directory] = process.argv.slice(2);
 const originalFetch = globalThis.fetch, originalSpawn = childProcess.spawn;
-const researchCommand = '/nix/store/synthetic-pi-success/bin/research-client';
+const researchCommand = '/nix/store/synthetic-pi-durable-success/bin/research-client';
 const children = [], sends = [];
 const inputs = ['isolated-first-input', 'isolated-second-input', 'uncertain-third-input'];
 const outputs = ['first committed answer', 'second committed answer', 'not a committed answer'];

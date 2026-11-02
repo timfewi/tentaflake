@@ -793,7 +793,7 @@ fn parse_declared_runtime(value: &str, line: usize) -> Result<Option<DeclaredRun
         return Err(invalid());
     };
     if fields.len() != 2
-        || !matches!(name, "runsc" | "runsc-research" | "runsc-pi")
+        || !matches!(name, "runsc" | "runsc-research" | "runsc-pi-durable")
         || !path.rsplit_once("/bin/").is_some_and(|(root, binary)| {
             binary == name
                 && root.strip_prefix("/nix/store/").is_some_and(|item| {
@@ -3542,7 +3542,7 @@ mod tests {
     #[test]
     fn declared_runtime_is_exact_typed_and_never_inferred_from_a_name() {
         assert_eq!(parse_declared_runtime("-", 2).unwrap(), None);
-        for name in ["runsc", "runsc-research", "runsc-pi"] {
+        for name in ["runsc", "runsc-research", "runsc-pi-durable"] {
             let declared = test_declared_runtime(name);
             let path = format!("/nix/store/fixture/bin/{name}");
             let encoded = serde_json::json!({"name":name,"path":path}).to_string();
@@ -3566,7 +3566,13 @@ mod tests {
                 live_runtime_security(Some(name), "unknown", &declared),
                 LiveContainerState::Unknown
             );
-            for other in ["runsc", "runsc-research", "runsc-pi", "runc", "arbitrary"] {
+            for other in [
+                "runsc",
+                "runsc-research",
+                "runsc-pi-durable",
+                "runc",
+                "arbitrary",
+            ] {
                 if other != name {
                     assert_eq!(
                         live_runtime_security(Some(other), "docker", &declared),

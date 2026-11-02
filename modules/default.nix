@@ -5,7 +5,7 @@
 {
   imports = [
     ./agent-instances.nix
-    ../adapters/pi/options.nix
+    ../adapters/pi-durable/options.nix
     ./options.nix
     ./boot.nix
     ./backup.nix

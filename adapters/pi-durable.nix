@@ -11,7 +11,7 @@ let
         bundle = null;
         image = null;
       }
-      // (lib.attrByPath [ "tentaflake" "piRuntime" ] { } config);
+      // (lib.attrByPath [ "tentaflake" "piDurableRuntime" ] { } config);
       container = "agent-${args.name}";
       root = args.stateDir or "/var/lib/tentaflake/agents/${args.name}";
       broker = lib.attrByPath [ "tentaflake" "broker" "agents" container ] null config;
@@ -21,7 +21,7 @@ let
     policy.enable
     && lib.isDerivation policy.package
     && lib.isDerivation policy.bundle
-    && (import ../lib/piTransport.nix { inherit lib pkgs; }).configurationSupported config
+    && (import ../lib/piDurableTransport.nix { inherit lib pkgs; }).configurationSupported config
     && (policy.package.upstreamRevision or null) == "35dfa757378bd7a8570670e99c2687bdd1039a06"
     && (policy.bundle.runtimePackage or null) == policy.package
     && (policy.bundle.imageVerificationVersion or null) == 1
@@ -50,7 +50,7 @@ let
     preset = {
       schemaVersion = 1;
       identity = {
-        id = "pi";
+        id = "pi-durable";
         version = "1.4.0";
         status = "scaffold";
       };
@@ -92,10 +92,10 @@ let
         vendorAcceptance = "pending";
       };
     };
-    id = "pi";
-    displayName = "Pi";
-    reason = "Pi is blocked without an explicitly admitted pinned runner image bundle and exact broker/Research/worker/quota policy. Upstream close/resume can redispatch an uncertain model request; submission-wide quarantine and lifecycle acceptance evidence are required. See docs/agent-adapters.md.";
-    settingsReason = "Pi settings are unavailable until runtime acceptance.";
+    id = "pi-durable";
+    displayName = "Pi Durable";
+    reason = "Pi Durable is blocked without an explicitly admitted pinned runner image bundle and exact broker/Research/worker/quota policy. Upstream close/resume can redispatch an uncertain model request; submission-wide quarantine and lifecycle acceptance evidence are required. See docs/agent-adapters.md.";
+    settingsReason = "Pi Durable settings are unavailable until runtime acceptance.";
   };
 in
 scaffold
@@ -137,15 +137,15 @@ scaffold
     }@args:
     { config, ... }:
     if settings != { } then
-      throw "tentaflake: Pi has only fixed generated runtime configuration."
+      throw "tentaflake: Pi Durable has only fixed generated runtime configuration."
     else if
       !builtins.isString stateDir
       || builtins.match "/var/lib/[a-zA-Z0-9_-]+(/[a-zA-Z0-9_-]+)*" stateDir == null
     then
-      throw "tentaflake: Pi requires a normalized state directory below /var/lib."
+      throw "tentaflake: Pi Durable requires a normalized state directory below /var/lib."
     else
       let
-        enabled = lib.attrByPath [ "tentaflake" "piRuntime" "enable" ] false config;
+        enabled = lib.attrByPath [ "tentaflake" "piDurableRuntime" "enable" ] false config;
       in
       {
         # Module structure must not depend on config: it is collected before
@@ -155,16 +155,16 @@ scaffold
             assertions = [
               {
                 assertion = !enabled || admitted config args;
-                message = "tentaflake: Pi runtime admission requires package, bundle, image and exact broker/Research/worker/quota policy.";
+                message = "tentaflake: Pi Durable runtime admission requires package, bundle, image and exact broker/Research/worker/quota policy.";
               }
               {
                 assertion = enabled || !autoStart;
-                message = "tentaflake: unadmitted Pi must keep autoStart = false.";
+                message = "tentaflake: unadmitted Pi Durable must keep autoStart = false.";
               }
             ];
           }
           (lib.mkIf enabled (
-            (import ./pi/runtime.nix { inherit pkgs lib; } {
+            (import ./pi-durable/runtime.nix { inherit pkgs lib; } {
               inherit name stateDir autoStart;
             })
               { inherit config; }
