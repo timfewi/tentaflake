@@ -22,7 +22,7 @@ const RESOLVE_NO_SYMLINKS: u64 = 0x04;
 const COMPLETION_MARKER: &str = "/workspace/.tentaflake-worker-complete";
 // Directory components below input/artifacts, excluding their one wrapper.
 const MAX_TREE_DEPTH: usize = 128;
-// Pi's offline_worker schema uses the same bound; keep both producers admissible.
+// Pi Durable's offline_worker schema uses the same bound; keep both producers admissible.
 const MAX_ARGUMENT_UTF16_UNITS: usize = 4096;
 const WORKSPACE_INIT_SCRIPT: &str = r#"
 cp -R --no-preserve=ownership /input/. /workspace/
@@ -370,7 +370,7 @@ fn validate_request(config: &Config, request: &JobRequest) -> Result<()> {
     if request.argv.is_empty() || request.argv.len() > 128 {
         return Err("argv must contain between 1 and 128 entries".into());
     }
-    // Shared with Pi's offline_worker tool: arguments may be empty and are
+    // Shared with Pi Durable's offline_worker tool: arguments may be empty and are
     // bounded in UTF-16 code units, as JavaScript `String.length` counts them.
     if request.argv.iter().any(|value| {
         value.contains('\0') || value.encode_utf16().count() > MAX_ARGUMENT_UTF16_UNITS

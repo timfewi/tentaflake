@@ -37,7 +37,7 @@ jobs:
       integrations: ${{ steps.filter.outputs.integrations }}
       activity: ${{ steps.filter.outputs.activity }}
       workloads: ${{ steps.filter.outputs.workloads }}
-      pi: ${{ steps.filter.outputs.pi }}
+      pi-durable: ${{ steps.filter.outputs.pi-durable }}
       devcontainer: ${{ steps.filter.outputs.devcontainer }}
       selection: ${{ steps.filter.outputs.selection }}
       static: ${{ steps.filter.outputs.static }}
@@ -196,7 +196,7 @@ jobs:
           CHECK_INTEGRATIONS: ${{ needs.changes.outputs.integrations }}
           CHECK_ACTIVITY: ${{ needs.changes.outputs.activity }}
           CHECK_WORKLOADS: ${{ needs.changes.outputs.workloads }}
-          CHECK_PI: ${{ needs.changes.outputs.pi }}
+          CHECK_PI_DURABLE: ${{ needs.changes.outputs.pi-durable }}
           CHECK_RUST: ${{ needs.changes.outputs.rust }}
         run: |
           selected_checks=()
@@ -207,7 +207,7 @@ jobs:
             selected_checks+=(".#checks.x86_64-linux.image-pinning" ".#checks.x86_64-linux.agent-adapters" ".#checks.x86_64-linux.hardening-journald")
             selected_checks+=(".#checks.x86_64-linux.host-api" ".#checks.x86_64-linux.host-api-evaluation")
             selected_checks+=(".#checks.x86_64-linux.system-schema" ".#checks.x86_64-linux.control-evaluation" ".#checks.x86_64-linux.ci-vm-selection")
-            selected_checks+=(".#checks.x86_64-linux.pi-runtime-evaluation" ".#checks.x86_64-linux.local-image-proof")
+            selected_checks+=(".#checks.x86_64-linux.pi-durable-runtime-evaluation" ".#checks.x86_64-linux.local-image-proof")
           fi
           for crate in cli broker worker control integrations activity workloads; do
             variable="CHECK_${crate^^}"
@@ -218,9 +218,9 @@ jobs:
           if [[ "$CHECK_WORKER" == true ]]; then
             selected_checks+=(".#checks.x86_64-linux.tentaflake-worker-image")
           fi
-          if [[ "$CHECK_PI" == true ]]; then
-            selected_checks+=(".#checks.x86_64-linux.tentaflake-pi" ".#checks.x86_64-linux.tentaflake-pi-recovery" ".#checks.x86_64-linux.pi-runtime-module-graph")
-            selected_checks+=(".#packages.x86_64-linux.tentaflake-pi-image")
+          if [[ "$CHECK_PI_DURABLE" == true ]]; then
+            selected_checks+=(".#checks.x86_64-linux.tentaflake-pi-durable" ".#checks.x86_64-linux.tentaflake-pi-durable-recovery" ".#checks.x86_64-linux.pi-durable-runtime-module-graph")
+            selected_checks+=(".#packages.x86_64-linux.tentaflake-pi-durable-image")
           fi
           if [[ "$CHECK_RUST" == true ]]; then
             selected_checks+=(".#checks.x86_64-linux.rust-package-sources")
@@ -259,16 +259,16 @@ jobs:
         if: needs.changes.outputs.research == 'true'
         run: nix build --no-link -L .#checks.x86_64-linux.research-integration
 
-      # Component VMs: admitted Pi capsules and the workload observer, including
+      # Component VMs: admitted Pi Durable capsules and the workload observer, including
       # its 64-binding lease scale test. One VM at a time bounds runner load.
       - name: nix build (component VM tests)
-        if: needs.changes.outputs.pi == 'true' || needs.changes.outputs.workloads == 'true'
+        if: needs.changes.outputs.pi-durable == 'true' || needs.changes.outputs.workloads == 'true'
         env:
-          CHECK_PI: ${{ needs.changes.outputs.pi }}
+          CHECK_PI_DURABLE: ${{ needs.changes.outputs.pi-durable }}
           CHECK_WORKLOADS: ${{ needs.changes.outputs.workloads }}
         run: |
-          if [[ "$CHECK_PI" == true ]]; then
-            nix build --no-link -L .#checks.x86_64-linux.pi-runtime-vm
+          if [[ "$CHECK_PI_DURABLE" == true ]]; then
+            nix build --no-link -L .#checks.x86_64-linux.pi-durable-runtime-vm
           fi
           if [[ "$CHECK_WORKLOADS" == true ]]; then
             nix build --no-link -L .#checks.x86_64-linux.workload-mapping-vm

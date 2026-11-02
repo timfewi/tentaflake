@@ -3,7 +3,7 @@ let
   researchRuntime = pkgs.writeShellScriptBin "runsc-research" ''
     exec ${lib.getExe' pkgs.gvisor "runsc"} --host-uds=open "$@"
   '';
-  piRuntime = pkgs.writeShellScriptBin "runsc-pi" ''
+  piDurableRuntime = pkgs.writeShellScriptBin "runsc-pi-durable" ''
     exec ${lib.getExe' pkgs.gvisor "runsc"} --host-uds=all "$@"
   '';
   stock = {
@@ -15,10 +15,10 @@ let
     runtime = researchRuntime;
     path = lib.getExe researchRuntime;
   };
-  pi = {
-    name = "runsc-pi";
-    runtime = piRuntime;
-    path = lib.getExe piRuntime;
+  pi-durable = {
+    name = "runsc-pi-durable";
+    runtime = piDurableRuntime;
+    path = lib.getExe piDurableRuntime;
   };
   at =
     config: keys: fallback:
@@ -61,7 +61,7 @@ let
   elevatedRegistration =
     value:
     references research value
-    || references pi value
+    || references pi-durable value
     || (anyString (value: normalize value == stock.path) value && hostUdsArguments value);
   backend = config: at config [ "virtualisation" "oci-containers" "backend" ] "";
   registrations =
@@ -83,13 +83,13 @@ let
     config: selectedBackend: selector:
     builtins.elem selector [
       research.name
-      pi.name
+      pi-durable.name
     ]
     || elevatedRegistration selector
     || elevatedRegistration ((registrations config selectedBackend).${selector} or { });
 in
 rec {
-  inherit stock research pi;
+  inherit stock research pi-durable;
   selectorElevated = config: selector: selectorElevatedIn config (backend config) selector;
   stockSupported =
     config:
@@ -103,9 +103,9 @@ rec {
     config:
     let
       researchEnabled = at config [ "tentaflake" "research" "agents" ] { } != { };
-      piEnabled =
-        at config [ "tentaflake" "piRuntime" "enable" ] false
-        && at config [ "tentaflake" "piRuntime" "transport" ] null == "runsc-pi-v1";
+      piDurableEnabled =
+        at config [ "tentaflake" "piDurableRuntime" "enable" ] false
+        && at config [ "tentaflake" "piDurableRuntime" "transport" ] null == "runsc-pi-durable-v1";
     in
     lib.all
       (
@@ -117,8 +117,8 @@ rec {
           in
           if name == research.name then
             researchEnabled && value == expected selectedBackend research
-          else if name == pi.name then
-            piEnabled && value == expected selectedBackend pi
+          else if name == pi-durable.name then
+            piDurableEnabled && value == expected selectedBackend pi-durable
           else
             !elevatedRegistration value
         ) (builtins.attrNames (registrations config selectedBackend))

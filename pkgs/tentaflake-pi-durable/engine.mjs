@@ -72,7 +72,7 @@ export class Engine {
       execute: async (args, api) => {
         const run = this.requireActive();
         const operation = this.ledger.operation(run.id, taskIdentity(api.taskId), 'worker');
-        const id = `pi_${operation.replaceAll('-', '')}`;
+        const id = `pi_durable_${operation.replaceAll('-', '')}`;
         try { return { output: [{ type: 'text', text: JSON.stringify(await worker({ ...args, id, workspace: this.config.workspace, signal: run.controller.signal })) }] }; }
         catch (error) { this.ledger.uncertain(run.id); throw error; }
       },

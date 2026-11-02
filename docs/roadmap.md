@@ -12,7 +12,7 @@ This checkout is not a new published release; tags define released behavior.
 2. Complete actual vendor startup, model transport, Research discovery,
    execution mediation, lifecycle and restore acceptance for each runtime.
    Source fixtures alone do not establish support. OpenClaw remains a refusal
-   scaffold, and Pi one unless explicitly admitted; generic OCI remains offline
+   scaffold, and Pi Durable one unless explicitly admitted; generic OCI remains offline
    without accepted model/Research hooks.
 3. Improve bounded application readiness and diagnostics without replaying work
    or overriding explicit operator stops.

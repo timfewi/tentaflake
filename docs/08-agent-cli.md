@@ -69,7 +69,7 @@ separately; TOML accepts no credential contents, keys or provider configuration.
 model execution or remediation authority.
 
 Workload bindings are policy for existing runnable declarations, not declarations
-themselves. At most 64 bindings are accepted, only with Docker; stopped Pi and
+themselves. At most 64 bindings are accepted, only with Docker; stopped Pi Durable and
 OpenClaw adapters cannot be bound. Tenant/workload pairs must be unique, and all
 three identifiers are bounded to 64 ASCII letters, digits, underscores, hyphens
 and dots (a dot cannot be first). Unit names, engine endpoints, commands and
@@ -78,10 +78,10 @@ generation-authority initialization remain required.
 
 `ui`, `board`, `monitoring`, `securityObserver` and `llm` remain disabled-only
 until their public schema has implemented runtime backing.
-Pi `run_read`, `run_submit` and `run_stop` grants remain rejected. The public
-compiler currently receives only `pkgs` and `lib`, while the pinned Pi source,
+Pi Durable `run_read`, `run_submit` and `run_stop` grants remain rejected. The public
+compiler currently receives only `pkgs` and `lib`, while the pinned Pi Durable source,
 runtime package and verified image bundle are flake-local artifacts; no trusted
-artifact-selection input reaches this compiler. Public Pi entries therefore
+artifact-selection input reaches this compiler. Public Pi Durable entries therefore
 remain stopped/unreviewed, without accepting user-supplied packages, image
 selectors or Nix expressions to bypass admission.
 
@@ -100,7 +100,7 @@ uid = 62101
 
 Enablement requires 1–128 exact declared `agent-<name>` IDs with distinct UIDs in
 `1..4294967294`. Each entry accepts only `uid`. Unknown IDs, wildcard scopes,
-duplicate UIDs, the `dev` profile, stopped Pi/OpenClaw adapters and generic OCI
+duplicate UIDs, the `dev` profile, stopped Pi Durable/OpenClaw adapters and generic OCI
 without an accepted Research integration are rejected by both validators.
 Adapter support comes from the generated runtime catalog; the host module also
 checks the actual runnable adapter and exact read-only client/socket mounts.
@@ -233,7 +233,7 @@ name = "assistant"
 autoStart = false
 
 [[agents]]
-adapter = "pi"
+adapter = "pi-durable"
 name = "experiment"
 autoStart = false
 ```
@@ -293,7 +293,7 @@ The exact IDs are `agent-researcher` and `agent-legal`. These names are role
 labels only: they grant no Research, model, legal-advisory, connector or host API
 authority. The example contains no credentials, credential paths, provider
 settings or host-service grants, and uses no new schema fields or admission
-override. Hermes vendor acceptance remains pending; this is not an admitted Pi
+override. Hermes vendor acceptance remains pending; this is not an admitted Pi Durable
 runtime or evidence that either role can perform live work.
 
 To review it separately, save only the TOML block as `tentaflake.toml` in a
@@ -456,7 +456,7 @@ Evaluate and build the complete selected host, review the diff/assertions, and
 activate only with operator authorization. Balanced automatic startup requires
 the same ID's broker, worker, quota and Research declarations. `autoStart = false`
 does not prevent activation from creating declared worker services or quota
-filesystems. OpenClaw, and Pi without explicit host admission, create only
+filesystems. OpenClaw, and Pi Durable without explicit host admission, create only
 refusal units, not those runtime resources.
 
 After authorized activation, check `tentaflake status`, `tentaflake doctor

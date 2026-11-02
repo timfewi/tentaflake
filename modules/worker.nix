@@ -91,7 +91,7 @@ let
         maxRequestBytes = lib.mkOption {
           type = lib.types.ints.positive;
           default = 64 * 1024;
-          description = "Largest accepted request file; Pi's offline_worker tool requires at least 65536.";
+          description = "Largest accepted request file; Pi Durable's offline_worker tool requires at least 65536.";
         };
         maxInboxEntries = lib.mkOption {
           type = lib.types.ints.positive;
@@ -143,7 +143,7 @@ let
         maxTimeoutSeconds = lib.mkOption {
           type = lib.types.ints.positive;
           default = 3600;
-          description = "Largest accepted job timeout; Pi's offline_worker tool requires at least 3600.";
+          description = "Largest accepted job timeout; Pi Durable's offline_worker tool requires at least 3600.";
         };
         memory = lib.mkOption {
           type = lib.types.str;

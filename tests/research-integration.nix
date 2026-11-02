@@ -78,9 +78,9 @@ let
             child.kill()
             child.wait()
   '';
-  piProbe = pkgs.writeText "pi-research-probe.mjs" ''
+  piDurableProbe = pkgs.writeText "pi-durable-research-probe.mjs" ''
     import assert from 'node:assert/strict';
-    import { Research } from '/pi-runner/mediation.mjs';
+    import { Research } from '/pi-durable-runner/mediation.mjs';
     assert.equal(process.getuid(), Number(process.argv[2]));
     const research = new Research(process.argv[3]);
     try {
@@ -238,7 +238,7 @@ pkgs.testers.runNixOSTest {
         argv = ["docker", "run", "--rm", "--runtime=runsc-research", "--network=none", "--read-only", "--user", f"{uid}:{gid}",
                 "--cap-drop=ALL", "--security-opt=no-new-privileges:true", "--security-opt=apparmor=docker-default",
                 "--pids-limit=128", "--memory=256m", "--tmpfs=/run:rw,nosuid,nodev,noexec,size=16m"]
-        for mount in mounts[name] + ["${probe}:/research-probe.py:ro", "${stockRuntimeProbe}:/stock-runtime-probe.py:ro", "${piProbe}:/pi-research-probe.mjs:ro", "${../pkgs/tentaflake-pi}:/pi-runner:ro"]:
+        for mount in mounts[name] + ["${probe}:/research-probe.py:ro", "${stockRuntimeProbe}:/stock-runtime-probe.py:ro", "${piDurableProbe}:/pi-durable-research-probe.mjs:ro", "${../pkgs/tentaflake-pi-durable}:/pi-durable-runner:ro"]:
             argv += ["--volume", mount]
         argv += ["tentaflake-research-fixture:test", "/bin/python3", "/research-probe.py", str(uid), client]
         stock = argv.copy()
@@ -246,7 +246,7 @@ pkgs.testers.runNixOSTest {
         stock[-4:] = ["/bin/python3", "/stock-runtime-probe.py", str(uid), client]
         machine.succeed(shlex.join(stock))
         machine.succeed(shlex.join(argv))
-        argv[-4:] = ["/bin/node", "/pi-research-probe.mjs", str(uid), client]
+        argv[-4:] = ["/bin/node", "/pi-durable-research-probe.mjs", str(uid), client]
         machine.succeed(shlex.join(argv))
   '';
 }

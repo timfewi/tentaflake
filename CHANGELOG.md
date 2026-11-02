@@ -18,6 +18,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Project the consumer example's declared `stateVersion` into the effective
   NixOS setting without importing the upstream root configuration or inventory.
 ### Breaking changes
+- Rename the Pi Durable adapter from `pi` to `pi-durable`, its host options to
+  `tentaflake.piDurableRuntime`, and its packages, commands, runtime transport
+  and temporary socket paths consistently. Update consumer declarations and
+  admission configuration together; the old adapter name is rejected.
 - Make schema-v1 `tentaflake.toml` the sole public desired-system source.
   The file-only `systemFromData` compiler returns one NixOS module, not a list.
   Offline `config validate|normalize|migrate` share the versioned schema.
@@ -56,7 +60,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   VPN/service identities, readiness, credentials and provider admission remain
   explicit host policy; names and offline validation confer no runtime readiness.
   Research grants select the named connect-only `runsc-research` runtime per
-  capsule without changing stock `runsc`, engine defaults or Pi's separate
+  capsule without changing stock `runsc`, engine defaults or Pi Durable's separate
   reviewed transport. Canonical backend registrations and instance admission
   reject elevated aliases, direct-path bypasses and global defaults without
   banning unrelated consumer runtimes. Security manifests retain exact configured
@@ -75,13 +79,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Add an opt-in Unix host API with canonical agent inventory, host health,
   separately enabled bounded logs and fixed lifecycle actions. Durable request
   receipts prevent automatic replay after uncertain action outcomes. A separate
-  compatible web UI can use host-only mode without task migration or Pi.
+  compatible web UI can use host-only mode without task migration or Pi Durable.
 - Add an opt-in strict local-text LLM cost envelope with explicit one-time
   budget provisioning, exclusive state ownership, checksum-protected durable
   reservations, uncertain-hold rollover blocking and clock-rollback refusal.
   Provider pricing or hard caps remain prerequisites for paid admission; the
   ordinary request policy remains unchanged.
-- Retain stopped public Pi declarations while adding a separately admitted,
+- Retain stopped public Pi Durable declarations while adding a separately admitted,
   opt-in pinned Pi Durable runner with immutable image/transport checks,
   durable no-replay receipts and broker/Research/offline-worker mediation.
   Exact-peer host API grants separately scope runner reads, submissions and stop.
@@ -97,7 +101,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   succeeds, classify Responses outcomes using their own terminal envelope, and
   publish workload manifests for every supported scope-ID length.
 - Reject onboarding state-path overlap against both installed and existing desired
-  instances before publication. Classify only exact admitted per-agent Pi control
+  instances before publication. Classify only exact admitted per-agent Pi Durable control
   and read-only credential mounts as safe in security manifests.
 - Let desired-system settings override consumer-example bootstrap defaults, and
   execute all new Rust package suites and explicit non-VM checks in CI dispatch.
@@ -133,10 +137,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   generated-flake, package/image/system builds and VM tests; manual dispatch
   remains for re-runs and full inventories. Route `schema/**` to the CLI Rust
   corpus and schema evaluation, and Nix schema parser changes to evaluation.
-- Align the offline worker with Pi's `offline_worker` tool: empty arguments are
+- Align the offline worker with Pi Durable's `offline_worker` tool: empty arguments are
   valid, arguments are bounded to 4096 UTF-16 code units, and the default
-  `maxTimeoutSeconds` rises from 900 to 3600. Pi admission now requires a worker
-  admitting 3600-second timeouts and 65536-byte requests, so a call Pi accepts
+  `maxTimeoutSeconds` rises from 900 to 3600. Pi Durable admission now requires a worker
+  admitting 3600-second timeouts and 65536-byte requests, so a call Pi Durable accepts
   can no longer be silently discarded. Deployments relying on the old 900-second
   default must set it explicitly; the host API applies the same argument bounds.
 - Copy `host-api/` into installer-created systems so an enabled host API builds;
@@ -147,14 +151,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   second verification. Even with every command at its one-second deadline, all
   64 bindings are re-stamped inside the 10-second lease; a compile-time budget
   check and a 64-binding latency regression keep it that way.
-- Expose the Pi runtime and workload-mapping VM tests as flake checks, add a
+- Expose the Pi Durable runtime and workload-mapping VM tests as flake checks, add a
   64-binding workload lease scale VM, and run them plus the immutable control
   store contract in CI when their paths change. Fix CI-exposed test races in the
   CI selection fileset, host API client and CLI fixture scripts.
 - Keep `docs/` to inventoried product guides (checked by `just fast` and CI);
   move planning, backlog, prompt and archive-comparison notes and a private
   consumer's integration test out of the repository. Working notes belong in
-  the ignored `.scratch/` directory. Describe optional Pi admission accurately.
+  the ignored `.scratch/` directory. Describe optional Pi Durable admission accurately.
 
 ## [0.5.0] - Archived unreleased development
 

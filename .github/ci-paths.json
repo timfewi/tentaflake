@@ -204,15 +204,15 @@
       "static"
     ]
   },
-  "pi": {
+  "pi-durable": {
     "paths": [
-      "pkgs/tentaflake-pi/**",
-      "lib/piTransport.nix",
-      "tests/pi-runtime-*.nix",
+      "pkgs/tentaflake-pi-durable/**",
+      "lib/piDurableTransport.nix",
+      "tests/pi-durable-runtime-*.nix",
       "tests/local-image-proof.nix"
     ],
     "checks": [
-      "pi",
+      "pi-durable",
       "evaluate",
       "static"
     ]
@@ -315,7 +315,7 @@
       "integrations",
       "activity",
       "workloads",
-      "pi",
+      "pi-durable",
       "rust",
       "devcontainer",
       "selection",

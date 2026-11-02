@@ -32,7 +32,7 @@
         "type": "github"
       }
     },
-    "pi-upstream": {
+    "pi-durable-upstream": {
       "flake": false,
       "locked": {
         "lastModified": 1793402276,
@@ -74,7 +74,7 @@
     "root": {
       "inputs": {
         "nixpkgs": "nixpkgs",
-        "pi-upstream": "pi-upstream",
+        "pi-durable-upstream": "pi-durable-upstream",
         "tentaflake-research": "tentaflake-research"
       }
     },

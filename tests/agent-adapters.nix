@@ -73,7 +73,7 @@ let
     (instance "hermes" "zeroclaw-named")
     (instance "zeroclaw" "hermes-named")
     (instance "openclaw" "assistant")
-    (instance "pi" "pilot")
+    (instance "pi-durable" "pilot")
   ];
   containers = config.virtualisation.oci-containers.containers;
   records = config.tentaflake.agentInstances;
@@ -233,7 +233,7 @@ let
   );
   scaffoldsOnly = eval [
     (instance "openclaw" "refusal-openclaw")
-    (instance "pi" "refusal-pi")
+    (instance "pi-durable" "refusal-pi-durable")
   ];
   hasParentGuard = service: lib.hasInfix "refusing unsafe agent parent" service.preStart;
 in
@@ -455,7 +455,7 @@ assert lib.all
   )
   [
     "openclaw"
-    "pi"
+    "pi-durable"
   ];
 assert containers.agent-custom.environment.HERMES_HOME == "/state";
 assert lib.elem "/var/lib/legacy-home:/state:rw" containers.agent-custom.volumes;
@@ -472,7 +472,7 @@ assert lib.all (
   unit:
   !(lib.hasInfix "zeroclaw" unit)
   && !(lib.hasInfix "openclaw" unit)
-  && !(lib.any (backend: lib.hasPrefix "${backend}-pi-" unit) [
+  && !(lib.any (backend: lib.hasPrefix "${backend}-pi-durable-" unit) [
     "docker"
     "podman"
   ])
@@ -489,7 +489,7 @@ assert
     "generic"
     "hermes"
     "openclaw"
-    "pi"
+    "pi-durable"
     "zeroclaw"
   ];
 assert rejects (contract "broken" { });
@@ -606,7 +606,7 @@ assert rejects
 assert rejects
   (eval [
     (mkAgent {
-      adapter = "pi";
+      adapter = "pi-durable";
       name = "reserved-tenant";
       autoStart = false;
       stateDir = "/var/lib/shared-agent-state";
@@ -649,7 +649,7 @@ assert
   let
     requested = eval [
       (mkAgent {
-        adapter = "pi";
+        adapter = "pi-durable";
         name = "invalid";
         autoStart = true;
       })
@@ -658,7 +658,7 @@ assert
   !requested.tentaflake.agentInstances.agent-invalid.runnable
   && !(requested.virtualisation.oci-containers.containers ? agent-invalid)
   && requested.systemd.services.docker-agent-invalid.wantedBy == [ ]
-  && lib.any (lib.hasInfix "unadmitted Pi must keep autoStart = false.") (failures requested);
+  && lib.any (lib.hasInfix "unadmitted Pi Durable must keep autoStart = false.") (failures requested);
 assert denies "credential" { envFile = "/run/provider.env"; };
 assert denies "secret-like settings" { settings.model.api_key = "fixture-only"; };
 assert denies "publish container ports" { extraContainerConfig.ports = [ "8080:8080" ]; };

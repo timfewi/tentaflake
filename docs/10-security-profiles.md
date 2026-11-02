@@ -5,8 +5,8 @@
 Installed hosts default to `balanced`. TOML-defined instances use the internal
 builder and shared containment policy on final merged OCI configurations.
 OpenClaw remains a stopped scaffold without containers or operational support.
-Pi is the same stopped scaffold unless the host explicitly admits its reviewed
-runtime; see [Pi admission](agent-adapters.md).
+Pi Durable is the same stopped scaffold unless the host explicitly admits its reviewed
+runtime; see [Pi Durable admission](agent-adapters.md).
 The policy rejects unsafe configurations during NixOS evaluation instead of
 silently weakening them. `strict` also fails because no tested separate-kernel boundary
 is implemented yet.
@@ -41,7 +41,7 @@ overrides cannot bypass the final checks. It enforces:
 
 - gVisor selected explicitly for Docker or Podman: stock `runsc` for ordinary
   capsules, named `runsc-research` only with the exact agent's Research grant,
-  or separately admitted `runsc-pi` for a reviewed Pi runtime;
+  or separately admitted `runsc-pi-durable` for a reviewed Pi Durable runtime;
 - explicit non-root UID/GID and `privileged=false`;
 - `cap-drop=ALL`, `no-new-privileges`, and read-only root;
 - the runtime default seccomp policy with every unconfined override rejected;
@@ -203,7 +203,7 @@ Podman's documented `OCIRuntime` reports only a name: a different name is unsafe
 but a matching name remains unknown without independent executable-path evidence.
 An unexpected path-shaped value is unsupported schema evidence, not proof of
 either safety or drift.
-`runsc`, `runsc-research` and `runsc-pi` are distinct capabilities, never
+`runsc`, `runsc-research` and `runsc-pi-durable` are distinct capabilities, never
 interchangeable runtime aliases. Older records lacking this evidence remain
 live-state unknown (`TFSEC-033`), even if an inspected name happens to be
 `runsc`; regenerate them through an authorized host update.
@@ -211,7 +211,7 @@ Unknown runtime evidence does not suppress other live checks: an observed
 privilege, mount, network or resource violation still yields unsafe drift.
 
 Secure agents require the canonical, argument-free stock `runsc` mapping in the
-active Docker or Podman backend. Elevated Research/Pi wrappers cannot be
+active Docker or Podman backend. Elevated Research/Pi Durable wrappers cannot be
 registered through aliases, selected as global defaults, or selected directly
 by an ungranted container. Runtime selectors for managed agents must retain
 their exact admitted name and instance. Independent host runtime registrations,

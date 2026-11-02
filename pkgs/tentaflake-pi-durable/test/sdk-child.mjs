@@ -66,7 +66,7 @@ async function runnerFixture(mode) {
     return stat.dev === tokenStat.dev && stat.ino === tokenStat.ino
       ? Object.assign(Object.create(stat), { uid: 0 }) : stat;
   };
-  const researchCommand = '/nix/store/synthetic-pi-test/bin/research-client';
+  const researchCommand = '/nix/store/synthetic-pi-durable-test/bin/research-client';
   childProcess.spawn = (command, args, options) => {
     assert.equal(command, researchCommand);
     assert.deepEqual(args, ['--socket', '/run/tentaflake-research/socket']);

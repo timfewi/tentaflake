@@ -14,7 +14,7 @@ import { openaiProvider } from '@earendil-works/pi-ai/providers/openai';
 
 for (const interruption of ['crash', 'close', 'restored-crash', 'restored-close']) {
   test(`real SDK ${interruption} after broker dispatch never reopens uncertain work`, { timeout: 20000 }, async () => {
-    const directory = mkdtempSync(join(tmpdir(), 'pi-sdk-')); chmodSync(directory, 0o700);
+    const directory = mkdtempSync(join(tmpdir(), 'pi-durable-sdk-')); chmodSync(directory, 0o700);
     writeFileSync(join(directory, 'virtual-key'), 'synthetic-virtual-key', { mode: 0o600 });
     let sends = 0, observed;
     const dispatched = new Promise(resolve => { observed = resolve; });
@@ -69,7 +69,7 @@ for (const interruption of ['crash', 'close', 'restored-crash', 'restored-close'
 // child close; synthetic Research/abort transport only, with no provider dispatch.
 for (const mode of ['idle', 'sessions', 'already-closed', 'sdk-error', 'storage-error', 'both-errors', 'cancel-error', 'cancel-sdk-error']) {
   test(`real runner shutdown: ${mode}`, { timeout: 20000 }, async t => {
-    const directory = mkdtempSync(join(tmpdir(), 'pi-stop-')); chmodSync(directory, 0o700);
+    const directory = mkdtempSync(join(tmpdir(), 'pi-durable-stop-')); chmodSync(directory, 0o700);
     mkdirSync(join(directory, 'runtime'), { mode: 0o710 });
     chmodSync(join(directory, 'runtime'), 0o710);
     mkdirSync(join(directory, 'workspace'), { mode: 0o700 });

@@ -108,7 +108,7 @@ class CiSelection(unittest.TestCase):
     def test_shared_security_and_unknown_paths_require_both(self):
         for name in ("modules/security.nix", "lib/constants.nix", "lib/control-data.md", "flake.nix",
                      "adapters/default.nix", "adapters/hermes.nix", "adapters/zeroclaw.nix",
-                     "adapters/openclaw.nix", "adapters/pi.nix", "tests/agent-adapters.nix",
+                     "adapters/openclaw.nix", "adapters/pi-durable.nix", "tests/agent-adapters.nix",
                      "new-component/config"):
             with self.subTest(name=name):
                 base = self.git("rev-parse", "HEAD")
@@ -183,17 +183,17 @@ class CiSelection(unittest.TestCase):
                 self.assertEqual(select(base, self.commit(), self.repository),
                                  {"workloads", "evaluate", "static"})
 
-    def test_pi_sources_select_non_vm_gates(self):
-        for name in ("pkgs/tentaflake-pi/default.nix", "lib/piTransport.nix",
-                     "tests/pi-runtime-evaluation.nix", "tests/pi-runtime-vm.nix",
+    def test_pi_durable_sources_select_non_vm_gates(self):
+        for name in ("pkgs/tentaflake-pi-durable/default.nix", "lib/piDurableTransport.nix",
+                     "tests/pi-durable-runtime-evaluation.nix", "tests/pi-durable-runtime-vm.nix",
                      "tests/local-image-proof.nix"):
             with self.subTest(name=name):
                 base = self.git("rev-parse", "HEAD")
                 self.write(name)
                 affected = select(base, self.commit(), self.repository)
-                self.assertEqual(affected, {"pi", "evaluate", "static"})
+                self.assertEqual(affected, {"pi-durable", "evaluate", "static"})
                 selected = execution(affected)
-                self.assertTrue(selected["pi"])
+                self.assertTrue(selected["pi-durable"])
                 self.assertTrue(selected["evaluate"])
                 self.assertTrue(selected["builds"])
                 self.assertFalse(selected["runtime"])
@@ -385,7 +385,7 @@ class WorkflowPolicy(unittest.TestCase):
         self.assertEqual(len(steps), 1)
         environment = os.environ.copy()
         for variable, check in re.findall(
-                r"(?m)^          (CHECK_[A-Z_]+): \$\{\{ needs\.changes\.outputs\.([a-z]+) \}\}$",
+                r"(?m)^          (CHECK_[A-Z_]+): \$\{\{ needs\.changes\.outputs\.([a-z][a-z-]*) \}\}$",
                 steps[0]):
             self.assertRegex(
                 workflow,
@@ -428,17 +428,17 @@ class WorkflowPolicy(unittest.TestCase):
                 self.assertTrue(all(call[:2] == ["build", "--no-link"] for call in calls))
                 self.assertTrue(all(len(call[2:]) <= 4 for call in calls))
 
-    def test_pi_changes_execute_recovery_module_graph_and_image_builds(self):
+    def test_pi_durable_changes_execute_recovery_module_graph_and_image_builds(self):
         calls = self.run_step(
-            "nix build (non-VM checks)", execution({"pi", "evaluate", "static"}))
+            "nix build (non-VM checks)", execution({"pi-durable", "evaluate", "static"}))
         targets = {arg for call in calls for arg in call[2:]}
         self.assertTrue({
-            ".#checks.x86_64-linux.tentaflake-pi",
-            ".#checks.x86_64-linux.tentaflake-pi-recovery",
-            ".#checks.x86_64-linux.pi-runtime-evaluation",
-            ".#checks.x86_64-linux.pi-runtime-module-graph",
+            ".#checks.x86_64-linux.tentaflake-pi-durable",
+            ".#checks.x86_64-linux.tentaflake-pi-durable-recovery",
+            ".#checks.x86_64-linux.pi-durable-runtime-evaluation",
+            ".#checks.x86_64-linux.pi-durable-runtime-module-graph",
             ".#checks.x86_64-linux.local-image-proof",
-            ".#packages.x86_64-linux.tentaflake-pi-image",
+            ".#packages.x86_64-linux.tentaflake-pi-durable-image",
         } <= targets)
         self.assertTrue(all(len(call[2:]) <= 4 for call in calls))
 
@@ -452,20 +452,20 @@ class WorkflowPolicy(unittest.TestCase):
         self.assertEqual(actual, {
             "tentaflake-cli", "tentaflake-broker", "tentaflake-worker",
             "tentaflake-control", "tentaflake-integrations", "tentaflake-activity",
-            "tentaflake-workloads", "tentaflake-worker-image", "tentaflake-pi",
-            "tentaflake-pi-recovery", "tentaflake-pi-image",
-            "pi-runtime-evaluation", "pi-runtime-module-graph",
+            "tentaflake-workloads", "tentaflake-worker-image", "tentaflake-pi-durable",
+            "tentaflake-pi-durable-recovery", "tentaflake-pi-durable-image",
+            "pi-durable-runtime-evaluation", "pi-durable-runtime-module-graph",
             "local-image-proof", "host-api", "host-api-evaluation", "control-evaluation",
             "devcontainer-cli", "ci-vm-selection", "rust-package-sources", "system-schema",
             "image-pinning", "hardening-journald", "agent-adapters", "module-evaluation",
             "research-policy",
         })
 
-    def test_component_vms_follow_pi_and_workload_selection(self):
+    def test_component_vms_follow_pi_durable_and_workload_selection(self):
         for selected, expected in (
-            ({"pi"}, ["pi-runtime-vm"]),
+            ({"pi-durable"}, ["pi-durable-runtime-vm"]),
             ({"workloads", "rust"}, ["workload-mapping-vm", "workload-mapping-scale-vm"]),
-            (CHECKS, ["pi-runtime-vm", "workload-mapping-vm", "workload-mapping-scale-vm"]),
+            (CHECKS, ["pi-durable-runtime-vm", "workload-mapping-vm", "workload-mapping-scale-vm"]),
         ):
             with self.subTest(selected=sorted(selected)):
                 calls = self.run_step("nix build (component VM tests)", execution(selected))

@@ -280,7 +280,7 @@ fn stats_omit_stopped_scaffolds_but_keep_real_and_unmanaged_agents() {
     fake_backend(&fixture);
     fs::write(
         fixture.0.join("agents.tsv"),
-        "pi\tpilot\tagent-pilot\tdocker-agent-pilot.service\t/var/lib/tentaflake/agents/pilot\tfalse\n\
+        "pi-durable\tpilot\tagent-pilot\tdocker-agent-pilot.service\t/var/lib/tentaflake/agents/pilot\tfalse\n\
          future-runtime\tchat\tagent-chat\tdocker-agent-chat.service\t/var/lib/tentaflake/agents/chat\tfalse\n\
          generic\tworker\tagent-worker\tdocker-agent-worker.service\t/var/lib/tentaflake/agents/worker\ttrue\n\
          generic\tparked\tagent-parked\tdocker-agent-parked.service\t/var/lib/tentaflake/agents/parked\tfalse\n\
@@ -310,7 +310,7 @@ fn scaffold_only_stats_and_container_commands_never_invoke_backend() {
     fake_backend(&fixture);
     fs::write(
         fixture.0.join("agents.tsv"),
-        "pi\tpilot\tpi-pilot\tdocker-pi-pilot.service\t/var/lib/pi-pilot\tfalse\n\
+        "pi-durable\tpilot\tpi-durable-pilot\tdocker-pi-durable-pilot.service\t/var/lib/pi-durable-pilot\tfalse\n\
          openclaw\tchat\topenclaw-chat\tdocker-openclaw-chat.service\t/var/lib/openclaw-chat\tfalse\n",
     )
     .unwrap();

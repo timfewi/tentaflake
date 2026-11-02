@@ -251,7 +251,7 @@ let
   ungrantedPi = evaluateDeclarative {
     inherit (host) services;
     virtualisation.oci-containers.containers.agent-offline.extraOptions = lib.mkForce [
-      "--runtime=runsc-pi"
+      "--runtime=runsc-pi-durable"
     ];
   };
   podmanUngrantedPi = evaluateDeclarative {
@@ -259,7 +259,7 @@ let
     virtualisation.oci-containers.backend = lib.mkForce "podman";
     virtualisation.oci-containers.containers.agent-offline.preRunExtraOptions = lib.mkForce [
       "--runtime"
-      "runsc-pi"
+      "runsc-pi-durable"
     ];
   };
   ungrantedDirectPath = evaluateDeclarative {
@@ -298,7 +298,7 @@ let
     virtualisation.oci-containers.containers.consumer = {
       image = "registry.example.invalid/fixture@sha256:${lib.concatStrings (lib.replicate 64 "a")}";
       autoStart = false;
-      extraOptions = [ "--runtime=${runtimes.pi.path}" ];
+      extraOptions = [ "--runtime=${runtimes.pi-durable.path}" ];
     };
   };
 in
@@ -425,7 +425,7 @@ assert runtimePolicyValid "docker" false "runsc";
 assert !(runtimePolicyValid "docker" false "runsc-research");
 assert !(runtimePolicyValid "docker" true "runsc");
 assert !(runtimePolicyValid "docker" true "arbitrary");
-assert !(runtimePolicyValid "docker" true "runsc-pi");
+assert !(runtimePolicyValid "docker" true "runsc-pi-durable");
 assert denies "exact per-agent runtime registration" runtimeOverride;
 assert denies "exact per-agent runtime registration" runtimeArguments;
 assert denies "exact per-agent runtime registration" runtimeGlobalDefault;
@@ -463,7 +463,7 @@ assert
   });
 assert
   !(registrationAccepts podmanDeclarative {
-    virtualisation.docker.daemon.settings.runtimes.inactive-alias.path = runtimes.pi.path;
+    virtualisation.docker.daemon.settings.runtimes.inactive-alias.path = runtimes.pi-durable.path;
   });
 assert
   !(registrationAccepts declarative {
@@ -499,22 +499,22 @@ assert
 assert
   !(registrationAccepts podmanDeclarative {
     virtualisation.containers.containersConf.settings.engine = {
-      runtimes.alias = [ runtimes.pi.path ];
+      runtimes.alias = [ runtimes.pi-durable.path ];
       runtime = "alias";
     };
   });
 assert runtimes.selectorElevated declarative transport.path;
-assert runtimes.selectorElevated declarative runtimes.pi.path;
+assert runtimes.selectorElevated declarative runtimes.pi-durable.path;
 assert !runtimes.selectorElevated declarative "consumer";
 assert
   runtimes.selectors {
     extraOptions = [ "--runtime=${transport.path}" ];
     preRunExtraOptions = [
       "--runtime"
-      "runsc-pi"
+      "runsc-pi-durable"
     ];
   } == [
     transport.path
-    "runsc-pi"
+    "runsc-pi-durable"
   ];
 pkgs.runCommand "tentaflake-research-policy" { } "touch $out"

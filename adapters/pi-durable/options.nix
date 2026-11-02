@@ -1,16 +1,16 @@
 { lib, ... }:
 {
-  options.tentaflake.piRuntime = {
+  options.tentaflake.piDurableRuntime = {
     enable = lib.mkEnableOption "the source-qualified Pi Durable runner with an explicitly admitted immutable image bundle";
     transport = lib.mkOption {
-      type = lib.types.nullOr (lib.types.enum [ "runsc-pi-v1" ]);
+      type = lib.types.nullOr (lib.types.enum [ "runsc-pi-durable-v1" ]);
       default = null;
       description = "Explicit opt-in to the reviewed rootful gVisor host Unix transport. Configuration is not runtime acceptance.";
     };
     package = lib.mkOption {
       type = lib.types.nullOr lib.types.package;
       default = null;
-      description = "Reviewed tentaflake-pi package from the exact pinned SDK source; never an instance definition.";
+      description = "Reviewed tentaflake-pi-durable package from the exact pinned SDK source; never an instance definition.";
     };
     bundle = lib.mkOption {
       type = lib.types.nullOr lib.types.package;

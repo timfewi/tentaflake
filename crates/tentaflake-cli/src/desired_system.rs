@@ -397,12 +397,12 @@ fn validate_services(value: &Value, agents: &[Value], schema: &Value) -> Result<
                 id.strip_prefix("agent-")
                     .is_some_and(|name| agent["name"] == name)
             });
-            if agent.is_none_or(|agent| agent["adapter"] == "pi" || agent["adapter"] == "openclaw")
-                || !scopes.insert((
-                    binding["tenant_id"].as_str().unwrap(),
-                    binding["workload_id"].as_str().unwrap(),
-                ))
-            {
+            if agent.is_none_or(|agent| {
+                agent["adapter"] == "pi-durable" || agent["adapter"] == "openclaw"
+            }) || !scopes.insert((
+                binding["tenant_id"].as_str().unwrap(),
+                binding["workload_id"].as_str().unwrap(),
+            )) {
                 return Err(
                     "workload binding requires an unambiguous declared runnable agent".into(),
                 );
@@ -794,7 +794,7 @@ mod tests {
         assert!(migrate(br#"{"schemaVersion":1,"agents":[],"agents":[]}"#, true).is_err());
         assert!(
             migrate(
-                br#"{"schemaVersion":1,"agents":[{"name":"first","name":"last","adapter":"pi"}]}"#,
+                br#"{"schemaVersion":1,"agents":[{"name":"first","name":"last","adapter":"pi-durable"}]}"#,
                 true
             )
             .is_err()

@@ -112,7 +112,7 @@ let
     config = inspectedWorker;
     inherit (pkgs) lib;
   };
-  piTransport = import ../lib/piTransport.nix {
+  piDurableTransport = import ../lib/piDurableTransport.nix {
     inherit pkgs;
     inherit (pkgs) lib;
   };
@@ -122,12 +122,12 @@ let
     evaluate {
       tentaflake = {
         hostApi.enable = true;
-        piRuntime = {
+        piDurableRuntime = {
           inherit enable;
-          transport = if transportEnabled then piTransport.version else null;
+          transport = if transportEnabled then piDurableTransport.version else null;
           package = pkgs.hello;
           image = "localhost/fixture:reviewed";
-          bundle = pkgs.runCommand "synthetic-pi-bundle" {
+          bundle = pkgs.runCommand "synthetic-pi-durable-bundle" {
             passthru = {
               imageVerificationVersion = 1;
               imageSelector = selector;
@@ -157,16 +157,18 @@ let
             inherit extraOptions;
           };
         };
-        docker.daemon.settings.runtimes.runsc-pi.path = piTransport.path;
+        docker.daemon.settings.runtimes.runsc-pi-durable.path = piDurableTransport.path;
       };
     };
-  admittedRunner = runnerHost "pi" true true "localhost/fixture:reviewed" true [ ];
-  stoppedRunner = runnerHost "pi" false true "localhost/fixture:reviewed" true [ ];
-  disabledRunner = runnerHost "pi" true false "localhost/fixture:reviewed" true [ ];
+  admittedRunner = runnerHost "pi-durable" true true "localhost/fixture:reviewed" true [ ];
+  stoppedRunner = runnerHost "pi-durable" false true "localhost/fixture:reviewed" true [ ];
+  disabledRunner = runnerHost "pi-durable" true false "localhost/fixture:reviewed" true [ ];
   otherRunner = runnerHost "hermes" true true "localhost/fixture:reviewed" true [ ];
-  unreviewedRunner = runnerHost "pi" true true "localhost/fixture:other" true [ ];
-  unsupportedRunner = runnerHost "pi" true true "localhost/fixture:reviewed" false [ ];
-  remappedRunner = runnerHost "pi" true true "localhost/fixture:reviewed" true [ "--userns=private" ];
+  unreviewedRunner = runnerHost "pi-durable" true true "localhost/fixture:other" true [ ];
+  unsupportedRunner = runnerHost "pi-durable" true true "localhost/fixture:reviewed" false [ ];
+  remappedRunner = runnerHost "pi-durable" true true "localhost/fixture:reviewed" true [
+    "--userns=private"
+  ];
   generatedConfig =
     configuration:
     pkgs.lib.last (
@@ -261,9 +263,9 @@ pkgs.runCommand "tentaflake-host-api-evaluation" { } ''
   with open(sys.argv[1]) as source:
       assert json.load(source)["runners"] == {
           "agent-runner": {
-              "socket": "/run/tentaflake-pi/agent-runner/control/runner.sock",
-              "token": "/run/tentaflake-pi/agent-runner/api-token",
-              "transport": "runsc-pi-v1",
+              "socket": "/run/tentaflake-pi-durable/agent-runner/control/runner.sock",
+              "token": "/run/tentaflake-pi-durable/agent-runner/api-token",
+              "transport": "runsc-pi-durable-v1",
           }
       }
   for path in sys.argv[2:]:

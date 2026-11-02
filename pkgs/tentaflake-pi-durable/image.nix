@@ -11,9 +11,9 @@
 }:
 let
   tag = builtins.hashString "sha256" (toString runtimePackage);
-  imageSelector = "tentaflake-pi:${tag}";
+  imageSelector = "tentaflake-pi-durable:${tag}";
   archive = dockerTools.buildLayeredImage {
-    name = "tentaflake-pi";
+    name = "tentaflake-pi-durable";
     inherit tag;
     maxLayers = 80;
     contents = [
@@ -21,14 +21,14 @@ let
       cacert
     ];
     extraCommands = ''
-      mkdir -p state workspace etc/tentaflake run/tentaflake-pi tmp
+      mkdir -p state workspace etc/tentaflake run/tentaflake-pi-durable tmp
       chmod 1777 tmp
     '';
     config = {
       User = "10100:10100";
       Cmd = [
-        "/bin/tentaflake-pi"
-        "/etc/tentaflake/pi.json"
+        "/bin/tentaflake-pi-durable"
+        "/etc/tentaflake/pi-durable.json"
       ];
       WorkingDir = "/workspace";
       Env = [
@@ -39,7 +39,7 @@ let
     };
   };
 in
-runCommand "tentaflake-pi-image-bundle"
+runCommand "tentaflake-pi-durable-image-bundle"
   {
     nativeBuildInputs = [
       coreutils
@@ -53,7 +53,7 @@ runCommand "tentaflake-pi-image-bundle"
       imageArchive = archive;
     };
     meta = {
-      description = "Local pinned Pi image with exact after-load config ID proof";
+      description = "Local pinned Pi Durable image with exact after-load config ID proof";
       license = lib.licenses.mit;
       platforms = lib.platforms.linux;
     };

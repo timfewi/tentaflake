@@ -1,4 +1,4 @@
-# OpenClaw and Pi share lib/stoppedScaffold.nix. The caller's NixOS evaluation
+# OpenClaw and Pi Durable share lib/stoppedScaffold.nix. The caller's NixOS evaluation
 # declares both instances; module-level checks need no further full evaluation.
 {
   pkgs,
@@ -94,7 +94,8 @@ let
     assert adapter.artifact.kind == "unselected" && !adapter.artifact.reviewed;
     # Planned upstream facts are metadata only; the scaffold never runs them.
     assert adapter.command == command && adapter.capabilities == capabilities;
-    assert adapter.research.supported == (id == "pi") && !(adapter.research.configure { }).valid;
+    assert
+      adapter.research.supported == (id == "pi-durable") && !(adapter.research.configure { }).valid;
     assert rejects (adapter.configuration.generate name { });
     assert adapter.execution.interface == "unverified" && !adapter.execution.automatic;
     assert adapter.evidence.vendorAcceptance == "pending";
@@ -136,11 +137,11 @@ let
       { boardSocket = "/run/other/bridge.sock"; }
       { envFile = "/run/fixture.env"; }
     ];
-    # Pi's source-qualified recovery blocker must not become a configurable
+    # Pi Durable's source-qualified recovery blocker must not become a configurable
     # "safe mode": retry toggles and stable IDs do not fix close/resume replay.
     # These are admission tests, not simulated upstream crash acceptance.
     assert
-      id != "pi"
+      id != "pi-durable"
       || lib.all (args: rejects (instance args "docker")) [
         { settings.retry.enabled = false; }
         { settings.recovery = "resume"; }
@@ -157,7 +158,7 @@ let
         { extraVolumes = [ "/run/podman/podman.sock:/run/podman.sock:ro" ]; }
       ];
     assert
-      id != "pi"
+      id != "pi-durable"
       || (
         lib.hasInfix "close/resume" service.script
         && lib.hasInfix "uncertain model request" service.script
@@ -168,7 +169,7 @@ let
         && !(service.serviceConfig ? LoadCredential)
       );
     assert
-      id != "pi"
+      id != "pi-durable"
       || (
         !adapter.admitted { } { inherit name; }
         && (adapter.research.configure {
@@ -205,10 +206,10 @@ assert lib.all (
 ) (builtins.attrNames presets);
 assert lib.length (lib.unique reserved) == lib.length reserved;
 assert scaffold {
-  id = "pi";
+  id = "pi-durable";
   name = "pilot";
   version = "1.4.0";
-  uid = presets.pi.ownership.uid;
+  uid = presets.pi-durable.ownership.uid;
   command = [ ];
   capabilities = [ ];
 };

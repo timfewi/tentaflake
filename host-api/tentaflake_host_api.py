@@ -28,7 +28,7 @@ MAX_RESPONSE = 768 * 1024
 MAX_RECEIPTS = 10000
 RUNNER_UID = 10100
 # Rootful runsc Gofer creates the host listener; this is not an inbound grant.
-RUNSC_PI_PEER_UID = 0
+RUNSC_PI_DURABLE_PEER_UID = 0
 RUNNER_TIMEOUT = 5
 RUNNER_ID = re.compile(r"[A-Za-z0-9_.:-]{1,128}\Z")
 PEER_PERMISSIONS = {
@@ -262,13 +262,13 @@ class Service:
         for aid, descriptor in self.runners.items():
             if (
                 aid not in self.agents or not self.agents[aid]["runnable"]
-                or self.agents[aid]["runtime"] != "pi"
+                or self.agents[aid]["runtime"] != "pi-durable"
                 or not isinstance(descriptor, dict)
                 or set(descriptor) != {"socket", "token", "transport"}
                 or descriptor != {
-                    "socket": f"/run/tentaflake-pi/{aid}/control/runner.sock",
-                    "token": f"/run/tentaflake-pi/{aid}/api-token",
-                    "transport": "runsc-pi-v1",
+                    "socket": f"/run/tentaflake-pi-durable/{aid}/control/runner.sock",
+                    "token": f"/run/tentaflake-pi-durable/{aid}/api-token",
+                    "transport": "runsc-pi-durable-v1",
                 }
             ):
                 raise ValueError("Invalid runner inventory")
@@ -750,7 +750,7 @@ class Service:
                     or not 1 <= len(row["argv"]) <= 128
                     or any(
                         not isinstance(arg, str)
-                        # Worker/Pi bound: empty allowed, 4096 UTF-16 code units.
+                        # Worker/Pi Durable bound: empty allowed, 4096 UTF-16 code units.
                         or len(arg.encode("utf-16-le")) // 2 > 4096
                         or "\0" in arg
                         for arg in row["argv"]
@@ -1136,7 +1136,7 @@ class Service:
                 remaining()
                 connection.connect(address)
                 _, uid, _ = struct.unpack("iII", connection.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, 12))
-                if descriptor["transport"] != "runsc-pi-v1" or uid != RUNSC_PI_PEER_UID:
+                if descriptor["transport"] != "runsc-pi-durable-v1" or uid != RUNSC_PI_DURABLE_PEER_UID:
                     raise APIError("Runner peer identity is invalid", 503)
                 data = b"" if body is None else json.dumps(body, ensure_ascii=False, separators=(",", ":")).encode()
                 # HTTP/1.0 requests avoid chunked framing; never redirect or retry.

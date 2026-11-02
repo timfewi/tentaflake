@@ -23,10 +23,10 @@ let
       }
     ];
   };
-  piScaffold = scaffold // {
+  piDurableScaffold = scaffold // {
     agents = [
       {
-        adapter = "pi";
+        adapter = "pi-durable";
         name = "research";
         autoStart = false;
       }
@@ -81,7 +81,7 @@ assert (lib.head result.instances).container == "agent-from-json";
 assert (lib.head result.instances).requiresHostUpdate;
 assert (plan hermes).valid;
 assert !(lib.head (plan scaffold).instances).runnable;
-assert !(lib.head (plan piScaffold).instances).runnable;
+assert !(lib.head (plan piDurableScaffold).instances).runnable;
 assert lib.all (value: value) (lib.attrValues isolationRegressions);
 assert rejects (plan (generic // { schemaVersion = 2; }));
 assert lib.all (schemaVersion: rejects (plan (generic // { inherit schemaVersion; }))) [

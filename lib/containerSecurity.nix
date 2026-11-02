@@ -216,7 +216,7 @@ in
         && (reviewedImage.bundle.imageVerificationVersion or null) == 1
         && builtins.isString (reviewedImage.image or null)
         && (reviewedImage.bundle.imageSelector or null) == reviewedImage.image
-        && lib.match "^tentaflake-pi:[0-9a-f]{64}$" reviewedImage.image != null;
+        && lib.match "^tentaflake-pi-durable:[0-9a-f]{64}$" reviewedImage.image != null;
       effectiveAutomaticStart = automaticStart || (merged.autoStart or false);
       extraOptions = merged.extraOptions or [ ];
       preRunExtraOptions = merged.preRunExtraOptions or [ ];
@@ -273,8 +273,8 @@ in
         {
           assertion =
             runtimeName == (if researchPolicyEnabled then "runsc-research" else "runsc")
-            || (runtimeName == "runsc-pi" && validReviewedImage);
-          message = "tentaflake: secure runtimes require the exact Research grant or reviewed Pi image; ordinary agents must retain stock runsc.";
+            || (runtimeName == "runsc-pi-durable" && validReviewedImage);
+          message = "tentaflake: secure runtimes require the exact Research grant or reviewed Pi Durable image; ordinary agents must retain stock runsc.";
         }
         {
           assertion = !(merged.privileged or false);

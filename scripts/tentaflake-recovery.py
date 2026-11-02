@@ -17,7 +17,7 @@ import time
 MAX_BYTES = 1024 * 1024 * 1024
 MAX_ENTRIES = 100000
 REQUIRED = {
-    'pi': ['receipts.sqlite', 'durable.sqlite', 'owner.sqlite'],
+    'pi-durable': ['receipts.sqlite', 'durable.sqlite', 'owner.sqlite'],
     'budget': ['budget.json', 'budget.json.initialized', 'budget.json.lock'],
     'worker': ['.queue.lock', 'pending', 'running', 'approvals', 'jobs', 'reservations', 'results'],
     'control': ['writer.lock', 'receipts.json'],

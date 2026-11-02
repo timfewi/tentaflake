@@ -17,31 +17,31 @@ let
   cli = pkgs.callPackage ../pkgs/tentaflake-cli { };
   workers = lib.filterAttrs (_: agent: agent.enable) config.tentaflake.worker.agents;
   policies = import ../lib/hostApiPolicy.nix { inherit config lib; };
-  pi = config.tentaflake.piRuntime;
-  piTransport = import ../lib/piTransport.nix { inherit lib pkgs; };
+  pi-durable = config.tentaflake.piDurableRuntime;
+  piDurableTransport = import ../lib/piDurableTransport.nix { inherit lib pkgs; };
   runnerAdmitted =
-    pi.enable
-    && pi.package != null
-    && pi.bundle != null
-    && pi.image != null
-    && (pi.bundle.imageVerificationVersion or null) == 1
-    && (pi.bundle.imageSelector or null) == pi.image
-    && (pi.bundle.runtimePackage or null) == pi.package
-    && piTransport.supported config;
+    pi-durable.enable
+    && pi-durable.package != null
+    && pi-durable.bundle != null
+    && pi-durable.image != null
+    && (pi-durable.bundle.imageVerificationVersion or null) == 1
+    && (pi-durable.bundle.imageSelector or null) == pi-durable.image
+    && (pi-durable.bundle.runtimePackage or null) == pi-durable.package
+    && piDurableTransport.supported config;
   runners =
     lib.mapAttrs
       (_: declaration: {
-        socket = "/run/tentaflake-pi/${declaration.container}/control/runner.sock";
-        token = "/run/tentaflake-pi/${declaration.container}/api-token";
-        transport = piTransport.version;
+        socket = "/run/tentaflake-pi-durable/${declaration.container}/control/runner.sock";
+        token = "/run/tentaflake-pi-durable/${declaration.container}/api-token";
+        transport = piDurableTransport.version;
       })
       (
         lib.filterAttrs (
           _: declaration:
-          declaration.adapter == "pi"
+          declaration.adapter == "pi-durable"
           && declaration.runnable
           && runnerAdmitted
-          && piTransport.containerSupported (
+          && piDurableTransport.containerSupported (
             config.virtualisation.oci-containers.containers.${declaration.container} or { }
           )
         ) config.tentaflake.agentInstances
