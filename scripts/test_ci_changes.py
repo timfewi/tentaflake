@@ -184,7 +184,13 @@ class CiSelection(unittest.TestCase):
                                  {"workloads", "evaluate", "static"})
 
     def test_pi_durable_sources_select_non_vm_gates(self):
-        for name in ("pkgs/tentaflake-pi-durable/default.nix", "lib/piDurableTransport.nix",
+        for name in ("pkgs/tentaflake-pi-durable/default.nix", "pkgs/tentaflake-pi-durable/engine.mjs",
+                     "pkgs/tentaflake-pi-durable/test/sdk-child.mjs",
+                     "pkgs/tentaflake-pi-durable/test/sdk-recovery.test.mjs",
+                     "lib/piDurableTools.nix", "lib/piDurableTransport.nix",
+                     "lib/piDurableProvisioning.nix", "modules/pi-durable-provisioning.nix",
+                     "tests/pi-durable-provisioning.nix",
+                     "tests/fixtures/pi-durable-provisioning/tentaflake.toml",
                      "tests/pi-durable-runtime-evaluation.nix", "tests/pi-durable-runtime-vm.nix",
                      "tests/local-image-proof.nix"):
             with self.subTest(name=name):
@@ -263,13 +269,16 @@ class CiSelection(unittest.TestCase):
     def test_shared_agent_parser_retains_runtime_and_schema_evaluation_without_research(self):
         self.write("lib/systemFromData.nix")
         self.assertEqual(select(self.base, self.commit(), self.repository),
-                         {"runtime", "evaluate", "generated", "static"})
+                         {"runtime", "pi-durable", "evaluate", "generated", "static"})
 
     def test_system_schema_selects_cli_corpus_and_schema_evaluation(self):
         # The CLI embeds schema/system-v1*.json; the Nix parser reads it too.
-        self.write("schema/system-v1.json")
-        self.assertEqual(select(self.base, self.commit(), self.repository),
-                         {"runtime", "evaluate", "generated", "cli", "rust", "static"})
+        for name in ("schema/system-v1.json", "schema/system-v1-fixtures.json"):
+            with self.subTest(name=name):
+                base = self.git("rev-parse", "HEAD")
+                self.write(name)
+                self.assertEqual(select(base, self.commit(), self.repository),
+                                 {"runtime", "pi-durable", "evaluate", "generated", "cli", "rust", "static"})
 
     def test_devcontainer_changes_do_not_build_agents_or_research(self):
         self.write(".devcontainer/devcontainer.json")
@@ -436,6 +445,7 @@ class WorkflowPolicy(unittest.TestCase):
             ".#checks.x86_64-linux.tentaflake-pi-durable",
             ".#checks.x86_64-linux.tentaflake-pi-durable-recovery",
             ".#checks.x86_64-linux.pi-durable-runtime-evaluation",
+            ".#checks.x86_64-linux.pi-durable-provisioning",
             ".#checks.x86_64-linux.pi-durable-runtime-module-graph",
             ".#checks.x86_64-linux.local-image-proof",
             ".#packages.x86_64-linux.tentaflake-pi-durable-image",
@@ -455,6 +465,7 @@ class WorkflowPolicy(unittest.TestCase):
             "tentaflake-workloads", "tentaflake-worker-image", "tentaflake-pi-durable",
             "tentaflake-pi-durable-recovery", "tentaflake-pi-durable-image",
             "pi-durable-runtime-evaluation", "pi-durable-runtime-module-graph",
+            "pi-durable-provisioning",
             "local-image-proof", "host-api", "host-api-evaluation", "control-evaluation",
             "devcontainer-cli", "ci-vm-selection", "rust-package-sources", "system-schema",
             "image-pinning", "hardening-journald", "agent-adapters", "module-evaluation",

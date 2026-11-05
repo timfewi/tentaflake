@@ -11,6 +11,7 @@ let
       broker = config.tentaflake.broker.agents.${name} or null;
       worker = config.tentaflake.worker.agents.${name} or null;
       quota = config.tentaflake.workspaceQuota.agents.${name} or null;
+      instance = instances.${name} or null;
       llmEnabled = broker != null && broker.enable && broker.llm.enable;
       fetchEnabled = broker != null && broker.enable && broker.fetch.enable;
       workerEnabled = worker != null && worker.enable;
@@ -20,6 +21,15 @@ let
       managed = builtins.hasAttr name instances;
       authority = "nix";
       auto_start = if container == null then null else container.autoStart;
+      runtime =
+        if instance != null && instance.adapter == "pi-durable" && instance.tools != null then
+          {
+            adapter = "pi-durable";
+            tool_selection = true;
+            inherit (instance) tools;
+          }
+        else
+          null;
       llm = {
         enabled = llmEnabled;
         allowed_models = lib.optionals llmEnabled (

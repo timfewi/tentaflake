@@ -90,10 +90,6 @@ in
         message = "workloadMapping refuses daemon user-namespace remapping.";
       }
       {
-        assertion = builtins.length (builtins.attrNames cfg.bindings) <= 64;
-        message = "workloadMapping supports at most 64 explicit host bindings.";
-      }
-      {
         assertion = lib.all (
           name:
           builtins.hasAttr name instances

@@ -13,6 +13,16 @@ let
     ;
   cfg = config.tentaflake.control;
   hashType = types.strMatching "[0-9a-f]{64}";
+  # Nix packages may expose bin/nix through immutable component symlinks.
+  # Resolve only the deployment-owned package at build time; the server still
+  # opens the resulting real store executable with O_NOFOLLOW and UID checks.
+  nixExecutable = lib.removeSuffix "\n" (
+    builtins.readFile (
+      pkgs.runCommand "tentaflake-control-nix-executable" { } ''
+        realpath -e ${config.nix.package}/bin/nix > "$out"
+      ''
+    )
+  );
   settings = pkgs.writeText "tentaflake-control.json" (
     builtins.toJSON {
       source = cfg.desiredSource;
@@ -27,7 +37,7 @@ let
           {
             template = cfg.build.template;
             template_hash = cfg.build.templateHash;
-            nix = "${config.nix.package}/bin/nix";
+            nix = nixExecutable;
             target = cfg.build.target;
             deadline_seconds = cfg.build.deadlineSeconds;
           }
@@ -195,8 +205,10 @@ in
         RestrictRealtime = true;
         LockPersonality = true;
         RestrictAddressFamilies = [ "AF_UNIX" ];
-        # Resolve the current source entry; file bind mounts would hide atomic
-        # replacements. ProtectSystem already keeps desired source read-only.
+        # Observe live link basenames in the read-only parent, not a bind of
+        # either current target: activation replaces the symlinks atomically.
+        # The desired source likewise stays unpinned under ProtectSystem.
+        ReadOnlyPaths = [ "/run" ];
         ReadWritePaths = [
           "/var/lib/tentaflake-control"
           "/run/tentaflake-control"

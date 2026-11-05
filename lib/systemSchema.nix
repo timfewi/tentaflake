@@ -5,7 +5,25 @@ let
   schema = builtins.fromJSON (builtins.readFile ../schema/system-v1.json);
   catalog = builtins.fromJSON (builtins.readFile ../adapters/catalog.json);
   fail = message: throw "tentaflake desired system: ${message}";
+  # These adapters accept declaration intent only; the host adapter still
+  # requires its exact policy before publishing a runnable container.
+  permanentlyStopped =
+    adapter:
+    builtins.elem adapter schema.stoppedAdapters
+    && !(builtins.elem adapter (schema.hostAdmittedAdapters or [ ]));
   matches = pattern: value: builtins.isString value && builtins.match pattern value != null;
+  allUnique =
+    values:
+    builtins.length values == builtins.length (
+      builtins.attrNames (
+        builtins.listToAttrs (
+          map (value: {
+            name = builtins.toJSON value;
+            value = null;
+          }) values
+        )
+      )
+    );
   statePath =
     spec: value:
     matches "/var/lib/[a-zA-Z0-9_-]+(/[a-zA-Z0-9_-]+)*" value
@@ -55,21 +73,21 @@ let
       && builtins.deepSeq (object "nested" spec.fields value) true
     else if spec.type == "list" then
       builtins.isList value
-      && builtins.length value <= spec.max
+      && (!(spec ? max) || builtins.length value <= spec.max)
       && lib.all (typed spec.items) value
-      && (!(spec.unique or false) || builtins.length value == builtins.length (lib.unique value))
+      && (!(spec.unique or false) || allUnique value)
       && (
         !(spec ? uniqueBy)
         || (
           let
             keys = map (item: item.${spec.uniqueBy}) value;
           in
-          builtins.length keys == builtins.length (lib.unique keys)
+          allUnique keys
         )
       )
     else if spec.type == "map" then
       builtins.isAttrs value
-      && builtins.length (builtins.attrNames value) <= spec.max
+      && (!(spec ? max) || builtins.length (builtins.attrNames value) <= spec.max)
       && lib.all (typed spec.keys) (builtins.attrNames value)
       && lib.all (typed spec.items) (builtins.attrValues value)
     else if spec.type == "statePath" then
@@ -114,14 +132,18 @@ let
       fail "unsupported adapter-specific agent fields."
     else if checked.adapter == "generic" && !(checked ? definition) then
       fail "generic agents require a runtime definition."
-    else if
-      builtins.elem checked.adapter (schema.stoppedAdapters or [ ]) && (checked.autoStart or false)
-    then
+    else if permanentlyStopped checked.adapter && (checked.autoStart or false) then
       fail "stopped adapters cannot autoStart."
     else
       checked;
   checkedAgents = map agent data.agents;
   names = map (entry: entry.name) checkedAgents;
+  agentsById = builtins.listToAttrs (
+    map (entry: {
+      name = "agent-${entry.name}";
+      value = entry;
+    }) checkedAgents
+  );
   sections = lib.mapAttrs (
     section: value:
     if
@@ -150,15 +172,12 @@ let
   relayUids = map (client: client.uid) (builtins.attrValues researchAgents);
   researchValid =
     id:
-    lib.any (
-      agent:
-      "agent-${agent.name}" == id
-      && !(builtins.elem agent.adapter schema.stoppedAdapters)
-      && (catalog.presets.${agent.adapter}.research.supported or false)
-    ) checkedAgents;
+    declared id
+    && !(permanentlyStopped agentsById.${id}.adapter)
+    && (catalog.presets.${agentsById.${id}.adapter}.research.supported or false);
   enabled = section: section.enable or false;
   inactive = section: enabled section || lib.all (key: key == "enable") (builtins.attrNames section);
-  declared = id: builtins.elem id (map (name: "agent-${name}") names);
+  declared = id: builtins.hasAttr id agentsById;
   permissionGates = {
     actions = "allowActions";
     logs = "allowLogs";
@@ -176,22 +195,16 @@ let
     && (
       !(builtins.elem "tool_decisions" peer.permissions) || builtins.elem "tool_requests" peer.permissions
     )
-    && !(lib.any (p: builtins.elem p peer.permissions) [
-      "run_read"
-      "run_submit"
-      "run_stop"
-    ]);
+    && (
+      !(lib.any (permission: builtins.elem permission schema.runnerPermissions) peer.permissions)
+      || lib.all (id: builtins.elem agentsById.${id}.adapter schema.runnerAdapters) peer.agents
+    );
   bindings = mapping.bindings or { };
   scopes = lib.mapAttrsToList (_: binding: [
     binding.tenant_id
     binding.workload_id
   ]) bindings;
-  bindingValid =
-    id:
-    declared id
-    && lib.any (
-      agent: "agent-${agent.name}" == id && !(builtins.elem agent.adapter schema.stoppedAdapters)
-    ) checkedAgents;
+  bindingValid = id: declared id && !(permanentlyStopped agentsById.${id}.adapter);
   servicesValid =
     inactive host
     && inactive connectors
@@ -204,7 +217,7 @@ let
         researchAgents != { }
         && (sections.sandbox.profile or "balanced") != "dev"
         && lib.all researchValid (builtins.attrNames researchAgents)
-        && builtins.length relayUids == builtins.length (lib.unique relayUids)
+        && allUnique relayUids
       )
     )
     && (
@@ -229,7 +242,7 @@ let
         (sections.container.backend or "docker") == "docker"
         && mapping ? bindings
         && lib.all bindingValid (builtins.attrNames bindings)
-        && builtins.length scopes == builtins.length (lib.unique scopes)
+        && allUnique scopes
       )
     );
 in
@@ -241,9 +254,7 @@ then
   fail "schemaVersion must be integer 1."
 else if !(data ? agents) || !builtins.isList data.agents then
   fail "agents array is required."
-else if builtins.length data.agents > 128 then
-  fail "at most 128 agents are supported."
-else if builtins.length names != builtins.length (lib.unique names) then
+else if !allUnique names then
   fail "duplicate global agent identity."
 else if !servicesValid then
   fail "invalid service grants, dependencies, runtime paths or workload scope."

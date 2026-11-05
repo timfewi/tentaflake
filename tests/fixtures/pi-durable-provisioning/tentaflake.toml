@@ -1,0 +1,18 @@
+schemaVersion = 1
+
+[[agents]]
+name = "research-specialist"
+adapter = "pi-durable"
+autoStart = true
+tools = ["research_search"]
+
+[[agents]]
+name = "legal-specialist"
+adapter = "pi-durable"
+autoStart = true
+tools = []
+
+[[agents]]
+name = "paused-specialist"
+adapter = "pi-durable"
+autoStart = false

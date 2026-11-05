@@ -1,6 +1,6 @@
 //! Data-only desired-system validation. The descriptor is shared with the Nix compiler.
 use serde_json::Value;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
 use std::os::unix::fs::OpenOptionsExt;
@@ -98,8 +98,8 @@ fn pinned_image(value: &str) -> bool {
             .all(|c| c.is_ascii_digit() || (b'a'..=b'f').contains(&c))
 }
 
-fn matches_type(value: &Value, spec: &Value) -> bool {
-    match spec["type"].as_str().unwrap_or("") {
+fn typed(value: &Value, spec: &Value) -> Result<(), String> {
+    let valid = match spec["type"].as_str().unwrap_or("") {
         "bool" => value.is_boolean(),
         "disabled" => value == false,
         "enum" => spec["values"]
@@ -133,24 +133,53 @@ fn matches_type(value: &Value, spec: &Value) -> bool {
                     })
                 })
         }),
-        "list" => value.as_array().is_some_and(|items| {
-            items.len() <= spec["max"].as_u64().unwrap() as usize
-                && items.iter().all(|item| matches_type(item, &spec["items"]))
-                && items.iter().enumerate().all(|(i, item)| {
-                    (spec["unique"] != true || !items[..i].contains(item))
-                        && spec["uniqueBy"].as_str().is_none_or(|key| {
-                            !items[..i].iter().any(|prior| prior[key] == item[key])
-                        })
-                })
-        }),
-        "map" => value.as_object().is_some_and(|items| {
-            items.len() <= spec["max"].as_u64().unwrap() as usize
-                && items.iter().all(|(key, item)| {
-                    spec["keys"]["type"] == "agentId"
-                        && agent_id(key)
-                        && matches_type(item, &spec["items"])
-                })
-        }),
+        "list" => {
+            let items = value.as_array().ok_or(": expected a list")?;
+            if spec["max"]
+                .as_u64()
+                .is_some_and(|max| items.len() as u64 > max)
+            {
+                return Err(": too many items".into());
+            }
+            let unique_by = spec["uniqueBy"].as_str();
+            let mut strings = BTreeSet::new();
+            let mut numbers = BTreeSet::new();
+            for (index, item) in items.iter().enumerate() {
+                typed(item, &spec["items"]).map_err(|error| format!("[{index}]{error}"))?;
+                if spec["unique"] == true || unique_by.is_some() {
+                    let key = unique_by.map_or(item, |field| &item[field]);
+                    let duplicate = if let Some(key) = key.as_str() {
+                        !strings.insert(key)
+                    } else if let Some(key) = key.as_u64() {
+                        !numbers.insert(key)
+                    } else {
+                        items[..index]
+                            .iter()
+                            .any(|prior| unique_by.map_or(prior, |field| &prior[field]) == key)
+                    };
+                    if duplicate {
+                        return Err(format!("[{index}]: duplicate item or unique field"));
+                    }
+                }
+            }
+            return Ok(());
+        }
+        "map" => {
+            let items = value.as_object().ok_or(": expected a map")?;
+            if spec["max"]
+                .as_u64()
+                .is_some_and(|max| items.len() as u64 > max)
+            {
+                return Err(": too many entries".into());
+            }
+            for (index, (key, item)) in items.iter().enumerate() {
+                if spec["keys"]["type"] != "agentId" || !agent_id(key) {
+                    return Err(format!("[{index}]: invalid canonical agent ID"));
+                }
+                typed(item, &spec["items"]).map_err(|error| format!("[{index}]{error}"))?;
+            }
+            return Ok(());
+        }
         "version" => value.as_u64() == Some(1),
         "owner" => value
             .as_u64()
@@ -198,12 +227,16 @@ fn matches_type(value: &Value, spec: &Value) -> bool {
             })
         }),
         "object" | "runtimeDefinition" => {
-            object(value, &spec["fields"]).is_ok()
-                && spec["required"].as_array().is_none_or(|required| {
-                    required
-                        .iter()
-                        .all(|key| value.get(key.as_str().unwrap()).is_some())
-                })
+            object(value, &spec["fields"])?;
+            if let Some(required) = spec["required"].as_array() {
+                for key in required {
+                    let key = key.as_str().unwrap();
+                    if value.get(key).is_none() {
+                        return Err(format!(".{key}: field is required"));
+                    }
+                }
+            }
+            return Ok(());
         }
         "statePath" | "backupPath" => value.as_str().is_some_and(|s| {
             (spec["type"] != "backupPath" || s.len() <= 256)
@@ -234,22 +267,36 @@ fn matches_type(value: &Value, spec: &Value) -> bool {
                 && !s.split('/').any(|p| p == "..")
         }),
         _ => false,
+    };
+    if valid {
+        Ok(())
+    } else {
+        Err(": invalid or unsupported value".into())
     }
 }
 
+// Error paths use descriptor-owned field names and numeric collection indexes only.
+// Unknown keys stop at their containing object; map keys and source values never escape.
 fn object(value: &Value, fields: &Value) -> Result<(), String> {
-    let object = value
-        .as_object()
-        .ok_or("configuration section must be an object")?;
+    let object = value.as_object().ok_or(": expected an object")?;
+    let fields = fields.as_object().expect("descriptor fields");
     for (key, value) in object {
-        let spec = fields
-            .get(key)
-            .ok_or("unknown or unsafe configuration field")?;
-        if !matches_type(value, spec) {
-            return Err("unsupported configuration value or invalid field type".into());
-        }
+        let spec = fields.get(key).ok_or(": unknown or unsafe field")?;
+        typed(value, spec).map_err(|error| format!(".{key}{error}"))?;
     }
     Ok(())
+}
+
+// Public parsing accepts intent for source-qualified adapters, not host admission.
+// The Nix adapter and service modules must still enforce the exact prerequisites.
+fn permanently_stopped(schema: &Value, adapter: &Value) -> bool {
+    schema["stoppedAdapters"]
+        .as_array()
+        .unwrap()
+        .contains(adapter)
+        && !schema["hostAdmittedAdapters"]
+            .as_array()
+            .is_some_and(|adapters| adapters.contains(adapter))
 }
 
 /// Validate JSON transport against exactly the same descriptor as TOML and Nix.
@@ -259,9 +306,9 @@ pub fn validate(value: &Value) -> Result<(), String> {
     let schema = &*DESCRIPTOR;
     let root = value
         .as_object()
-        .ok_or("desired system must be an object")?;
+        .ok_or("desired system: expected an object")?;
     if value["schemaVersion"].as_u64() != Some(1) {
-        return Err("schemaVersion must be integer 1".into());
+        return Err("schemaVersion: must be integer 1".into());
     }
     for (key, section) in root {
         if key == "schemaVersion" || key == "agents" {
@@ -269,107 +316,150 @@ pub fn validate(value: &Value) -> Result<(), String> {
         }
         if key == "_securityNote" {
             if !section.is_string() {
-                return Err("_securityNote must be a string".into());
+                return Err("_securityNote: expected a string".into());
             }
             continue;
         }
         let fields = schema["sections"]
             .get(key)
-            .ok_or("unknown desired-system section")?;
-        object(section, fields)?;
+            .ok_or("desired system: unknown section")?;
+        object(section, fields).map_err(|error| format!("{key}{error}"))?;
     }
     let agents = value["agents"]
         .as_array()
-        .ok_or("agents array is required")?;
-    if agents.len() > 128 {
-        return Err("at most 128 agents are supported".into());
-    }
-    let mut identities = BTreeSet::new();
-    for agent in agents {
-        object(agent, &schema["agent"])?;
-        let identity = agent["name"].as_str().ok_or("agent name is required")?;
+        .ok_or("agents: array is required")?;
+    let mut identities = BTreeMap::new();
+    for (index, agent) in agents.iter().enumerate() {
+        object(agent, &schema["agent"]).map_err(|error| format!("agents[{index}]{error}"))?;
+        let identity = agent["name"]
+            .as_str()
+            .ok_or_else(|| format!("agents[{index}].name: field is required"))?;
         if agent.get("adapter").is_none() {
-            return Err("agent adapter is required".into());
+            return Err(format!("agents[{index}].adapter: field is required"));
         }
         if agent["adapter"] == "generic" && agent.get("definition").is_none() {
-            return Err("generic adapter requires a runtime definition".into());
+            return Err(format!(
+                "agents[{index}].definition: generic adapter requires a runtime definition"
+            ));
         }
-        if schema["stoppedAdapters"]
-            .as_array()
-            .unwrap()
-            .contains(&agent["adapter"])
-            && agent["autoStart"] == true
-        {
-            return Err("adapter has no admitted runnable implementation".into());
+        if permanently_stopped(schema, &agent["adapter"]) && agent["autoStart"] == true {
+            return Err(format!(
+                "agents[{index}].autoStart: adapter has no admitted runnable implementation"
+            ));
         }
         for key in agent.as_object().unwrap().keys() {
             if let Some(adapters) = schema["agent"][key]["adapters"].as_array()
                 && !adapters.contains(&agent["adapter"])
             {
-                return Err("field is unsupported by the selected adapter".into());
+                return Err(format!(
+                    "agents[{index}].{key}: field is unsupported by the selected adapter"
+                ));
             }
         }
-        if !identities.insert(identity) {
-            return Err("duplicate global agent identity".into());
+        if identities.insert(identity, agent).is_some() {
+            return Err(format!(
+                "agents[{index}].name: duplicate global agent identity"
+            ));
         }
     }
-    validate_services(value, agents, schema)?;
+    validate_services(value, &identities, schema)?;
     Ok(())
 }
 
-fn validate_services(value: &Value, agents: &[Value], schema: &Value) -> Result<(), String> {
+fn validate_services(
+    value: &Value,
+    agents: &BTreeMap<&str, &Value>,
+    schema: &Value,
+) -> Result<(), String> {
     let host = &value["hostApi"];
     let connectors = &value["connectors"];
     let mapping = &value["workloadMapping"];
     let storage = &value["storage"];
     let research = &value["research"];
-    for section in [host, connectors, mapping, storage, research] {
+    for (name, section) in [
+        ("hostApi", host),
+        ("connectors", connectors),
+        ("workloadMapping", mapping),
+        ("storage", storage),
+        ("research", research),
+    ] {
         if section["enable"] != true
             && section
                 .as_object()
                 .is_some_and(|fields| fields.keys().any(|key| key != "enable"))
         {
-            return Err("service configuration requires explicit enable".into());
+            return Err(format!(
+                "{name}.enable: service configuration requires explicit enable"
+            ));
         }
     }
-    if (host["enable"] == true && host.get("peers").is_none())
-        || (host["allowToolDecisions"] == true && host["allowToolRequests"] != true)
-        || (connectors["enable"] == true && connectors.get("configFile").is_none())
-        || (storage["enable"] == true
-            && (storage["paths"].as_array().is_none_or(Vec::is_empty)
-                || storage.get("repositoryFile").is_none()
-                || storage.get("passwordFile").is_none()))
-    {
-        return Err("service requires explicit grants or runtime configuration".into());
+    if host["enable"] == true && host.get("peers").is_none() {
+        return Err("hostApi.peers: explicit peer grants are required".into());
     }
-    if let Some(paths) = storage["paths"].as_array()
-        && paths.iter().any(|path| {
-            !canonical_backup_path(path.as_str().unwrap())
-                && !agents
-                    .iter()
-                    .any(|agent| agent.get("stateDir") == Some(path))
-        })
-    {
-        return Err(
-            "backup paths require a canonical state tree or exact declared stateDir".into(),
-        );
+    if host["allowToolDecisions"] == true && host["allowToolRequests"] != true {
+        return Err("hostApi.allowToolDecisions: requires allowToolRequests".into());
     }
-    let declared = |id: &Value| {
-        id.as_str()
-            .and_then(|id| id.strip_prefix("agent-"))
-            .and_then(|name| agents.iter().find(|agent| agent["name"] == name))
+    if connectors["enable"] == true && connectors.get("configFile").is_none() {
+        return Err("connectors.configFile: runtime configuration is required".into());
+    }
+    if storage["enable"] == true {
+        if storage["paths"].as_array().is_none_or(Vec::is_empty) {
+            return Err("storage.paths: at least one backup path is required".into());
+        }
+        for field in ["repositoryFile", "passwordFile"] {
+            if storage.get(field).is_none() {
+                return Err(format!(
+                    "storage.{field}: runtime file reference is required"
+                ));
+            }
+        }
+    }
+    if let Some(paths) = storage["paths"].as_array() {
+        let state_dirs: BTreeSet<_> = agents
+            .values()
+            .filter_map(|agent| agent["stateDir"].as_str())
+            .collect();
+        for (index, path) in paths.iter().enumerate() {
+            let path = path.as_str().unwrap();
+            if !canonical_backup_path(path) && !state_dirs.contains(path) {
+                return Err(format!(
+                    "storage.paths[{index}]: requires a canonical state tree or exact declared stateDir"
+                ));
+            }
+        }
+    }
+    let declared = |id: &str| {
+        id.strip_prefix("agent-")
+            .and_then(|name| agents.get(name).copied())
     };
     if let Some(peers) = host["peers"].as_array() {
-        for peer in peers {
+        for (index, peer) in peers.iter().enumerate() {
             let ids = peer["agents"].as_array().unwrap();
             let permissions = peer["permissions"].as_array().unwrap();
             let has = |p: &str| permissions.iter().any(|v| v == p);
-            if ids.iter().any(|id| declared(id).is_none())
-                || (ids.is_empty() && permissions.iter().any(|p| p != "host_health"))
+            let runner = permissions.iter().any(|permission| {
+                schema["runnerPermissions"]
+                    .as_array()
+                    .unwrap()
+                    .contains(permission)
+            });
+            for (agent_index, id) in ids.iter().enumerate() {
+                let agent = declared(id.as_str().unwrap()).ok_or_else(|| {
+                    format!("hostApi.peers[{index}].agents[{agent_index}]: requires an exact declared agent ID")
+                })?;
+                if runner
+                    && !schema["runnerAdapters"]
+                        .as_array()
+                        .unwrap()
+                        .contains(&agent["adapter"])
+                {
+                    return Err(format!(
+                        "hostApi.peers[{index}].agents[{agent_index}]: runner permissions require a declared Pi Durable agent"
+                    ));
+                }
+            }
+            if (ids.is_empty() && permissions.iter().any(|p| p != "host_health"))
                 || (has("tool_decisions") && !has("tool_requests"))
-                || ["run_read", "run_submit", "run_stop"]
-                    .iter()
-                    .any(|p| has(p))
                 || [
                     ("actions", "allowActions"),
                     ("logs", "allowLogs"),
@@ -379,7 +469,9 @@ fn validate_services(value: &Value, agents: &[Value], schema: &Value) -> Result<
                 .iter()
                 .any(|(permission, gate)| has(permission) && host[*gate] != true)
             {
-                return Err("invalid or unsupported exact peer grant".into());
+                return Err(format!(
+                    "hostApi.peers[{index}].permissions: requires exact nonempty scope and explicit operation grants"
+                ));
             }
         }
     }
@@ -387,25 +479,26 @@ fn validate_services(value: &Value, agents: &[Value], schema: &Value) -> Result<
         if value["container"]
             .get("backend")
             .is_some_and(|backend| backend != "docker")
-            || mapping.get("bindings").is_none()
         {
-            return Err("workload mapping requires Docker and explicit bindings".into());
+            return Err("workloadMapping: requires the Docker backend".into());
         }
+        let bindings = mapping["bindings"]
+            .as_object()
+            .ok_or("workloadMapping.bindings: explicit bindings are required")?;
         let mut scopes = BTreeSet::new();
-        for (id, binding) in mapping["bindings"].as_object().unwrap() {
-            let agent = agents.iter().find(|agent| {
-                id.strip_prefix("agent-")
-                    .is_some_and(|name| agent["name"] == name)
-            });
-            if agent.is_none_or(|agent| {
-                agent["adapter"] == "pi-durable" || agent["adapter"] == "openclaw"
-            }) || !scopes.insert((
+        for (index, (id, binding)) in bindings.iter().enumerate() {
+            if declared(id).is_none_or(|agent| permanently_stopped(schema, &agent["adapter"])) {
+                return Err(format!(
+                    "workloadMapping.bindings[{index}]: requires an exact declared runnable agent"
+                ));
+            }
+            if !scopes.insert((
                 binding["tenant_id"].as_str().unwrap(),
                 binding["workload_id"].as_str().unwrap(),
             )) {
-                return Err(
-                    "workload binding requires an unambiguous declared runnable agent".into(),
-                );
+                return Err(format!(
+                    "workloadMapping.bindings[{index}]: duplicate tenant and workload scope"
+                ));
             }
         }
     }
@@ -416,29 +509,23 @@ fn validate_services(value: &Value, agents: &[Value], schema: &Value) -> Result<
         let clients = research["agents"]
             .as_object()
             .filter(|clients| !clients.is_empty())
-            .ok_or("Research requires explicit per-agent relay grants")?;
+            .ok_or("research.agents: explicit per-agent relay grants are required")?;
         if value["sandbox"]["profile"] == "dev" {
-            return Err("Research requires a secure profile".into());
+            return Err("sandbox.profile: Research requires a secure profile".into());
         }
         let mut uids = BTreeSet::new();
-        for (id, client) in clients {
-            let agent = agents.iter().find(|agent| {
-                id.strip_prefix("agent-")
-                    .is_some_and(|name| agent["name"] == name)
-            });
-            if agent.is_none_or(|agent| {
-                schema["stoppedAdapters"]
-                    .as_array()
-                    .unwrap()
-                    .contains(&agent["adapter"])
+        for (index, (id, client)) in clients.iter().enumerate() {
+            if declared(id).is_none_or(|agent| {
+                permanently_stopped(schema, &agent["adapter"])
                     || CATALOG["presets"][agent["adapter"].as_str().unwrap()]["research"]["supported"]
                         != true
-            }) || !uids.insert(client["uid"].as_u64().unwrap())
-            {
-                return Err(
-                    "Research requires declared runnable capable agents and distinct relay UIDs"
-                        .into(),
-                );
+            }) {
+                return Err(format!(
+                    "research.agents[{index}]: requires an exact declared runnable Research-capable agent"
+                ));
+            }
+            if !uids.insert(client["uid"].as_u64().unwrap()) {
+                return Err(format!("research.agents[{index}].uid: duplicate relay UID"));
             }
         }
     }
@@ -565,8 +652,16 @@ fn refuse_legacy(path: &Path) -> Result<(), String> {
 
 pub(super) fn run(args: &[String], mode: super::OutputMode) -> Result<u8, String> {
     match run_inner(args, mode) {
-        Err(_) if mode.json => {
-            println!("{{\"schemaVersion\":1,\"valid\":false,\"error\":\"invalid_configuration\"}}");
+        Err(error) if mode.json => {
+            println!(
+                "{}",
+                serde_json::json!({
+                    "schemaVersion": 1,
+                    "valid": false,
+                    "error": "invalid_configuration",
+                    "message": error
+                })
+            );
             Ok(2)
         }
         Err(error) if args.first().is_some_and(|action| action == "migrate") => Err(format!(
@@ -634,6 +729,15 @@ mod tests {
     use serde_json::json;
 
     #[test]
+    fn old_descriptor_metadata_remains_stopped_and_openclaw_is_never_admitted() {
+        let old = json!({"stoppedAdapters": ["pi-durable", "openclaw"]});
+        let current: Value = serde_json::from_str(SCHEMA).unwrap();
+        assert!(permanently_stopped(&old, &json!("pi-durable")));
+        assert!(!permanently_stopped(&current, &json!("pi-durable")));
+        assert!(permanently_stopped(&current, &json!("openclaw")));
+    }
+
+    #[test]
     fn shared_golden_semantics_and_refusals() {
         let corpus: Value =
             serde_json::from_str(include_str!("../../../schema/system-v1-fixtures.json")).unwrap();
@@ -651,8 +755,195 @@ mod tests {
     }
 
     #[test]
-    fn research_relay_limits() {
-        for (count, accepted) in [(128, true), (129, false)] {
+    fn pi_tool_subsets_roundtrip_without_changing_omission_or_explicit_none() {
+        let schema: Value = serde_json::from_str(SCHEMA).unwrap();
+        let all = &schema["agent"]["tools"]["items"]["values"];
+        for tools in [
+            None,
+            Some(json!([])),
+            Some(json!(["research_search"])),
+            Some(all.clone()),
+        ] {
+            let mut value =
+                json!({"schemaVersion":1,"agents":[{"name":"specialist","adapter":"pi-durable"}]});
+            if let Some(tools) = tools {
+                value["agents"][0]["tools"] = tools;
+            }
+            let normalized = normalize(&value).unwrap();
+            assert_eq!(parse(normalized.as_bytes()).unwrap(), value);
+            assert_eq!(
+                normalized.contains("tools ="),
+                value["agents"][0].get("tools").is_some()
+            );
+            for adapter in ["hermes", "zeroclaw", "openclaw"] {
+                if value["agents"][0].get("tools").is_some() {
+                    let mut invalid = value.clone();
+                    invalid["agents"][0]["adapter"] = json!(adapter);
+                    assert!(validate(&invalid).unwrap_err().contains(".tools:"));
+                }
+            }
+        }
+        for tools in [
+            json!(["read"]),
+            json!(["research_search", "research_search"]),
+            Value::Null,
+        ] {
+            let invalid = json!({"schemaVersion":1,"agents":[{"name":"specialist","adapter":"pi-durable","tools":tools}]});
+            assert!(validate(&invalid).unwrap_err().contains(".tools"));
+        }
+    }
+
+    #[test]
+    fn runner_grants_are_independent_and_only_cover_declared_pi_durable_agents() {
+        for permission in ["run_read", "run_submit", "run_stop"] {
+            let value = json!({
+                "schemaVersion":1,"agents":[{"name":"one","adapter":"pi-durable"}],
+                "hostApi":{"enable":true,"peers":[{
+                    "uid":1000,"agents":["agent-one"],"permissions":[permission]
+                }]}
+            });
+            assert_eq!(parse(normalize(&value).unwrap().as_bytes()).unwrap(), value);
+            for adapter in ["hermes", "zeroclaw", "openclaw", "generic"] {
+                let mut invalid = value.clone();
+                invalid["agents"][0]["adapter"] = json!(adapter);
+                if adapter == "generic" {
+                    invalid["agents"][0]["definition"] = json!({
+                        "schemaVersion":1,
+                        "image":"test/image@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                        "command":["/bin/true"]
+                    });
+                }
+                assert!(
+                    validate(&invalid)
+                        .unwrap_err()
+                        .starts_with("hostApi.peers[0].agents[0]:")
+                );
+            }
+        }
+        let agents: Vec<_> = (0..300)
+            .map(|i| json!({"name":format!("runner-{i}"),"adapter":"pi-durable","autoStart":false}))
+            .collect();
+        let ids: Vec<_> = (0..300).map(|i| format!("agent-runner-{i}")).collect();
+        let mut fleet = json!({
+            "schemaVersion":1,"agents":agents,
+            "hostApi":{"enable":true,"peers":[{
+                "uid":1000,"agents":ids,"permissions":["run_read","run_submit","run_stop"]
+            }]}
+        });
+        assert_eq!(parse(normalize(&fleet).unwrap().as_bytes()).unwrap(), fleet);
+        fleet["agents"][299]["adapter"] = json!("hermes");
+        assert_eq!(
+            validate(&fleet).unwrap_err(),
+            "hostApi.peers[0].agents[299]: runner permissions require a declared Pi Durable agent"
+        );
+    }
+
+    #[test]
+    fn validation_diagnostics_use_fixed_fields_and_indexes_not_input_secrets() {
+        for (value, expected) in [
+            (
+                json!({"schemaVersion":1,"agents":[],"DO-NOT-PRINT":{"secret":"DO-NOT-PRINT"}}),
+                "desired system: unknown section",
+            ),
+            (
+                json!({"schemaVersion":1,"agents":[],"hostApi":{"DO-NOT-PRINT":"DO-NOT-PRINT"}}),
+                "hostApi: unknown or unsafe field",
+            ),
+            (
+                json!({"schemaVersion":1,"agents":[{"name":"do-not-print","adapter":"hermes","DO-NOT-PRINT":"DO-NOT-PRINT"}]}),
+                "agents[0]: unknown or unsafe field",
+            ),
+            (
+                json!({"schemaVersion":1,"agents":[{"name":"do-not-print","adapter":"DO-NOT-PRINT"}]}),
+                "agents[0].adapter: invalid or unsupported value",
+            ),
+            (
+                json!({"schemaVersion":1,"agents":[],"research":{"enable":true,"agents":{"DO-NOT-PRINT":{"uid":1}}}}),
+                "research.agents[0]: invalid canonical agent ID",
+            ),
+            (
+                json!({"schemaVersion":1,"agents":[],"research":{"enable":true,"agents":{"agent-do-not-print":{"DO-NOT-PRINT":"DO-NOT-PRINT"}}}}),
+                "research.agents[0]: unknown or unsafe field",
+            ),
+            (
+                json!({"schemaVersion":1,"agents":[],"research":{"enable":true,"agents":{"agent-do-not-print":{"uid":1}}}}),
+                "research.agents[0]: requires an exact declared runnable Research-capable agent",
+            ),
+            (
+                json!({"schemaVersion":1,"agents":[],"hostApi":{"enable":true,"peers":[{"uid":1,"agents":["agent-do-not-print"],"permissions":["read"]}]}}),
+                "hostApi.peers[0].agents[0]: requires an exact declared agent ID",
+            ),
+            (
+                json!({"schemaVersion":1,"agents":[],"workloadMapping":{"enable":true,"bindings":{"agent-do-not-print":{"tenant_id":"DO-NOT-PRINT","workload_id":"DO-NOT-PRINT","policy_revision":"DO-NOT-PRINT"}}}}),
+                "workloadMapping.bindings[0]: requires an exact declared runnable agent",
+            ),
+            (
+                json!({"schemaVersion":1,"agents":[],"storage":{"enable":true,"paths":["/var/lib/do-not-print"],"repositoryFile":"/run/DO-NOT-PRINT","passwordFile":"/run/DO-NOT-PRINT"}}),
+                "storage.paths[0]: requires a canonical state tree or exact declared stateDir",
+            ),
+        ] {
+            let error = validate(&value).unwrap_err();
+            assert_eq!(error, expected);
+            assert!(!error.to_ascii_lowercase().contains("do-not-print"));
+            assert!(!error.chars().any(char::is_control));
+            assert!(error.len() <= 2048);
+        }
+        let mut nested = json!({
+            "schemaVersion":1,"agents":[{"name":"do-not-print","adapter":"generic","definition":{
+                "schemaVersion":1,
+                "image":"test/image@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "command":["/bin/true"],"resources":{"memory":"DO-NOT-PRINT"}
+            }}]
+        });
+        assert_eq!(
+            validate(&nested).unwrap_err(),
+            "agents[0].definition.resources.memory: invalid or unsupported value"
+        );
+        nested["agents"][0]["definition"]["resources"] = json!({"DO-NOT-PRINT":"DO-NOT-PRINT"});
+        assert_eq!(
+            validate(&nested).unwrap_err(),
+            "agents[0].definition.resources: unknown or unsafe field"
+        );
+        assert_eq!(
+            typed(
+                &json!({"uid":1}),
+                &json!({
+                    "type":"object","required":["agents"],"fields":{"uid":{"type":"owner"}}
+                }),
+            )
+            .unwrap_err(),
+            ".agents: field is required"
+        );
+    }
+
+    #[test]
+    fn desired_input_stays_bounded_to_one_mib() {
+        assert_eq!(
+            parse(&vec![b' '; MAX_INPUT as usize + 1]).unwrap_err(),
+            "desired system exceeds 1 MiB"
+        );
+    }
+
+    #[test]
+    fn optional_collection_maxima_preserve_explicit_finite_bounds() {
+        let values = json!(["agent-one", "agent-two", "agent-three"]);
+        let mut list = json!({"type":"list","unique":true,"items":{"type":"agentId"}});
+        typed(&values, &list).unwrap();
+        list["max"] = json!(2);
+        assert_eq!(typed(&values, &list).unwrap_err(), ": too many items");
+        let values = json!({"agent-one":{"uid":1},"agent-two":{"uid":2}});
+        let mut map = json!({
+            "type":"map","keys":{"type":"agentId"},
+            "items":{"type":"object","required":["uid"],"fields":{"uid":{"type":"owner"}}}
+        });
+        typed(&values, &map).unwrap();
+        map["max"] = json!(1);
+        assert_eq!(typed(&values, &map).unwrap_err(), ": too many entries");
+    }
+
+    #[test]
+    fn research_relay_fleets_are_not_count_limited() {
+        for count in [128, 129, 300] {
             let agents: Vec<_> = (0..count)
                 .map(|i| json!({"name":format!("r{i}"),"adapter":"hermes","autoStart":false}))
                 .collect();
@@ -663,12 +954,16 @@ mod tests {
                 "schemaVersion":1, "agents":agents,
                 "research":{"enable":true,"agents":clients}
             });
-            assert_eq!(validate(&value).is_ok(), accepted);
+            validate(&value).unwrap();
+            assert_eq!(parse(normalize(&value).unwrap().as_bytes()).unwrap(), value);
+            let mut duplicate_uid = value.clone();
+            duplicate_uid["research"]["agents"]["agent-r1"]["uid"] = json!(1);
+            assert!(validate(&duplicate_uid).is_err());
         }
     }
 
     #[test]
-    fn service_limits_and_migration_preservation() {
+    fn saved_service_fleets_scale_without_weakening_field_limits() {
         let service = |count: usize| {
             let agents: Vec<_> = (0..count)
                 .map(|i| {
@@ -688,25 +983,59 @@ mod tests {
                 format!("agent-a{i}"),
                 json!({"tenant_id":"tenant","workload_id":format!("w{i}"),"policy_revision":"r"})
             )).collect();
+            let paths: Vec<_> = (0..count)
+                .map(|i| format!("/var/lib/tentaflake/agents/a{i}"))
+                .collect();
             json!({"schemaVersion":1,"agents":agents,"hostApi":{"enable":true,"peers":peers},
-                "workloadMapping":{"enable":true,"bindings":bindings}})
+                "workloadMapping":{"enable":true,"bindings":bindings},
+                "storage":{"enable":true,"paths":paths,
+                    "repositoryFile":"/run/backup/repository","passwordFile":"/run/backup/password"}})
         };
-        for (count, accepted) in [(128, true), (129, false)] {
-            let mut inventory = service(count);
+        for count in [64, 65, 128, 129, 300] {
+            let fleet = service(count);
+            validate(&fleet).unwrap();
+            let mut inventory = fleet;
             inventory["hostApi"] = json!({"enable":false});
             inventory["workloadMapping"] = json!({"enable":false});
-            assert_eq!(validate(&inventory).is_ok(), accepted);
+            validate(&inventory).unwrap();
         }
-        let valid = service(64);
+        let mut valid = service(300);
+        let all_ids: Vec<_> = (0..300).map(|i| format!("agent-a{i}")).collect();
+        valid["hostApi"]["peers"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({"uid":301,"agents":all_ids,"permissions":["read"]}));
+        let paths: Vec<_> = (0..300)
+            .flat_map(|i| {
+                [
+                    format!("/var/lib/tentaflake/agents/a{i}"),
+                    format!("/var/lib/tentaflake/agents/a{i}/workspace"),
+                    format!("/var/lib/tentaflake-broker-llm-agent-a{i}"),
+                ]
+            })
+            .collect();
+        valid["storage"]["paths"] = json!(paths);
         validate(&valid).unwrap();
         let migrated = migrate(&serde_json::to_vec(&valid).unwrap(), true).unwrap();
         assert_eq!(parse(migrated.as_bytes()).unwrap(), valid);
-        let mut too_many = service(65);
-        too_many["workloadMapping"] = json!({"enable":false});
-        assert!(validate(&too_many).is_err());
-        too_many = service(65);
-        too_many["hostApi"] = json!({"enable":false});
-        assert!(validate(&too_many).is_err());
+        let mut host_only = service(65);
+        host_only["workloadMapping"] = json!({"enable":false});
+        validate(&host_only).unwrap();
+        let mut mapping_only = service(65);
+        mapping_only["hostApi"] = json!({"enable":false});
+        validate(&mapping_only).unwrap();
+        let mut duplicate_peer = valid.clone();
+        duplicate_peer["hostApi"]["peers"][300]["uid"] = json!(1);
+        assert!(validate(&duplicate_peer).is_err());
+        let mut duplicate_id = valid.clone();
+        duplicate_id["hostApi"]["peers"][300]["agents"][299] = json!("agent-a0");
+        assert!(validate(&duplicate_id).is_err());
+        let mut duplicate_path = valid.clone();
+        duplicate_path["storage"]["paths"][899] = duplicate_path["storage"]["paths"][0].clone();
+        assert!(validate(&duplicate_path).is_err());
+        let mut duplicate_binding = valid.clone();
+        duplicate_binding["workloadMapping"]["bindings"]["agent-a1"]["workload_id"] = json!("w0");
+        assert!(validate(&duplicate_binding).is_err());
         assert!(
             validate(&json!({"schemaVersion":1,"agents":[],
                 "connectors":{"enable":true,"configFile":format!("/run/{}", "a".repeat(252))}
@@ -722,31 +1051,16 @@ mod tests {
     fn argv_rejects_nul_before_nix_serialization() {
         // Nix rejects NUL at its parser boundary, so it cannot occur in the
         // shared JSON corpus. The Rust boundary must reject it as well.
-        assert!(!matches_type(
-            &json!(["/bin/true\0"]),
-            &json!({"type":"command"})
-        ));
+        assert!(typed(&json!(["/bin/true\0"]), &json!({"type":"command"})).is_err());
     }
 
     #[test]
     fn identity_limits_include_the_runtime_prefix() {
-        assert!(matches_type(
-            &json!("a".repeat(57)),
-            &json!({"type":"name"})
-        ));
-        assert!(!matches_type(
-            &json!("a".repeat(58)),
-            &json!({"type":"name"})
-        ));
-        assert!(matches_type(
-            &json!("a".repeat(63)),
-            &json!({"type":"hostName"})
-        ));
-        assert!(!matches_type(
-            &json!("a".repeat(64)),
-            &json!({"type":"hostName"})
-        ));
-        assert!(!matches_type(&json!("host-"), &json!({"type":"hostName"})));
+        assert!(typed(&json!("a".repeat(57)), &json!({"type":"name"})).is_ok());
+        assert!(typed(&json!("a".repeat(58)), &json!({"type":"name"})).is_err());
+        assert!(typed(&json!("a".repeat(63)), &json!({"type":"hostName"})).is_ok());
+        assert!(typed(&json!("a".repeat(64)), &json!({"type":"hostName"})).is_err());
+        assert!(typed(&json!("host-"), &json!({"type":"hostName"})).is_err());
     }
 
     #[test]

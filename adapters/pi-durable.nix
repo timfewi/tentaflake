@@ -2,31 +2,43 @@
 # quarantine around the pinned SDK, never its unsafe default close/resume path.
 { pkgs, lib, ... }:
 let
+  toolPolicy = import ../lib/piDurableTools.nix { inherit lib; };
+  runtimePolicy =
+    config:
+    {
+      enable = false;
+      package = null;
+      bundle = null;
+      image = null;
+    }
+    // (lib.attrByPath [ "tentaflake" "piDurableRuntime" ] { } config);
+  # Artifact qualification is independent of the OCI engine's configuration.
+  # Admission also reads that configuration, so it cannot select OCI topology:
+  # Docker settings depend on docker.enable, which depends on OCI membership.
+  artifactSelected =
+    config:
+    let
+      policy = runtimePolicy config;
+    in
+    policy.enable
+    && lib.isDerivation policy.package
+    && lib.isDerivation policy.bundle
+    && (policy.package.upstreamRevision or null) == "35dfa757378bd7a8570670e99c2687bdd1039a06"
+    && (policy.bundle.runtimePackage or null) == policy.package
+    && (policy.bundle.imageVerificationVersion or null) == 1
+    && policy.image != null
+    && (policy.bundle.imageSelector or null) == policy.image;
   admitted =
     config: args:
     let
-      policy = {
-        enable = false;
-        package = null;
-        bundle = null;
-        image = null;
-      }
-      // (lib.attrByPath [ "tentaflake" "piDurableRuntime" ] { } config);
       container = "agent-${args.name}";
       root = args.stateDir or "/var/lib/tentaflake/agents/${args.name}";
       broker = lib.attrByPath [ "tentaflake" "broker" "agents" container ] null config;
       worker = lib.attrByPath [ "tentaflake" "worker" "agents" container ] null config;
       quota = lib.attrByPath [ "tentaflake" "workspaceQuota" "agents" container ] null config;
     in
-    policy.enable
-    && lib.isDerivation policy.package
-    && lib.isDerivation policy.bundle
+    artifactSelected config
     && (import ../lib/piDurableTransport.nix { inherit lib pkgs; }).configurationSupported config
-    && (policy.package.upstreamRevision or null) == "35dfa757378bd7a8570670e99c2687bdd1039a06"
-    && (policy.bundle.runtimePackage or null) == policy.package
-    && (policy.bundle.imageVerificationVersion or null) == 1
-    && policy.image != null
-    && (policy.bundle.imageSelector or null) == policy.image
     && lib.attrByPath [ "tentaflake" "security" "profile" ] null config == "balanced"
     && broker != null
     && broker.enable
@@ -106,6 +118,7 @@ scaffold
     (scaffold.metadata args backend)
     // {
       stateStorage = "${args.stateDir or "/var/lib/tentaflake/agents/${args.name}"}/state";
+      tools = toolPolicy.select (args.tools or toolPolicy.supported);
     };
   research = scaffold.preset.research // {
     configure =
@@ -133,8 +146,10 @@ scaffold
       name,
       autoStart ? false,
       stateDir ? "/var/lib/tentaflake/agents/${name}",
+      tools ? toolPolicy.supported,
       settings ? { },
     }@args:
+    assert builtins.deepSeq (toolPolicy.select tools) true;
     { config, ... }:
     if settings != { } then
       throw "tentaflake: Pi Durable has only fixed generated runtime configuration."
@@ -145,7 +160,18 @@ scaffold
       throw "tentaflake: Pi Durable requires a normalized state directory below /var/lib."
     else
       let
-        enabled = lib.attrByPath [ "tentaflake" "piDurableRuntime" "enable" ] false config;
+        accepted = admitted config args;
+        runtimeEnabled = lib.attrByPath [ "tentaflake" "piDurableRuntime" "enable" ] false config;
+        container = "agent-${name}";
+        configured =
+          lib.attrByPath [ "tentaflake" "broker" "agents" container "enable" ] false config
+          || lib.attrByPath [ "tentaflake" "worker" "agents" container "enable" ] false config
+          || lib.attrByPath [ "tentaflake" "workspaceQuota" "agents" container "enable" ] false config
+          || lib.hasAttrByPath [ "tentaflake" "research" "agents" container ] config;
+        # Exact maps may be generated from declaration metadata, but neither
+        # their presence nor artifact selection requires engine configuration.
+        # No maps means a stopped scaffold, including rejected capacity plans.
+        runtimeSelected = artifactSelected config && configured;
       in
       {
         # Module structure must not depend on config: it is collected before
@@ -154,22 +180,27 @@ scaffold
           {
             assertions = [
               {
-                assertion = !enabled || admitted config args;
+                assertion = !runtimeEnabled || !(autoStart || configured) || accepted;
                 message = "tentaflake: Pi Durable runtime admission requires package, bundle, image and exact broker/Research/worker/quota policy.";
               }
               {
-                assertion = enabled || !autoStart;
+                assertion = accepted || !autoStart;
                 message = "tentaflake: unadmitted Pi Durable must keep autoStart = false.";
               }
             ];
           }
-          (lib.mkIf enabled (
+          (lib.mkIf runtimeSelected (
             (import ./pi-durable/runtime.nix { inherit pkgs lib; } {
               inherit name stateDir autoStart;
+              tools = toolPolicy.select tools;
             })
               { inherit config; }
           ))
-          (lib.mkIf (!enabled) ((scaffold.build (args // { autoStart = false; })) { inherit config; }))
+          (lib.mkIf (!runtimeSelected) (
+            (scaffold.build ((builtins.removeAttrs args [ "tools" ]) // { autoStart = false; })) {
+              inherit config;
+            }
+          ))
         ];
       };
 }

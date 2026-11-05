@@ -29,9 +29,12 @@ uid = 62102
 This projects the per-agent map to `tentaflake.research.agents` and enables
 `services.secureResearch`; it does not provision a VPN or provider credentials.
 Names alone confer no permission. The shared Rust/Nix validators require
-distinct non-root relay UIDs and declared runnable Research-capable adapters;
-stopped Pi Durable/OpenClaw and generic OCI cannot opt in. See the complete
-[public permission contract](08-agent-cli.md#public-research-permissions).
+distinct non-root relay UIDs and exact declared Research-capable adapters.
+OpenClaw and generic OCI cannot opt in; Pi bindings express intent but still
+require its exact host admission before a relay can be used. Optional
+[identity-derived Pi provisioning](agent-adapters.md#identity-derived-specialist-provisioning)
+derives that map from admitted startup identities instead of hand-written
+per-agent UIDs. See the complete [public permission contract](08-agent-cli.md#public-research-permissions).
 Existing consumer Nix policy may still set `tentaflake.research.agents` directly;
 disabled or omitted public Research declarations do not override it.
 
@@ -221,8 +224,9 @@ extra runtime arguments fails host evaluation. Secure agents retain the exact
 stock runtime mapping in either backend. An ungranted container cannot select
 Research or Pi Durable transport by name, alias or direct executable path. Unrelated
 consumer runtimes and unmanaged containers remain independent host policy.
-The separately reviewed internal Pi Durable path retains its own `runsc-pi-durable` transport
-and admission checks; this does not admit public stopped Pi Durable declarations.
+The separately reviewed Pi Durable path retains its own `runsc-pi-durable`
+transport and admission checks; a public declaration or binding alone does not
+admit a stopped Pi or select arbitrary MCP tools.
 
 The security manifest declares the exact configured runtime. Live inspection
 compares Docker's runtime name; missing declarations are unknown and a different

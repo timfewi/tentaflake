@@ -99,6 +99,7 @@
     ],
     "checks": [
       "runtime",
+      "pi-durable",
       "evaluate",
       "generated",
       "cli",
@@ -115,6 +116,7 @@
     ],
     "checks": [
       "runtime",
+      "pi-durable",
       "evaluate",
       "generated",
       "static"
@@ -208,6 +210,11 @@
     "paths": [
       "pkgs/tentaflake-pi-durable/**",
       "lib/piDurableTransport.nix",
+      "lib/piDurableProvisioning.nix",
+      "lib/piDurableTools.nix",
+      "modules/pi-durable-provisioning.nix",
+      "tests/pi-durable-provisioning.nix",
+      "tests/fixtures/pi-durable-provisioning/**",
       "tests/pi-durable-runtime-*.nix",
       "tests/local-image-proof.nix"
     ],

@@ -1,6 +1,7 @@
 //! Add stopped declarative workloads; activation remains an explicit host update.
 use super::{Agent, Config, OutputMode, RUNTIME_CATALOG, output_with_timeout};
 use serde_json::{Value, json};
+use std::collections::BTreeSet;
 use std::fs::{self, DirBuilder, File, OpenOptions};
 use std::io::{Read, Write};
 use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
@@ -10,7 +11,6 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use toml_edit::{DocumentMut, Item};
 
 const MAX_INPUT: u64 = 1024 * 1024;
-const MAX_AGENTS: usize = 128;
 
 pub(super) fn template(args: &[String], mode: OutputMode) -> Result<u8, String> {
     if mode.hide {
@@ -170,20 +170,10 @@ fn additions(value: &Value) -> Result<&Vec<Value>, String> {
         return Err("onboarding fragments may contain only schemaVersion, agents and optional _securityNote metadata; edit the desired system separately".into());
     }
     let entries = schema_entries(value)?;
-    if entries.is_empty() || entries.len() > MAX_AGENTS {
-        return Err("onboarding requires between 1 and 128 agent additions".into());
+    if entries.is_empty() {
+        return Err("onboarding requires at least one agent addition".into());
     }
     Ok(entries)
-}
-
-// Conflict projection only: the shared Nix parser validates workload semantics.
-fn identities(value: &Value) -> Result<Vec<String>, String> {
-    let mut result = Vec::new();
-    for entry in schema_entries(value)? {
-        let name = entry["name"].as_str().ok_or("missing agent identity")?;
-        result.push(format!("agent-{name}"));
-    }
-    Ok(result)
 }
 
 fn check_conflicts(
@@ -195,15 +185,17 @@ fn check_conflicts(
         Some(bytes) => parse(bytes)?,
         None => json!({"schemaVersion": 1, "agents": []}),
     };
-    let mut known = identities(&combined)?;
+    let mut known: BTreeSet<_> = schema_entries(&combined)?
+        .iter()
+        .map(|entry| format!("agent-{}", entry["name"].as_str().unwrap()))
+        .collect();
     known.extend(agents.iter().map(|agent| agent.container.clone()));
-    for identity in identities(incoming)? {
-        if known.contains(&identity) {
+    for entry in additions(incoming)? {
+        let identity = format!("agent-{}", entry["name"].as_str().unwrap());
+        if !known.insert(identity) {
             return Err("agent identity conflicts with existing configuration or active inventory; no files changed".into());
         }
-        known.push(identity);
     }
-    additions(incoming)?;
     Ok(())
 }
 
@@ -450,6 +442,53 @@ mod tests {
             {"adapter":"zeroclaw","name":"duplicate","autoStart":false}
         ]});
         assert!(check_conflicts(None, &duplicate, &[]).is_err());
+    }
+
+    #[test]
+    fn imports_preserve_pi_tool_selection_without_importing_host_authority() {
+        let incoming = json!({
+            "schemaVersion": 1,
+            "agents": [
+                {"adapter": "pi-durable", "name": "none", "autoStart": false, "tools": []},
+                {"adapter": "pi-durable", "name": "search", "autoStart": false, "tools": ["research_search"]},
+                {"adapter": "pi-durable", "name": "omitted", "autoStart": false}
+            ]
+        });
+        check_conflicts(None, &incoming, &[]).unwrap();
+        let rendered = serialize_import(None, &incoming).unwrap();
+        assert_eq!(
+            super::super::desired_system::parse(&rendered).unwrap(),
+            incoming
+        );
+        let mut invalid = incoming.clone();
+        invalid["agents"][0]["tools"] = json!(["bash"]);
+        assert!(additions(&invalid).is_err());
+        let mut with_authority = incoming;
+        with_authority["research"] = json!({"enable": true});
+        assert!(additions(&with_authority).is_err());
+    }
+
+    #[test]
+    fn imports_accept_300_stopped_additions_and_keep_byte_bounds() {
+        let agents: Vec<_> = (0..300)
+            .map(|i| json!({"adapter":"hermes","name":format!("new-{i}"),"autoStart":false}))
+            .collect();
+        let incoming = json!({"schemaVersion":1,"agents":agents});
+        let existing = b"schemaVersion = 1\n[[agents]]\nname = 'existing'\nadapter = 'zeroclaw'\nautoStart = false\n";
+        assert_eq!(additions(&incoming).unwrap().len(), 300);
+        check_conflicts(Some(existing), &incoming, &[]).unwrap();
+        let merged = serialize_import(Some(existing), &incoming).unwrap();
+        assert!(merged.len() as u64 <= MAX_INPUT);
+        let value = super::super::desired_system::parse(&merged).unwrap();
+        assert_eq!(value["agents"].as_array().unwrap().len(), 301);
+        assert_eq!(value["agents"][0]["name"], "existing");
+        assert_eq!(value["agents"][300], incoming["agents"][299]);
+        assert!(additions(&json!({"schemaVersion":1,"agents":[]})).is_err());
+        let mut collision = incoming;
+        collision["agents"][299]["name"] = json!("existing");
+        assert!(check_conflicts(Some(existing), &collision, &[]).is_err());
+        let oversized = PrivateInput::new(&vec![b' '; MAX_INPUT as usize + 1]).unwrap();
+        assert!(read_optional(&oversized.path()).is_err());
     }
 
     #[test]

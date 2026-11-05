@@ -77,6 +77,7 @@ let
     servePort = nullable unsigned;
     cmd = nullable strings;
     extraVolumes = strings;
+    tools = strings;
     healDataDirs = strings;
     extraEnvironment =
       value: builtins.isAttrs value && lib.all builtins.isString (builtins.attrValues value);

@@ -3,6 +3,7 @@
   name,
   stateDir,
   autoStart ? false,
+  tools,
 }:
 { config, ... }:
 let
@@ -54,6 +55,7 @@ let
     brokerBaseUrl =
       if brokerEnabled then "http://${broker.gateway}:${toString broker.llm.port}/v1" else "";
     inherit model;
+    inherit tools;
     researchCommand = "${researchPackage}/bin/research-client";
   };
   dependencies = [

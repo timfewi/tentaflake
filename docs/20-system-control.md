@@ -54,6 +54,11 @@ network/devices/tmp, read-only host/home protection, AF_UNIX only, and fixed CPU
 memory, task, descriptor and shutdown budgets. No sudo, credentials or broad
 groups are configured. When builds are disabled the Nix daemon socket is hidden.
 
+The sandbox keeps the live `/run` directory read-only, with only the service's
+runtime directory writable. It does not bind `/run/current-system` or
+`/run/booted-system` individually: binding an observation entry could hide a later
+atomic activation replacement. The desired source likewise stays unpinned.
+
 ## Revision and approval contract
 
 Transport is HTTP/1.1 over the fixed socket, JSON only, `Content-Length` required for POST (optional for an empty GET),
@@ -64,6 +69,9 @@ deadline is five seconds. Clients verify the configured service UID before sendi
 request data. The CLI's deployment path is fixed; browser data cannot select it.
 Normalizer calls have a ten-second deadline and 256 KiB combined output ceiling.
 Errors contain stable codes, never source snippets, subprocess stderr or secrets.
+The validation route additionally returns only the normalizer's structured safe
+diagnostic (fixed schema field paths/indexes, never source values or arbitrary
+unknown field names). Unstructured subprocess output is not a diagnostic.
 
 Canonical revisions are lowercase SHA-256 of the normalized JSON object serialized
 without whitespace, with lexically ordered object keys. HTTP uses the shared
@@ -82,14 +90,67 @@ Hash meanings:
   schema-byte digest and the complete fixed builder settings. Reusing a declared
   policy revision while changing these settings still invalidates approvals.
 
-`GET /v1/system` returns configuration, revision, schema, hashes and capabilities.
-`POST /v1/system/proposals` accepts exactly
-`{request_id, base_revision, configuration}`. It serializes JSON as TOML with
-`toml_edit`, invokes `tentaflake config normalize <private>/tentaflake.toml --json`,
-requires semantic preservation, and durably stores candidate TOML, canonical JSON,
-base, hashes and typed changed paths. A diff entry is
-`{path: "/sandbox/profile", kind: "added" | "removed" | "changed"}`;
+Read-role `GET /v1/system` returns:
+
+```text
+{
+  schema_version: 1,
+  revision,
+  configuration,
+  schema,
+  hashes: {policy, compiler, inputs},
+  capabilities: {propose: boolean, build: boolean, activate: false},
+  observed: {current_system: string | null, booted_system: string | null}
+}
+```
+
+`observed` is additive in protocol version 1. The controller reads the two fixed
+link basenames under `/run` through a no-follow directory descriptor and bounded
+`readlinkat`; it never follows their targets or accepts a request-selected path.
+Each target must be one exact `/nix/store/<hash>-<name>` item (no child path).
+Unreadable, missing, non-link, relative, malformed, oversized or non-UTF-8 targets
+are independently `null`, without failing an otherwise available system response.
+Activation can replace a link between requests; these are live, independent
+observations, not an atomic pair or persisted desired-state fields.
+
+Compare a reviewed built receipt's `output_path` with `current_system` to observe
+which closure is selected now; `booted_system` may legitimately remain older until
+a reboot. Neither a `built` receipt nor either observed path proves application
+health, agent/model acceptance or successful source reconciliation. Health needs
+separate host/application evidence. Observations do not enter desired revisions,
+approval hashes or receipts, and confer no activation authority.
+
+Read-role `GET /v1/system/source` returns exactly
+`{schema_version: 1, revision, source, bytes}`. `source` is the configured desired
+file's exact UTF-8 TOML, including comments, formatting and line endings; `bytes`
+is its UTF-8 byte length. The revision is still the normalized-JSON hash, not a
+source-byte hash. Both reads use the same fixed normalizer and source protections.
+
+Read-role `POST /v1/system/validate` accepts exactly `{source}` and creates no
+proposal, approval, request-ID receipt or build. A valid response is
+`{schema_version: 1, valid: true, revision, configuration, changes}`; changes are
+relative to the current desired configuration. Invalid TOML/schema/policy returns
+HTTP 200 with `{schema_version: 1, valid: false, error: {code, message}}` and no
+revision/configuration. Codes are `invalid_configuration` or
+`sandbox_policy_denied`; the message identifies a safe field path where available.
+Malformed requests, denied roles and unavailable source/compiler infrastructure
+retain the ordinary 400/403/503 responses. Validation enforces the same minimum
+and no-downgrade policy as proposals. The whole JSON request remains at most
+256 KiB (escaping and the envelope count), not 256 KiB of TOML plus overhead.
+
+`POST /v1/system/proposals` accepts exactly one of
+`{request_id, base_revision, configuration}` or
+`{request_id, base_revision, source}`. The configuration form serializes JSON as
+TOML with `toml_edit` and requires semantic preservation. The source form stores
+the submitted TOML bytes unchanged, including comments and formatting. Both
+invoke `tentaflake config normalize <private>/tentaflake.toml --json` and durably
+store candidate TOML, canonical JSON, base, hashes and typed changed paths.
+A diff entry is `{path: "/sandbox/profile", kind: "added" | "removed" | "changed"}`;
 there are no old/new secret excerpts. Proposals return in the `proposal` wrapper.
+Supplying both representations or neither is invalid. Request-ID identity
+includes the submitted representation and exact source string, so reusing an ID
+with changed comments conflicts even when the normalized revision is unchanged.
+Existing configuration-form request fingerprints remain compatible.
 
 `POST /v1/system/proposals/{id}/approve` accepts exactly
 `{request_id, base_revision, revision, hashes}` and returns `approval` with its ID,
@@ -141,12 +202,27 @@ path length (u64 big-endian), path bytes, executable bits (u32 big-endian,
 `mode & 0111`), content length (u64 big-endian) and content bytes, in order, using
 SHA-256. Empty directories have no semantic fingerprint entry but are counted
 against the inventory limit. Operators compute/review this before enabling builds.
+The offline administrative command
+`tentaflake-control template-fingerprint /nix/store/<reviewed-template>` prints
+this exact fingerprint with the same paths, bounds, no-symlink and non-writable
+checks. Offline computation requires one consistent owner instead of UID 0, so it
+also works inside Nix build sandboxes that map immutable input ownership to
+`nobody`. It does not attest deployment ownership: service validation and
+materialization always independently require the real store's root UID.
+The command needs no deployment configuration and exposes no server route or
+browser-selected path.
 
 The only build argv is:
 
 ```text
 <fixed-nix> build --no-link --json --no-write-lock-file <private-candidate>#nixosConfigurations.<fixed-target>.config.system.build.toplevel
 ```
+
+The module resolves the deployment-owned Nix package's `bin/nix` at build time:
+some package versions expose a component symlink. The fixed settings contain its
+real immutable store executable, not the symlink. Service admission still checks
+every component without following links and requires root ownership and no write
+bits; requests cannot select or replace the executable.
 
 Child environments are cleared; only fixed `NIX_REMOTE=daemon`, private state
 `HOME`/`XDG_CACHE_HOME`, and Nix settings retaining sandboxing and disabling fallback
@@ -159,18 +235,24 @@ operator-ready rollout acceptance by itself. Human activation is outside this AP
 
 ## CLI and verification
 
-The installed client provides `system`, `propose`, `approve <proposal-id>`, `build`
-and `status <build-id>`. POST operations read their closed JSON body from stdin;
-GET operations read no input. Example flow is system → propose → inspect changed
-paths → approve exact hashes → build → status. Service startup is
-`tentaflake-control serve <deployment-config>`; this administrative argument is
-not exposed as a request route. Output is JSON and any refusal exits nonzero.
+The installed client provides `system`, `source`, `validate`, `propose`,
+`approve <proposal-id>`, `build` and `status <build-id>`. POST operations read their
+closed JSON body from stdin; GET operations read no input. Example flow is source →
+validate → propose → inspect changed paths → approve exact hashes → build → status.
+Service startup is `tentaflake-control serve <deployment-config>`; this
+administrative argument is not exposed as a request route. Output is JSON and
+any refusal exits nonzero. `validate` also exits nonzero for `valid: false`.
+The fixed client preserves the additive `observed` object in `system` output;
+it does not turn missing observations into a build, activation or health claim.
 
 The repository's `just fast` gate includes the control crate's ordinary unit
 tests. These cover Unix peer/role denial,
 malformed/extra/duplicate fields, revision/policy/compiler drift, no sandbox
 downgrade, stable IDs, receipt restart uncertainty, locks and symlinks, client UID
-verification, bounded synthetic subprocesses and store output paths. Synthetic
+verification, fixed-client source/validation routes, bounded synthetic subprocesses,
+store output paths and exact, independently nullable live-system observations.
+Observation fixtures include malformed/oversized/UTF-8 targets, no-follow parent
+and target checks, regular-file refusal and atomic link replacement. Synthetic
 normalizers are labeled fixtures; the real compiler has its own shared corpus.
 
 An additional **explicitly isolated** test exercises production deployment checks,
@@ -192,9 +274,12 @@ queued/running restart uncertainty without any authorization/recovery bypass:
 3. Run the `control-evaluation` module and package gates.
 
 The immutable fixture tests are deliberately ignored by default because they need
-explicit immutable artifacts and a selected UI checkout; an ordinary fast pass
-does not claim they ran. CI runs `immutable_unix_approval_build_and_recovery_contract`
-with the built fixture and CLI whenever control paths change; the UI adapter
-test still needs a locally selected UI checkout. The UI source is a test input only, never a production
-dependency of this OSS repository. Real Nix-daemon/host output acceptance and all
-activation remain separate operator tiers.
+explicit immutable artifacts; the UI variant additionally needs a selected UI
+checkout. An ordinary fast pass does not claim they ran. CI runs
+`immutable_unix_approval_build_and_recovery_contract` and
+`real_source_validation_and_lossless_build_contract` with the built fixture and
+CLI whenever control paths change. To run those two without a UI checkout, use
+`--ignored --skip ui_adapter_speaks_real_closed_transport`. The UI source is a
+test input only, never a production dependency of this OSS repository.
+Real Nix-daemon/host output acceptance and all activation remain separate
+operator tiers.

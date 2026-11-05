@@ -306,16 +306,18 @@ fn connect(path: &std::path::Path) -> Result<UnixStream> {
 /// Deployment selects the socket and expected server UID, never browser request data.
 pub fn client(config: &Config, method: &str, route: &str, body: &[u8]) -> Result<(u16, Value)> {
     let allowed = (method == "GET"
-        && (route == "/v1/system"
+        && (matches!(route, "/v1/system" | "/v1/system/source")
             || route
                 .strip_prefix("/v1/system/builds/")
                 .is_some_and(crate::identifier)))
         || (method == "POST"
-            && (matches!(route, "/v1/system/proposals" | "/v1/system/builds")
-                || route
-                    .strip_prefix("/v1/system/proposals/")
-                    .and_then(|s| s.strip_suffix("/approve"))
-                    .is_some_and(crate::identifier)));
+            && (matches!(
+                route,
+                "/v1/system/proposals" | "/v1/system/builds" | "/v1/system/validate"
+            ) || route
+                .strip_prefix("/v1/system/proposals/")
+                .and_then(|s| s.strip_suffix("/approve"))
+                .is_some_and(crate::identifier)));
     if !allowed || body.len() > MAX_DOCUMENT {
         return Err("request route or size refused".into());
     }

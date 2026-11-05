@@ -56,6 +56,13 @@ permits required builds.
 
 Focused adapter checks cover common IDs, TOML rejection/validation, lazy
 selection, metadata, scaffold refusal and quota-helper negative cases.
+`checks.*.pi-durable-provisioning` uses the public compiler, pure identity policy
+projection and real host modules for two separately isolated specialists with
+distinct public tool subsets, immutable runner JSON, adding a third without
+manual maps, omitted-field compatibility, 300 stopped declarations, exact admitted
+manual-stop compatibility and missing/cross-agent/capacity refusals. Its runtime
+package/image proof is synthetic and its credential path is never read; this
+is evaluation coverage, not provider/tool/runtime acceptance.
 `checks.*.hardening-journald` covers defaults/overrides and legacy configuration
 refusal. `checks.*.worker-drain-wakeup` boots a NixOS VM with a synthetic host
 and the real API sandbox to cover queue-unlock/oneshot-completion races without
@@ -63,11 +70,24 @@ executing containers. It is a VM gate, not part of `just fast`.
 `checks.*.pi-durable-runtime-vm` boots two admitted Pi Durable capsules on the reviewed
 `runsc-pi-durable` transport without provider calls. `checks.*.workload-mapping-vm`
 and `checks.*.workload-mapping-scale-vm` run the workload observer against real
-rootful Docker/systemd; the scale test keeps all 64 supported bindings live and
-inside the 10-second lease. CI runs these component VMs when Pi Durable or workload
-paths change, and the immutable control-store contract when control changes.
+rootful Docker/systemd; the scale test keeps 65 bindings, above the former count
+ceiling, live and inside the 10-second lease. Its fixed size is a regression
+fixture, not a saved-fleet or runtime-capacity maximum. CI runs these component
+VMs when Pi Durable or workload paths change, and the immutable control-store
+contract when control changes.
 Host and Research VM suites exercise policy integrations, not real vendor
 startup/model/tool acceptance. Keep pending acceptance explicit in the catalog.
+
+The packaged `tentaflake-pi-durable-tools-test` command runs focused real-pinned-SDK
+registry/Unix capability fixtures for explicit no-tools, search-only, all-tools
+and omitted-field compatibility, plus unselected invocation refusal. Research
+initialization is synthetic; no model/provider turn or external tool is invoked.
+After an explicitly authorized package build, run
+`result/bin/tentaflake-pi-durable-tools-test`. The broader packaged
+`tentaflake-pi-durable-test` also checks exact five-tool Research manifest
+validation, durable admission, SDK recovery and shutdown. Schema/compiler and
+Pi tool-policy source changes route to the Pi package/recovery/image and
+evaluation gates in addition to their existing compiler coverage.
 
 For explicitly authorized focused builds, select the actual exported check:
 

@@ -484,6 +484,39 @@ assert lib.all (name: lib.hasInfix "agent\t${name}\t${name}\tpodman-${name}.serv
 assert rejects (toml ./fixtures/adapter-input/unknown-agent-field.toml);
 assert rejects (toml ./fixtures/adapter-input/invalid-auto-start.toml);
 assert rejects (toml ./fixtures/adapter-input/secret-setting.toml);
+assert lib.all
+  (
+    tools:
+    rejects (
+      adapters.pi-durable.build {
+        name = "invalid";
+        inherit tools;
+      }
+    )
+  )
+  [
+    [ "read" ]
+    [
+      "research_search"
+      "research_search"
+    ]
+    null
+  ];
+assert lib.all
+  (
+    adapter:
+    rejects (mkAgent {
+      inherit adapter;
+      name = "invalid";
+      tools = [ ];
+    })
+  )
+  [
+    "hermes"
+    "zeroclaw"
+    "openclaw"
+    "generic"
+  ];
 assert
   registryNames == [
     "generic"

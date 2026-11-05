@@ -41,9 +41,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Make each adapter Nix file the runtime implementation/preset owner; generate
   CLI catalog JSON and docs from those presets. Vendor acceptance stays pending.
 ### Added
+- Add optional Pi-only public `agents[].tools` subsets for the six reviewed
+  Research/offline-worker stable IDs: explicit `[]` registers none; omission
+  preserves existing fixed-toolset consumers. Reject unknown/duplicate IDs and
+  other adapters' use. Enforce the immutable per-agent subset in SDK registration
+  and invocation, report actual registered tools with selection support, and
+  include declared selection in the host policy revision. Retain exact Research
+  manifest validation and broker/worker/Research admission without advancing the SDK.
+- Report the Pi Durable runner's fixed active model in live capabilities so
+  consumers can compare it with exact broker policy instead of presenting
+  private desired text as an applied model. Older/missing or disagreeing model
+  evidence cannot establish effective-model readiness; no switching or live
+  inference acceptance is implied.
+- Add disabled-by-default Pi Durable specialist provisioning from canonical TOML
+  startup identities. A one-time reviewed host policy derives isolated broker,
+  Research relay, worker and separate workspace/state quotas without per-agent
+  Nix maps; finite admitted capacity rejects excess starts, not stopped creation.
+  Keep OCI declaration selection independent of engine transport admission so
+  generated host policies evaluate without a Docker/container fixed-point
+  cycle; exact runtime admission remains mandatory for startup and descriptors.
+  Keep all-stopped fleets independent of a running Research service; the first
+  derived client enables it without inventing clients or weakening the pinned
+  service's nonempty/distinct UID admission requirements.
+- Accept Pi startup and Research declaration intent in both public validators
+  while retaining exact host admission. Unadmitted stopped identities remain
+  refusal units, including on admitted hosts; explicitly admitted stopped
+  instances retain manual-start support. Role/display metadata grants nothing.
 - Add optional Rust system control with exact Unix-peer roles, revision-bound
   drafts/approvals and durable fixed-target build receipts. It never edits the
   live desired source or activates a host; uncertain builds are not replayed.
+- Preserve exact desired TOML comments/formatting through source reads and
+  source-form proposals/builds. Add read-role source validation with safe
+  field-path diagnostics and an offline immutable-template fingerprint command.
+- Expose independently nullable current/booted system closure observations to
+  read-role control clients, using bounded no-follow link reads. Build receipts
+  still imply neither activation nor health.
+- Remove arbitrary saved-fleet, onboarding, Research, backup, peer-agent and
+  workload-binding count ceilings. Keep finite input/output bytes, parser,
+  resource, execution-concurrency and receipt limits.
+- Admit independent exact-scoped Pi Durable runner grants in schema-v1 desired
+  state without admitting a runtime, image, credentials or stopped agent.
+- Resolve a deployment-owned Nix package's component symlink before fixing the
+  builder executable path, without relaxing runtime no-follow/ownership checks.
 - Add an opt-in read-only Drive/Gmail/HubSpot connector gateway with exact
   resource grants and runtime-only credential provisioning, plus evidence-linked
   advisory proposals without remediation authority. Live account acceptance

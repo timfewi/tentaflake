@@ -12,7 +12,6 @@ use std::time::{Duration, Instant};
 pub const MAX_GENERATION: u64 = 9_007_199_254_740_991;
 pub const STATE: &str = "/var/lib/tentaflake-workloads";
 pub const RUNTIME: &str = "/run/tentaflake-workloads";
-pub const MAX_BINDINGS: usize = 64;
 /// Consumers' maximum manifest lease.
 pub const MANIFEST_LEASE: Duration = Duration::from_secs(10);
 /// Cycles start at most this often.
@@ -111,7 +110,7 @@ pub fn valid_id(s: &str) -> bool {
         && s != ".."
 }
 pub fn validate_policy(p: &Policy) -> Result<()> {
-    if p.version != 1 || p.bindings.len() > MAX_BINDINGS {
+    if p.version != 1 {
         return Err(invalid());
     }
     for executable in [&p.docker, &p.systemctl] {
@@ -563,7 +562,6 @@ impl Authority {
     pub fn validate(&self) -> Result<()> {
         if self.version != 1
             || self.counter > MAX_GENERATION
-            || self.entries.len() > MAX_BINDINGS
             || self.entries.iter().any(|(id, e)| {
                 !valid_id(id)
                     || e.generation == 0
@@ -608,6 +606,68 @@ mod tests {
             policy_revision: "r1".into(),
             unit: "docker-agent-a.service".into(),
         }
+    }
+    #[test]
+    fn three_hundred_bindings_preserve_policy_and_authority_validation() {
+        let executable = fs::canonicalize(on_path("bash")).unwrap();
+        let executable = executable.to_str().unwrap();
+        let bindings: Vec<_> = (0..300)
+            .map(|i| Binding {
+                agent_id: format!("agent-{i}"),
+                unit: format!("docker-agent-{i}.service"),
+                workload_id: format!("w{i}"),
+                ..binding()
+            })
+            .collect();
+        let bytes = serde_json::to_vec(&serde_json::json!({
+            "version": 1,
+            "docker": executable,
+            "systemctl": executable,
+            "bindings": bindings,
+        }))
+        .unwrap();
+        // The fixed policy loader's byte bound, not a binding-count allowance.
+        assert!(bytes.len() <= 65_536);
+        let mut policy: Policy = serde_json::from_slice(&bytes).unwrap();
+        validate_policy(&policy).unwrap();
+        assert_eq!(policy.bindings.len(), 300);
+        let mut authority = Authority::empty();
+        for b in &policy.bindings {
+            authority.assign(b, &None).unwrap();
+        }
+        authority.validate().unwrap();
+        assert_eq!(authority.counter, 300);
+        let bytes = serde_json::to_vec(&authority).unwrap();
+        // Durable authority reads and atomic publication retain their byte cap.
+        assert!(bytes.len() <= 262_144);
+        let mut restored: Authority = serde_json::from_slice(&bytes).unwrap();
+        restored.validate().unwrap();
+        assert_eq!(restored.entries.len(), 300);
+        assert!(
+            policy
+                .bindings
+                .iter()
+                .all(|b| restored.entries.contains_key(&b.agent_id))
+        );
+
+        policy.bindings.push(policy.bindings[0].clone());
+        assert!(validate_policy(&policy).is_err());
+        let _ = policy.bindings.pop();
+        let last = policy.bindings.last().unwrap().clone();
+        policy.bindings.last_mut().unwrap().workload_id = "w0".into();
+        assert!(validate_policy(&policy).is_err());
+        *policy.bindings.last_mut().unwrap() = last.clone();
+        policy.bindings.last_mut().unwrap().unit = "docker-other.service".into();
+        assert!(validate_policy(&policy).is_err());
+        *policy.bindings.last_mut().unwrap() = last;
+        policy.bindings.last_mut().unwrap().agent_id = "undeclared".into();
+        policy.bindings.last_mut().unwrap().unit = "docker-undeclared.service".into();
+        assert!(validate_policy(&policy).is_err());
+        restored.entries.get_mut("agent-299").unwrap().generation = 0;
+        assert!(restored.validate().is_err());
+        restored.entries.get_mut("agent-299").unwrap().generation = 300;
+        restored.entries.get_mut("agent-299").unwrap().fingerprint = "x".repeat(8193);
+        assert!(restored.validate().is_err());
     }
     #[test]
     fn scope_ids_match_projection_bounds() {
@@ -693,7 +753,8 @@ mod tests {
             .to_owned()
     }
     #[test]
-    fn sixty_four_bindings_cost_four_commands_inside_the_lease() {
+    fn three_hundred_bindings_cost_four_commands_inside_the_lease() {
+        const BINDINGS: usize = 300;
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../target/test-tmp")
             .join(format!("workloads-batch-{}", std::process::id()));
@@ -701,7 +762,7 @@ mod tests {
         fs::create_dir_all(&root).unwrap();
         let log = root.join("calls");
         let (bash, sleep) = (on_path("bash"), on_path("sleep"));
-        // Each fake command takes 200 ms; a per-binding design needs 51 s here.
+        // Each fake command takes 200 ms; a per-binding design needs 240 s here.
         let tool = |name: &str, line: &str| {
             let path = root.join(name);
             fs::write(
@@ -719,7 +780,7 @@ mod tests {
             version: 1,
             docker: tool("docker", &format!("/%s {} 4242 true\\n", "0".repeat(64))),
             systemctl: tool("systemctl", "Id=%s\\nActiveState=active\\n\\n"),
-            bindings: (0..MAX_BINDINGS)
+            bindings: (0..BINDINGS)
                 .map(|i| Binding {
                     agent_id: format!("agent-{i}"),
                     unit: format!("docker-agent-{i}.service"),
@@ -733,7 +794,7 @@ mod tests {
         let elapsed = started.elapsed();
         let calls = fs::read_to_string(&log).unwrap();
         fs::remove_dir_all(&root).unwrap();
-        assert_eq!(identities.len(), MAX_BINDINGS);
+        assert_eq!(identities.len(), BINDINGS);
         // The fake PID is not a Docker scope, so kernel verification refuses it.
         assert!(identities.iter().all(Option::is_none));
         assert_eq!(

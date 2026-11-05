@@ -1,6 +1,7 @@
 use super::*;
 use std::io::{Read, Write};
 use std::os::fd::AsRawFd;
+use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::{DirBuilderExt, PermissionsExt, symlink};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::sync::{
@@ -44,7 +45,27 @@ impl Fixture {
         let normalizer = root.join("mock-normalizer");
         let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".into());
         // A fixed synthetic schema compiler, not a replacement for the shared real-schema corpus.
-        fs::write(&normalizer, format!("#!{shell}\n[ \"$1\" = config ] && [ \"$2\" = normalize ] && [ \"$4\" = --json ] || exit 9\ntext=\nwhile IFS= read -r line || [ -n \"$line\" ]; do text=\"$text$line\"; done < \"$3\"\ncase \"$text\" in\n *invalid*) exit 2;;\n *strict*) printf '%s' '{{\"schemaVersion\":1,\"agents\":[],\"sandbox\":{{\"profile\":\"strict\"}}}}';;\n *balanced*) printf '%s' '{{\"schemaVersion\":1,\"agents\":[],\"sandbox\":{{\"profile\":\"balanced\"}}}}';;\n *) printf '%s' '{{\"schemaVersion\":1,\"agents\":[]}}';;\nesac\n")).unwrap();
+        fs::write(
+            &normalizer,
+            format!(
+                r#"#!{shell}
+[ "$1" = config ] && [ "$2" = normalize ] && [ "$4" = --json ] || exit 9
+text=
+while IFS= read -r line || [ -n "$line" ]; do text="$text$line"; done < "$3"
+case "$text" in
+ *invalid*)
+   printf '%s' '{{"schemaVersion":1,"valid":false,"error":"invalid_configuration","message":"/agents/0/adapter: unsupported configuration value or invalid field type"}}'
+   printf 'private source diagnostic' >&2
+   exit 2;;
+ *strict*) printf '%s' '{{"schemaVersion":1,"agents":[],"sandbox":{{"profile":"strict"}}}}';;
+ *balanced*) printf '%s' '{{"schemaVersion":1,"agents":[],"sandbox":{{"profile":"balanced"}}}}';;
+ *dev*) printf '%s' '{{"schemaVersion":1,"agents":[],"sandbox":{{"profile":"dev"}}}}';;
+ *) printf '%s' '{{"schemaVersion":1,"agents":[]}}';;
+esac
+"#
+            ),
+        )
+        .unwrap();
         fs::set_permissions(&normalizer, fs::Permissions::from_mode(0o700)).unwrap();
         let schema = root.join("schema.json");
         fs::write(&schema, b"{}").unwrap();
@@ -191,6 +212,144 @@ fn unix_peer_and_role_are_exact_no_root_bypass() {
     assert!(e.lock().unwrap().state.requests.is_empty());
 }
 #[test]
+fn observed_links_are_exact_bounded_independent_and_fresh() {
+    let f = Fixture::new();
+    let current = "/nix/store/00000000000000000000000000000000-current-system";
+    let booted = "/nix/store/11111111111111111111111111111111-booted-system";
+    let current_link = f.root.join("current-system");
+    symlink(current, &current_link).unwrap();
+    symlink(booted, f.root.join("booted-system")).unwrap();
+    assert_eq!(
+        observed_systems(&f.root),
+        json!({"current_system":current,"booted_system":booted})
+    );
+    for target in [
+        "../nix/store/00000000000000000000000000000000-relative".into(),
+        "/etc/passwd".into(),
+        format!("{current}/bin/switch-to-configuration"),
+        "/nix/store/../00000000000000000000000000000000-traversal".into(),
+        "/nix/store/eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee-invalid-hash".into(),
+        format!("{current}\n"),
+        format!("/nix/store/{}-{}", "0".repeat(32), "a".repeat(212)),
+        format!("/nix/store/{}-{}", "0".repeat(32), "a".repeat(600)),
+    ] {
+        fs::remove_file(&current_link).unwrap();
+        symlink(target, &current_link).unwrap();
+        assert_eq!(
+            observed_systems(&f.root),
+            json!({"current_system":null,"booted_system":booted})
+        );
+    }
+    fs::remove_file(&current_link).unwrap();
+    symlink(
+        std::ffi::OsStr::from_bytes(b"/nix/store/00000000000000000000000000000000-\xff"),
+        &current_link,
+    )
+    .unwrap();
+    assert_eq!(observed_systems(&f.root)["current_system"], Value::Null);
+    fs::remove_file(&current_link).unwrap();
+    let longest = format!("/nix/store/{}-{}", "0".repeat(32), "a".repeat(211));
+    assert_eq!(longest.len(), 255);
+    symlink(&longest, &current_link).unwrap();
+    assert_eq!(observed_systems(&f.root)["current_system"], longest);
+    let replacement = f.root.join("current-system.next");
+    symlink(current, &replacement).unwrap();
+    fs::rename(replacement, &current_link).unwrap();
+    assert_eq!(
+        observed_systems(&f.root),
+        json!({"current_system":current,"booted_system":booted})
+    );
+}
+
+#[test]
+fn unavailable_observations_never_follow_parents_targets_or_regular_files() {
+    let f = Fixture::new();
+    let unknown = json!({"current_system":null,"booted_system":null});
+    assert_eq!(observed_systems(&f.root), unknown);
+    assert_eq!(observed_systems(&f.root.join("missing")), unknown);
+    assert_eq!(observed_systems(&f.config.source), unknown);
+    let store_item = "/nix/store/00000000000000000000000000000000-fixture";
+    fs::write(f.root.join("current-system"), store_item).unwrap();
+    assert_eq!(observed_systems(&f.root), unknown);
+    fs::remove_file(f.root.join("current-system")).unwrap();
+    symlink(store_item, f.root.join("indirect")).unwrap();
+    symlink("indirect", f.root.join("current-system")).unwrap();
+    assert_eq!(observed_systems(&f.root), unknown);
+    symlink(store_item, f.root.join("booted-system")).unwrap();
+    let parent_link = f.root.join("linked-parent");
+    symlink(&f.root, &parent_link).unwrap();
+    assert_eq!(observed_systems(&parent_link), unknown);
+    fs::create_dir(f.root.join("run")).unwrap();
+    assert_eq!(observed_systems(&parent_link.join("run")), unknown);
+}
+
+#[test]
+fn fixed_client_keeps_observations_and_allows_read_role_source_routes() {
+    let f = Fixture::new();
+    let mut engine = f.open();
+    engine.config.peers[0].roles = vec![Role::Read];
+    let config = engine.config.clone();
+    let engine = Arc::new(Mutex::new(engine));
+    let listener = UnixListener::bind(&config.socket).unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let server = Arc::clone(&engine);
+    let task = std::thread::spawn(move || {
+        let start = std::time::Instant::now();
+        let mut requests = 0;
+        while requests < 3 && start.elapsed() < Duration::from_secs(15) {
+            match listener.accept() {
+                Ok((stream, _)) => {
+                    transport::serve_connection(stream, &server).unwrap();
+                    requests += 1;
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    std::thread::sleep(Duration::from_millis(2));
+                }
+                Err(error) => panic!("fixture listener: {error}"),
+            }
+        }
+        requests
+    });
+    let validation = serde_json::to_vec(&json!({"source":"schemaVersion=1\nagents=[]\n"})).unwrap();
+    let responses = [
+        transport::client(&config, "GET", "/v1/system", b""),
+        transport::client(&config, "GET", "/v1/system/source", b""),
+        transport::client(&config, "POST", "/v1/system/validate", &validation),
+    ];
+    assert_eq!(task.join().unwrap(), 3);
+    for response in &responses {
+        assert_eq!(response.as_ref().unwrap().0, 200);
+    }
+    let system = &responses[0].as_ref().unwrap().1;
+    let observed = system["observed"].as_object().unwrap();
+    assert_eq!(observed.len(), 2);
+    for key in ["current_system", "booted_system"] {
+        assert!(
+            observed[key].is_null() || observed[key].as_str().is_some_and(template::output_path)
+        );
+    }
+    assert_eq!(
+        system["capabilities"],
+        json!({"propose":false,"build":false,"activate":false})
+    );
+    assert_eq!(
+        responses[1].as_ref().unwrap().1["source"],
+        "schemaVersion = 1\nagents = []\n"
+    );
+    assert_eq!(responses[2].as_ref().unwrap().1["valid"], true);
+    assert!(engine.lock().unwrap().state.requests.is_empty());
+    for (method, route) in [
+        ("POST", "/v1/system/source"),
+        ("GET", "/v1/system/validate"),
+    ] {
+        assert_eq!(
+            transport::client(&config, method, route, b"").unwrap_err(),
+            "request route or size refused"
+        );
+    }
+}
+
+#[test]
 fn unix_malformed_closed_fields_and_nested_duplicates() {
     let f = Fixture::new();
     let e = Arc::new(Mutex::new(f.open()));
@@ -215,11 +374,204 @@ fn unix_malformed_closed_fields_and_nested_duplicates() {
     assert_eq!(http(e.clone(), b"POST /v1/system/proposals HTTP/1.1\r\nTransfer-Encoding: chunked\r\nContent-Length: 0\r\n\r\n").0, 400);
     assert!(e.lock().unwrap().state.requests.is_empty());
 }
+
+#[test]
+fn source_reads_and_proposals_preserve_exact_utf8_and_semantic_revisions() {
+    let f = Fixture::new();
+    let source = "# Public résumé\r\nschemaVersion=1\r\nagents = [] # retained\r\n";
+    fs::write(&f.config.source, source).unwrap();
+    let mut e = f.open();
+    let current = call(&mut e, "GET", "/v1/system/source", Value::Null).unwrap();
+    assert_eq!(current["source"], source);
+    assert_eq!(current["bytes"], source.len());
+    let system = call(&mut e, "GET", "/v1/system", Value::Null).unwrap();
+    assert_eq!(current["revision"], system["revision"]);
+    let candidate = format!("{source}\n# preserved candidate formatting\n");
+    let body =
+        json!({"request_id":"source1","base_revision":current["revision"],"source":candidate});
+    let proposal = call(&mut e, "POST", "/v1/system/proposals", body.clone()).unwrap();
+    assert_eq!(proposal["proposal"]["revision"], current["revision"]);
+    assert_eq!(e.state.proposals["p_source1"].toml, candidate);
+    assert_eq!(
+        call(&mut e, "POST", "/v1/system/proposals", body.clone()).unwrap(),
+        proposal
+    );
+    let mut changed = body.clone();
+    changed["source"] = json!(format!("{candidate}# another comment\n"));
+    assert_eq!(
+        call(&mut e, "POST", "/v1/system/proposals", changed)
+            .unwrap_err()
+            .status,
+        409
+    );
+    let approval = approval(&mut e, &proposal["proposal"], "source_approval");
+    assert_eq!(approval["revision"], current["revision"]);
+    drop(e);
+    let mut e = f.open();
+    assert_eq!(e.state.proposals["p_source1"].toml, candidate);
+    assert_eq!(
+        call(&mut e, "POST", "/v1/system/proposals", body).unwrap(),
+        proposal
+    );
+    assert_eq!(fs::read_to_string(&f.config.source).unwrap(), source);
+}
+
+#[test]
+fn validation_is_read_only_and_reports_only_structured_safe_diagnostics() {
+    let f = Fixture::new();
+    let mut e = f.open();
+    e.config.peers[0].roles = vec![Role::Read];
+    let before = fs::read(f.config.state.join("receipts.json")).unwrap();
+    let valid = call(
+        &mut e,
+        "POST",
+        "/v1/system/validate",
+        json!({"source":"schemaVersion=1\nagents=[]\n[sandbox]\nprofile=\"strict\"\n"}),
+    )
+    .unwrap();
+    assert_eq!(valid["valid"], true);
+    assert_eq!(valid["revision"], revision(&valid["configuration"]));
+    assert_eq!(
+        valid["changes"],
+        json!([{"path":"/sandbox","kind":"added"}])
+    );
+    let invalid = call(
+        &mut e,
+        "POST",
+        "/v1/system/validate",
+        json!({"source":"invalid private-value"}),
+    )
+    .unwrap();
+    assert_eq!(
+        invalid,
+        json!({"schema_version":1,"valid":false,"error":{"code":"invalid_configuration","message":"/agents/0/adapter: unsupported configuration value or invalid field type"}})
+    );
+    assert!(!invalid.to_string().contains("private"));
+    assert!(invalid.get("configuration").is_none());
+    let denied = call(
+        &mut e,
+        "POST",
+        "/v1/system/validate",
+        json!({"source":"schemaVersion=1\nagents=[]\n[sandbox]\nprofile=\"dev\"\n"}),
+    )
+    .unwrap();
+    assert_eq!(denied["valid"], false);
+    assert_eq!(denied["error"]["code"], "sandbox_policy_denied");
+    assert_eq!(
+        fs::read(f.config.state.join("receipts.json")).unwrap(),
+        before
+    );
+    assert!(e.state.proposals.is_empty());
+    assert!(e.state.requests.is_empty());
+    e.config.peers[0].roles = vec![Role::Propose];
+    assert_eq!(
+        call(&mut e, "GET", "/v1/system/source", Value::Null)
+            .unwrap_err()
+            .status,
+        403
+    );
+    assert_eq!(
+        call(&mut e, "POST", "/v1/system/validate", json!({"source":""}))
+            .unwrap_err()
+            .status,
+        403
+    );
+}
+
+#[test]
+fn source_routes_reject_ambiguous_fields_and_keep_request_limits() {
+    let f = Fixture::new();
+    let e = Arc::new(Mutex::new(f.open()));
+    for body in [
+        r#"{"request_id":"x","base_revision":"x"}"#,
+        r#"{"request_id":"x","base_revision":"x","configuration":{},"source":""}"#,
+        r#"{"request_id":"x","base_revision":"x","source":"","command":"nix"}"#,
+        r#"{"request_id":"x","base_revision":"x","source":"","source":"changed"}"#,
+    ] {
+        assert_eq!(
+            http(e.clone(), &request("POST", "/v1/system/proposals", body)).0,
+            400
+        );
+    }
+    for body in [
+        r#"{"source":"","extra":true}"#,
+        r#"{"source":null}"#,
+        r#"{"source":"","source":"changed"}"#,
+    ] {
+        assert_eq!(
+            http(e.clone(), &request("POST", "/v1/system/validate", body)).0,
+            400
+        );
+    }
+    let large = serde_json::to_vec(&json!({"source":" ".repeat(MAX_DOCUMENT)})).unwrap();
+    assert_eq!(
+        e.lock()
+            .unwrap()
+            .handle(
+                unsafe { libc::geteuid() },
+                "POST",
+                "/v1/system/validate",
+                &large
+            )
+            .unwrap_err()
+            .status,
+        413
+    );
+    assert_eq!(
+        http(e.clone(), &request("GET", "/v1/system/source", "{}")).0,
+        400
+    );
+    assert!(e.lock().unwrap().state.requests.is_empty());
+}
+
+#[test]
+fn legacy_and_unstructured_normalizer_errors_never_expose_subprocess_text() {
+    let f = Fixture::new();
+    let mut e = f.open();
+    for (body, status, message) in [
+        (
+            "printf '%s' '{\"schemaVersion\":1,\"valid\":false,\"error\":\"invalid_configuration\"}'; exit 2",
+            200,
+            Some("Invalid desired-system configuration"),
+        ),
+        (
+            "printf '%s' 'private unstructured output'; printf 'private stderr' >&2; exit 2",
+            503,
+            None,
+        ),
+        (
+            "printf '%s' '{\"schemaVersion\":1,\"valid\":false,\"error\":\"invalid_configuration\",\"message\":\"private\",\"extra\":\"private\"}'; exit 2",
+            503,
+            None,
+        ),
+    ] {
+        // Keep current source valid; use the failure script only for the candidate.
+        let normalizer = f.script("diagnostic-normalizer", &format!("text=\nwhile IFS= read -r line || [ -n \"$line\" ]; do text=\"$text$line\"; done < \"$3\"\ncase \"$text\" in *candidate*) {body};; *) printf '%s' '{{\"schemaVersion\":1,\"agents\":[]}}';; esac"));
+        e.config.normalizer = normalizer.clone();
+        e.config.hashes.compiler = digest(&fs::read(normalizer).unwrap());
+        let response = call(
+            &mut e,
+            "POST",
+            "/v1/system/validate",
+            json!({"source":"candidate"}),
+        );
+        if let Some(message) = message {
+            assert_eq!(response.unwrap()["error"]["message"], message);
+        } else {
+            assert_eq!(response.unwrap_err().status, status);
+        }
+    }
+}
 #[test]
 fn draft_replay_and_conflicting_request_ids_are_durable() {
     let f = Fixture::new();
     let mut e = f.open();
     let proposal = draft(&mut e, "draft1");
+    let original_request = json!(["/v1/system/proposals", {"request_id":"draft1","base_revision":proposal["base_revision"],"configuration":proposal["configuration"]}]);
+    assert_eq!(
+        e.state.requests["draft1"].fingerprint,
+        revision(&original_request)
+    );
     assert_eq!(draft(&mut e, "draft1"), proposal);
     let bad = call(
         &mut e,
@@ -381,6 +733,7 @@ fn storage_lock_symlinks_and_immutable_template_are_enforced() {
         storage::read_file(&f.root.join("linked-parent/tentaflake.toml"), MAX_DOCUMENT).is_err()
     );
     assert!(template::fingerprint(&f.root).is_err());
+    assert!(template::fingerprint_for_review(&f.root).is_err());
     assert!(Engine::open(f.config.clone()).is_err());
     drop(e);
     fs::remove_file(f.config.state.join("receipts.json")).unwrap();

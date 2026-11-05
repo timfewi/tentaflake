@@ -5,8 +5,23 @@ use std::os::unix::process::CommandExt;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
+pub struct Output {
+    pub success: bool,
+    pub stdout: Vec<u8>,
+}
+
 /// No shell, inherited environment, unbounded pipe readers or detached descendants.
 pub fn run(command: &mut Command, deadline: Duration, limit: usize) -> Result<Vec<u8>> {
+    let output = capture(command, deadline, limit)?;
+    if output.success {
+        Ok(output.stdout)
+    } else {
+        Err("fixed executable failed".into())
+    }
+}
+
+/// Capture only bounded stdout and exit status; stderr is counted but never exposed.
+pub fn capture(command: &mut Command, deadline: Duration, limit: usize) -> Result<Output> {
     let home = command
         .get_current_dir()
         .unwrap_or(std::path::Path::new("/var/empty"))
@@ -87,11 +102,10 @@ pub fn run(command: &mut Command, deadline: Duration, limit: usize) -> Result<Ve
         if let Some(success) = exited
             && done.iter().all(|v| *v)
         {
-            break if success {
-                Ok(output)
-            } else {
-                Err("fixed executable failed".into())
-            };
+            break Ok(Output {
+                success,
+                stdout: output,
+            });
         }
         std::thread::sleep(Duration::from_millis(2));
     };

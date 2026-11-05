@@ -1,6 +1,9 @@
 {
   "schemaVersion": 1,
   "stoppedAdapters": ["pi-durable", "openclaw"],
+  "hostAdmittedAdapters": ["pi-durable"],
+  "runnerAdapters": ["pi-durable"],
+  "runnerPermissions": ["run_read", "run_submit", "run_stop"],
   "sections": {
     "system": {
       "hostName": { "type": "hostName", "path": ["tentaflake", "hostName"] },
@@ -17,7 +20,7 @@
     "storage": {
       "enable": { "type": "bool", "enabledPath": ["tentaflake", "backup", "enable"] },
       "paths": {
-        "type": "list", "max": 128, "unique": true,
+        "type": "list", "unique": true,
         "items": { "type": "backupPath", "excludedRoots": ["/var/lib/docker", "/var/lib/containers"] },
         "path": ["tentaflake", "backup", "paths"]
       },
@@ -44,7 +47,7 @@
     "research": {
       "enable": { "type": "bool", "enabledPath": ["services", "secureResearch", "enable"] },
       "agents": {
-        "type": "map", "max": 128, "keys": { "type": "agentId" },
+        "type": "map", "keys": { "type": "agentId" },
         "path": ["tentaflake", "research", "agents"],
         "items": { "type": "object", "required": ["uid"], "fields": {
           "uid": { "type": "owner" }
@@ -58,10 +61,10 @@
       "allowToolRequests": { "type": "bool", "path": ["tentaflake", "hostApi", "allowToolRequests"] },
       "allowToolDecisions": { "type": "bool", "path": ["tentaflake", "hostApi", "allowToolDecisions"] },
       "peers": {
-        "type": "list", "max": 64, "uniqueBy": "uid", "path": ["tentaflake", "hostApi", "peers"],
+        "type": "list", "uniqueBy": "uid", "path": ["tentaflake", "hostApi", "peers"],
         "items": { "type": "object", "required": ["uid", "agents", "permissions"], "fields": {
           "uid": { "type": "owner" },
-          "agents": { "type": "list", "max": 128, "unique": true, "items": { "type": "agentId" } },
+          "agents": { "type": "list", "unique": true, "items": { "type": "agentId" } },
           "permissions": { "type": "list", "max": 10, "unique": true, "items": {
             "type": "enum", "values": ["read", "actions", "logs", "propose", "tool_requests", "tool_decisions", "host_health", "run_read", "run_submit", "run_stop"]
           } }
@@ -76,7 +79,7 @@
     "workloadMapping": {
       "enable": { "type": "bool", "path": ["tentaflake", "workloadMapping", "enable"] },
       "bindings": {
-        "type": "map", "max": 64, "keys": { "type": "agentId" },
+        "type": "map", "keys": { "type": "agentId" },
         "path": ["tentaflake", "workloadMapping", "bindings"],
         "items": { "type": "object", "required": ["tenant_id", "workload_id", "policy_revision"], "fields": {
           "tenant_id": { "type": "exactId" },
@@ -92,6 +95,13 @@
     "adapter": { "type": "enum", "values": ["hermes", "zeroclaw", "pi-durable", "openclaw", "generic"] },
     "autoStart": { "type": "bool", "adapters": ["hermes", "zeroclaw", "pi-durable", "openclaw"] },
     "stateDir": { "type": "statePath", "excludedRoots": ["/var/lib/docker", "/var/lib/containers"], "adapters": ["hermes", "zeroclaw", "pi-durable", "openclaw"] },
+    "tools": {
+      "type": "list", "unique": true, "adapters": ["pi-durable"],
+      "items": { "type": "enum", "values": [
+        "research_job", "research_search", "research_fetch",
+        "research_browser", "research_read", "offline_worker"
+      ] }
+    },
     "definition": {
       "type": "runtimeDefinition",
       "adapters": ["generic"],

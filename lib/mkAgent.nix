@@ -28,6 +28,9 @@ else
     tentaflake.agentDeclarations = [
       (
         selected.metadata options config.virtualisation.oci-containers.backend
+        // {
+          autoStart = options.autoStart or false;
+        }
         // lib.optionalAttrs (selected ? admitted) {
           runnable = selected.admitted config options;
         }

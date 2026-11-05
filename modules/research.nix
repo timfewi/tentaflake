@@ -81,7 +81,9 @@ in
         };
       in
       {
-        assertion = lib.all (volume: lib.elem volume (containers.${name}.volumes or [ ])) client.volumes;
+        assertion =
+          builtins.hasAttr name containers
+          && lib.all (volume: lib.elem volume (containers.${name}.volumes or [ ])) client.volumes;
         message = "Research agent ${name} must retain its exact read-only client closure and relay socket mounts.";
       }
     ) cfg.agents
