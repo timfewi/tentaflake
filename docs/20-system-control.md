@@ -142,6 +142,12 @@ path length (u64 big-endian), path bytes, executable bits (u32 big-endian,
 SHA-256. Empty directories have no semantic fingerprint entry but are counted
 against the inventory limit. Operators compute/review this before enabling builds.
 
+`tentaflake-control template-fingerprint /nix/store/<reviewed-template>` prints
+that same digest without deployment configuration, a controller socket or a
+build request. Offline review accepts the uniform read-only owner observed in a
+Nix sandbox; it grants no deployment authority. Runtime validation and candidate
+materialization still require root-owned store entries and the reviewed hash.
+
 The only build argv is:
 
 ```text
@@ -172,6 +178,9 @@ malformed/extra/duplicate fields, revision/policy/compiler drift, no sandbox
 downgrade, stable IDs, receipt restart uncertainty, locks and symlinks, client UID
 verification, bounded synthetic subprocesses and store output paths. Synthetic
 normalizers are labeled fixtures; the real compiler has its own shared corpus.
+The explicit immutable fixture also provides
+`offline_fingerprint_cli_preserves_runtime_digest_and_refusals`, which compares
+the CLI digest with runtime validation and rejects linked inputs and extra arguments.
 
 An additional **explicitly isolated** test exercises production deployment checks,
 immutable store templates, the actual Unix protocol, fixed mock-builder argv,

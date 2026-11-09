@@ -132,6 +132,52 @@ fn build_request(p: &Value, a: &Value) -> Value {
 
 #[test]
 #[ignore = "requires explicitly built immutable synthetic fixture; see docs/20-system-control.md"]
+fn offline_fingerprint_cli_preserves_runtime_digest_and_refusals() {
+    let fixture = PathBuf::from(
+        std::env::var_os("TENTAFLAKE_CONTROL_FIXTURE").expect("set immutable fixture output"),
+    );
+    let source = fixture.join("template");
+    let expected = template::fingerprint(&source).unwrap();
+    assert_eq!(template::fingerprint_for_review(&source).unwrap(), expected);
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_tentaflake-control"))
+        .arg("template-fingerprint")
+        .arg(&source)
+        .env_clear()
+        .stdin(std::process::Stdio::null())
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    assert_eq!(output.stdout, format!("{expected}\n").as_bytes());
+    assert!(output.stderr.is_empty());
+    for arguments in [
+        vec!["template-fingerprint".to_owned()],
+        vec![
+            "template-fingerprint".to_owned(),
+            source.to_str().unwrap().to_owned(),
+            "extra".to_owned(),
+        ],
+        vec![
+            "template-fingerprint".to_owned(),
+            fixture.join("linked-template").to_str().unwrap().to_owned(),
+        ],
+    ] {
+        let output = std::process::Command::new(env!("CARGO_BIN_EXE_tentaflake-control"))
+            .args(arguments)
+            .env_clear()
+            .stdin(std::process::Stdio::null())
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(2));
+        assert!(output.stdout.is_empty());
+        assert_eq!(
+            output.stderr,
+            b"tentaflake-control: operation refused or unavailable\n"
+        );
+    }
+}
+
+#[test]
+#[ignore = "requires explicitly built immutable synthetic fixture; see docs/20-system-control.md"]
 fn immutable_unix_approval_build_and_recovery_contract() {
     let fixture = PathBuf::from(
         std::env::var_os("TENTAFLAKE_CONTROL_FIXTURE").expect("set immutable fixture output"),

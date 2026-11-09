@@ -381,6 +381,7 @@ fn storage_lock_symlinks_and_immutable_template_are_enforced() {
         storage::read_file(&f.root.join("linked-parent/tentaflake.toml"), MAX_DOCUMENT).is_err()
     );
     assert!(template::fingerprint(&f.root).is_err());
+    assert!(template::fingerprint_for_review(&f.root).is_err());
     assert!(Engine::open(f.config.clone()).is_err());
     drop(e);
     fs::remove_file(f.config.state.join("receipts.json")).unwrap();
