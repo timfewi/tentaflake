@@ -110,9 +110,7 @@ pub fn valid_id(s: &str) -> bool {
         && s != ".."
 }
 pub fn validate_policy(p: &Policy) -> Result<()> {
-    if p.version != 1 {
-        return Err(invalid());
-    }
+    validate_binding_policy(p.version, &p.bindings)?;
     for executable in [&p.docker, &p.systemctl] {
         if !executable.starts_with("/nix/store/") {
             return Err(invalid());
@@ -122,9 +120,17 @@ pub fn validate_policy(p: &Policy) -> Result<()> {
             return Err(invalid());
         }
     }
+    Ok(())
+}
+// Scope validation is independent of deployment filesystem ownership. The public
+// entrypoint always adds the strict immutable-executable checks above.
+fn validate_binding_policy(version: u32, bindings: &[Binding]) -> Result<()> {
+    if version != 1 {
+        return Err(invalid());
+    }
     let mut agents = std::collections::BTreeSet::new();
     let mut scopes = std::collections::BTreeSet::new();
-    for b in &p.bindings {
+    for b in bindings {
         if ![
             &b.agent_id,
             &b.tenant_id,
@@ -607,30 +613,36 @@ mod tests {
             unit: "docker-agent-a.service".into(),
         }
     }
-    #[test]
-    fn three_hundred_bindings_preserve_policy_and_authority_validation() {
-        let executable = fs::canonicalize(on_path("bash")).unwrap();
-        let executable = executable.to_str().unwrap();
-        let bindings: Vec<_> = (0..300)
+    fn scale_bindings() -> Vec<Binding> {
+        (0..300)
             .map(|i| Binding {
                 agent_id: format!("agent-{i}"),
                 unit: format!("docker-agent-{i}.service"),
                 workload_id: format!("w{i}"),
                 ..binding()
             })
-            .collect();
+            .collect()
+    }
+    #[test]
+    fn three_hundred_bindings_preserve_policy_and_authority_validation() {
+        // Synthetic path: this test exercises scope policy, not deployment
+        // ownership, which is checked by validate_policy and the rootful VM.
+        let executable = "/nix/store/00000000000000000000000000000000-synthetic-observer";
         let bytes = serde_json::to_vec(&serde_json::json!({
             "version": 1,
             "docker": executable,
             "systemctl": executable,
-            "bindings": bindings,
+            "bindings": scale_bindings(),
         }))
         .unwrap();
         // The fixed policy loader's byte bound, not a binding-count allowance.
         assert!(bytes.len() <= 65_536);
         let mut policy: Policy = serde_json::from_slice(&bytes).unwrap();
-        validate_policy(&policy).unwrap();
+        validate_binding_policy(policy.version, &policy.bindings).unwrap();
         assert_eq!(policy.bindings.len(), 300);
+        for version in [0, 2] {
+            assert!(validate_binding_policy(version, &policy.bindings).is_err());
+        }
         let mut authority = Authority::empty();
         for b in &policy.bindings {
             authority.assign(b, &None).unwrap();
@@ -651,23 +663,40 @@ mod tests {
         );
 
         policy.bindings.push(policy.bindings[0].clone());
-        assert!(validate_policy(&policy).is_err());
+        assert!(validate_binding_policy(policy.version, &policy.bindings).is_err());
         let _ = policy.bindings.pop();
         let last = policy.bindings.last().unwrap().clone();
         policy.bindings.last_mut().unwrap().workload_id = "w0".into();
-        assert!(validate_policy(&policy).is_err());
+        assert!(validate_binding_policy(policy.version, &policy.bindings).is_err());
         *policy.bindings.last_mut().unwrap() = last.clone();
         policy.bindings.last_mut().unwrap().unit = "docker-other.service".into();
-        assert!(validate_policy(&policy).is_err());
+        assert!(validate_binding_policy(policy.version, &policy.bindings).is_err());
         *policy.bindings.last_mut().unwrap() = last;
         policy.bindings.last_mut().unwrap().agent_id = "undeclared".into();
         policy.bindings.last_mut().unwrap().unit = "docker-undeclared.service".into();
-        assert!(validate_policy(&policy).is_err());
+        assert!(validate_binding_policy(policy.version, &policy.bindings).is_err());
+        restored.version = 2;
+        assert!(restored.validate().is_err());
+        restored.version = 1;
         restored.entries.get_mut("agent-299").unwrap().generation = 0;
         assert!(restored.validate().is_err());
         restored.entries.get_mut("agent-299").unwrap().generation = 300;
         restored.entries.get_mut("agent-299").unwrap().fingerprint = "x".repeat(8193);
         assert!(restored.validate().is_err());
+    }
+    #[test]
+    fn valid_binding_policy_does_not_admit_missing_deployment_executables() {
+        let policy = Policy {
+            version: 1,
+            docker: "/nix/store/00000000000000000000000000000000-missing-workload-observer".into(),
+            systemctl: "/nix/store/00000000000000000000000000000000-missing-workload-observer"
+                .into(),
+            bindings: scale_bindings(),
+        };
+        assert_eq!(policy.bindings.len(), 300);
+        validate_binding_policy(policy.version, &policy.bindings).unwrap();
+        assert!(!Path::new(&policy.docker).exists());
+        assert!(validate_policy(&policy).is_err());
     }
     #[test]
     fn scope_ids_match_projection_bounds() {
