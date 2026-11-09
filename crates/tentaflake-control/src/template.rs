@@ -80,11 +80,12 @@ fn tree(
     files: &mut Vec<(PathBuf, Vec<u8>, u32)>,
     bytes: &mut usize,
     entries: &mut usize,
+    owner: u32,
 ) -> Result<()> {
     let path = root.join(relative);
     let dir = open_path(&path, true)?;
     let m = dir.metadata().map_err(|_| "template unavailable")?;
-    if m.uid() != 0 || m.mode() & 0o222 != 0 {
+    if m.uid() != owner || m.mode() & 0o222 != 0 {
         return Err("mutable template refused".into());
     }
     let mut children: Vec<_> = fs::read_dir(&path)
@@ -117,13 +118,13 @@ fn tree(
             .file_type()
             .map_err(|_| "template unavailable")?
             .is_symlink()
-            || m.uid() != 0
+            || m.uid() != owner
             || m.mode() & 0o222 != 0
         {
             return Err("mutable or linked template refused".into());
         }
         if m.is_dir() {
-            tree(root, &rel, files, bytes, entries)?;
+            tree(root, &rel, files, bytes, entries, owner)?;
         } else if m.is_file() {
             let data = read_file(&root.join(&rel), 32 * 1024 * 1024 - *bytes)?;
             *bytes += data.len();
@@ -134,12 +135,12 @@ fn tree(
     }
     Ok(())
 }
-fn inventory(root: &Path) -> Result<Vec<(PathBuf, Vec<u8>, u32)>> {
+fn inventory(root: &Path, owner: u32) -> Result<Vec<(PathBuf, Vec<u8>, u32)>> {
     if !store_path(root) {
         return Err("template must be immutable store source".into());
     }
     let mut files = Vec::new();
-    tree(root, Path::new(""), &mut files, &mut 0, &mut 0)?;
+    tree(root, Path::new(""), &mut files, &mut 0, &mut 0, owner)?;
     if !files.iter().any(|(p, _, _)| p == Path::new("flake.nix"))
         || !files.iter().any(|(p, _, _)| p == Path::new("flake.lock"))
         || !files
@@ -163,10 +164,21 @@ fn hash_inventory(files: &[(PathBuf, Vec<u8>, u32)]) -> String {
     crate::hex(&hash.finalize())
 }
 pub fn fingerprint(root: &Path) -> Result<String> {
-    Ok(hash_inventory(&inventory(root)?))
+    Ok(hash_inventory(&inventory(root, 0)?))
+}
+/// Compute a digest without opening deployment state or granting build authority.
+/// Nix sandboxes may map immutable input ownership to nobody; all entries must
+/// still share the root's observed owner and remain read-only. Deployment
+/// validate() and materialize() continue to require the real store's root UID.
+pub fn fingerprint_for_review(root: &Path) -> Result<String> {
+    let owner = open_path(root, true)?
+        .metadata()
+        .map_err(|_| "template unavailable")?
+        .uid();
+    Ok(hash_inventory(&inventory(root, owner)?))
 }
 pub fn materialize(builder: &Builder, destination: &Path, toml: &str) -> Result<()> {
-    let files = inventory(&builder.template)?;
+    let files = inventory(&builder.template, 0)?;
     if hash_inventory(&files) != builder.template_hash {
         return Err("template drift".into());
     }

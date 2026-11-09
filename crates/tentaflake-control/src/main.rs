@@ -2,10 +2,9 @@ use std::io::Read;
 use std::path::Path;
 use tentaflake_control::{Config, Engine, storage::MAX_DOCUMENT};
 
-fn run() -> Result<i32, String> {
-    let args: Vec<_> = std::env::args().skip(1).collect();
-    let [mode, rest @ ..] = args.as_slice() else {
-        return Err("usage: tentaflake-control serve <deployment.json> | system | propose | approve <proposal-id> | build | status <build-id>".into());
+fn run(args: &[String]) -> Result<i32, String> {
+    let [mode, rest @ ..] = args else {
+        return Err("usage: tentaflake-control serve <deployment.json> | template-fingerprint <immutable-template> | system | propose | approve <proposal-id> | build | status <build-id>".into());
     };
     if mode == "serve" {
         let [path] = rest else {
@@ -13,6 +12,16 @@ fn run() -> Result<i32, String> {
         };
         return tentaflake_control::transport::serve(Engine::open(Config::load(Path::new(path))?)?)
             .map(|_| 0);
+    }
+    if mode == "template-fingerprint" {
+        let [path] = rest else {
+            return Err("template-fingerprint requires one immutable template".into());
+        };
+        println!(
+            "{}",
+            tentaflake_control::template::fingerprint_for_review(Path::new(path))?
+        );
+        return Ok(0);
     }
     // Client deployment is fixed. There is deliberately no socket, executable, path or flags option.
     let config = Config::load(Path::new("/etc/tentaflake-control.json"))?;
@@ -42,11 +51,33 @@ fn run() -> Result<i32, String> {
     Ok(if status == 200 { 0 } else { 2 })
 }
 fn main() {
-    match run() {
+    match run(&std::env::args().skip(1).collect::<Vec<_>>()) {
         Ok(code) => std::process::exit(code),
         Err(_) => {
             eprintln!("tentaflake-control: operation refused or unavailable");
             std::process::exit(2);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::run;
+
+    #[test]
+    fn fingerprint_is_dispatched_without_loading_deployment_configuration() {
+        assert_eq!(
+            run(&["template-fingerprint".into(), "/".into()]).unwrap_err(),
+            "template must be immutable store source"
+        );
+        for arguments in [
+            vec!["template-fingerprint".into()],
+            vec!["template-fingerprint".into(), "/".into(), "extra".into()],
+        ] {
+            assert_eq!(
+                run(&arguments).unwrap_err(),
+                "template-fingerprint requires one immutable template"
+            );
         }
     }
 }
