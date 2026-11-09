@@ -254,6 +254,9 @@ store output paths and exact, independently nullable live-system observations.
 Observation fixtures include malformed/oversized/UTF-8 targets, no-follow parent
 and target checks, regular-file refusal and atomic link replacement. Synthetic
 normalizers are labeled fixtures; the real compiler has its own shared corpus.
+The explicit immutable fixture also provides
+`offline_fingerprint_cli_preserves_runtime_digest_and_refusals`, which compares
+the CLI digest with runtime validation and rejects linked inputs and extra arguments.
 
 An additional **explicitly isolated** test exercises production deployment checks,
 immutable store templates, the actual Unix protocol, fixed mock-builder argv,

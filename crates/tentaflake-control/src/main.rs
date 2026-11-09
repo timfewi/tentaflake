@@ -2,9 +2,8 @@ use std::io::Read;
 use std::path::Path;
 use tentaflake_control::{Config, Engine, storage::MAX_DOCUMENT};
 
-fn run() -> Result<i32, String> {
-    let args: Vec<_> = std::env::args().skip(1).collect();
-    let [mode, rest @ ..] = args.as_slice() else {
+fn run(args: &[String]) -> Result<i32, String> {
+    let [mode, rest @ ..] = args else {
         return Err("usage: tentaflake-control serve <deployment.json> | template-fingerprint <immutable-template> | system | source | validate | propose | approve <proposal-id> | build | status <build-id>".into());
     };
     if mode == "serve" {
@@ -60,11 +59,33 @@ fn run() -> Result<i32, String> {
     )
 }
 fn main() {
-    match run() {
+    match run(&std::env::args().skip(1).collect::<Vec<_>>()) {
         Ok(code) => std::process::exit(code),
         Err(_) => {
             eprintln!("tentaflake-control: operation refused or unavailable");
             std::process::exit(2);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::run;
+
+    #[test]
+    fn fingerprint_is_dispatched_without_loading_deployment_configuration() {
+        assert_eq!(
+            run(&["template-fingerprint".into(), "/".into()]).unwrap_err(),
+            "template must be immutable store source"
+        );
+        for arguments in [
+            vec!["template-fingerprint".into()],
+            vec!["template-fingerprint".into(), "/".into(), "extra".into()],
+        ] {
+            assert_eq!(
+                run(&arguments).unwrap_err(),
+                "template-fingerprint requires one immutable template"
+            );
         }
     }
 }

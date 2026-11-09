@@ -166,9 +166,10 @@ fn hash_inventory(files: &[(PathBuf, Vec<u8>, u32)]) -> String {
 pub fn fingerprint(root: &Path) -> Result<String> {
     Ok(hash_inventory(&inventory(root, 0)?))
 }
-/// Offline digest computation also works in a Nix sandbox, where immutable input
-/// ownership is mapped to nobody. This does not attest deployment ownership:
-/// validate() and materialize() always require the real store's root UID.
+/// Compute a digest without opening deployment state or granting build authority.
+/// Nix sandboxes may map immutable input ownership to nobody; all entries must
+/// still share the root's observed owner and remain read-only. Deployment
+/// validate() and materialize() continue to require the real store's root UID.
 pub fn fingerprint_for_review(root: &Path) -> Result<String> {
     let owner = open_path(root, true)?
         .metadata()

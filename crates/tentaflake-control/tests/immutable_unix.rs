@@ -141,6 +141,52 @@ fn build_request(p: &Value, a: &Value) -> Value {
 
 #[test]
 #[ignore = "requires explicitly built immutable synthetic fixture; see docs/20-system-control.md"]
+fn offline_fingerprint_cli_preserves_runtime_digest_and_refusals() {
+    let fixture = PathBuf::from(
+        std::env::var_os("TENTAFLAKE_CONTROL_FIXTURE").expect("set immutable fixture output"),
+    );
+    let source = fixture.join("template");
+    let expected = template::fingerprint(&source).unwrap();
+    assert_eq!(template::fingerprint_for_review(&source).unwrap(), expected);
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_tentaflake-control"))
+        .arg("template-fingerprint")
+        .arg(&source)
+        .env_clear()
+        .stdin(std::process::Stdio::null())
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    assert_eq!(output.stdout, format!("{expected}\n").as_bytes());
+    assert!(output.stderr.is_empty());
+    for arguments in [
+        vec!["template-fingerprint".to_owned()],
+        vec![
+            "template-fingerprint".to_owned(),
+            source.to_str().unwrap().to_owned(),
+            "extra".to_owned(),
+        ],
+        vec![
+            "template-fingerprint".to_owned(),
+            fixture.join("linked-template").to_str().unwrap().to_owned(),
+        ],
+    ] {
+        let output = std::process::Command::new(env!("CARGO_BIN_EXE_tentaflake-control"))
+            .args(arguments)
+            .env_clear()
+            .stdin(std::process::Stdio::null())
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(2));
+        assert!(output.stdout.is_empty());
+        assert_eq!(
+            output.stderr,
+            b"tentaflake-control: operation refused or unavailable\n"
+        );
+    }
+}
+
+#[test]
+#[ignore = "requires explicitly built immutable synthetic fixture; see docs/20-system-control.md"]
 fn immutable_unix_approval_build_and_recovery_contract() {
     let fixture = PathBuf::from(
         std::env::var_os("TENTAFLAKE_CONTROL_FIXTURE").expect("set immutable fixture output"),
@@ -360,6 +406,10 @@ fn ui_adapter_speaks_real_closed_transport() {
     let ui = std::env::var_os("TENTAFLAKE_UI_SOURCE").expect("set reviewed UI checkout");
     assert!(std::env::var_os("TENTAFLAKE_REAL_NORMALIZER").is_some());
     let (_scratch, config) = config(&fixture, "ui-contract");
+    let original_source = "# Original UTF-8: café ☃\r\nschemaVersion=1\r\nagents=[]\r\n";
+    let proposed_source = "# Reviewed UTF-8: café ☃\r\nschemaVersion = 1\r\nagents = []\r\n[sandbox]\r\nprofile = \"strict\"\r\n";
+    fs::write(&config.source, original_source).unwrap();
+    const EXPECTED_REQUESTS: usize = 9;
     let listener = UnixListener::bind(&config.socket).unwrap();
     listener.set_nonblocking(true).unwrap();
     let engine = Arc::new(Mutex::new(Engine::open(config.clone()).unwrap()));
@@ -367,7 +417,7 @@ fn ui_adapter_speaks_real_closed_transport() {
     let task = std::thread::spawn(move || {
         let start = Instant::now();
         let mut requests = 0;
-        while requests < 5 && start.elapsed() < Duration::from_secs(20) {
+        while requests < EXPECTED_REQUESTS && start.elapsed() < Duration::from_secs(20) {
             match listener.accept() {
                 Ok((stream, _)) => {
                     transport::serve_connection(stream, &server).unwrap();
@@ -385,6 +435,8 @@ fn ui_adapter_speaks_real_closed_transport() {
         .env("PYTHONPATH", ui).env("PYTHONDONTWRITEBYTECODE", "1")
         .env("CONTROL_SOCKET", &config.socket)
         .env("CONTROL_UID", config.server_uid.to_string())
+        .env("CONTROL_ORIGINAL_SOURCE", original_source)
+        .env("CONTROL_PROPOSED_SOURCE", proposed_source)
         .args(["-c", r#"
 import os
 from types import SimpleNamespace
@@ -395,18 +447,44 @@ def call(method, route, body=None):
     assert status == 200
     return value
 current = call("GET", "/api/system")
-p = call("POST", "/api/system/proposals", {"request_id":"ui-draft","base_revision":current["revision"],"configuration":current["configuration"]})["proposal"]
+raw = call("GET", "/api/system/source")
+assert raw["revision"] == current["revision"]
+assert raw["source"] == os.environ["CONTROL_ORIGINAL_SOURCE"]
+assert raw["bytes"] == len(raw["source"].encode("utf-8"))
+source = os.environ["CONTROL_PROPOSED_SOURCE"]
+validation = call("POST", "/api/system/validate", {"source":source})
+assert validation["valid"] is True
+assert validation["configuration"]["sandbox"]["profile"] == "strict"
+assert validation["revision"] != current["revision"]
+assert call("GET", "/api/system/source") == raw
+legacy = call("POST", "/api/system/proposals", {"request_id":"ui-legacy","base_revision":current["revision"],"configuration":current["configuration"]})["proposal"]
+assert legacy["revision"] == current["revision"]
+assert legacy["configuration"] == current["configuration"]
+p = call("POST", "/api/system/proposals", {"request_id":"ui-draft","base_revision":current["revision"],"source":source})["proposal"]
+assert p["revision"] == validation["revision"]
+assert p["configuration"] == validation["configuration"]
 a = call("POST", "/api/system/proposals/" + p["id"] + "/approve", {"request_id":"ui-approve","base_revision":p["base_revision"],"revision":p["revision"],"hashes":p["hashes"]})["approval"]
 b = call("POST", "/api/system/builds", {"request_id":"ui-build","proposal_id":p["id"],"approval_id":a["id"],"revision":p["revision"],"hashes":p["hashes"]})["build"]
 assert b["state"] == "queued"
 assert call("GET", "/api/system/builds/" + b["id"])["build"] == b
 "#]).output().unwrap();
-    assert_eq!(task.join().unwrap(), 5);
+    assert_eq!(task.join().unwrap(), EXPECTED_REQUESTS);
     assert!(
         output.status.success(),
         "real UI adapter contract failed: {}",
         String::from_utf8_lossy(&output.stderr)
     );
+    assert_eq!(
+        fs::read(&config.source).unwrap(),
+        original_source.as_bytes()
+    );
+    let receipts: Value =
+        serde_json::from_slice(&fs::read(config.state.join("receipts.json")).unwrap()).unwrap();
+    assert_eq!(receipts["proposals"].as_object().unwrap().len(), 2);
+    assert_eq!(receipts["approvals"].as_object().unwrap().len(), 1);
+    assert_eq!(receipts["builds"].as_object().unwrap().len(), 1);
+    assert_eq!(receipts["requests"].as_object().unwrap().len(), 4);
+    assert_eq!(receipts["proposals"]["p_ui-draft"]["toml"], proposed_source);
     // No worker was started: this contract test neither builds nor activates a host.
     assert!(!config.state.join("b_ui-build").exists());
 }
