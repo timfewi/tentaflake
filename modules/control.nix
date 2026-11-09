@@ -13,17 +13,7 @@ let
     ;
   cfg = config.tentaflake.control;
   hashType = types.strMatching "[0-9a-f]{64}";
-  # Nix packages may expose bin/nix through immutable component symlinks.
-  # Resolve only the deployment-owned package at build time; the server still
-  # opens the resulting real store executable with O_NOFOLLOW and UID checks.
-  nixExecutable = lib.removeSuffix "\n" (
-    builtins.readFile (
-      pkgs.runCommand "tentaflake-control-nix-executable" { } ''
-        realpath -e ${config.nix.package}/bin/nix > "$out"
-      ''
-    )
-  );
-  settings = pkgs.writeText "tentaflake-control.json" (
+  settingsSource = pkgs.writeText "tentaflake-control.json" (
     builtins.toJSON {
       source = cfg.desiredSource;
       inherit (cfg) normalizer peers hashes;
@@ -37,7 +27,7 @@ let
           {
             template = cfg.build.template;
             template_hash = cfg.build.templateHash;
-            nix = nixExecutable;
+            nix = "${config.nix.package}/bin/nix";
             target = cfg.build.target;
             deadline_seconds = cfg.build.deadlineSeconds;
           }
@@ -45,6 +35,18 @@ let
           null;
     }
   );
+  # Nix packages may expose bin/nix through immutable component symlinks.
+  # Resolve only the deployment-owned package while building settings, never
+  # through import-from-derivation during evaluation. Runtime still verifies
+  # the resulting real store executable with O_NOFOLLOW and root-owner checks.
+  settings =
+    if cfg.build.enable then
+      pkgs.runCommand "tentaflake-control.json" { nativeBuildInputs = [ pkgs.jq ]; } ''
+        resolvedNix="$(realpath -e ${config.nix.package}/bin/nix)"
+        jq --arg nix "$resolvedNix" '.builder.nix = $nix' ${settingsSource} > "$out"
+      ''
+    else
+      settingsSource;
 in
 {
   options.tentaflake.control = {

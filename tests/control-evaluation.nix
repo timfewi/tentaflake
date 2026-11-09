@@ -58,11 +58,6 @@ let
       };
     };
   };
-  buildSettings = builtins.fromJSON (
-    builtins.unsafeDiscardStringContext (
-      builtins.readFile building.environment.etc."tentaflake-control.json".source
-    )
-  );
   unit = enabled.systemd.services.tentaflake-control.serviceConfig;
   failures = cfg: map (entry: entry.message) (lib.filter (entry: !entry.assertion) cfg.assertions);
 in
@@ -94,11 +89,15 @@ assert lib.hasInfix "/bin/tentaflake-control serve /nix/store/" unit.ExecStart;
 pkgs.runCommand "tentaflake-control-evaluation"
   {
     configuredNix = building.nix.package;
-    resolvedNix = buildSettings.builder.nix;
+    controlSettings = building.environment.etc."tentaflake-control.json".source;
+    nativeBuildInputs = [ pkgs.jq ];
   }
   ''
     test -e "$configuredNix/bin/nix"
+    resolvedNix="$(jq --exit-status --raw-output '.builder.nix' "$controlSettings")"
+    test "$resolvedNix" = "$(realpath -e "$configuredNix/bin/nix")"
     test -f "$resolvedNix"
+    test -x "$resolvedNix"
     test ! -L "$resolvedNix"
     case "$resolvedNix" in /nix/store/*) ;; *) exit 1;; esac
     touch "$out"
