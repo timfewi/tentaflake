@@ -140,6 +140,7 @@
       # ── Exported module set ──
       nixosModules = {
         default = tentaflakeModules;
+        pi-durable-provisioning = import ./modules/pi-durable-provisioning.nix;
 
         # Installer and optional profiles are exported explicitly;
         # none of them enlarge nixosModules.default.
@@ -187,6 +188,7 @@
         host-api = self.packages.${system}.tentaflake-host-api;
         host-api-evaluation = import ./tests/host-api-evaluation.nix { inherit pkgs; };
         pi-durable-runtime-evaluation = import ./tests/pi-durable-runtime-evaluation.nix { inherit pkgs; };
+        pi-durable-provisioning = import ./tests/pi-durable-provisioning.nix { inherit self pkgs; };
         # Force the complete two-instance fixture's module graph, including
         # runnable declarations and generated OCI/systemd units, without building
         # or booting a VM. This catches config-dependent imports/recursion.

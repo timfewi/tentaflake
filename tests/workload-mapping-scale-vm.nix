@@ -1,10 +1,10 @@
-# Explicit slow scale test: the observer's supported maximum of 64 bindings on a
-# real rootful Docker engine and systemd must keep every manifest live and fresh
-# within the consumers' 10-second lease. NIC-less, synthetic workloads only.
+# Explicit slow scale regression: 65 bindings exceed the former count ceiling.
+# A real rootful Docker engine and systemd must keep every manifest live and
+# fresh within the consumers' 10-second lease. NIC-less, synthetic workloads only.
 { pkgs }:
 let
   inherit (pkgs) lib;
-  count = 64;
+  count = 65;
   names = lib.genList (index: "n${toString index}") count;
   image = pkgs.dockerTools.buildImage {
     name = "workload-scale-fixture";

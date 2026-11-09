@@ -10,6 +10,7 @@ import { modelBoundary } from '../mediation.mjs';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import childProcess from 'node:child_process';
+import http from 'node:http';
 import { syncBuiltinESMExports } from 'node:module';
 import { createInterface } from 'node:readline';
 import { serve } from '../runner.mjs';
@@ -78,13 +79,68 @@ async function runnerFixture(mode) {
   globalThis.fetch = forbiddenFetch;
   const raw = createModels(); raw.setProvider(openaiProvider());
   const socketPath = join(directory, 'runtime', 'api.sock');
+  const activeModel = raw.getModels('openai').find(model => model.api === 'openai-responses').id;
+  const fixedTools = ['research_job', 'research_search', 'research_fetch', 'research_browser', 'research_read', 'offline_worker'];
+  const selections = {
+    'runner-tools-none': [],
+    'runner-tools-search': ['research_search'],
+    'runner-tools-all': [...fixedTools].reverse(),
+  };
+  const requestedTools = selections[mode];
+  const expectedTools = fixedTools.filter(tool => requestedTools === undefined || requestedTools.includes(tool));
   const runtime = await serve({
     stateDir: join(directory, 'state'), socketPath, apiTokenFile: tokenPath,
     brokerBaseUrl: 'http://10.88.0.1:8080/v1', brokerTokenFile: join(directory, 'virtual-key'),
-    model: raw.getModels('openai').find(model => model.api === 'openai-responses').id,
+    model: activeModel,
     researchCommand, workspace: join(directory, 'workspace'),
+    ...(requestedTools === undefined ? {} : { tools: requestedTools }),
   });
   assert.ok(runtime.engine.harness, 'exercise the actual writable SDK, not quarantine');
+  if (mode === 'runner-capabilities' || mode.startsWith('runner-tools-')) {
+    const capabilities = await new Promise((resolve, reject) => {
+      const request = http.get({ socketPath, path: '/v1/capabilities',
+        headers: { authorization: 'Bearer synthetic-api-token' } }, response => {
+        let body = '';
+        response.setEncoding('utf8');
+        response.on('data', chunk => { body += chunk; });
+        response.on('error', reject);
+        response.on('end', () => {
+          try {
+            assert.equal(response.statusCode, 200);
+            resolve(JSON.parse(body));
+          } catch (error) { reject(error); }
+        });
+      });
+      request.on('error', reject);
+    });
+    assert.equal(capabilities.runtime, 'pi-durable');
+    assert.equal(capabilities.available, true);
+    assert.equal(capabilities.model, activeModel);
+    assert.equal(capabilities.model, runtime.engine.config.model);
+    assert.equal(capabilities.features.tool_selection, true);
+    const registered = runtime.engine.registry.snapshot().tools().map(({ tool }) => tool.name);
+    assert.deepEqual(registered, expectedTools, 'the actual pinned SDK registry contains only the reviewed subset');
+    assert.deepEqual(capabilities.tools, registered, 'capabilities report the actual registry, not desired source');
+    assert.ok(Object.isFrozen(runtime.engine.config.tools));
+    assert.throws(() => runtime.engine.config.tools.push('research_fetch'), TypeError);
+    if (requestedTools) requestedTools.push('not-admitted');
+    assert.deepEqual(runtime.engine.config.tools, expectedTools, 'caller mutation cannot expand accepted configuration');
+    let calls = 0;
+    const researchRequest = runtime.engine.research.request;
+    runtime.engine.research.request = async () => { calls++; throw new Error('Unselected Research dispatch'); };
+    try {
+      for (const tool of [...fixedTools.filter(tool => !expectedTools.includes(tool)), 'not-admitted']) {
+        await assert.rejects(runtime.engine.invokeTool(tool,
+          tool === 'offline_worker' ? { argv: ['true'], timeout_seconds: 1 } : { arguments: '{}' },
+          { taskId: 1 }), /not selected/);
+      }
+      assert.equal(calls, 0, 'unselected invokes never reach the admitted connection');
+      assert.equal(runtime.ledger.db.prepare('SELECT count(*) AS count FROM operations').get().count, 0,
+        'selection refusal precedes durable outbound admission and worker publication');
+    } finally { runtime.engine.research.request = researchRequest; }
+    assert.equal(runtime.ledger.db.prepare('SELECT count(*) AS count FROM runs').get().count, 0,
+      'capabilities must not submit a model turn');
+  }
   if (mode === 'runner-sessions') {
     const first = await runtime.engine.session('ui-session-one');
     const second = await runtime.engine.session('ui-session-two');

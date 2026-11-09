@@ -8,7 +8,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
+use std::ffi::CStr;
 use std::fs;
+use std::os::fd::AsRawFd;
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -160,7 +162,29 @@ impl Config {
 struct DraftRequest {
     request_id: String,
     base_revision: String,
-    configuration: Value,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    configuration: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    source: Option<String>,
+}
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SourceRequest {
+    source: String,
+}
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct NormalizationFailure {
+    #[serde(rename = "schemaVersion")]
+    schema_version: u8,
+    valid: bool,
+    error: String,
+    #[serde(default)]
+    message: Option<String>,
+}
+enum NormalizeError {
+    Invalid(String),
+    Unavailable,
 }
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -403,6 +427,45 @@ fn diff(before: &Value, after: &Value, path: &str, result: &mut Vec<Value>) {
     }
 }
 
+fn observed_systems(run: &Path) -> Value {
+    // Pin the real parent directory, not a link's current target. Read the two
+    // fixed basenames without following their symlinks or inspecting the store.
+    let run = storage::open_path(run, true).ok();
+    let link = |entry: &CStr| {
+        let Some(run) = &run else {
+            return Value::Null;
+        };
+        // An exact store item is at most 255 bytes. A full buffer means the
+        // target is oversized or truncated; never accept its prefix.
+        let mut target = [0u8; 256];
+        let length = unsafe {
+            libc::readlinkat(
+                run.as_raw_fd(),
+                entry.as_ptr(),
+                target.as_mut_ptr().cast(),
+                target.len(),
+            )
+        };
+        let Ok(length) = usize::try_from(length) else {
+            return Value::Null;
+        };
+        if length >= target.len() {
+            return Value::Null;
+        }
+        let Ok(target) = std::str::from_utf8(&target[..length]) else {
+            return Value::Null;
+        };
+        if !template::output_path(target) {
+            return Value::Null;
+        }
+        Value::String(target.to_owned())
+    };
+    Value::Object(serde_json::Map::from_iter([
+        ("current_system".into(), link(c"current-system")),
+        ("booted_system".into(), link(c"booted-system")),
+    ]))
+}
+
 pub struct Engine {
     pub config: Config,
     store: PrivateDir,
@@ -483,8 +546,14 @@ impl Engine {
         Ok(hashes)
     }
     fn normalize(&self, bytes: &[u8]) -> Result<Value> {
-        self.normalize_store.atomic("tentaflake.toml", bytes)?;
-        let output = process::run(
+        self.normalize_detailed(bytes)
+            .map_err(|_| "desired configuration unavailable or invalid".into())
+    }
+    fn normalize_detailed(&self, bytes: &[u8]) -> std::result::Result<Value, NormalizeError> {
+        self.normalize_store
+            .atomic("tentaflake.toml", bytes)
+            .map_err(|_| NormalizeError::Unavailable)?;
+        let output = process::capture(
             Command::new(&self.config.normalizer)
                 .current_dir(&self.config.state)
                 .arg("config")
@@ -493,11 +562,31 @@ impl Engine {
                 .arg("--json"),
             Duration::from_secs(10),
             MAX_DOCUMENT,
-        )?;
+        )
+        .map_err(|_| NormalizeError::Unavailable)?;
+        if !output.success {
+            let failure: NormalizationFailure =
+                serde_json::from_slice(&output.stdout).map_err(|_| NormalizeError::Unavailable)?;
+            if failure.schema_version != 1
+                || failure.valid
+                || failure.error != "invalid_configuration"
+            {
+                return Err(NormalizeError::Unavailable);
+            }
+            let message = failure
+                .message
+                .filter(|message| {
+                    !message.is_empty()
+                        && message.len() <= 2048
+                        && !message.chars().any(char::is_control)
+                })
+                .unwrap_or_else(|| "Invalid desired-system configuration".into());
+            return Err(NormalizeError::Invalid(message));
+        }
         let value: Value =
-            serde_json::from_slice(&output).map_err(|_| "invalid normalizer response")?;
+            serde_json::from_slice(&output.stdout).map_err(|_| NormalizeError::Unavailable)?;
         if !value.is_object() {
-            return Err("invalid normalizer response".into());
+            return Err(NormalizeError::Unavailable);
         }
         Ok(value)
     }
@@ -611,12 +700,22 @@ impl Engine {
             let schema: Value =
                 serde_json::from_slice(&storage::read_file(&self.config.schema, MAX_DOCUMENT)?)
                     .map_err(|_| ApiError::new(503, "unavailable"))?;
-            return Ok(
-                json!({"schema_version":1,"revision":revision(&configuration),"configuration":configuration,"schema":schema,"hashes":hashes,"capabilities":{"propose":self.authorize(uid, Role::Propose).is_ok(),"build":self.config.builder.is_some() && self.authorize(uid, Role::Build).is_ok(),"activate":false}}),
-            );
+            let mut response = json!({"schema_version":1,"revision":revision(&configuration),"configuration":configuration,"schema":schema,"hashes":hashes,"capabilities":{"propose":self.authorize(uid, Role::Propose).is_ok(),"build":self.config.builder.is_some() && self.authorize(uid, Role::Build).is_ok(),"activate":false}});
+            response["observed"] = observed_systems(Path::new("/run"));
+            return Ok(response);
         }
         if method == "GET" {
             self.authorize(uid, Role::Read)?;
+            if route == "/v1/system/source" {
+                self.current_hashes()?;
+                let source = self.source_bytes()?;
+                let configuration = self.normalize(&source)?;
+                let source =
+                    String::from_utf8(source).map_err(|_| ApiError::new(503, "unavailable"))?;
+                return Ok(
+                    json!({"schema_version":1,"revision":revision(&configuration),"bytes":source.len(),"source":source}),
+                );
+            }
             if let Some(id) = route
                 .strip_prefix("/v1/system/builds/")
                 .filter(|s| identifier(s))
@@ -628,9 +727,39 @@ impl Engine {
         if method != "POST" {
             return Err(ApiError::new(405, "method_not_allowed"));
         }
+        if route == "/v1/system/validate" {
+            self.authorize(uid, Role::Read)?;
+            let request: SourceRequest = decode(bytes)?;
+            self.current_hashes()?;
+            let base = self.current()?;
+            let configuration = match self.normalize_detailed(request.source.as_bytes()) {
+                Ok(configuration) => configuration,
+                Err(NormalizeError::Invalid(message)) => {
+                    return Ok(
+                        json!({"schema_version":1,"valid":false,"error":{"code":"invalid_configuration","message":message}}),
+                    );
+                }
+                Err(NormalizeError::Unavailable) => {
+                    return Err(ApiError::new(503, "unavailable"));
+                }
+            };
+            if self.enforce_profile(&configuration, &base).is_err() {
+                return Ok(
+                    json!({"schema_version":1,"valid":false,"error":{"code":"sandbox_policy_denied","message":"/sandbox/profile: candidate must retain the deployment minimum and current sandbox profile"}}),
+                );
+            }
+            let mut changes = Vec::new();
+            diff(&base, &configuration, "", &mut changes);
+            return Ok(
+                json!({"schema_version":1,"valid":true,"revision":revision(&configuration),"configuration":configuration,"changes":changes}),
+            );
+        }
         if route == "/v1/system/proposals" {
             self.authorize(uid, Role::Propose)?;
             let request: DraftRequest = decode(bytes)?;
+            if request.configuration.is_some() == request.source.is_some() {
+                return Err(invalid());
+            }
             let fp = revision(&json!([route, &request]));
             if let Some(response) = self.replay(&request.request_id, &fp)? {
                 return Ok(response);
@@ -643,19 +772,30 @@ impl Engine {
             if revision(&base) != request.base_revision {
                 return Err(conflict());
             }
-            self.enforce_profile(&request.configuration, &base)?;
-            let toml = toml_edit::ser::to_document(&request.configuration)
-                .map_err(|_| invalid())?
-                .to_string();
+            let toml = match (&request.configuration, request.source) {
+                (Some(configuration), None) => {
+                    self.enforce_profile(configuration, &base)?;
+                    toml_edit::ser::to_document(configuration)
+                        .map_err(|_| invalid())?
+                        .to_string()
+                }
+                (None, Some(source)) => source,
+                _ => return Err(invalid()),
+            };
             if toml.len() > MAX_DOCUMENT {
                 return Err(invalid());
             }
             let configuration = self
                 .normalize(toml.as_bytes())
                 .map_err(|_| ApiError::new(422, "invalid_configuration"))?;
-            if configuration != request.configuration {
+            if request
+                .configuration
+                .as_ref()
+                .is_some_and(|original| original != &configuration)
+            {
                 return Err(ApiError::new(422, "normalization_changed_meaning"));
             }
+            self.enforce_profile(&configuration, &base)?;
             let id = format!("p_{}", request.request_id);
             let mut changes = Vec::new();
             diff(&base, &configuration, "", &mut changes);

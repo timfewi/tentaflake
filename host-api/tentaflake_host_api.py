@@ -101,6 +101,7 @@ def unknown_policy():
         "managed": False,
         "authority": "nix",
         "auto_start": None,
+        "runtime": None,
         "llm": {
             "enabled": False,
             "allowed_models": [],
@@ -254,8 +255,6 @@ class Service:
                 "unit": unit,
                 "runnable": runnable == "true",
             }
-        if len(self.agents) > 256:
-            raise ValueError("Host inventory exceeds its agent limit")
         self.runners = config.get("runners", {})
         if not isinstance(self.runners, dict):
             raise ValueError("Invalid runner inventory")
@@ -275,7 +274,10 @@ class Service:
         self.peer_grants = None
         peers = config.get("peer_grants")
         if peers is not None:
-            if not isinstance(peers, list) or len(peers) > 64:
+            if (
+                not isinstance(peers, list)
+                or len(json.dumps(peers, separators=(",", ":")).encode()) > MAX_OUTPUT
+            ):
                 raise ValueError("Invalid host API peer grants")
             self.peer_grants = {}
             for peer in peers:
@@ -286,7 +288,6 @@ class Service:
                     or not 1 <= peer["uid"] <= 4294967294
                     or peer["uid"] in self.peer_grants
                     or not isinstance(peer["agents"], list)
-                    or len(peer["agents"]) > 256
                     or any(not isinstance(aid, str) or aid not in self.agents for aid in peer["agents"])
                     or len(peer["agents"]) != len(set(peer["agents"]))
                     or not isinstance(peer["permissions"], list)

@@ -34,6 +34,18 @@ let
       container = field column;
       unit = field column;
       stateDir = field column;
+      autoStart = lib.mkOption {
+        type = lib.types.bool;
+        default = false;
+        description = "Public startup intent, independent of whether exact host runtime policy admits the instance.";
+      };
+      tools = lib.mkOption {
+        type = lib.types.nullOr (
+          lib.types.listOf (lib.types.enum (import ../lib/piDurableTools.nix { inherit lib; }).supported)
+        );
+        default = null;
+        description = "Effective fixed Pi Durable tool subset; null means the adapter supplies no reviewed selection evidence.";
+      };
       stateStorage = field column;
       stateDirectories = lib.mkOption {
         type = lib.types.listOf column;

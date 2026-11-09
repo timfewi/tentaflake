@@ -59,7 +59,7 @@ live/unavailable transitions; unchanged facts survive observer restarts.
 Identity is checked before and after inspection against procfs and the
 cgroup-v2 filesystem/inode. A nonempty observation cycle uses at most four
 batched commands (unit state and container inspection, each before and after
-the kernel checks), independent of the number of bindings, up to 64. This bounds
+the kernel checks), independent of the number of bindings. This bounds
 subprocess count, not total work: engine inspection, procfs/cgroup checks and
 manifest publication still grow with the binding count. Each command has a
 one-second deadline and a 256-byte-per-binding output cap; cycles are paced to
@@ -69,6 +69,16 @@ it does not bound kernel reads, scheduling or fsynced publication. A manifest's
 timestamp is taken after the second verification, before publication. Consumers
 must reject stale evidence even if the observer remains running. A failed or
 missing observation is unavailable, never a zero resource value.
+
+There is no arbitrary total binding-count ceiling in the host module, policy
+parser or durable authority. The immutable JSON policy retains its 64 KiB read
+limit; authority reads and each atomic JSON publication retain their 256 KiB
+limit. Closed schemas, bounded identifiers, generation/fingerprint checks and
+the observer service's 128 MiB memory and 16-task limits remain unchanged.
+These finite byte and host-resource bounds still constrain possible size.
+A saved fleet is desired-state inventory, not simultaneous running or observable
+capacity: only runnable declarations may be bound, and larger running subsets
+must still fit the engine, host resources, command deadlines and freshness lease.
 
 A metrics consumer needs only metadata and kernel-counter read access, with independent
 exact UID/tenant/agent reader grants. Consumers must enforce a maximum
@@ -87,13 +97,15 @@ stop/restart, read permissions and corrupt/missing authority. A consumer
 integration can add configuration through `extraModules` and counter comparison
 or cross-tenant assertions through `extraTestScript`, before the final
 authority-corruption checks. This fixture is not native vendor/SDK
-runtime attestation. `tests/workload-mapping-scale-vm.nix` runs all 64
-supported bindings on the same NIC-less engine (four CPUs, 4096 MiB) and
-asserts every manifest stays live and younger than the 10-second lease over a
-30-second window. The focused Rust command is `cargo test -p
-tentaflake-workloads`; both VMs are `checks.*.workload-mapping-vm` and
-`checks.*.workload-mapping-scale-vm`, which CI runs when workload paths change,
-not part of local fast checks.
+runtime attestation. `tests/workload-mapping-scale-vm.nix` runs 65 bindings,
+exceeding the former count ceiling, on the same NIC-less engine (four CPUs,
+4096 MiB) and asserts every manifest stays live and younger than the 10-second
+lease over a 30-second window. This is a fixed regression workload, not a fleet
+capacity maximum. Rust fixtures cover 300 exact policy/authority bindings and
+300-entry batched observations without increasing their byte/deadline bounds.
+The focused Rust command is `cargo test -p tentaflake-workloads`; both VMs are
+`checks.*.workload-mapping-vm` and `checks.*.workload-mapping-scale-vm`, which CI
+runs when workload paths change, not part of local fast checks.
 
 ## Observability profile
 

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, writeFileSync, readFileSync, rmSync, chmodSync, symlinkSync, linkSync, mkdirSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { modelBoundary, secret, worker } from '../mediation.mjs';
+import { modelBoundary, secret, worker, Research } from '../mediation.mjs';
 
 async function fixture(run) {
   const root = mkdtempSync(join(tmpdir(), 'pi-durable-mediation-'));
@@ -21,6 +21,23 @@ async function fixture(run) {
     await run({ ledger, active, model, events, create });
   } finally { boundary?.close(); globalThis.fetch = saved; rmSync(root, { recursive: true, force: true }); }
 }
+test('Research initialization still requires the exact upstream five-tool manifest', async () => {
+  const expected = ['research_browser', 'research_fetch', 'research_job', 'research_read', 'research_search'];
+  for (const manifest of [expected, expected.slice(1), [...expected, 'other'], [...expected, 'research_search']]) {
+    const methods = [];
+    const research = Object.create(Research.prototype);
+    research.child = { stdin: { write(line) {
+      assert.equal(JSON.parse(line).method, 'notifications/initialized');
+    } } };
+    research.request = async method => {
+      methods.push(method);
+      return method === 'initialize' ? { protocolVersion: '2025-11-25' } : { tools: manifest.map(name => ({ name })) };
+    };
+    if (manifest === expected) await research.initialize();
+    else await assert.rejects(research.initialize(), /capability mismatch/);
+    assert.deepEqual(methods, ['initialize', 'tools/list']);
+  }
+});
 test('production rejects public, loopback, malformed and credentialed broker endpoints', () => {
   for (const brokerBaseUrl of ['http://9.9.9.9/v1', 'http://127.0.0.1/v1', 'http://10.999.0.1/v1',
     'http://010.0.0.1/v1', 'http://user@10.0.0.1/v1', 'https://10.0.0.1/v1', 'http://10.0.0.1:65536/v1'])

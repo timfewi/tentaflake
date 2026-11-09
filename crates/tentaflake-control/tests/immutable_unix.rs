@@ -7,10 +7,15 @@ use std::os::fd::AsRawFd;
 use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::{
+    Arc, Mutex,
+    atomic::{AtomicU64, Ordering},
+};
 use tentaflake_control::{
     Config, Engine, Hashes, MinimumProfile, Peer, Role, digest, storage, template, transport,
 };
+
+static SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 fn http(engine: &Arc<Mutex<Engine>>, method: &str, path: &str, value: Value) -> (u16, Value) {
     let body = if method == "GET" {
@@ -43,7 +48,11 @@ impl Drop for Scratch {
 fn config(fixture: &Path, target: &str) -> (Scratch, Config) {
     let parent = std::env::temp_dir();
     storage::secure_ancestry(&parent).expect("fixture requires safe temporary ancestry");
-    let root = parent.join(format!("tfc-immutable-{}-{target}", std::process::id()));
+    let root = parent.join(format!(
+        "tfc-immutable-{}-{}-{target}",
+        std::process::id(),
+        SEQUENCE.fetch_add(1, Ordering::Relaxed)
+    ));
     fs::DirBuilder::new().mode(0o700).create(&root).unwrap();
     let directory = storage::open_path(&root, true).unwrap();
     // The raw listener/UI client fixtures need a short address even under a long
@@ -183,6 +192,11 @@ fn immutable_unix_approval_build_and_recovery_contract() {
         std::env::var_os("TENTAFLAKE_CONTROL_FIXTURE").expect("set immutable fixture output"),
     );
     assert!(template::fingerprint(&fixture.join("linked-template")).is_err());
+    assert!(template::fingerprint_for_review(&fixture.join("linked-template")).is_err());
+    assert_eq!(
+        template::fingerprint_for_review(&fixture.join("template")).unwrap(),
+        template::fingerprint(&fixture.join("template")).unwrap()
+    );
     {
         let (_scratch, mut invalid) = config(&fixture, "hash_drift");
         invalid.hashes.inputs = "0".repeat(64);
@@ -304,6 +318,83 @@ fn immutable_unix_approval_build_and_recovery_contract() {
 }
 
 #[test]
+#[ignore = "requires immutable fixture and real normalizer"]
+fn real_source_validation_and_lossless_build_contract() {
+    assert!(std::env::var_os("TENTAFLAKE_REAL_NORMALIZER").is_some());
+    let fixture = PathBuf::from(
+        std::env::var_os("TENTAFLAKE_CONTROL_FIXTURE").expect("set immutable fixture"),
+    );
+    let (_scratch, config) = config(&fixture, "ok");
+    let engine = Arc::new(Mutex::new(Engine::open(config.clone()).unwrap()));
+    let (_, current) = http(&engine, "GET", "/v1/system/source", Value::Null);
+    assert_eq!(
+        current["source"],
+        fs::read_to_string(&config.source).unwrap()
+    );
+    let source = "# Formatting survives exactly\r\nschemaVersion=1\r\nagents=[] # user comment\r\n[sandbox]\r\nprofile=\"strict\"\r\n";
+    let (status, validation) = http(
+        &engine,
+        "POST",
+        "/v1/system/validate",
+        json!({"source":source}),
+    );
+    assert_eq!(status, 200);
+    assert_eq!(validation["valid"], true);
+    let (status, invalid) = http(
+        &engine,
+        "POST",
+        "/v1/system/validate",
+        json!({"source":"schemaVersion=1\nagents=[]\n[sandbox]\nprofile=\"private-invalid-value\"\n"}),
+    );
+    assert_eq!(status, 200);
+    assert_eq!(invalid["valid"], false);
+    assert!(
+        invalid["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("sandbox.profile")
+    );
+    assert!(!invalid.to_string().contains("private-invalid-value"));
+    let (status, result) = http(
+        &engine,
+        "POST",
+        "/v1/system/proposals",
+        json!({"request_id":"source","base_revision":current["revision"],"source":source}),
+    );
+    assert_eq!(status, 200);
+    let p = &result["proposal"];
+    assert_eq!(p["revision"], validation["revision"]);
+    let (_, approval) = http(
+        &engine,
+        "POST",
+        &format!("/v1/system/proposals/{}/approve", p["id"].as_str().unwrap()),
+        json!({"request_id":"approve_source","base_revision":p["base_revision"],"revision":p["revision"],"hashes":p["hashes"]}),
+    );
+    assert_eq!(
+        http(
+            &engine,
+            "POST",
+            "/v1/system/builds",
+            build_request(p, &approval["approval"])
+        )
+        .0,
+        200
+    );
+    let work = engine.lock().unwrap().claim().unwrap().unwrap();
+    let output = work.execute();
+    assert!(output.is_ok());
+    assert_eq!(
+        fs::read(config.state.join("b_build/tentaflake.toml")).unwrap(),
+        source.as_bytes()
+    );
+    assert_eq!(
+        fs::read(&config.source).unwrap(),
+        current["source"].as_str().unwrap().as_bytes()
+    );
+    engine.lock().unwrap().finish("b_build", output).unwrap();
+}
+
+#[test]
 #[ignore = "requires immutable fixture, real normalizer, pinned Python and explicit UI source"]
 fn ui_adapter_speaks_real_closed_transport() {
     use std::os::unix::net::UnixListener;
@@ -315,6 +406,10 @@ fn ui_adapter_speaks_real_closed_transport() {
     let ui = std::env::var_os("TENTAFLAKE_UI_SOURCE").expect("set reviewed UI checkout");
     assert!(std::env::var_os("TENTAFLAKE_REAL_NORMALIZER").is_some());
     let (_scratch, config) = config(&fixture, "ui-contract");
+    let original_source = "# Original UTF-8: café ☃\r\nschemaVersion=1\r\nagents=[]\r\n";
+    let proposed_source = "# Reviewed UTF-8: café ☃\r\nschemaVersion = 1\r\nagents = []\r\n[sandbox]\r\nprofile = \"strict\"\r\n";
+    fs::write(&config.source, original_source).unwrap();
+    const EXPECTED_REQUESTS: usize = 9;
     let listener = UnixListener::bind(&config.socket).unwrap();
     listener.set_nonblocking(true).unwrap();
     let engine = Arc::new(Mutex::new(Engine::open(config.clone()).unwrap()));
@@ -322,7 +417,7 @@ fn ui_adapter_speaks_real_closed_transport() {
     let task = std::thread::spawn(move || {
         let start = Instant::now();
         let mut requests = 0;
-        while requests < 5 && start.elapsed() < Duration::from_secs(20) {
+        while requests < EXPECTED_REQUESTS && start.elapsed() < Duration::from_secs(20) {
             match listener.accept() {
                 Ok((stream, _)) => {
                     transport::serve_connection(stream, &server).unwrap();
@@ -340,6 +435,8 @@ fn ui_adapter_speaks_real_closed_transport() {
         .env("PYTHONPATH", ui).env("PYTHONDONTWRITEBYTECODE", "1")
         .env("CONTROL_SOCKET", &config.socket)
         .env("CONTROL_UID", config.server_uid.to_string())
+        .env("CONTROL_ORIGINAL_SOURCE", original_source)
+        .env("CONTROL_PROPOSED_SOURCE", proposed_source)
         .args(["-c", r#"
 import os
 from types import SimpleNamespace
@@ -350,18 +447,44 @@ def call(method, route, body=None):
     assert status == 200
     return value
 current = call("GET", "/api/system")
-p = call("POST", "/api/system/proposals", {"request_id":"ui-draft","base_revision":current["revision"],"configuration":current["configuration"]})["proposal"]
+raw = call("GET", "/api/system/source")
+assert raw["revision"] == current["revision"]
+assert raw["source"] == os.environ["CONTROL_ORIGINAL_SOURCE"]
+assert raw["bytes"] == len(raw["source"].encode("utf-8"))
+source = os.environ["CONTROL_PROPOSED_SOURCE"]
+validation = call("POST", "/api/system/validate", {"source":source})
+assert validation["valid"] is True
+assert validation["configuration"]["sandbox"]["profile"] == "strict"
+assert validation["revision"] != current["revision"]
+assert call("GET", "/api/system/source") == raw
+legacy = call("POST", "/api/system/proposals", {"request_id":"ui-legacy","base_revision":current["revision"],"configuration":current["configuration"]})["proposal"]
+assert legacy["revision"] == current["revision"]
+assert legacy["configuration"] == current["configuration"]
+p = call("POST", "/api/system/proposals", {"request_id":"ui-draft","base_revision":current["revision"],"source":source})["proposal"]
+assert p["revision"] == validation["revision"]
+assert p["configuration"] == validation["configuration"]
 a = call("POST", "/api/system/proposals/" + p["id"] + "/approve", {"request_id":"ui-approve","base_revision":p["base_revision"],"revision":p["revision"],"hashes":p["hashes"]})["approval"]
 b = call("POST", "/api/system/builds", {"request_id":"ui-build","proposal_id":p["id"],"approval_id":a["id"],"revision":p["revision"],"hashes":p["hashes"]})["build"]
 assert b["state"] == "queued"
 assert call("GET", "/api/system/builds/" + b["id"])["build"] == b
 "#]).output().unwrap();
-    assert_eq!(task.join().unwrap(), 5);
+    assert_eq!(task.join().unwrap(), EXPECTED_REQUESTS);
     assert!(
         output.status.success(),
         "real UI adapter contract failed: {}",
         String::from_utf8_lossy(&output.stderr)
     );
+    assert_eq!(
+        fs::read(&config.source).unwrap(),
+        original_source.as_bytes()
+    );
+    let receipts: Value =
+        serde_json::from_slice(&fs::read(config.state.join("receipts.json")).unwrap()).unwrap();
+    assert_eq!(receipts["proposals"].as_object().unwrap().len(), 2);
+    assert_eq!(receipts["approvals"].as_object().unwrap().len(), 1);
+    assert_eq!(receipts["builds"].as_object().unwrap().len(), 1);
+    assert_eq!(receipts["requests"].as_object().unwrap().len(), 4);
+    assert_eq!(receipts["proposals"]["p_ui-draft"]["toml"], proposed_source);
     // No worker was started: this contract test neither builds nor activates a host.
     assert!(!config.state.join("b_ui-build").exists());
 }

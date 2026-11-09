@@ -4,7 +4,7 @@ use tentaflake_control::{Config, Engine, storage::MAX_DOCUMENT};
 
 fn run(args: &[String]) -> Result<i32, String> {
     let [mode, rest @ ..] = args else {
-        return Err("usage: tentaflake-control serve <deployment.json> | template-fingerprint <immutable-template> | system | propose | approve <proposal-id> | build | status <build-id>".into());
+        return Err("usage: tentaflake-control serve <deployment.json> | template-fingerprint <immutable-template> | system | source | validate | propose | approve <proposal-id> | build | status <build-id>".into());
     };
     if mode == "serve" {
         let [path] = rest else {
@@ -27,6 +27,8 @@ fn run(args: &[String]) -> Result<i32, String> {
     let config = Config::load(Path::new("/etc/tentaflake-control.json"))?;
     let (method, route) = match (mode.as_str(), rest) {
         ("system", []) => ("GET", "/v1/system".to_owned()),
+        ("source", []) => ("GET", "/v1/system/source".to_owned()),
+        ("validate", []) => ("POST", "/v1/system/validate".to_owned()),
         ("propose", []) => ("POST", "/v1/system/proposals".to_owned()),
         ("approve", [id]) => ("POST", format!("/v1/system/proposals/{id}/approve")),
         ("build", []) => ("POST", "/v1/system/builds".to_owned()),
@@ -48,7 +50,13 @@ fn run(args: &[String]) -> Result<i32, String> {
         "{}",
         serde_json::to_string(&response).map_err(|_| "response unavailable")?
     );
-    Ok(if status == 200 { 0 } else { 2 })
+    Ok(
+        if status == 200 && (mode != "validate" || response["valid"] == true) {
+            0
+        } else {
+            2
+        },
+    )
 }
 fn main() {
     match run(&std::env::args().skip(1).collect::<Vec<_>>()) {

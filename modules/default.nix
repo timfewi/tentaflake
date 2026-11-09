@@ -6,6 +6,7 @@
   imports = [
     ./agent-instances.nix
     ../adapters/pi-durable/options.nix
+    ./pi-durable-provisioning.nix
     ./options.nix
     ./boot.nix
     ./backup.nix

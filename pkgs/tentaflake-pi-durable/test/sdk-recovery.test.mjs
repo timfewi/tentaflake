@@ -12,6 +12,12 @@ import { DatabaseSync } from 'node:sqlite';
 import { createModels } from '@earendil-works/pi-ai/models';
 import { openaiProvider } from '@earendil-works/pi-ai/providers/openai';
 
+test('tool selection rejects unsupported and duplicate IDs before SDK open', () => {
+  for (const tools of [['read'], ['mcp:research/search'], ['research_search', 'research_search'], null, 'research_search', [true]]) {
+    assert.throws(() => new Engine({ tools }, undefined), /unique subset/);
+  }
+});
+
 for (const interruption of ['crash', 'close', 'restored-crash', 'restored-close']) {
   test(`real SDK ${interruption} after broker dispatch never reopens uncertain work`, { timeout: 20000 }, async () => {
     const directory = mkdtempSync(join(tmpdir(), 'pi-durable-sdk-')); chmodSync(directory, 0o700);
@@ -67,8 +73,11 @@ for (const interruption of ['crash', 'close', 'restored-crash', 'restored-close'
 
 // Lifecycle regression: actual runner, HTTP Unix socket, SDK SQLite and Research
 // child close; synthetic Research/abort transport only, with no provider dispatch.
-for (const mode of ['idle', 'sessions', 'already-closed', 'sdk-error', 'storage-error', 'both-errors', 'cancel-error', 'cancel-sdk-error']) {
-  test(`real runner shutdown: ${mode}`, { timeout: 20000 }, async t => {
+for (const mode of ['idle', 'capabilities', 'tools-none', 'tools-search', 'tools-all', 'sessions', 'already-closed', 'sdk-error', 'storage-error', 'both-errors', 'cancel-error', 'cancel-sdk-error']) {
+  const name = mode === 'capabilities' ? 'real runner tool selection omission reports the active configured model and fixed registry without inference'
+    : mode.startsWith('tools-') ? `real runner tool selection: ${mode}`
+    : `real runner shutdown: ${mode}`;
+  test(name, { timeout: 20000 }, async t => {
     const directory = mkdtempSync(join(tmpdir(), 'pi-durable-stop-')); chmodSync(directory, 0o700);
     mkdirSync(join(directory, 'runtime'), { mode: 0o710 });
     chmodSync(join(directory, 'runtime'), 0o710);

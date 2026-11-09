@@ -30,9 +30,9 @@ export async function serve(config) {
   try { lstatSync(config.socketPath); throw new Refusal('Runtime endpoint already exists'); }
   catch (error) { if (error.code !== 'ENOENT') throw error; }
   const ledger = new Ledger(config.stateDir);
-  const engine = new Engine(config, ledger);
-  try { await engine.open(); }
-  catch (error) { try { await engine.close(); } finally { ledger.close(); } throw error; }
+  let engine;
+  try { engine = new Engine(config, ledger); await engine.open(); }
+  catch (error) { try { await engine?.close(); } finally { ledger.close(); } throw error; }
   let closing = false;
   const server = http.createServer(async (request, response) => {
     const json = (status, value) => { response.writeHead(status, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' }); response.end(JSON.stringify(value)); };
@@ -43,8 +43,9 @@ export async function serve(config) {
       if (closing) throw new Refusal('Runner is stopping', 503);
       const url = new URL(request.url, 'http://localhost');
       if (request.method === 'GET' && url.pathname === '/v1/capabilities') {
-        json(200, { runtime: 'pi-durable', version: 1, available: !ledger.quarantined,
-          quarantined: ledger.quarantined, features: { runs: !ledger.quarantined, persistent_sessions: true,
+        json(200, { runtime: 'pi-durable', version: 1, model: engine.config.model, available: !ledger.quarantined,
+          quarantined: ledger.quarantined, tools: engine.registeredTools(),
+          features: { runs: !ledger.quarantined, persistent_sessions: true, tool_selection: true,
             live_inputs: false, session_import: false, streaming: false, cancellation: true } }); return;
       }
       if (request.method === 'POST' && url.pathname === '/api/sessions') {
@@ -140,7 +141,7 @@ function configuration(path) {
     throw new Refusal('Unsafe runtime configuration');
   const config = JSON.parse(readFileSync(path, 'utf8'));
   const fields = ['stateDir','socketPath','apiTokenFile','brokerBaseUrl','brokerTokenFile','model','researchCommand','workspace'];
-  if (Object.keys(config).length !== fields.length || fields.some(k => typeof config[k] !== 'string'))
+  if (fields.some(k => typeof config[k] !== 'string') || Object.keys(config).some(k => !fields.includes(k) && k !== 'tools'))
     throw new Refusal('Invalid runtime configuration');
   for (const key of ['stateDir','socketPath','apiTokenFile','brokerTokenFile','researchCommand','workspace'])
     if (resolve(config[key]) !== config[key]) throw new Refusal('Runtime paths must be canonical absolute paths');

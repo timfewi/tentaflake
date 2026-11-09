@@ -68,6 +68,20 @@ mutations. Inventory is filtered to the caller's exact agents. An authenticated
 multi-tenant UI bridge may receive the union of its tenants' host grants, but
 must separately enforce each browser principal's narrower ownership.
 
+There is no total agent-count ceiling at API startup, in one peer's exact agent
+scope or in the number of distinct peers. The generated inventory remains bounded
+to 256 KiB; peer-grant JSON and the immutable policy projection each have
+separate 512 KiB limits, and each response is bounded to 768 KiB. These byte
+limits can still constrain large or verbose inventories/grants. Duplicate UIDs,
+duplicate/unknown agent IDs and duplicate/unknown permissions are rejected.
+Request deadlines and the eight-request concurrency limit remain in force.
+
+A saved fleet is desired-state inventory, not a running-concurrency allowance.
+Registering or granting access to hundreds of stopped agents does not admit their
+runtimes, allocate host capacity or bypass broker/worker budgets, quotas or
+automatic-startup gates. Size the running subset against those independent
+limits.
+
 ## Connect an optional UI
 
 Install and pin a compatible UI in the consumer flake, not in this repository.
@@ -284,6 +298,15 @@ inventory or policy responses. Such agents advertise
 the three booleans reflect the exact peer's independent run grants. Legacy
 group mode does not acquire runner authority.
 
+In `tentaflake.toml`, a peer with any `run_read`, `run_submit` or `run_stop`
+permission must name only exact declared `pi-durable` agent IDs; mixed-runtime
+scopes and wildcards are rejected. Each permission is independent and grants
+neither another run operation nor legacy actions/logs. Stopped Pi Durable
+declarations may carry these grants, but the grants do not make the runtime
+runnable, enable automatic startup or create a runner descriptor. The root
+mediator still requires the explicit host runtime/image/transport admission
+above before any runner access.
+
 All routes below are relative to `/v1/agents/{canonical-id}/runner`:
 
 | Route | Grant | Runner request/result |
@@ -295,6 +318,40 @@ All routes below are relative to `/v1/agents/{canonical-id}/runner`:
 | `GET /runs/{run_id}` | `run_read` | Runner projection including `state`, `uncertain`, `output` and `error` |
 | `GET /runs/{run_id}/events` | `run_read` | One bounded SSE frame converted to `{events:[…]}`; a waiting heartbeat returns an empty array |
 | `POST /runs/{run_id}/stop` | `run_stop` | Exactly `{}`; returns runner projection, not evidence that an external effect was undone |
+
+The live runner capability response includes `runtime:"pi-durable"`, `version:1`,
+`model` from the running engine's fixed configuration, `available`, `quarantined`,
+the actual SDK registry's stable-ID `tools` array and `features` with
+`tool_selection:true`. The host mediator passes these fields through unchanged. Model
+selection is not a request field or a mutable runner operation. A consumer that
+claims effective model readiness must require this active-model evidence and
+match it to the exact singleton broker model in peer-verified policy details;
+older runners without `model`, unreadable evidence and disagreement stay
+unverified. This is configured-engine evidence, not a successful inference or
+provider-acceptance test, and the current run request does not bind a policy
+revision/model atomically against host changes after the last read.
+
+For reviewed Pi `agents[].tools`, peer-verified details include
+`policy.runtime = {adapter:"pi-durable", tool_selection:true, tools:[...]}` in
+the existing `policy_revision` digest. The list is the canonical configured
+subset, including `[]`; other adapters and absent selection evidence have
+`runtime:null`. Compare this declared list exactly with the live registered list
+and require `features.tool_selection:true` before claiming applied per-tool
+selection. Missing old-host/runner evidence is unsupported or unverified, never
+an invented empty/applied selection. The details field alone is not observation.
+Tool changes use reviewed public source/build plus separate owner activation,
+not this service's limited configuration-proposal fields or run-request fields.
+An active run keeps its accepted configuration; a private equip/unequip does
+not instantly revoke it. The existing read-versus-submit cutover race above
+also applies to tool evidence.
+
+The admitted connection still validates the complete fixed five-tool Research
+manifest even if fewer tools are registered. `research.enabled` is declaration
+and `research.readiness` remains `"unverified"`: capability registration does
+not establish current provider/job/egress readiness or permission for a paid/data
+operation. A search-only subset needs an already approved bounded `job_id`
+supplied in context when `research_job` is unselected. No dependency or new
+connection is implicitly authorized.
 
 Session titles are at most 200 characters. Request/session identifiers match
 `[A-Za-z0-9_.:-]{1,128}`; run path IDs match `[A-Za-z0-9-]{1,128}`.

@@ -165,19 +165,18 @@ in
         assertion =
           cfg.peers == null
           || (
-            builtins.length cfg.peers <= 64
+            builtins.stringLength (builtins.toJSON cfg.peers) <= 512 * 1024
             &&
               builtins.length (map (peer: peer.uid) cfg.peers)
               == builtins.length (lib.unique (map (peer: peer.uid) cfg.peers))
             && lib.all (
               peer:
-              builtins.length peer.agents <= 256
-              && builtins.length peer.agents == builtins.length (lib.unique peer.agents)
+              builtins.length peer.agents == builtins.length (lib.unique peer.agents)
               && lib.all (id: builtins.hasAttr id config.tentaflake.agentInstances) peer.agents
               && builtins.length peer.permissions == builtins.length (lib.unique peer.permissions)
             ) cfg.peers
           );
-        message = "tentaflake.hostApi.peers requires at most 64 unique UIDs, unique permissions and exact declared agent IDs.";
+        message = "tentaflake.hostApi.peers requires unique UIDs, unique permissions and exact declared agent IDs within 512 KiB of JSON.";
       }
     ];
     users.groups.tentaflake-api = { };

@@ -201,6 +201,20 @@ else:
         self.thread = None
         self.addCleanup(self.close)
 
+    def fleet_inventory(self, count):
+        inventory = Path(self.config["inventory"])
+        rows = inventory.read_text().splitlines()
+        for number in range(count - len(rows)):
+            name = f"fleet-{number}"
+            rows.append(
+                f"fixture\t{name}\tagent-{name}\tdocker-agent-{name}.service\t"
+                f"/var/lib/tentaflake/agents/{name}\ttrue"
+            )
+        inventory.write_text("\n".join(rows) + "\n")
+        self.assertEqual(len(rows), count)
+        self.assertLessEqual(len(inventory.read_bytes()), 256 * 1024)
+        return [row.split("\t")[2] for row in rows]
+
     def start(self, **overrides):
         self.config.update(overrides)
         self.service = api.Service(self.config)
@@ -305,6 +319,30 @@ else:
         self.assertFalse(unmanaged["policy"]["managed"])
         self.assertEqual(unmanaged["editable_fields"], [])
         self.assertNotEqual(unmanaged["policy_revision"], details["policy_revision"])
+
+    def test_runtime_tool_selection_is_peer_visible_revision_bound_policy(self):
+        self.config["policies"]["agent-coding"]["runtime"] = {
+            "adapter": "pi-durable",
+            "tool_selection": True,
+            "tools": ["research_search"],
+        }
+        self.start()
+        _, selected = self.request("GET", "/v1/agents/agent-coding/details")
+        self.assertEqual(selected["policy"]["runtime"]["tools"], ["research_search"])
+        self.assertNotIn("runtime.tools", selected["editable_fields"])
+        self.assertNotIn(str(self.root), json.dumps(selected))
+        self.service.policies["agent-coding"]["runtime"]["tools"] = []
+        _, narrowed = self.request("GET", "/v1/agents/agent-coding/details")
+        self.assertEqual(narrowed["policy"]["runtime"]["tools"], [])
+        self.assertNotEqual(narrowed["policy_revision"], selected["policy_revision"])
+        status, _ = self.request("POST", "/v1/agents/agent-coding/config-proposals", {
+            "policy_revision": selected["policy_revision"],
+            "changes": {"llm.allowed_models": ["model-a"]},
+        })
+        self.assertEqual(status, 409)
+        _, unknown = self.request("GET", "/v1/agents/agent-assistant/details")
+        self.assertIsNone(unknown["policy"]["runtime"])
+        self.assertEqual(self.mutations(), [])
 
     def test_proposals_are_revision_bound_downloads_without_mutation(self):
         self.start()
@@ -894,6 +932,80 @@ else:
                 finally:
                     service.close()
 
+    def test_three_hundred_agents_and_peers_preserve_exact_scope(self):
+        agents = self.fleet_inventory(300)
+        for aid in agents:
+            self.config["policies"].setdefault(aid, api.unknown_policy())
+        uid = api.os.geteuid()
+        self.assertGreater(uid, 0, "Unix peer fixture requires an unprivileged test UID")
+        peers = [{"uid": uid, "agents": agents, "permissions": ["read"]}] + [
+            {"uid": uid + number + 1, "agents": [aid], "permissions": ["read"]}
+            for number, aid in enumerate(agents[:-1])
+        ]
+        self.start(
+            allow_actions=True,
+            allow_logs=True,
+            peer_grants=peers,
+        )
+        self.assertEqual(len(self.service.agents), 300)
+        self.assertEqual(len(self.service.peer_grants), 300)
+        for peer in peers:
+            self.assertEqual(self.service.peer_grant(peer["uid"]), {
+                "agents": frozenset(peer["agents"]),
+                "permissions": frozenset(["read"]),
+            })
+        self.assertEqual(self.service.peer_grant(uid)["agents"], frozenset(agents))
+        status, inventory = self.request("GET", "/v1/agents")
+        self.assertEqual(status, 200)
+        self.assertEqual([row["id"] for row in inventory["agents"]], agents)
+        narrow = self.service.route("GET", "/v1/agents", None, peer_uid=uid + 1)
+        self.assertEqual([row["id"] for row in narrow["agents"]], ["agent-coding"])
+        narrow = self.service.route("GET", "/v1/agents", None, peer_uid=peers[-1]["uid"])
+        self.assertEqual([row["id"] for row in narrow["agents"]], [agents[-2]])
+        with patch.object(self.service, "run") as command:
+            for peer, method, path, body in [
+                (uid + 1, "GET", f"/v1/agents/{agents[-1]}/details", None),
+                (uid, "GET", "/v1/agents/agent-absent/details", None),
+                (uid, "GET", f"/v1/agents/{agents[-1]}/logs", None),
+                (uid, "GET", "/v1/health", None),
+                (uid, "POST", f"/v1/agents/{agents[-1]}/actions",
+                 {"action": "start", "request_id": "denied-fleet"}),
+            ]:
+                with self.subTest(peer=peer, method=method, path=path):
+                    with self.assertRaises(api.APIError) as denied:
+                        self.service.route(method, path, body, peer_uid=peer)
+                    self.assertEqual(denied.exception.status, 403)
+            command.assert_not_called()
+        self.assertEqual(self.mutations(), [])
+
+    def test_large_peer_grants_still_reject_duplicate_unknown_ids_and_permissions(self):
+        agents = self.fleet_inventory(300)
+        valid = {"uid": max(1, api.os.geteuid()), "agents": agents, "permissions": ["read"]}
+        for peer in [
+            {**valid, "agents": [*agents, agents[0]]},
+            {**valid, "agents": [*agents[:-1], "agent-absent"]},
+            {**valid, "permissions": ["read", "root"]},
+            {**valid, "permissions": ["read", "read"]},
+        ]:
+            with self.subTest(peer=peer):
+                with self.assertRaisesRegex(ValueError, "peer grants"):
+                    api.Service({**self.config, "peer_grants": [peer]})
+
+    def test_three_hundred_peers_reject_duplicate_uids_and_oversize_grants(self):
+        agents = self.fleet_inventory(300)
+        peers = [
+            {"uid": 10000 + number, "agents": [aid], "permissions": ["read"]}
+            for number, aid in enumerate(agents)
+        ]
+        with self.assertRaisesRegex(ValueError, "peer grants"):
+            api.Service({**self.config, "peer_grants": [*peers, peers[0]]})
+        oversized = [{**peer, "agents": agents} for peer in peers]
+        self.assertGreater(
+            len(json.dumps(oversized, separators=(",", ":")).encode()), api.MAX_OUTPUT
+        )
+        with self.assertRaisesRegex(ValueError, "peer grants"):
+            api.Service({**self.config, "peer_grants": oversized})
+
     def test_exact_peer_filters_inventory_and_denies_ungranted_operations(self):
         uid = api.os.geteuid()
         self.assertGreater(uid, 0, "Unix peer fixture requires an unprivileged test UID")
@@ -1054,6 +1166,31 @@ else:
         data = json.dumps(value).encode()
         return (f"HTTP/1.0 {status} Response\r\nContent-Type: application/json\r\n"
                 f"Content-Length: {len(data)}\r\n\r\n").encode() + data
+
+    def test_stopped_pi_durable_run_grants_do_not_admit_a_runner(self):
+        uid = max(1, api.os.geteuid())
+        self.start(peer_grants=[{
+            "uid": uid,
+            "agents": ["agent-waiting"],
+            "permissions": ["read", "run_read", "run_submit", "run_stop"],
+        }])
+        listed = self.service.route("GET", "/v1/agents", None, peer_uid=uid)
+        self.assertEqual([row["id"] for row in listed["agents"]], ["agent-waiting"])
+        self.assertNotIn("runner", listed["agents"][0]["capabilities"])
+        with patch.object(self.service, "runner_file") as files:
+            for method, operation, body in [
+                ("GET", "capabilities", None),
+                ("POST", "sessions", {"title": "test", "request_id": "stopped"}),
+                ("POST", "runs/run-1/stop", {}),
+            ]:
+                with self.subTest(operation=operation):
+                    with self.assertRaises(api.APIError) as denied:
+                        self.service.route(
+                            method, f"/v1/agents/agent-waiting/runner/{operation}",
+                            body, peer_uid=uid,
+                        )
+                    self.assertEqual(denied.exception.status, 404)
+            files.assert_not_called()
 
     def test_runner_scope_and_permissions_precede_all_io(self):
         self.start_runner_api(["read"])
@@ -1309,6 +1446,16 @@ else:
             "fixture\tcoding\tagent-coding\t--all\t/tmp\ttrue\n"
         )
         with self.assertRaisesRegex(ValueError, "identity"):
+            api.Service(self.config)
+
+    def test_inventory_duplicate_ids_and_byte_limit_remain_enforced(self):
+        inventory = Path(self.config["inventory"])
+        rows = inventory.read_text().splitlines(keepends=True)
+        inventory.write_text("".join([*rows, rows[0]]))
+        with self.assertRaisesRegex(ValueError, "identity"):
+            api.Service(self.config)
+        inventory.write_bytes(b"#" + b"x" * (256 * 1024))
+        with self.assertRaisesRegex(ValueError, "inventory exceeds its limit"):
             api.Service(self.config)
 
     def test_untrusted_socket_path_is_not_removed(self):

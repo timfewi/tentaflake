@@ -68,6 +68,51 @@ let
       ];
     };
   };
+  fleetNames = pkgs.lib.genList (index: "fleet-${toString index}") 300;
+  fleetAgents = map (name: "agent-${name}") fleetNames;
+  fleetPeer = {
+    uid = 12345;
+    agents = fleetAgents;
+    permissions = [ "read" ];
+  };
+  fleetPeers = [
+    fleetPeer
+  ]
+  ++ pkgs.lib.genList (index: {
+    uid = 12346 + index;
+    agents = [ (builtins.elemAt fleetAgents index) ];
+    permissions = [ "read" ];
+  }) 299;
+  fleet = evaluate {
+    # Synthetic stopped declarations isolate inventory/grant scale from admission.
+    tentaflake.agentDeclarations = map (name: {
+      adapter = "fixture";
+      inherit name;
+      container = "agent-${name}";
+      unit = "docker-agent-${name}.service";
+      stateDir = "/var/lib/tentaflake/agents/${name}";
+      stateStorage = "/var/lib/tentaflake/agents/${name}/state";
+      workspace = "/var/lib/tentaflake/agents/${name}/workspace";
+      uid = 2000;
+      gid = 2000;
+      runnable = false;
+    }) fleetNames;
+    tentaflake.hostApi = {
+      enable = true;
+      peers = fleetPeers;
+    };
+  };
+  oversizedPeerGrants = evaluate {
+    tentaflake.agentDeclarations = fleet.tentaflake.agentDeclarations;
+    tentaflake.hostApi = {
+      enable = true;
+      peers = pkgs.lib.genList (index: {
+        uid = 12345 + index;
+        agents = fleetAgents;
+        permissions = [ "read" ];
+      }) 300;
+    };
+  };
   unknownPeerAgent = evaluate {
     tentaflake.hostApi = {
       enable = true;
@@ -192,6 +237,11 @@ assert pkgs.lib.any (pkgs.lib.hasInfix "allowToolDecisions requires allowToolReq
   failures invalidDecisions
 );
 assert failures scoped == [ ];
+assert pkgs.lib.assertMsg (failures fleet == [ ]) (builtins.toJSON (failures fleet));
+assert builtins.length (builtins.attrNames fleet.tentaflake.agentInstances) == 300;
+assert fleet.tentaflake.hostApi.peers == fleetPeers;
+assert builtins.length fleet.tentaflake.hostApi.peers == 300;
+assert pkgs.lib.any (pkgs.lib.hasInfix "512 KiB") (failures oversizedPeerGrants);
 assert scoped.systemd.services.tentaflake-api.serviceConfig.RuntimeDirectoryMode == "0711";
 assert enabled.tentaflake.hostApi.peers == null;
 assert scoped.tentaflake.hostApi.peers != null;
@@ -247,6 +297,7 @@ assert pkgs.lib.hasInfix "tentaflake-host-api --config /nix/store/"
 assert policies.agent-operator.managed;
 assert !policies.agent-operator.research.enabled;
 assert policies.agent-operator.research.readiness == "unverified";
+assert policies.agent-operator.runtime == null;
 assert policies.agent-operator.worker.enabled;
 assert policies.agent-operator.worker.limits.max_timeout_seconds == 3600;
 assert policies.agent-operator.auto_start == false;
@@ -271,6 +322,31 @@ pkgs.runCommand "tentaflake-host-api-evaluation" { } ''
   for path in sys.argv[2:]:
       with open(path) as source:
           assert json.load(source)["runners"] == {}
+  PY
+  ${pkgs.python3}/bin/python3 - ${generatedConfig fleet} <<'PY'
+  import json
+  import sys
+  from pathlib import Path
+
+  with open(sys.argv[1]) as source:
+      configuration = json.load(source)
+  expected = {f"agent-fleet-{number}" for number in range(300)}
+  assert configuration["peer_grants"] == [{
+      "uid": 12345,
+      "agents": [f"agent-fleet-{number}" for number in range(300)],
+      "permissions": ["read"],
+  }] + [{
+      "uid": 12346 + number,
+      "agents": [f"agent-fleet-{number}"],
+      "permissions": ["read"],
+  } for number in range(299)]
+  assert len(json.dumps(configuration["peer_grants"], separators=(",", ":")).encode()) <= 512 * 1024
+  inventory = Path(configuration["inventory"]).read_bytes()
+  assert len(inventory) <= 256 * 1024
+  rows = inventory.decode().splitlines()
+  assert len(rows) == 300
+  assert {row.split("\t")[2] for row in rows} == expected
+  assert set(configuration["policies"]) == expected
   PY
   touch "$out"
 ''

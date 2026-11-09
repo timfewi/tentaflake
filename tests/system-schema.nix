@@ -55,7 +55,7 @@ let
       if spec ? path then lib.attrByPath spec.path null projected == desired.${section}.${field} else true
     ) (builtins.attrNames desired.${section})
   ) (builtins.attrNames descriptor.sections);
-  serviceLimits = count: {
+  serviceFleet = count: {
     schemaVersion = 1;
     agents = builtins.genList (i: {
       name = "a${toString i}";
@@ -82,6 +82,57 @@ let
           };
         }) count
       );
+    };
+    storage = {
+      enable = true;
+      paths = builtins.genList (i: "/var/lib/tentaflake/agents/a${toString i}") count;
+      repositoryFile = "/run/backup/repository";
+      passwordFile = "/run/backup/password";
+    };
+  };
+  largeServiceFleet =
+    let
+      fleet = serviceFleet 300;
+    in
+    fleet
+    // {
+      hostApi = fleet.hostApi // {
+        peers = fleet.hostApi.peers ++ [
+          {
+            uid = 301;
+            agents = map (agent: "agent-${agent.name}") fleet.agents;
+            permissions = [ "read" ];
+          }
+        ];
+      };
+      storage = fleet.storage // {
+        paths = lib.concatMap (agent: [
+          "/var/lib/tentaflake/agents/${agent.name}"
+          "/var/lib/tentaflake/agents/${agent.name}/workspace"
+          "/var/lib/tentaflake-broker-llm-agent-${agent.name}"
+        ]) fleet.agents;
+      };
+    };
+  runnerFleet = {
+    schemaVersion = 1;
+    agents = builtins.genList (i: {
+      name = "runner-${toString i}";
+      adapter = "pi-durable";
+      autoStart = false;
+    }) 300;
+    hostApi = {
+      enable = true;
+      peers = [
+        {
+          uid = 1000;
+          agents = builtins.genList (i: "agent-runner-${toString i}") 300;
+          permissions = [
+            "run_read"
+            "run_submit"
+            "run_stop"
+          ];
+        }
+      ];
     };
   };
   serviceFixture = ./fixtures/service-projection/tentaflake.toml;
@@ -113,7 +164,7 @@ let
         }
       ];
     }).config;
-  researchLimits = count: {
+  researchFleet = count: {
     schemaVersion = 1;
     agents = builtins.genList (i: {
       name = "r${toString i}";
@@ -132,7 +183,7 @@ let
   };
 in
 assert accepts (
-  (serviceLimits 128)
+  (serviceFleet 128)
   // {
     hostApi = {
       enable = false;
@@ -142,18 +193,17 @@ assert accepts (
     };
   }
 );
-assert
-  !accepts (
-    (serviceLimits 129)
-    // {
-      hostApi = {
-        enable = false;
-      };
-      workloadMapping = {
-        enable = false;
-      };
-    }
-  );
+assert accepts (
+  (serviceFleet 129)
+  // {
+    hostApi = {
+      enable = false;
+    };
+    workloadMapping = {
+      enable = false;
+    };
+  }
+);
 assert lib.all accepts corpus.valid;
 assert lib.all (data: !accepts data) corpus.invalid;
 assert accepts (agentName 57);
@@ -161,23 +211,62 @@ assert !accepts (agentName 58);
 assert accepts (hostName (repeat 63));
 assert !accepts (hostName (repeat 64));
 assert !accepts (hostName "trailing-");
-assert accepts (serviceLimits 64);
+assert accepts (serviceFleet 64);
+assert accepts (
+  (serviceFleet 65)
+  // {
+    workloadMapping = {
+      enable = false;
+    };
+  }
+);
+assert accepts (
+  (serviceFleet 65)
+  // {
+    hostApi = {
+      enable = false;
+    };
+  }
+);
+assert accepts (serviceFleet 300);
+assert accepts largeServiceFleet;
 assert
   !accepts (
-    (serviceLimits 65)
+    largeServiceFleet
     // {
-      workloadMapping = {
-        enable = false;
+      hostApi = largeServiceFleet.hostApi // {
+        peers = largeServiceFleet.hostApi.peers ++ [ (builtins.head largeServiceFleet.hostApi.peers) ];
       };
     }
   );
 assert
   !accepts (
-    (serviceLimits 65)
+    largeServiceFleet
     // {
-      hostApi = {
-        enable = false;
+      storage = largeServiceFleet.storage // {
+        paths = largeServiceFleet.storage.paths ++ [ (builtins.head largeServiceFleet.storage.paths) ];
       };
+    }
+  );
+assert
+  !accepts (
+    largeServiceFleet
+    // {
+      workloadMapping = largeServiceFleet.workloadMapping // {
+        bindings = largeServiceFleet.workloadMapping.bindings // {
+          agent-a299 = largeServiceFleet.workloadMapping.bindings.agent-a0;
+        };
+      };
+    }
+  );
+assert accepts runnerFleet;
+assert
+  !accepts (
+    runnerFleet
+    // {
+      agents = lib.imap0 (
+        i: agent: if i == 299 then agent // { adapter = "hermes"; } else agent
+      ) runnerFleet.agents;
     }
   );
 assert
@@ -191,7 +280,7 @@ assert
   };
 assert
   !accepts (
-    (serviceLimits 1)
+    (serviceFleet 1)
     // {
       workloadMapping = {
         enable = true;
@@ -240,8 +329,23 @@ assert serviceProjection.hostApi.peers == serviceDesired.hostApi.peers;
 assert serviceProjection.workloadMapping.bindings == serviceDesired.workloadMapping.bindings;
 assert serviceProjection.integrations.advisory.enable;
 assert serviceProjection.integrations.configFile == serviceDesired.connectors.configFile;
-assert accepts (researchLimits 128);
-assert !accepts (researchLimits 129);
+assert accepts (researchFleet 128);
+assert accepts (researchFleet 129);
+assert accepts (researchFleet 300);
+assert
+  !accepts (
+    let
+      fleet = researchFleet 300;
+    in
+    fleet
+    // {
+      research = fleet.research // {
+        agents = fleet.research.agents // {
+          agent-r299.uid = 1;
+        };
+      };
+    }
+  );
 assert researchProjection.services.secureResearch.enable;
 assert researchProjection.tentaflake.research.agents == researchDesired.research.agents;
 assert

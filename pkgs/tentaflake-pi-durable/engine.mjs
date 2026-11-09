@@ -9,6 +9,14 @@ import { Refusal, stateFile } from './ledger.mjs';
 import { modelBoundary, Research, worker } from './mediation.mjs';
 
 const context = BACKGROUND_CONTEXT;
+export const supportedTools = Object.freeze([
+  'research_job', 'research_search', 'research_fetch', 'research_browser', 'research_read', 'offline_worker',
+]);
+export function selectTools(tools = supportedTools) {
+  if (!Array.isArray(tools) || tools.some(tool => !supportedTools.includes(tool)) || new Set(tools).size !== tools.length)
+    throw new Refusal('Tools must be a unique subset of the reviewed stable tool IDs');
+  return Object.freeze(supportedTools.filter(tool => tools.includes(tool)));
+}
 const taskIdentity = value => {
   if (!Number.isSafeInteger(value) || value <= 0) throw new Refusal('Invalid SDK task correlation');
   return String(value);
@@ -38,7 +46,10 @@ async function auditCheckpoint(storage, viewer, ledger) {
   return count === ledger.db.prepare('SELECT count(*) AS count FROM runs').get().count;
 }
 export class Engine {
-  constructor(config, ledger) { this.config = config; this.ledger = ledger; this.active = undefined; this.stopping = false; }
+  constructor(config, ledger) {
+    this.config = Object.freeze({ ...config, tools: selectTools(config.tools) });
+    this.ledger = ledger; this.active = undefined; this.stopping = false;
+  }
   async open() {
     if (this.ledger.quarantined) return; // MUST precede writable SDK open.
     const raw = createModels(); raw.setProvider(openaiProvider());
@@ -48,34 +59,17 @@ export class Engine {
       brokerBaseUrl: this.config.brokerBaseUrl, brokerTokenFile: this.config.brokerTokenFile,
       active: () => this.active });
     const registry = createRegistry();
-    const tools = ['research_job','research_search','research_fetch','research_browser','research_read'].map(name => defineTool({
-      name, description: `Call the isolated ${name} capability. Supply its JSON arguments as a string.`,
-      parameters: Type.Object({ arguments: Type.String({ maxLength: 60000 }) }, { additionalProperties: false }),
-      replay: 'unsafe',
-      execute: async (args, api) => {
-        const run = this.requireActive();
-        const parameters = JSON.parse(args.arguments);
-        if (!parameters || typeof parameters !== 'object' || Array.isArray(parameters)) throw new Refusal('Expected Research argument object');
-        this.ledger.operation(run.id, taskIdentity(api.taskId), name);
-        try {
-          const response = await this.research.request('tools/call', { name, arguments: parameters }, run.controller.signal);
-          if (response?.isError) throw new Refusal('Research outcome requires reconciliation');
-          return { output: [{ type: 'text', text: JSON.stringify(response) }] };
-        } catch (error) { this.ledger.uncertain(run.id); throw error; }
-      },
-    }));
-    tools.push(defineTool({
-      name: 'offline_worker', description: 'Submit one local-reversible command to the isolated offline worker. No host shell or network.',
+    const tools = this.config.tools.map(name => name === 'offline_worker' ? defineTool({
+      name, description: 'Submit one local-reversible command to the isolated offline worker. No host shell or network.',
       parameters: Type.Object({ argv: Type.Array(Type.String({ maxLength: 4096 }), { minItems: 1, maxItems: 128 }),
         timeout_seconds: Type.Integer({ minimum: 1, maximum: 3600 }) }, { additionalProperties: false }),
       replay: 'unsafe',
-      execute: async (args, api) => {
-        const run = this.requireActive();
-        const operation = this.ledger.operation(run.id, taskIdentity(api.taskId), 'worker');
-        const id = `pi_durable_${operation.replaceAll('-', '')}`;
-        try { return { output: [{ type: 'text', text: JSON.stringify(await worker({ ...args, id, workspace: this.config.workspace, signal: run.controller.signal })) }] }; }
-        catch (error) { this.ledger.uncertain(run.id); throw error; }
-      },
+      execute: (args, api) => this.invokeTool(name, args, api),
+    }) : defineTool({
+      name, description: `Call the isolated ${name} capability. Supply its JSON arguments as a string.`,
+      parameters: Type.Object({ arguments: Type.String({ maxLength: 60000 }) }, { additionalProperties: false }),
+      replay: 'unsafe',
+      execute: (args, api) => this.invokeTool(name, args, api),
     }));
     registry.install(defineExtension({ name: 'tentaflake-boundary', tools, hooks: [
       hook(GenerationTask, { beforeRequest: (_request, api) => {
@@ -86,6 +80,7 @@ export class Engine {
       } }),
       hook(CompactionTask, { beforeCompact: () => ({ decline: true }) }),
     ] }));
+    this.registry = registry;
     const options = {
       models: this.boundary.models, registry,
       settings: { retry: { enabled: false }, toolExecution: 'sequential', afterFailedRun: 'withdraw',
@@ -107,6 +102,29 @@ export class Engine {
     this.harness = await Harness.open(await openNodeSqliteStorage(path), options, context);
     // No unconditional resume. A clean ledger permits only a new explicit
     // submission. All interrupted admissions were quarantined by Ledger.open.
+  }
+  registeredTools() {
+    return this.harness ? this.registry.snapshot().tools().map(({ tool }) => tool.name) : [];
+  }
+  async invokeTool(name, args, api) {
+    // Also enforce selection at dispatch: stale/forged calls never reach a
+    // Research request, worker publication or durable operation admission.
+    if (!this.config.tools.includes(name)) throw new Refusal('Tool is not selected by the reviewed runtime policy');
+    const run = this.requireActive();
+    if (name === 'offline_worker') {
+      const operation = this.ledger.operation(run.id, taskIdentity(api.taskId), 'worker');
+      const id = `pi_durable_${operation.replaceAll('-', '')}`;
+      try { return { output: [{ type: 'text', text: JSON.stringify(await worker({ ...args, id, workspace: this.config.workspace, signal: run.controller.signal })) }] }; }
+      catch (error) { this.ledger.uncertain(run.id); throw error; }
+    }
+    const parameters = JSON.parse(args.arguments);
+    if (!parameters || typeof parameters !== 'object' || Array.isArray(parameters)) throw new Refusal('Expected Research argument object');
+    this.ledger.operation(run.id, taskIdentity(api.taskId), name);
+    try {
+      const response = await this.research.request('tools/call', { name, arguments: parameters }, run.controller.signal);
+      if (response?.isError) throw new Refusal('Research outcome requires reconciliation');
+      return { output: [{ type: 'text', text: JSON.stringify(response) }] };
+    } catch (error) { this.ledger.uncertain(run.id); throw error; }
   }
   requireActive() {
     if (!this.active || this.active.cancelled || this.stopping || this.ledger.quarantined)

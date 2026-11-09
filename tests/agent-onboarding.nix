@@ -32,6 +32,12 @@ let
       }
     ];
   };
+  withTools =
+    tools:
+    piDurableScaffold
+    // {
+      agents = [ ((lib.head piDurableScaffold.agents) // { inherit tools; }) ];
+    };
   result = plan generic;
   rejects = value: !(builtins.tryEval (builtins.deepSeq value true)).success;
   withState =
@@ -82,6 +88,34 @@ assert (lib.head result.instances).requiresHostUpdate;
 assert (plan hermes).valid;
 assert !(lib.head (plan scaffold).instances).runnable;
 assert !(lib.head (plan piDurableScaffold).instances).runnable;
+assert lib.all
+  (
+    tools:
+    let
+      selected = plan (withTools tools);
+    in
+    selected.valid && !(lib.head selected.instances).runnable
+  )
+  [
+    [ ]
+    [ "research_search" ]
+    [
+      "research_job"
+      "research_search"
+      "research_fetch"
+      "research_browser"
+      "research_read"
+      "offline_worker"
+    ]
+  ];
+assert rejects (plan (withTools [ "read" ]));
+assert rejects (
+  plan (withTools [
+    "research_search"
+    "research_search"
+  ])
+);
+assert rejects (plan (hermes // { agents = [ ((lib.head hermes.agents) // { tools = [ ]; }) ]; }));
 assert lib.all (value: value) (lib.attrValues isolationRegressions);
 assert rejects (plan (generic // { schemaVersion = 2; }));
 assert lib.all (schemaVersion: rejects (plan (generic // { inherit schemaVersion; }))) [

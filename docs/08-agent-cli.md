@@ -50,11 +50,12 @@ policy_revision = "review-1"
 
 All three services default off. Service fields beyond `enable` require explicit
 `enable = true`. Host API enablement requires `peers`, including `[]` to deny
-everyone; it never selects the legacy implicit group grants. At most 64 unique
-peer UIDs are allowed, in `1..4294967294` (never root). Each peer has at most 128
-unique, exact declared `agent-<name>` IDs and unique finite permissions.
-Accepted operations are `read`, `actions`, `logs`, `propose`, `tool_requests`,
-`tool_decisions` and `host_health`. Actions, logs and worker operations require
+everyone; it never selects the legacy implicit group grants. Peer UIDs must be
+unique and in `1..4294967294` (never root). Each peer lists unique, exact declared
+`agent-<name>` IDs and unique finite permissions; neither collection has an
+agent-count ceiling. Accepted operations are `read`, `actions`, `logs`, `propose`,
+`tool_requests`, `tool_decisions`, `host_health`, `run_read`, `run_submit` and
+`run_stop`. Actions, logs and worker operations require
 their corresponding `allowActions`, `allowLogs`, `allowToolRequests` and
 `allowToolDecisions` switches. Decisions also require request-read authority
 both globally and on that peer. Empty agent scope permits only `host_health`
@@ -69,26 +70,76 @@ separately; TOML accepts no credential contents, keys or provider configuration.
 model execution or remediation authority.
 
 Workload bindings are policy for existing runnable declarations, not declarations
-themselves. At most 64 bindings are accepted, only with Docker; stopped Pi Durable and
-OpenClaw adapters cannot be bound. Tenant/workload pairs must be unique, and all
-three identifiers are bounded to 64 ASCII letters, digits, underscores, hyphens
-and dots (a dot cannot be first). Unit names, engine endpoints, commands and
-arbitrary paths cannot be supplied. Runtime provenance checks and explicit
-generation-authority initialization remain required.
+themselves. Bindings have no fleet-size ceiling and require Docker. OpenClaw
+cannot be bound; Pi bindings express intent and still require actual host
+runtime admission. Tenant/workload pairs must be unique. Each identifier is
+bounded to 64 ASCII letters, digits, underscores, hyphens and dots (a dot cannot
+be first). Unit names, engine endpoints, commands and arbitrary paths cannot be
+supplied. Runtime provenance checks and explicit generation-authority
+initialization remain required.
 
 `ui`, `board`, `monitoring`, `securityObserver` and `llm` remain disabled-only
 until their public schema has implemented runtime backing.
-Pi Durable `run_read`, `run_submit` and `run_stop` grants remain rejected. The public
-compiler currently receives only `pkgs` and `lib`, while the pinned Pi Durable source,
-runtime package and verified image bundle are flake-local artifacts; no trusted
-artifact-selection input reaches this compiler. Public Pi Durable entries therefore
-remain stopped/unreviewed, without accepting user-supplied packages, image
-selectors or Nix expressions to bypass admission.
+The independent Pi Durable `run_read`, `run_submit` and `run_stop` grants are
+accepted only when **every** exact agent ID in that peer's scope declares
+`adapter = "pi-durable"`; mixed-runtime scopes are rejected. A runner grant
+does not imply `read`, another runner grant, legacy actions or any permission on
+another runtime. Separate peers may scope other runtimes to their own operations.
+These declarations grant no runtime admission: the public compiler receives no
+trusted runtime-package or image-selection input. Pi `autoStart = true` is
+accepted as desired intent, but the host rejects it without exact runtime,
+broker, Research, worker and quota admission. New unadmitted `false`
+declarations remain refusal units, including on a host admitting other Pi
+instances. Existing fully admitted-but-stopped instances remain runnable for
+manual starts. Optional [identity-derived host provisioning](agent-adapters.md#identity-derived-specialist-provisioning)
+removes per-agent Nix map edits after one reviewed host opt-in. User-supplied
+packages, image selectors, role labels and Nix expressions cannot bypass it.
+See [exact runner mediation](19-web-ui.md#exact-scoped-pi-durable-runner-mediation).
+
+## Reviewed Pi tool subsets
+
+Only `adapter = "pi-durable"` accepts optional `agents[].tools`. The supported
+stable IDs are `research_job`, `research_search`, `research_fetch`,
+`research_browser`, `research_read` and `offline_worker`. For example:
+
+```toml
+[[agents]]
+name = "specialist"
+adapter = "pi-durable"
+autoStart = false
+tools = ["research_search"]
+```
+
+An explicit `tools = []` registers no callable tools. Omitting the field
+preserves existing reviewed consumers' fixed set of all six; normalization
+preserves that omission rather than replacing it with an empty list. Unknown
+IDs, duplicate IDs, wrong types and this field on another adapter are rejected.
+Public source preserves list order; effective configuration uses the fixed
+order above. This is a narrowing of the approved fixed Research connection
+and offline worker, never an arbitrary MCP server, command or egress grant.
+All existing runtime, broker, Research, worker and quota prerequisites remain
+mandatory, even for `[]`.
+
+A search-only registry does not create a Research job: without `research_job`,
+an already approved bounded `job_id` must be supplied in context. Search still
+requires an actually configured search provider and the job's operation/data/paid
+grants; browser use requires its own service capability. Selected registration
+is not proof these prerequisites are present or that any operation succeeds.
+
+Change tools through the existing reviewed desired-source proposal/build and
+owner activation path. The runner reads an immutable read-only configuration,
+registers only the selected SDK tools and rejects unselected dispatches.
+Private loadout changes do not instantly revoke an active run's accepted
+policy. Compare the new live `tools` and `features.tool_selection` evidence with
+the host's revision-bound `policy.runtime` before claiming an effective change;
+old runners without this evidence remain unverified. This adds no OS sandbox
+boundary and does not advance the pinned SDK.
 
 ## Public Research permissions
 
-For an already declared Hermes or ZeroClaw agent, opt in to the existing isolated
-[Research service](16-research.md), with a dedicated non-root host relay UID:
+For an already declared Hermes or ZeroClaw agent (or Pi with separate exact host
+admission), opt in to the existing isolated [Research service](16-research.md),
+with a dedicated non-root host relay UID:
 
 ```toml
 [research]
@@ -98,13 +149,18 @@ enable = true
 uid = 62101
 ```
 
-Enablement requires 1–128 exact declared `agent-<name>` IDs with distinct UIDs in
-`1..4294967294`. Each entry accepts only `uid`. Unknown IDs, wildcard scopes,
-duplicate UIDs, the `dev` profile, stopped Pi Durable/OpenClaw adapters and generic OCI
-without an accepted Research integration are rejected by both validators.
+Enablement requires at least one exact declared `agent-<name>` ID with distinct
+UIDs in `1..4294967294`, without a fleet-size ceiling. Each entry accepts only
+`uid`. Unknown IDs, wildcard scopes, duplicate UIDs, the `dev` profile,
+OpenClaw and generic OCI without an accepted Research integration are rejected
+by both validators. Pi Research bindings are valid intent, not admission:
+the host rejects them unless its exact runtime and policy prerequisites hold.
+With identity-derived Pi provisioning the host derives the relay UID; omit the
+public per-agent map or retain that exact derived UID, never another agent's.
 Adapter support comes from the generated runtime catalog; the host module also
 checks the actual runnable adapter and exact read-only client/socket mounts.
-Agent names such as `researcher` are labels, never capability grants.
+Private display names, roles and skills grant no authority; public `name`
+remains the immutable runtime/workspace identity.
 
 `enable = true` projects to `services.secureResearch.enable`; `agents` projects
 intact to `tentaflake.research.agents`. Omission, an empty section and
@@ -140,9 +196,10 @@ It defaults off; omission, an empty section and `enable = false` remain valid.
 These disabled forms emit no backup settings, preserving pre-existing consumer
 Nix backup policy; `enable = false` is not a command to disable that policy.
 Any other storage fields require explicit `enable = true`. Enablement requires
-1–128 unique paths plus both runtime file references. Optional `environmentFile`
-references backend credentials; no repository URL, password, credential contents,
-Nix expressions, initialization, reset or relocation controls are accepted.
+at least one unique path plus both runtime file references, without a path-count
+ceiling. Optional `environmentFile` references backend credentials; no repository
+URL, password, credential contents, Nix expressions, initialization, reset or
+relocation controls are accepted.
 References must be strictly below `/run/`, at most 256 ASCII characters, with
 nonempty safe segments and no dot/traversal segments. Operators provision and
 protect these files separately and prepare the repository out of band.
@@ -193,8 +250,11 @@ Arbitrary host commands, mounts and credential inputs remain forbidden.
 Templates require no host configuration. Validation/plans/import require the
 generated CLI inputs and installed pinned Nix inputs. Evaluation is offline,
 bounded to 60 seconds and bounded output; it does not download images. Incoming
-files are limited to 1 MiB and 128 stopped additions. Alternate host mounts,
-runtime settings and credential paths are not public agent inputs.
+files and the merged desired system remain limited to 1 MiB, with at least one
+stopped addition and no agent-count ceiling. Saved inventory size does not
+reserve or raise host running concurrency, worker queues or runtime capacity.
+Alternate host mounts, runtime settings and credential paths are not public
+agent inputs.
 
 Import atomically adds to the same live `tentaflake.toml` schema-v1 document,
 preserving existing optional `_securityNote`. It rejects legacy arrays and duplicate
@@ -444,9 +504,21 @@ Normalization uses the same semantic validation as the compiler and normalizes
 only supplied data, without inserting defaults.
 `config normalize --json` emits the normalized data itself.
 `config validate --json` emits `{"schemaVersion":1,"valid":true}` on success;
-invalid configuration emits
-`{"schemaVersion":1,"valid":false,"error":"invalid_configuration"}` with exit
-status 2. `--hide` is refused because these commands handle desired-system data.
+invalid configuration from either command emits an additive safe diagnostic:
+`{"schemaVersion":1,"valid":false,"error":"invalid_configuration","message":"agents[0].adapter: invalid or unsupported value"}`
+with exit status 2. The message contains only fixed descriptor field names,
+numeric collection indexes and safe reason text. Map entries use indexes, never
+agent IDs; unknown keys are reported at the nearest known section or object.
+Input names, unknown field names, source snippets and values are never echoed.
+TOML parser and file-access failures use fixed redacted messages.
+`--hide` is refused because these commands handle desired-system data.
+
+Local desired-system inputs remain bounded to 1 MiB. Declared agents, Research
+entries, peer counts/scopes, workload bindings and backup path counts have no
+arbitrary fleet-size limit; identity grammar, unique keys/scopes/UIDs, finite
+permission enums and field/path lengths still apply. Offline acceptance proves
+neither host capacity nor runtime admission, and does not raise service request,
+parser, byte or queue bounds.
 
 Migration retains its source and creates its destination only if absent. It
 refuses unsupported behavior rather than silently dropping it; keep the original

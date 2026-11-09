@@ -36,6 +36,18 @@ Do not replace declarative agents with a mandatory runtime, UI or control servic
   Research, worker and quotas); never relax that admission. Generic
   custom OCI is offline, with no accepted model/Research integration. Synthetic
   fixtures are not vendor acceptance. See [adapters](docs/agent-adapters.md).
+- Optional `piDurableProvisioning` consumes canonical Pi startup identities and
+  derives exact maps only after one complete reviewed host policy. Public Pi
+  startup/Research intent is not admission. Unconfigured stopped declarations
+  stay refusal units even on admitted hosts; fully admitted manual-stop
+  consumers remain supported. Capacity rejects starts, not creation. Display
+  names, roles, skills and equipment badges never select policy or paths.
+- Pi-only public `agents[].tools` is an optional unique subset of the six
+  reviewed Research/offline-worker stable IDs: `[]` means none, omission keeps
+  existing fixed-set consumers. Carry it into immutable runner JSON, actual SDK
+  registration/dispatch and revision-bound host policy; never infer broader host
+  admission or relax the complete upstream five-tool Research manifest. Applied
+  selection requires matching live tools/feature evidence; badges are not proof.
 - `crates/` owns CLI/broker/worker. Shared Rust packaging in `lib/mkRustPackage.nix`
   includes workspace manifests and selected crate source; root versions and
   image metadata remain authoritative. Keep required root inputs explicit.

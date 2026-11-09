@@ -90,6 +90,19 @@ pub fn secure_ancestry(path: &Path) -> Result<()> {
 pub struct PrivateDir {
     pub dir: File,
     _lock: File,
+    owner_pid: libc::pid_t,
+}
+impl Drop for PrivateDir {
+    fn drop(&mut self) {
+        // A concurrent fork can retain this open file description until exec,
+        // even with CLOEXEC. Release the owner's lock explicitly on teardown;
+        // dropping a forked child's copy must never unlock the live parent.
+        if unsafe { libc::getpid() } == self.owner_pid {
+            unsafe {
+                libc::flock(self._lock.as_raw_fd(), libc::LOCK_UN);
+            }
+        }
+    }
 }
 impl PrivateDir {
     pub fn lock(path: &Path) -> Result<Self> {
@@ -127,7 +140,11 @@ impl PrivateDir {
         if unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
             return Err("state already has a writer".into());
         }
-        Ok(Self { dir, _lock: lock })
+        Ok(Self {
+            dir,
+            _lock: lock,
+            owner_pid: unsafe { libc::getpid() },
+        })
     }
     pub fn read(&self, filename: &str, limit: usize) -> Result<Option<Vec<u8>>> {
         let c = name(filename)?;
@@ -192,5 +209,99 @@ impl PrivateDir {
             return Err(err());
         }
         self.dir.sync_all().map_err(|_| err())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::os::unix::fs::DirBuilderExt;
+    use std::os::unix::net::UnixStream;
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::time::Duration;
+
+    static SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
+    struct Scratch(std::path::PathBuf);
+    impl Drop for Scratch {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    struct Child {
+        pid: libc::pid_t,
+        gate: UnixStream,
+    }
+    impl Drop for Child {
+        fn drop(&mut self) {
+            // This child only waits on our gate; always terminate and reap it,
+            // including when an assertion unwinds the parent test.
+            unsafe {
+                libc::kill(self.pid, libc::SIGKILL);
+                loop {
+                    let status = libc::waitpid(self.pid, std::ptr::null_mut(), 0);
+                    if status >= 0
+                        || std::io::Error::last_os_error().raw_os_error() != Some(libc::EINTR)
+                    {
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn owner_drop_releases_inherited_lock_without_child_unlocking_parent() {
+        let parent = std::env::temp_dir();
+        secure_ancestry(&parent).unwrap();
+        let scratch = Scratch(parent.join(format!(
+            "tfc-lock-{}-{}",
+            std::process::id(),
+            SEQUENCE.fetch_add(1, Ordering::Relaxed)
+        )));
+        std::fs::DirBuilder::new()
+            .mode(0o700)
+            .create(&scratch.0)
+            .unwrap();
+        let writer = PrivateDir::lock(&scratch.0).unwrap();
+        let duplicate = writer._lock.try_clone().unwrap();
+        let (gate, inherited_gate) = UnixStream::pair().unwrap();
+        gate.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+        let pid = unsafe { libc::fork() };
+        assert!(pid >= 0, "fixture fork failed");
+        if pid == 0 {
+            // Only close/getpid/flock/read/write/_exit after fork: no allocation,
+            // process spawning, Rust test assertions or inherited mutex access.
+            unsafe {
+                libc::close(gate.as_raw_fd());
+            }
+            drop(writer);
+            // The duplicate intentionally keeps the open file description alive
+            // after the child drops its inherited guard, until parent cleanup.
+            unsafe {
+                if libc::write(inherited_gate.as_raw_fd(), b"r".as_ptr().cast(), 1) != 1 {
+                    libc::_exit(1);
+                }
+                let mut released = [0u8; 1];
+                libc::read(inherited_gate.as_raw_fd(), released.as_mut_ptr().cast(), 1);
+                libc::_exit(0);
+            }
+        }
+        let mut child = Child { pid, gate };
+        drop(duplicate);
+        drop(inherited_gate);
+        let mut ready = [0u8; 1];
+        child.gate.read_exact(&mut ready).unwrap();
+        assert_eq!(ready, *b"r");
+        assert!(
+            PrivateDir::lock(&scratch.0).is_err(),
+            "dropping an inherited guard must not unlock the live parent writer"
+        );
+        drop(writer);
+        let reopened = PrivateDir::lock(&scratch.0)
+            .expect("owner drop must release the lock despite the child's inherited duplicate");
+        drop(reopened);
+        drop(child);
     }
 }

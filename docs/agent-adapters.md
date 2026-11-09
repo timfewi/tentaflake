@@ -322,6 +322,184 @@ explicitly deny live inputs and session import. Isolated context is unsupported.
 Task ownership stays with the client's own task system; the runner API does
 not grant enterprise approvals, connector permissions, or standalone UI admission.
 
+#### Identity-derived specialist provisioning
+
+`tentaflake.piDurableProvisioning.enable` is an optional **host policy**,
+disabled by default and available in `nixosModules.default` (also exported as
+`nixosModules.pi-durable-provisioning`). It consumes existing public
+`pi-durable` declarations whose `autoStart` is `true`; it never defines agents.
+After one reviewed installation-wide opt-in, adding or cloning a specialist
+requires only a new unique TOML `name` and the reviewed desired-source
+build/activation path, not another hand-written set of per-agent Nix maps.
+No title, role, skill, display name or agent count is an admission signal.
+
+The one-time owner review must supply all of the following:
+
+1. The existing pinned `tentaflake-pi-durable` package, matching local image
+   bundle/selector, `piDurableRuntime.enable`, balanced containment, and the
+   exact rootful `runsc-pi-durable-v1` transport. No package pin is advanced by
+   provisioning, and all existing adapter/image/mount assertions still apply.
+2. One named OpenAI Responses model present in the pinned SDK catalog, its
+   reviewed provider HTTPS base URL and positive input/output prices in
+   micro-USD per million tokens. `provider.credentialFile` is an existing
+   dedicated runtime file below `/run`, loaded only by the host broker.
+   Provisioning neither creates nor reads that file during evaluation, and
+   accepts no credential contents. The owner must explicitly set
+   `allowNonStrictCostEnvelope = true`: this runtime cannot meet a chat-only
+   strict cost envelope. An existing strict policy conflicts and fails; it is
+   never silently relaxed.
+3. Approval of the pinned isolated Research connection and its **complete**
+   five-tool manifest, plus separately configured service/egress UIDs, VPN,
+   resolvers, fresh readiness and any operation/provider/data/paid grants.
+   `research.tools` must list `research_job`, `research_search`,
+   `research_fetch`, `research_browser`, and `research_read` exactly once.
+   It is approval of the existing fixed transport, not an arbitrary MCP URL,
+   executable, per-agent tool subset, or authorization to use an unconfigured
+   search/browser provider. Public `agents[].tools` may only narrow this set.
+4. Finite `maxActiveAgents`, a non-overlapping owner-reserved
+   `10.<networkOctet>.0.0/16` broker network pool, and an unused static Research
+   relay UID pool (`research.relayUidBase` and `relayUidCount`). The actual
+   Research module still rejects host/service-identity collisions.
+5. Explicit finite `resources`, `broker`, `worker`, and `quota` policies:
+
+| Policy | Required fields |
+| --- | --- |
+| `resources` | `memoryMiB`, `cpuMillis`, `tmpfsMiB`, `runTmpfsMiB`, `nofile`; swap equals memory and the existing controller PID ceiling is 512 |
+| `broker` | `maxRequestBytes`, `maxResponseBytes`, `maxConcurrency`, `maxRequestsPerMinute`, `dailyRequestBudget`, `dailyTokenBudget`, `dailyCostMicrousd`, `maxCompletionTokens` |
+| `worker` | `memoryMiB`, `cpuMillis`, `pidsLimit`, `maxInboxEntries`, `maxInboxMiB`, `maxQueueEntries`, `maxQueueMiB`, `maxRetainedResults`, `maxSnapshotMiB`, `maxSnapshotEntries`, `maxRetainedResultMiB`, `maxRetainedEntries`, `maxLogMiB`, `workspaceTmpfsMiB`, `tmpTmpfsMiB` |
+| `quota` | `workspaceMiB`, `stateMiB`, each at least 128 MiB; existing data needs explicit offline migration |
+
+CPU quantities are thousandths of a core. Worker request/timeout maxima remain
+65536 bytes/3600 seconds, matching the fixed `offline_worker` interface.
+Existing worker result-reservation/entry assertions and broker streaming bounds
+remain mandatory. Aggregate broker limits are the admitted capacity times the
+per-agent policy; finite controller/worker/storage bounds likewise multiply by
+that capacity. This does not promise the host has those resources: the owner
+must review actual memory, disk, routes, provider terms and spending risk.
+
+This private-free consumer factory shows the complete wiring without choosing
+an installation's model, credential channel, Research policy or budgets:
+
+```nix
+{
+  tentaflake,
+  system,
+  systemFile,
+  reviewedProvisioningPolicy,
+  reviewedResearchService,
+}:
+let
+  packages = tentaflake.packages.${system};
+  bundle = packages.tentaflake-pi-durable-image;
+in
+{
+  imports = [
+    tentaflake.nixosModules.default
+    (tentaflake.lib.${system}.systemFromData { file = systemFile; })
+  ];
+  tentaflake.piDurableRuntime = {
+    enable = true;
+    transport = "runsc-pi-durable-v1";
+    package = packages.tentaflake-pi-durable;
+    inherit bundle;
+    image = bundle.imageSelector;
+  };
+  tentaflake.piDurableProvisioning = reviewedProvisioningPolicy // {
+    enable = true;
+  };
+  services.secureResearch = reviewedResearchService;
+}
+```
+
+Leave `enable` unset in `reviewedResearchService` when preparing an empty or
+all-stopped fleet. The existing Research integration enables the service when
+the first real client map is derived; no dummy client or running service is
+needed for stopped declarations. An independently enabled standalone Research
+service still requires its own real nonempty authorized client list and
+distinct service/egress/client identities; those prerequisites are unchanged.
+
+`systemFile` must be the tracked installation-owned `tentaflake.toml`.
+`reviewedProvisioningPolicy` must contain every policy above, including
+`provider = { upstreamBaseUrl = ...; credentialFile = ...; }` and
+`model = { name = ...; inputMicrousdPerMillion = ...;
+outputMicrousdPerMillion = ...; }`. These are required arguments and reviewed
+decisions, not a ready-to-activate default. Do not copy synthetic fixture
+pricing or credential paths into a live deployment.
+
+Subsequently, the UI/bridge creates a stopped public declaration with a fresh
+canonical `name`, binds its private profile to `agent-<name>`, and submits a
+reviewed TOML draft setting `autoStart = true` when execution is requested.
+Private display-name/role edits never rewrite that name or its workspace.
+Clones receive a fresh public identity and fresh private context, not another
+agent's worker binding. Public validation accepts startup/Research/workload
+**intent** for Pi, but host evaluation remains the authority. Missing model,
+credential channel, transport, Research, worker, quota or budgets fails closed.
+Public Research UID bindings, if supplied, must agree with the derived
+principal; unknown IDs, foreign paths/principals and policy-reference fields
+cannot redirect a grant.
+Canonical names retain the public lowercase identity syntax; the existing
+offline worker's 48-character container-ID bound means a runnable Pi name is
+at most 42 characters (the `agent-` prefix consumes six). Longer public stopped
+names may validate but cannot bypass the worker's startup assertion.
+
+Each selected identity gets its own broker network/token/accounting, relay
+principal, worker queue/results and sibling state/workspace quota images.
+Network/UID allocation is a stable identity hash, not roster position; adding
+or reordering declarations never rekeys an existing specialist. Hash
+collisions fail explicitly rather than sharing policy. Changing the network or
+UID pool requires review of a stopped-runtime migration, not automatic reuse.
+Container UIDs remain the existing 10100, with private host ancestry and exact
+per-agent mounts providing separation; this is not user-namespace isolation.
+
+Additional `autoStart = false` identities without exact host maps remain
+refusal units even when another Pi is admitted. They create no runner, broker,
+worker, quota or relay resources. Existing explicitly admitted-but-stopped
+instances with complete manual host maps remain supported for manual start;
+`false` does not revoke that independent host admission. Stop before removing
+admission and preserve existing state; this module never deletes or resets it.
+
+The capacity guard rejects excess **requested starts**, not additional stopped
+declarations. There is no scheduler, waiting queue, automatic eviction, or
+multi-host placement in this module. A UI must display that rejection instead
+of promising execution or silently borrowing another worker. New/stopped
+declarations, successful builds, role templates and equipment badges are not
+live runtime admission. Live admission remains unavailable until the owner
+grants the prerequisites and separately authorizes activation and acceptance.
+
+Public Pi-only `agents[].tools` optionally narrows the fixed registry to unique
+stable IDs: `research_job`, `research_search`, `research_fetch`,
+`research_browser`, `research_read` and `offline_worker`. An explicit `[]`
+exposes no tools; omission preserves the six-tool set for existing reviewed
+consumers. Both validators reject unknown/duplicate IDs and other adapters'
+use of the field. The compiler carries each agent's canonical subset into its
+immutable read-only runner configuration, independently of derived host maps.
+The SDK registry installs only that subset and dispatch also rejects unselected
+IDs before durable operation admission. All host broker/Research/worker/quota
+prerequisites and the exact upstream five-tool Research manifest validation
+remain mandatory, even when no Research tools are selected. Discovering the
+complete approved connection does not expose it to the agent.
+
+Tool operation prerequisites are unchanged: `research_search` needs an admitted
+configured search provider and bounded job permissions; if `research_job` is
+unselected, supply an already approved `job_id` in context. No dependency is
+silently granted. `research_fetch` performs bounded public-URL fetch under the
+job/readiness/egress policy, not search or unrestricted browsing. Browser use
+needs its own service capability. `offline_worker` publishes only a bounded
+`local-reversible` request to that identity's no-egress worker and retains
+existing approval/result semantics.
+
+Live capabilities expose the actual registered stable IDs as `tools` with
+`features.tool_selection = true`; peer-verified policy exposes
+`runtime = { adapter: "pi-durable", tool_selection: true, tools: [...] }`.
+That subset participates in the host policy revision. A loadout edit is desired
+intent until the reviewed source is built, separately owner-activated and its
+new actual evidence observed. It is not an instantaneous active-run revocation
+or a new OS sandbox boundary. Missing old-runner evidence remains unsupported/
+unverified. Arbitrary MCP servers, skill-driven grants, native host shell, direct
+provider/network access and isolated-session context remain unavailable. A saved
+badge, registered tool or source/evaluation fixture does not prove a live
+provider/job/Research operation.
+
 Focused verification uses separate package, evaluation and VM gates:
 
 - Build `.#tentaflake-pi-durable-sdk`, `.#tentaflake-pi-durable` and `.#tentaflake-pi-durable-image`.
@@ -329,12 +507,22 @@ Focused verification uses separate package, evaluation and VM gates:
   conflicting requests, stop/reopen, durable barriers, denied provider paths,
   credential permissions, and real pinned-SDK kill/close-after-send fixtures.
   Restored-receipt mismatch cases must stay quarantined with zero redispatch.
+- Run the packaged `bin/tentaflake-pi-durable-tools-test` for focused synthetic
+  none/search-only/all/omitted subsets, the actual SDK registry and HTTP
+  capability list, immutable accepted selection and unselected dispatch refusal.
+  It sends no model/provider turn and uses only synthetic Research initialization.
 - Evaluate `tests/stopped-scaffold.nix` and the shared adapter/containment suite.
 - Run `tests/research-integration.nix` when VM verification is authorized; its
   added Node probe uses this runner's actual Research class, pinned real client
   and real relay with an offline-denied fetch, not a generic MCP mock.
 - Evaluate `tests/pi-durable-runtime-evaluation.nix { inherit pkgs; }` for exact
   configured transport and wrong-path/flags/rootless/user-mapping negatives.
+- Evaluate `checks.*.pi-durable-provisioning` for two public dynamically derived
+  identities with distinct tool subsets, immutable runner JSON, a third identity
+  using omitted-field compatibility without map edits, 300 stopped declarations,
+  admitted-but-stopped compatibility, stable isolation, unchanged host authority,
+  capacity refusal and missing/cross-agent prerequisite negatives. Its image proof is synthetic;
+  no model requests, credentials, egress or activation are exercised.
 - Build `.#checks.x86_64-linux.pi-durable-runtime-vm` when VM verification is
   authorized; it exports the two-agent fixture from
   `tests/pi-durable-runtime-vm.nix`. It is not part of the fast gate. The VM is

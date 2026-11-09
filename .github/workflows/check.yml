@@ -208,6 +208,7 @@ jobs:
             selected_checks+=(".#checks.x86_64-linux.host-api" ".#checks.x86_64-linux.host-api-evaluation")
             selected_checks+=(".#checks.x86_64-linux.system-schema" ".#checks.x86_64-linux.control-evaluation" ".#checks.x86_64-linux.ci-vm-selection")
             selected_checks+=(".#checks.x86_64-linux.pi-durable-runtime-evaluation" ".#checks.x86_64-linux.local-image-proof")
+            selected_checks+=(".#checks.x86_64-linux.pi-durable-provisioning")
           fi
           for crate in cli broker worker control integrations activity workloads; do
             variable="CHECK_${crate^^}"
@@ -237,9 +238,11 @@ jobs:
         run: |
           fixture=$(nix build --no-link --print-out-paths .#control-test-fixture)
           cli=$(nix build --no-link --print-out-paths .#tentaflake-cli)
-          TENTAFLAKE_CONTROL_FIXTURE="$fixture" TENTAFLAKE_REAL_NORMALIZER="$cli/bin/tentaflake" \
-            nix develop --command cargo test --locked -p tentaflake-control --test immutable_unix -- \
-            --ignored --exact immutable_unix_approval_build_and_recovery_contract
+          for contract in immutable_unix_approval_build_and_recovery_contract real_source_validation_and_lossless_build_contract; do
+            TENTAFLAKE_CONTROL_FIXTURE="$fixture" TENTAFLAKE_REAL_NORMALIZER="$cli/bin/tentaflake" \
+              nix develop --command cargo test --locked -p tentaflake-control --test immutable_unix -- \
+              --ignored --exact "$contract"
+          done
 
       - name: nix build (tentaflake toplevel)
         if: needs.changes.outputs.evaluate == 'true' && needs.changes.outputs.runtime == 'true'

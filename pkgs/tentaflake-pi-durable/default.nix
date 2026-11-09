@@ -30,6 +30,8 @@ stdenvNoCC.mkDerivation {
       --add-flags "$out/lib/tentaflake-pi-durable/runner.mjs"
     makeWrapper ${nodejs_24}/bin/node "$out/bin/tentaflake-pi-durable-test" \
       --add-flags "--test $out/lib/tentaflake-pi-durable/test/ledger.test.mjs $out/lib/tentaflake-pi-durable/test/mediation.test.mjs $out/lib/tentaflake-pi-durable/test/sdk-recovery.test.mjs"
+    makeWrapper ${nodejs_24}/bin/node "$out/bin/tentaflake-pi-durable-tools-test" \
+      --add-flags "--test --test-name-pattern=tool.selection $out/lib/tentaflake-pi-durable/test/sdk-recovery.test.mjs"
     runHook postInstall
   '';
   passthru = {
