@@ -123,6 +123,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Exact-peer host API grants separately scope runner reads, submissions and stop.
   Synthetic fixtures do not establish live model/provider or target acceptance.
 ### Maintenance
+- Replace the outdated operator-shell PNG with a vector terminal that shows
+  the shell logo beside current `tentaflake status`, `doctor` and
+  `doctor --security` output, and darken the animated README banner.
 - Correct maintained guides against current source: offline CLI forms and
   adapter-specific public fields, generic stopped examples, internal-only legacy
   arguments, admitted mount/image exceptions and bounded observer work. Separate

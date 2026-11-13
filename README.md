@@ -42,12 +42,15 @@ host broker, worker, quota and Research policy stays in Nix.
 
 ## The operator shell
 
-![Tentaflake operator shell layout illustration](public/_compressed/tentaflake-tui-ui.png)
+![Tentaflake logo beside an operator terminal running tentaflake doctor and tentaflake doctor --security](public/tentaflake-operator-shell.svg)
 
-The login shell presents host and agent status. Use `tentaflake status`,
-`tentaflake logs agent-assistant` and `tentaflake doctor --security` to inspect
-your installation. The image illustrates the layout, not a live host or vendor
-acceptance. See the [operator shell guide](docs/06-shell.md) for current commands.
+The login shell presents host and agent status. `tentaflake doctor` checks
+units, disk and agent states; `tentaflake doctor --security` acts as the
+advisor: every stable `TFSEC-*` finding carries a remediation, critical/high
+findings exit non-zero, and missing live evidence is never reported as green.
+The terminal reproduces current CLI output formats on a synthetic host; it is
+not live evidence or vendor acceptance. See the
+[operator shell guide](docs/06-shell.md) for current commands.
 
 ## Scope and support
 
