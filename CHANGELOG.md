@@ -6,10 +6,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+
+## [0.5.0] - 2026-11-14
 ### Direction
 - Keep declarative TOML onboarding, installation and Nix host policy
   runtime-agnostic, with no mandatory runtime or control service.
-- Keep release tagging explicit; changes below are not a new published tag.
 - Keep the public desired-system TOML empty and commented. Document separate
   consumer/fork ownership and Git tracking, with fail-closed missing-source
   diagnostics and real-Git regressions that never substitute the upstream default.
@@ -817,7 +818,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `docs/` — quickstart guide, agent tips, skill index, and 4 bundled Hermes skills
 - GitHub Actions CI: `nix flake check` on PR and push to main
 
-[Unreleased]: https://github.com/timfewi/tentaflake/compare/v0.4.52...main
+[Unreleased]: https://github.com/timfewi/tentaflake/compare/v0.5.0...main
+[0.5.0]: https://github.com/timfewi/tentaflake/compare/v0.4.52...v0.5.0
+[0.4.52]: https://github.com/timfewi/tentaflake/compare/v0.4.51...v0.4.52
 [0.4.0]: https://github.com/timfewi/tentaflake/compare/v0.3.9...v0.4.0
 [0.3.1]: https://github.com/timfewi/tentaflake/compare/v0.2.0...v0.3.1
 [0.2.0]: https://github.com/timfewi/tentaflake/compare/v0.1.0...v0.2.0
