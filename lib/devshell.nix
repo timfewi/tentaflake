@@ -9,6 +9,7 @@
 { pkgs }:
 let
   inherit (pkgs) lib;
+  inherit ((fromTOML (builtins.readFile ../Cargo.toml)).workspace.package) version;
 
   # Single source of truth for the art is public/tentaflake-shell-logo.txt —
   # retained as the contributor-shell identity and rendered below.
@@ -67,7 +68,7 @@ let
       info=()
       kv() { info+=("$(printf '%b%-7s%b %s' "$dim" "$1" "$reset" "$2")"); }
 
-      info+=("$(printf '%b%btentaflake%b %bdev shell%b' "$bold" "$cyan" "$reset" "$bold" "$reset")")
+      info+=("$(printf '%b%btentaflake v%s%b %bdev shell%b' "$bold" "$cyan" ${lib.escapeShellArg version} "$reset" "$bold" "$reset")")
       info+=("$(printf '%bisolated AI agents on NixOS · nix develop%b' "$dim" "$reset")")
       info+=("")
 
