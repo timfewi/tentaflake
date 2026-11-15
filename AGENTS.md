@@ -156,5 +156,10 @@ workspace state) in `docs/` or anywhere else in Git. Write working notes to the
 ignored `.scratch/` directory; never commit it or treat it as a source of truth.
 Report actual checks and evidence gaps. No build authorizes activation.
 Use Conventional Commits and DCO sign-off with the human's configured identity;
-preserve unrelated work. Complete every applicable PR-template section and
-checklist. Report vulnerabilities through GitHub Security Advisories.
+preserve unrelated work. Versioned branches are mandatory: name every branch
+`<type>/vX.Y.Z-<topic>` for the next patch/minor/major after the newest released
+CHANGELOG section, add its notes under `[Unreleased]`, and change the Cargo
+workspace version only on `release/vX.Y.Z`; `scripts/check-versioning.sh`
+enforces it in CI ([rule](CONTRIBUTING.md#versioned-branches)). Complete
+every applicable PR-template section and checklist. Report vulnerabilities
+through GitHub Security Advisories.

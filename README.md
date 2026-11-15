@@ -10,6 +10,10 @@ systemd and the Rust `tentaflake` CLI. No mandatory web UI or control service.
 > revision and read the [changelog](CHANGELOG.md) and
 > [migration guide](docs/agent-adapters.md#breaking-migration) before updating.
 
+The current release is [v0.5.0](https://github.com/timfewi/tentaflake/releases/tag/v0.5.0);
+`tentaflake version` and the login banner show the installed one. Every change
+branch names the release it targets ([versioned branches](CONTRIBUTING.md#versioned-branches)).
+
 ## Start here
 
 1. [Install](docs/00-install.md) or use the [consumer example](examples/).

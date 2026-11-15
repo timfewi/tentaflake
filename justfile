@@ -114,10 +114,13 @@ iso-installer:
 
 # ── Release ──────────────────────────────────────────────────
 
-# Cut a release tag. Update CHANGELOG.md FIRST, then: just tag v0.4.0
+# Cut a release tag on the merged release/vX.Y.Z commit. Update CHANGELOG.md
+# and the Cargo workspace version FIRST, then: just tag v0.5.1
 # The git tag is the source of truth for the repo version.
 tag VERSION:
     @test -z "$(git status --porcelain)" || { echo "working tree dirty (staged, unstaged or untracked) — commit first"; exit 1; }
+    @grep -qx 'version = "{{ replace(VERSION, 'v', '') }}"' Cargo.toml \
+        || { echo "Cargo.toml does not declare {{ VERSION }} — prepare it on release/{{ VERSION }} first"; exit 1; }
     @grep -q "## \[{{ replace(VERSION, 'v', '') }}\]" CHANGELOG.md \
         || { echo "no CHANGELOG.md section for {{ VERSION }} — write it first"; exit 1; }
     git tag -a {{ VERSION }} -m "{{ VERSION }}"

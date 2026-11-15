@@ -2,6 +2,13 @@
 
 <!-- Describe your changes in detail -->
 
+## Target version
+
+<!-- Must match the branch name <type>/vX.Y.Z-<topic>; see CONTRIBUTING.md#versioned-branches -->
+
+- Target release: vX.Y.Z
+- SemVer level: patch / minor / major
+
 ## Type of Change
 
 - [ ] Bug fix
@@ -13,6 +20,7 @@
 ## Checklist
 
 - [ ] I have read [CONTRIBUTING.md](https://github.com/timfewi/tentaflake/blob/main/CONTRIBUTING.md)
+- [ ] The branch is named `<type>/vX.Y.Z-<topic>` (or `release/vX.Y.Z`) for the next release, and `CHANGELOG.md` has this change under `[Unreleased]`
 - [ ] This PR keeps the template **generic** — no domain-specific code
 - [ ] `nix flake check` passes
 - [ ] `cargo fmt --all -- --check` passes

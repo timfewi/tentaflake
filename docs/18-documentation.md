@@ -57,9 +57,9 @@ when anything below `.scratch/` is tracked.
 | `docs/16-research.md` | `configuration/research` |
 | `docs/17-builds.md` | `reference/builds` |
 | `docs/18-documentation.md` | `reference/documentation` |
-| `docs/19-web-ui.md` | new; route added at next release sync |
-| `docs/20-system-control.md` | new; route added at next release sync |
-| `docs/21-enterprise-connectors.md` | new; route added at next release sync |
+| `docs/19-web-ui.md` | `operations/host-api` |
+| `docs/20-system-control.md` | `operations/system-control` |
+| `docs/21-enterprise-connectors.md` | `configuration/enterprise-connectors` |
 | `docs/agent-adapters.md` | `configuration/agent-adapters` |
 | `docs/roadmap.md` | product roadmap, synchronized separately |
 | `docs/tailscale-policy.example.json` | example linked from `operations/tailscale` |
