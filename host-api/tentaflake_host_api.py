@@ -263,14 +263,21 @@ class Service:
                 aid not in self.agents or not self.agents[aid]["runnable"]
                 or self.agents[aid]["runtime"] != "pi-durable"
                 or not isinstance(descriptor, dict)
-                or set(descriptor) != {"socket", "token", "transport"}
-                or descriptor != {
+                or {k: v for k, v in descriptor.items() if k != "grant_hashes"} != {
                     "socket": f"/run/tentaflake-pi-durable/{aid}/control/runner.sock",
                     "token": f"/run/tentaflake-pi-durable/{aid}/api-token",
                     "transport": "runsc-pi-durable-v1",
                 }
             ):
                 raise ValueError("Invalid runner inventory")
+            if "grant_hashes" in descriptor:
+                hashes = descriptor["grant_hashes"]
+                if not isinstance(hashes, dict) or not 1 <= len(hashes) <= 64 or any(
+                    not isinstance(key, str) or not RUNNER_ID.fullmatch(key)
+                    or not isinstance(value, str) or not re.fullmatch(r"[a-f0-9]{64}", value)
+                    for key, value in hashes.items()
+                ):
+                    raise ValueError("Invalid host runner grant digests")
         self.peer_grants = None
         peers = config.get("peer_grants")
         if peers is not None:
@@ -1279,6 +1286,25 @@ class Service:
             capabilities = self.runner_exchange(descriptor, "GET", "/v1/capabilities")
             if capabilities.get("available") is not True or not isinstance(capabilities.get("features"), dict) or capabilities["features"].get("runs") is not True:
                 raise APIError("Runner submission is unavailable", 409)
+            declared = descriptor.get("grant_hashes")
+            offered = capabilities.get("grants", [])
+            if declared is not None:
+                if not isinstance(offered, list) or len(offered) != len(declared):
+                    raise APIError("Runner configuration differs from host grants", 409)
+                observed = {}
+                for entry in offered:
+                    if not isinstance(entry, dict) or not isinstance(entry.get("revision"), str):
+                        raise APIError("Invalid runner provider grant", 409)
+                    encoded = json.dumps(entry, sort_keys=True, ensure_ascii=False, separators=(",", ":"), allow_nan=False)
+                    observed[entry["revision"]] = hashlib.sha256(encoded.encode()).hexdigest()
+                if observed != declared:
+                    raise APIError("Runner configuration differs from host grants", 409)
+                if operation == "runs" and "binding" not in body:
+                    if len(offered) != 1:
+                        raise APIError("Explicit runner provider binding required", 400)
+                    body = {**body, "binding": {key: offered[0][key] for key in ("revision", "provider", "model", "protocol")}}
+            elif isinstance(offered, list) and any(isinstance(entry, dict) and entry.get("brokerBinding") is True for entry in offered):
+                raise APIError("Bound runner providers require a host grant", 403)
             if "binding" in body:
                 grants = capabilities.get("grants")
                 if not isinstance(grants, list) or not any(isinstance(grant, dict) and

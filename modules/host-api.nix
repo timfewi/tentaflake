@@ -30,11 +30,30 @@ let
     && piDurableTransport.supported config;
   runners =
     lib.mapAttrs
-      (_: declaration: {
-        socket = "/run/tentaflake-pi-durable/${declaration.container}/control/runner.sock";
-        token = "/run/tentaflake-pi-durable/${declaration.container}/api-token";
-        transport = piDurableTransport.version;
-      })
+      (
+        _: declaration:
+        let
+          broker = lib.attrByPath [ declaration.container ] null config.tentaflake.broker.agents;
+          grants = if broker == null then [ ] else broker.llm.providerGrants or [ ];
+          projection = import ../lib/piProviderGrants.nix { inherit lib; };
+        in
+        {
+          socket = "/run/tentaflake-pi-durable/${declaration.container}/control/runner.sock";
+          token = "/run/tentaflake-pi-durable/${declaration.container}/api-token";
+          transport = piDurableTransport.version;
+        }
+        // lib.optionalAttrs (grants != [ ]) {
+          grant_hashes = builtins.listToAttrs (
+            map (
+              grant:
+              let
+                capsule = projection.runner "http://${broker.gateway}:${toString broker.llm.port}" grant;
+              in
+              lib.nameValuePair capsule.revision (builtins.hashString "sha256" (builtins.toJSON capsule))
+            ) grants
+          );
+        }
+      )
       (
         lib.filterAttrs (
           _: declaration:

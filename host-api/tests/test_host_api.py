@@ -1237,6 +1237,24 @@ else:
             b"GET /v1/runs?request_id=request-1 HTTP/1.0",
         ])
 
+    def test_runner_checks_the_entire_offered_grant_against_the_host(self):
+        self.start_runner_api()
+        binding = {"revision": "r1", "provider": "anthropic", "protocol": "anthropic-messages", "model": "fixture"}
+        approved = {**binding, "brokerBinding": True, "tools": ["research_read"], "pricing": {"currency": "USD"}}
+        encoded = json.dumps(approved, sort_keys=True, separators=(",", ":")).encode()
+        self.service.runners["agent-coding"]["grant_hashes"] = {"r1": api.hashlib.sha256(encoded).hexdigest()}
+        capabilities = {"available": True, "features": {"runs": True}, "grants": [approved]}
+        drift = {**capabilities, "grants": [{**approved, "tools": []}]}
+        observed, files = self.fake_runner([
+            self.runner_json(drift), self.runner_json(capabilities), self.runner_json({"session": {"id": "approved"}}),
+        ])
+        with patch.object(self.service, "runner_file", side_effect=files), patch.object(api, "RUNSC_PI_DURABLE_PEER_UID", api.os.geteuid()):
+            with self.assertRaises(api.APIError) as refused:
+                self.runner_route("POST", "sessions", {"request_id": "stale", "title": "", "binding": binding})
+            self.assertEqual(refused.exception.status, 409)
+            self.assertEqual(self.runner_route("POST", "sessions", {"request_id": "ok", "title": "", "binding": binding})["session"]["id"], "approved")
+        self.assertEqual([row[0] for row in observed], [b"GET /v1/capabilities HTTP/1.0", b"GET /v1/capabilities HTTP/1.0", b"POST /api/sessions HTTP/1.0"])
+
     def test_runner_explicit_session_binding_and_terminal_measurement(self):
         self.start_runner_api()
         binding = {"provider": "anthropic", "protocol": "anthropic-messages",
