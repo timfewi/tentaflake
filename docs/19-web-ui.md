@@ -355,6 +355,17 @@ operation. A search-only subset needs an already approved bounded `job_id`
 supplied in context when `research_job` is unselected. No dependency or new
 connection is implicitly authorized.
 
+Session creation accepts an optional `binding` with `revision`, `provider`, `model`
+and `protocol`. On a multi-grant runner an unbound session takes the binding of
+its first explicitly bound run. A confirmed result from
+`GET /v1/agents/{agent}/runner/runs?request_id=…` can include `measurement`.
+It reports `provider`, `protocol`, `model`, `grant_revision`, integer
+`input_tokens`, `output_tokens`, `provider_requests`, `tool_calls` and
+`tool_results`, and the boolean `streamed`. Provider requests count every
+dispatched generation, including follow-up turns after tool results. The tool
+counts cover correlated calls and results. Legacy receipts without measurements
+omit this field.
+
 Session titles are at most 200 characters. Request/session identifiers match
 `[A-Za-z0-9_.:-]{1,128}`; run path IDs match `[A-Za-z0-9-]{1,128}`.
 Run input is nonblank and at most 65,536 UTF-8 bytes; its entire incoming JSON
