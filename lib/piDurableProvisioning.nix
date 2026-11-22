@@ -9,15 +9,21 @@ let
   required = [
     "maxActiveAgents"
     "networkOctet"
-    "provider"
-    "model"
     "research"
     "resources"
     "broker"
     "worker"
     "quota"
   ];
-  complete = lib.all (key: (policy.${key} or null) != null) required;
+  providerGrants = policy.providerGrants or [ ];
+  legacyProvider = (policy.provider or null) != null;
+  legacyModel = (policy.model or null) != null;
+  complete =
+    lib.all (key: (policy.${key} or null) != null) required
+    && (
+      if providerGrants == [ ] then legacyProvider && legacyModel else !legacyProvider && !legacyModel
+    );
+
   count = builtins.length (builtins.attrNames requested);
   withinCapacity = complete && count <= policy.maxActiveAgents;
   remainder = value: divisor: value - (builtins.div value divisor) * divisor;
@@ -51,7 +57,7 @@ in
 {
   inherit requested complete count;
   broker = mapRequested (
-    identity: _:
+    identity: instance:
     builtins.removeAttrs policy.broker [ "maxCompletionTokens" ]
     // {
       enable = true;
@@ -67,15 +73,34 @@ in
         }";
       llm = {
         enable = true;
-        upstreamBaseUrl = policy.provider.upstreamBaseUrl;
-        providerCredentialFile = policy.provider.credentialFile;
-        allowedModels = [ policy.model ];
         maxCompletionTokens = policy.broker.maxCompletionTokens;
         streaming.enable = true;
         # This fixed Responses runtime cannot use the chat-only strict envelope.
         # The host must explicitly accept that incompatibility, not downgrade it.
         strictCostEnvelope = false;
-      };
+      }
+      // (
+        if providerGrants == [ ] then
+          {
+            upstreamBaseUrl = policy.provider.upstreamBaseUrl;
+            providerCredentialFile = policy.provider.credentialFile;
+            allowedModels = [ policy.model ];
+          }
+        else
+          {
+            providerGrants = map (
+              grant:
+              grant
+              // {
+                tools =
+                  if (instance.tools or null) == null then
+                    grant.tools
+                  else
+                    lib.filter (tool: lib.elem tool instance.tools) grant.tools;
+              }
+            ) providerGrants;
+          }
+      );
       fetch.enable = false;
     }
   );

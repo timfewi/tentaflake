@@ -758,6 +758,50 @@ fn open_private(path: &Path) -> Result<File, String> {
     Ok(file)
 }
 
+pub fn claim_provider_operation(budget: &Path, operation: &str) -> Result<bool, String> {
+    let path = budget.with_extension("provider-operations-v1");
+    let mut file = OpenOptions::new()
+        .read(true)
+        .append(true)
+        .create(true)
+        .mode(0o600)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_NONBLOCK)
+        .open(&path)
+        .map_err(|e| e.to_string())?;
+    lock_owner(&file, true)?;
+    let metadata = file.metadata().map_err(|e| e.to_string())?;
+    const MAX_BYTES: u64 = 32 * 100_000;
+    if !metadata.is_file()
+        || metadata.nlink() != 1
+        || metadata.mode() & 0o077 != 0
+        || metadata.len() > MAX_BYTES
+        || !metadata.len().is_multiple_of(32)
+    {
+        return Err("invalid provider operation ledger".into());
+    }
+    let digest = ring::digest::digest(&ring::digest::SHA256, operation.as_bytes());
+    let mut previous = Vec::with_capacity(metadata.len() as usize);
+    file.read_to_end(&mut previous).map_err(|e| e.to_string())?;
+    if previous
+        .as_chunks::<32>()
+        .0
+        .iter()
+        .any(|entry| entry == digest.as_ref())
+    {
+        return Ok(false);
+    }
+    if metadata.len() >= MAX_BYTES {
+        return Err("provider operation ledger is full".into());
+    }
+    file.write_all(digest.as_ref())
+        .and_then(|()| file.sync_all())
+        .map_err(|e| e.to_string())?;
+    File::open(path.parent().ok_or("missing budget directory")?)
+        .and_then(|parent| parent.sync_all())
+        .map_err(|e| e.to_string())?;
+    Ok(true)
+}
+
 fn lock_owner(file: &File, exclusive: bool) -> Result<(), String> {
     // flock is tied to this open file description and released when it closes.
     let mode = if exclusive {

@@ -170,6 +170,50 @@ let
         (throw "Pi runtime configuration mount is missing")
         container.volumes
     );
+  providerGrants =
+    map
+      (p: {
+        inherit (p) provider protocol;
+        upstreamEndpoint = "https://${p.provider}.fixture.invalid${p.path}";
+        providerCredentialFile = "/run/pi-fixture/${p.provider}";
+        model = policy.model // {
+          name = "${p.provider}-fixture-model";
+        };
+        pricingRevision = "price-one";
+        tools = [
+          "research_search"
+          "research_fetch"
+        ];
+        maxOutputTokens = 128;
+      })
+      [
+        {
+          provider = "openai";
+          protocol = "openai-responses";
+          path = "/v1/responses";
+        }
+        {
+          provider = "anthropic";
+          protocol = "anthropic-messages";
+          path = "/v1/messages";
+        }
+        {
+          provider = "opencode-go";
+          protocol = "opencode-go-chat-completions";
+          path = "/inference/go/openai/v1/chat/completions";
+        }
+      ];
+  configuredGrants = {
+    tentaflake.piDurableProvisioning = {
+      provider = lib.mkForce null;
+      model = lib.mkForce null;
+      inherit providerGrants;
+    };
+  };
+  multi = changed configuredGrants;
+  multiConfig = runtimeConfiguration multi.virtualisation.oci-containers.containers.${first};
+  multiService = multi.systemd.services."tentaflake-broker-llm-${first}".serviceConfig;
+  brokerConfig = lib.last (lib.splitString " " multiService.ExecStart);
   narrowedPlan = derive {
     instances = lib.mapAttrs (
       _: instance: instance // { tools = [ ]; }
@@ -282,6 +326,24 @@ assert !unsupportedTransport.tentaflake.agentInstances.${first}.runnable;
 assert !unsupportedTransport.tentaflake.agentInstances.${second}.runnable;
 assert assertionsPass admitted;
 assert failsClosed refused;
+assert assertionsPass multi;
+assert failsClosed (changed {
+  tentaflake.piDurableProvisioning = { inherit providerGrants; };
+});
+assert failsClosed (
+  changed (
+    lib.recursiveUpdate configuredGrants {
+      tentaflake.piDurableProvisioning.providerGrants = [
+        ((builtins.head providerGrants) // { tools = [ "research_admin" ]; })
+      ];
+    }
+  )
+);
+assert lib.length multiService.LoadCredential == 4;
+assert lib.all (
+  g: lib.any (ref: lib.hasSuffix (":" + g.providerCredentialFile) ref) multiService.LoadCredential
+) providerGrants;
+assert lib.all (g: g.tools == [ ]) multi.tentaflake.broker.agents.${second}.llm.providerGrants;
 assert plan.count == 2;
 assert builtins.stringLength longIdentity == 63;
 assert longPlan.broker.${longIdentity}.networkName == longIdentity;
@@ -440,5 +502,20 @@ pkgs.runCommand "tentaflake-pi-durable-provisioning" { } ''
       assert configuration["model"] == "gpt-4.1-mini"
       assert configuration["researchCommand"].endswith("/bin/research-client")
   PY
+  ${pkgs.python3}/bin/python3 - ${multiConfig} ${brokerConfig} <<'PYTHON'
+  import json, sys
+  from pathlib import Path
+  runner, broker = [json.loads(Path(p).read_text()) for p in sys.argv[1:]]
+  grants = broker["llm"]["grants"]
+  assert [g["provider"] for g in grants] == ["openai", "anthropic", "opencode-go"]
+  for host, capsule in zip(grants, runner["grants"], strict=True):
+      revision = host["revision"]
+      assert capsule["brokerBinding"] and capsule["revision"] == revision and len(revision) == 64
+      assert capsule["model"] == host["model"]["name"] and capsule["tools"] == host["tools"] == ["research_search"]
+      assert capsule["budget"]["max_output_tokens"] == host["max_output_tokens"] == 128
+      assert host["provider_credential_file"] == "$CREDENTIALS_DIRECTORY/provider-" + revision
+      assert host["upstream_endpoint"].startswith("https://") and capsule["endpoint"].startswith("http://10.")
+  assert "/run/pi-fixture" not in str(runner) and "fixture.invalid" not in str(runner)
+  PYTHON
   touch "$out"
 ''
