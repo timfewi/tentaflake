@@ -46,6 +46,28 @@ let
       (builtins.head broker.llm.allowedModels).name
     else
       "";
+  modelPolicy = if model == "" then null else builtins.head broker.llm.allowedModels;
+  grant = if modelPolicy == null then null else rec {
+    version = 1;
+    provider = "openai";
+    inherit model;
+    protocol = "openai-responses";
+    endpoint = "http://${broker.gateway}:${toString broker.llm.port}/v1/responses";
+    pricing = {
+      revision = builtins.hashString "sha256" (builtins.toJSON {
+        inherit model;
+        inherit (modelPolicy) inputMicrousdPerMillion outputMicrousdPerMillion;
+      });
+      currency = "USD";
+      input_microusd_per_million = modelPolicy.inputMicrousdPerMillion;
+      output_microusd_per_million = modelPolicy.outputMicrousdPerMillion;
+    };
+    inherit tools;
+    budget.max_output_tokens = broker.llm.maxCompletionTokens;
+    revision = builtins.hashString "sha256" (builtins.toJSON {
+      inherit version provider model protocol endpoint pricing tools budget;
+    });
+  };
   configuration = (pkgs.formats.json { }).generate "${container}-pi-durable.json" {
     stateDir = "/state";
     workspace = "/workspace";
@@ -55,6 +77,7 @@ let
     brokerBaseUrl =
       if brokerEnabled then "http://${broker.gateway}:${toString broker.llm.port}/v1" else "";
     inherit model;
+    grants = lib.optional (grant != null) grant;
     inherit tools;
     researchCommand = "${researchPackage}/bin/research-client";
   };

@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Bind Pi Durable run identities to a complete immutable versioned provider grant,
+  retain legacy singleton requests, and expose durable cursor-addressed receipt
+  events without treating synthetic provider fixtures as production qualification.
+
 ## [0.5.0] - 2026-11-14
 ### Direction
 - Keep declarative TOML onboarding, installation and Nix host policy

@@ -313,23 +313,24 @@ All routes below are relative to `/v1/agents/{canonical-id}/runner`:
 | --- | --- | --- |
 | `GET /capabilities` | `run_read` | Fixed `GET /v1/capabilities`; live application readiness, not host security evidence |
 | `POST /sessions` | `run_submit` | Fixed `POST /api/sessions`, exactly `{title, request_id}`; returns `{session:{id}}` |
-| `POST /runs` | `run_submit` | Exactly `{request_id, session_id, input, context_mode:"persistent"}`; returns `{run_id}` |
+| `POST /runs` | `run_submit` | The legacy four fields or those fields plus exact `{binding:{revision,provider,model,protocol}}`; returns `{run_id}` |
 | `GET /runs?request_id=…` | `run_read` | Same-ID reconciliation; returns runner projection |
 | `GET /runs/{run_id}` | `run_read` | Runner projection including `state`, `uncertain`, `output` and `error` |
-| `GET /runs/{run_id}/events` | `run_read` | One bounded SSE frame converted to `{events:[…]}`; a waiting heartbeat returns an empty array |
+| `GET /runs/{run_id}/events?cursor=…` | `run_read` | Durable normalized receipt events after the optional nonnegative cursor; a waiting heartbeat returns an empty array |
 | `POST /runs/{run_id}/stop` | `run_stop` | Exactly `{}`; returns runner projection, not evidence that an external effect was undone |
 
-The live runner capability response includes `runtime:"pi-durable"`, `version:1`,
-`model` from the running engine's fixed configuration, `available`, `quarantined`,
+The live runner capability response includes `runtime:"pi-durable"`, `version:2`,
+the compatibility `model`, complete non-secret immutable `grants`, `available`, `quarantined`,
 the actual SDK registry's stable-ID `tools` array and `features` with
-`tool_selection:true`. The host mediator passes these fields through unchanged. Model
-selection is not a request field or a mutable runner operation. A consumer that
-claims effective model readiness must require this active-model evidence and
-match it to the exact singleton broker model in peer-verified policy details;
-older runners without `model`, unreadable evidence and disagreement stay
-unverified. This is configured-engine evidence, not a successful inference or
-provider-acceptance test, and the current run request does not bind a policy
-revision/model atomically against host changes after the last read.
+`tool_selection:true`. The host mediator passes these fields through unchanged.
+When more than one grant exists, a run must select one by its exact revision,
+provider, model and protocol. The runner resolves that selector to the complete
+versioned grant (fixed broker endpoint, pricing revision and positive USD token
+prices, allowed tools and output-token budget) before admission and includes the
+complete grant in the durable request digest. A matching retry returns the old
+receipt even after policy changes; changed content or binding conflicts before
+another provider effect. A single grant preserves the older request shape.
+This is configured-engine evidence, not live vendor qualification.
 
 For reviewed Pi `agents[].tools`, peer-verified details include
 `policy.runtime = {adapter:"pi-durable", tool_selection:true, tools:[...]}` in
@@ -340,7 +341,8 @@ and require `features.tool_selection:true` before claiming applied per-tool
 selection. Missing old-host/runner evidence is unsupported or unverified, never
 an invented empty/applied selection. The details field alone is not observation.
 Tool changes use reviewed public source/build plus separate owner activation,
-not this service's limited configuration-proposal fields or run-request fields.
+not this service's limited configuration-proposal fields. A run may only narrow
+to the tool set already present in its immutable host grant.
 An active run keeps its accepted configuration; a private equip/unequip does
 not instantly revoke it. The existing read-versus-submit cutover race above
 also applies to tool evidence.
@@ -358,7 +360,9 @@ Session titles are at most 200 characters. Request/session identifiers match
 Run input is nonblank and at most 65,536 UTF-8 bytes; its entire incoming JSON
 body is bounded to 70,000 bytes. Other host bodies retain the 4,096-byte limit.
 No arbitrary path, URL, query, header, socket or credential argument is accepted.
-Encoded runner paths are rejected. Poll bounded events and run state rather than
+Encoded runner paths are rejected. Receipt event cursors increase monotonically
+in the runner ledger and remain keyed to the existing run ID across reconnects;
+reconnecting never restarts work. Poll bounded events and run state rather than
 holding an unbounded event stream through the host API.
 
 The trusted root host API mediates an untrusted application. It retains an empty

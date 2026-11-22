@@ -22,6 +22,24 @@ test('exclusive writer, stable duplicates and conflicting intent', t => {
   assert.throws(() => ledger.admit({ ...input, request_id: 'second' }), /busy/);
   assert.throws(() => ledger.operation(first.row.id, undefined, 'model'), /denied/);
 });
+test('immutable provider grant participates in idempotency and durable event cursors', t => {
+  let ledger; const root = fixture(t, () => ledger?.close()); ledger = new Ledger(root);
+  const grant = { version: 1, revision: 'policy-1', provider: 'openai', model: 'model',
+    protocol: 'openai-responses', endpoint: 'http://10.0.0.1/v1/responses',
+    pricing: { revision: 'price-1', currency: 'USD', input_microusd_per_million: 1,
+      output_microusd_per_million: 2 }, tools: [], budget: { max_output_tokens: 100 } };
+  const first = ledger.admit({ ...input, grant });
+  assert.equal(ledger.admit({ ...input, grant }).row.id, first.row.id);
+  assert.throws(() => ledger.admit({ ...input, grant: { ...grant, revision: 'policy-2' } }), /conflict/);
+  const admitted = ledger.events(first.row.id);
+  assert.equal(admitted[0].event, 'run.admitted');
+  ledger.finish(first.row.id, 'completed', { output: 'ok', usage: { input_tokens: 1, output_tokens: 2 } });
+  const terminal = ledger.events(first.row.id, admitted[0].cursor);
+  assert.equal(terminal[0].event, 'run.completed');
+  assert.ok(terminal[0].cursor > admitted[0].cursor);
+  ledger.close(); ledger = new Ledger(root);
+  assert.equal(ledger.events(first.row.id, admitted[0].cursor)[0].cursor, terminal[0].cursor);
+});
 test('crash window is quarantined even before SDK submission or first dispatch', t => {
   let ledger; const root = fixture(t, () => ledger?.close()); ledger = new Ledger(root);
   const { row } = ledger.admit(input); ledger.close();

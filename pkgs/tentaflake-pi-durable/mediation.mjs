@@ -24,7 +24,7 @@ export function secret(path, { sharedApi = false } = {}) {
 // All methods except fixed model lookup and one supported stream are absent as
 // authority, rather than inherited from the provider registry. The SDK remains
 // the only model loop. No CodingTools, execution environment or extension load.
-export function modelBoundary({ ledger, models, model, brokerBaseUrl, brokerTokenFile, active, allowLoopback = false }) {
+export function modelBoundary({ ledger, models, model, grantedModels, brokerBaseUrl, brokerTokenFile, active, allowLoopback = false }) {
   const parsed = /^http:\/\/((?:[0-9]{1,3}\.){3}[0-9]{1,3})(?::([1-9][0-9]{0,4}))?\/v1\/?$/.exec(brokerBaseUrl);
   const octets = parsed?.[1].split('.').map(Number);
   if (!octets || octets.some((value, index) => value > 255 || String(value) !== parsed[1].split('.')[index]) ||
@@ -33,13 +33,19 @@ export function modelBoundary({ ledger, models, model, brokerBaseUrl, brokerToke
         (octets[0] === 192 && octets[1] === 168) || (allowLoopback && octets[0] === 127)))
     throw new Refusal('Expected fixed private IPv4 broker /v1 endpoint');
   const base = new URL(brokerBaseUrl);
-  const target = `${base.origin}/v1/responses`;
+  if (!grantedModels && model) grantedModels = new Map([[`${model.provider}\0${model.id}`, { model, grant: {
+    revision: 'legacy-single-model', provider: model.provider, model: model.id, protocol: 'openai-responses',
+    endpoint: `${base.origin}/v1/responses`, budget: { max_output_tokens: 4096 }, tools: [],
+  } }]]);
+  const targets = new Set([...grantedModels.values()].map(({ grant }) => grant.endpoint));
+  if ([...targets].some(target => { try { const url = new URL(target); return url.origin !== base.origin || !url.pathname.startsWith('/v1/'); } catch { return true; } }))
+    throw new Refusal('Grant endpoint is outside the fixed broker');
   const context = new AsyncLocalStorage();
   const originalFetch = globalThis.fetch;
   globalThis.fetch = async (input, options = {}) => {
     const operation = context.getStore();
     const url = typeof input === 'string' || input instanceof URL ? String(input) : input.url;
-    if (!operation || operation.sent || url !== target || (options.method ?? input.method ?? 'GET').toUpperCase() !== 'POST')
+    if (!operation || operation.sent || url !== operation.grant.endpoint || !targets.has(url) || (options.method ?? input.method ?? 'GET').toUpperCase() !== 'POST')
       throw new Refusal('Unmediated or repeated model transport denied');
     operation.sent = true;
     // SQLite FULL commit happens before the first byte may reach the broker.
@@ -47,24 +53,30 @@ export function modelBoundary({ ledger, models, model, brokerBaseUrl, brokerToke
     try { return await originalFetch(input, { ...options, redirect: 'error' }); }
     catch (error) { ledger.uncertain(operation.runId); throw error; }
   };
-  const lookup = (provider, id) => provider === model.provider && id === model.id ? model : undefined;
+  const lookup = (provider, id) => grantedModels.get(`${provider}\0${id}`)?.model;
   const facade = new Proxy({}, {
     get(_target, property) {
       if (property === 'getModel') return lookup;
       if (property === 'streamSimple') return (requested, messages, options) => {
         const run = active();
-        if (!run || !run.taskId || run.cancelled || ledger.quarantined || requested.id !== model.id || requested.provider !== model.provider)
+        const selected = grantedModels.get(`${requested.provider}\0${requested.id}`);
+        const runGrant = run?.grant ?? selected?.grant;
+        if (!run || !run.taskId || run.cancelled || ledger.quarantined || !selected ||
+            requested.id !== runGrant?.model || requested.provider !== runGrant?.provider || selected.grant.revision !== runGrant.revision)
           throw new Refusal('Missing stable model operation correlation');
-        const operation = { runId: run.id, taskId: run.taskId, sent: false };
+        const { model, grant } = selected;
+        const operation = { runId: run.id, taskId: run.taskId, sent: false, grant };
         run.taskId = undefined;
         const stream = context.run(operation, () => models.streamSimple(
-          { ...model, baseUrl: base.href.replace(/\/$/, '') }, messages,
+          { ...model, baseUrl: grant.endpoint.replace(/\/(?:responses|messages|chat\/completions)$/, '') }, messages,
           { ...options, apiKey: secret(brokerTokenFile), deferred: false, maxRetries: 0,
+            maxTokens: Math.min(options?.maxTokens ?? grant.budget.max_output_tokens, grant.budget.max_output_tokens),
             transport: 'sse', fetch: globalThis.fetch },
         ));
         // A transport response is NOT a durable SDK checkpoint. Keep every
         // operation receipt until the submission + idle barrier is committed.
         stream.result().then(message => {
+          run.usage = message.usage ?? null;
           if (['error', 'aborted'].includes(message.stopReason)) ledger.uncertain(operation.runId);
         }, () => ledger.uncertain(operation.runId));
         return stream;
