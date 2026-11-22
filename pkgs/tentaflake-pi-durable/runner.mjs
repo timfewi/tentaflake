@@ -98,7 +98,8 @@ export async function serve(config) {
       if (operation !== 'events') throw new Refusal('Capability unavailable', 404);
       projection(ledger.get(id));
       const cursorRaw = url.searchParams.get('cursor');
-      if ([...url.searchParams.keys()].some(k => k !== 'cursor') || (cursorRaw !== null && !/^(?:0|[1-9][0-9]{0,15})$/.test(cursorRaw)))
+      if ([...url.searchParams.keys()].some(k => k !== 'cursor') || url.searchParams.getAll('cursor').length > 1 ||
+          (cursorRaw !== null && (!/^(?:0|[1-9][0-9]{0,15})$/.test(cursorRaw) || !Number.isSafeInteger(Number(cursorRaw)))))
         throw new Refusal('Invalid event cursor', 400);
       let cursor = cursorRaw === null ? 0 : Number(cursorRaw);
       response.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-store' });

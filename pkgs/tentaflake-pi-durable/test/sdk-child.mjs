@@ -155,6 +155,14 @@ async function runnerFixture(mode) {
     const { row } = runtime.ledger.admit(input);
     for (let n = 0; n < 280; n++) runtime.ledger.event(row.id, 'run.progress', { n, detail: 'x'.repeat(320) });
     runtime.ledger.finish(row.id,'completed',{ output: 'done' });
+    for (const query of ['cursor=9007199254740992', 'cursor=1&cursor=2']) {
+      const response = await new Promise((resolve, reject) => {
+        http.get({ socketPath, path: `/v1/runs/${row.id}/events?${query}`, headers: { Authorization: 'Bearer synthetic-api-token' } }, resolve).on('error',reject);
+      });
+      assert.equal(response.statusCode,400);
+      assert.equal(response.headers['content-type'],'application/json');
+      response.resume();
+    }
     for (const after of [0,128]) {
       const records = await new Promise((resolve, reject) => {
         http.get({ socketPath, path: `/v1/runs/${row.id}/events?cursor=${after}`, headers: { Authorization: 'Bearer synthetic-api-token' } }, response => {
