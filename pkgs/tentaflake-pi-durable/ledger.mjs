@@ -59,6 +59,7 @@ export class Ledger {
         CREATE TABLE IF NOT EXISTS operations (
         id TEXT PRIMARY KEY, run_id TEXT NOT NULL, task_id TEXT NOT NULL, kind TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS sessions (id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL);
+        CREATE TABLE IF NOT EXISTS pending_sessions (id TEXT PRIMARY KEY);
         CREATE TABLE IF NOT EXISTS flags (name TEXT PRIMARY KEY, value TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS events (
           cursor INTEGER PRIMARY KEY AUTOINCREMENT, run_id TEXT NOT NULL,
@@ -137,6 +138,12 @@ export class Ledger {
     this.db.prepare('UPDATE runs SET state=?,result=? WHERE id=?').run(state, encoded, id);
     this.event(id, state === 'completed' ? 'run.completed' : 'run.failed', { state, result });
   }
+  hasSession(id) {
+    return !!this.db.prepare('SELECT 1 FROM sessions WHERE id=? UNION ALL SELECT 1 FROM pending_sessions WHERE id=? LIMIT 1').get(id,id);
+  }
+  reserveSession(id) {
+    if (!this.hasSession(id)) this.db.prepare('INSERT OR IGNORE INTO pending_sessions VALUES(?)').run(id);
+  }
   session(id) {
     const row = this.db.prepare('SELECT conversation_id FROM sessions WHERE id=?').get(id);
     if (!row) return undefined;
@@ -145,9 +152,15 @@ export class Ledger {
     return value;
   }
   sessionGrant(id) { return this.db.prepare('SELECT grant_digest FROM sessions WHERE id=?').get(id)?.grant_digest ?? null; }
+  checkSessionGrant(id, revision) {
+    const row = this.db.prepare('SELECT grant_digest FROM sessions WHERE id=?').get(id);
+    if (row && (row.grant_digest ?? 'legacy-single-model') !== revision)
+      throw new Refusal('Session provider binding conflict');
+  }
   bindSession(id, conversation, grantDigest = null) {
     if (!Number.isSafeInteger(conversation) || conversation <= 0) throw new Refusal('Invalid SDK session');
     this.db.prepare('INSERT INTO sessions(id,conversation_id,grant_digest) VALUES(?,?,?)').run(id, conversation, grantDigest);
+    this.db.prepare('DELETE FROM pending_sessions WHERE id=?').run(id);
   }
   close() {
     if (this.closed) return;

@@ -1239,8 +1239,14 @@ class Service:
             raise APIError("Invalid runner JSON body") from exc
         if size > (70000 if operation == "runs" else MAX_BODY):
             raise APIError("Runner request exceeds limit", 413)
+        if "binding" in body and (
+            not isinstance(body["binding"], dict)
+            or set(body["binding"]) != {"revision", "provider", "model", "protocol"}
+            or any(not isinstance(value, str) or not value for value in body["binding"].values())
+        ):
+            raise APIError("Invalid runner provider binding")
         if operation == "sessions":
-            if set(body) != {"title", "request_id"} or not isinstance(body["title"], str) or len(body["title"]) > 200:
+            if set(body) not in ({"title", "request_id"}, {"title", "request_id", "binding"}) or not isinstance(body["title"], str) or len(body["title"]) > 200:
                 raise APIError("Invalid runner session request")
             target = "/api/sessions"
         elif operation == "runs":
@@ -1248,10 +1254,7 @@ class Service:
                                   {"request_id", "session_id", "input", "context_mode", "binding"})
                     or not isinstance(body["session_id"], str) or not RUNNER_ID.fullmatch(body["session_id"])
                     or body["context_mode"] != "persistent" or not isinstance(body["input"], str)
-                    or not body["input"].strip() or len(body["input"].encode()) > 65536
-                    or ("binding" in body and (not isinstance(body["binding"], dict)
-                        or set(body["binding"]) != {"revision", "provider", "model", "protocol"}
-                        or any(not isinstance(value, str) or not value for value in body["binding"].values())))):
+                    or not body["input"].strip() or len(body["input"].encode()) > 65536):
                 raise APIError("Invalid persistent run request")
         elif not operation.endswith("/stop") or body:
             raise APIError("Invalid runner mutation")
@@ -1276,7 +1279,7 @@ class Service:
             capabilities = self.runner_exchange(descriptor, "GET", "/v1/capabilities")
             if capabilities.get("available") is not True or not isinstance(capabilities.get("features"), dict) or capabilities["features"].get("runs") is not True:
                 raise APIError("Runner submission is unavailable", 409)
-            if operation == "runs" and "binding" in body:
+            if "binding" in body:
                 grants = capabilities.get("grants")
                 if not isinstance(grants, list) or not any(isinstance(grant, dict) and
                         all(grant.get(key) == value for key, value in body["binding"].items()) for grant in grants):

@@ -1,6 +1,8 @@
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context';
 import { createModels } from '@earendil-works/pi-ai/models';
 import { openaiProvider } from '@earendil-works/pi-ai/providers/openai';
+import { opencodeGoProvider } from '@earendil-works/pi-ai/providers/opencode-go';
+import { configuredGrants } from './grants.mjs';
 import { anthropicProvider } from '@earendil-works/pi-ai/providers/anthropic';
 import { Harness, createRegistry, defineExtension, defineTool, hook, GenerationTask, CompactionTask, AssistantEntry } from '@earendil-works/pi-durable';
 import { openNodeSqliteStorage } from '@earendil-works/pi-durable/storage/sqlite/node';
@@ -48,20 +50,27 @@ async function auditCheckpoint(storage, viewer, ledger) {
 }
 export class Engine {
   constructor(config, ledger) {
-    this.config = Object.freeze({ ...config, tools: selectTools(config.tools) });
+    const tools = selectTools(config.tools);
+    const grants = configuredGrants(config, tools);
+    for (const grant of grants)
+      if (grant.tools.some(tool => !tools.includes(tool))) throw new Refusal('Grant tools exceed immutable runner policy');
+    this.config = Object.freeze({ ...config, grants, tools: selectTools([...new Set(grants.flatMap(grant => grant.tools))]) });
+    this.opening = new Map();
     this.ledger = ledger; this.active = undefined; this.stopping = false;
   }
   async open() {
     if (this.ledger.quarantined) return; // MUST precede writable SDK open.
-    const raw = createModels(); raw.setProvider(openaiProvider()); raw.setProvider(anthropicProvider());
+    const raw = createModels(); raw.setProvider(openaiProvider()); raw.setProvider(anthropicProvider()); raw.setProvider(opencodeGoProvider());
     const models = new Map();
     for (const grant of this.config.grants) {
       const model = raw.getModel(grant.provider, grant.model);
       const expected = grant.protocol === 'openai-responses' ? 'openai-responses' :
         grant.protocol === 'anthropic-messages' ? 'anthropic-messages' : 'openai-completions';
       if (!model || model.api !== expected) throw new Refusal('Granted model/protocol is not in the pinned supported catalog');
-      if (grant.tools.some(tool => !this.config.tools.includes(tool))) throw new Refusal('Grant tools exceed immutable runner policy');
-      models.set(`${grant.provider}\0${grant.model}`, { model, grant });
+      const key = `${grant.provider}\0${grant.model}`;
+      const selected = models.get(key) ?? { model, grant, revisions: new Map() };
+      selected.revisions.set(grant.revision, grant);
+      models.set(key, selected);
     }
     this.boundary = modelBoundary({ ledger: this.ledger, models: raw, grantedModels: models,
       brokerBaseUrl: this.config.brokerBaseUrl, brokerTokenFile: this.config.brokerTokenFile,
@@ -118,12 +127,21 @@ export class Engine {
   async invokeTool(name, args, api) {
     // Also enforce selection at dispatch: stale/forged calls never reach a
     // Research request, worker publication or durable operation admission.
+    if (!this.config.tools.includes(name)) throw new Refusal('Tool is not selected by immutable runner policy');
     const run = this.requireActive();
-    if (!this.config.tools.includes(name) || !run.grant?.tools.includes(name)) throw new Refusal('Tool is not selected by the immutable run grant');
+    if (!run.grant?.tools.includes(name)) throw new Refusal('Tool is not selected by the immutable run grant');
+    const call = `${taskIdentity(api.taskId)}:${api.callId}`;
+    if (typeof api.callId !== 'string' || !api.callId || run.toolCalls.has(call))
+      throw new Refusal('Tool execution has no unique invocation');
+    run.toolCalls.add(call);
     if (name === 'offline_worker') {
       const operation = this.ledger.operation(run.id, taskIdentity(api.taskId), 'worker');
       const id = `pi_durable_${operation.replaceAll('-', '')}`;
-      try { return { output: [{ type: 'text', text: JSON.stringify(await worker({ ...args, id, workspace: this.config.workspace, signal: run.controller.signal })) }] }; }
+      try {
+        const result = await worker({ ...args, id, workspace: this.config.workspace, signal: run.controller.signal });
+        run.toolResults.add(call);
+        return { output: [{ type: 'text', text: JSON.stringify(result) }] };
+      }
       catch (error) { this.ledger.uncertain(run.id); throw error; }
     }
     const parameters = JSON.parse(args.arguments);
@@ -132,6 +150,7 @@ export class Engine {
     try {
       const response = await this.research.request('tools/call', { name, arguments: parameters }, run.controller.signal);
       if (response?.isError) throw new Refusal('Research outcome requires reconciliation');
+      run.toolResults.add(call);
       return { output: [{ type: 'text', text: JSON.stringify(response) }] };
     } catch (error) { this.ledger.uncertain(run.id); throw error; }
   }
@@ -140,29 +159,44 @@ export class Engine {
       throw new Refusal('Instance is stopped or quarantined');
     return this.active;
   }
-  async session(id, grant = this.config.grants[0]) {
+  async session(id, grant) {
+    while (this.opening.has(id)) await this.opening.get(id);
+    const selected = grant ?? this.config.grants.find(item => item.revision === this.ledger.sessionGrant(id))
+      ?? (this.config.grants.length === 1 ? this.config.grants[0] : null);
+    if (!selected) {
+      if (!this.harness || this.ledger.quarantined || this.stopping) throw new Refusal('Instance unavailable');
+      this.ledger.reserveSession(id);
+      return;
+    }
+    const promise = this.openSession(id, selected);
+    this.opening.set(id,promise);
+    try { return await promise; } finally { if (this.opening.get(id) === promise) this.opening.delete(id); }
+  }
+  async openSession(id, grant) {
     if (!this.harness || this.stopping || this.ledger.quarantined) throw new Refusal('Instance unavailable');
     const existing = this.ledger.session(id);
     if (existing) {
-      const bound = this.ledger.sessionGrant(id);
-      if (bound !== null && bound !== grant.revision) throw new Refusal('Session provider binding conflict');
+      this.ledger.checkSessionGrant(id,grant.revision);
       const conversation = await this.harness.conversation(existing, context);
       if (!conversation) throw new Refusal('SDK session state is missing');
       return conversation;
     }
     // UI sessions are independent host-owned conversations, not the SDK's
     // singleton root or children whose lifetime belongs to a generation task.
+    const tools = this.registry.snapshot().tools().map(entry => entry.tool).filter(tool => grant.tools.includes(tool.name));
     const conversation = await this.harness.createConversation({ ownership: { kind: 'ownerless' },
-      agent: { model: { provider: grant.provider, modelId: grant.model } } }, context);
+      agent: { model: { provider: grant.provider, modelId: grant.model }, tools } }, context);
     this.ledger.bindSession(id, conversation.id, grant.revision);
     return conversation;
   }
   async execute(row) {
     if (this.active || this.stopping || !this.harness) { this.ledger.uncertain(row.id); return; }
-    const run = { id: row.id, controller: new AbortController(), cancelled: false };
+    const run = { id: row.id, sessionId: row.session_id, controller: new AbortController(), cancelled: false,
+      generations: [], toolCalls: new Set(), toolResults: new Set() };
     this.active = run;
     try {
-      run.grant = JSON.parse(row.grant);
+      run.grant = JSON.parse(row.grant) ?? (this.config.grants.length === 1 ? this.config.grants[0] : null);
+      if (!run.grant) throw new Refusal('Missing run grant');
       run.conversation = await this.session(row.session_id, run.grant);
       const submission = await run.conversation.submit({ type: 'input', content: row.input, requestId: row.request_id }, context);
       this.ledger.bind(row.id, submission.id);
@@ -170,6 +204,7 @@ export class Engine {
       // This reads committed SDK state; it does not clear uncertainty on a
       // provider event, afterResponse callback, cancellation or transport EOF.
       await run.conversation.waitForIdle(context);
+      const measured = await Promise.all(run.generations);
       if (run.cancelled || this.ledger.quarantined) { this.ledger.uncertain(row.id); return; }
       let output = '';
       if (settled.status === 'done' && settled.type === 'input') {
@@ -177,12 +212,21 @@ export class Engine {
         output = (answer?.model ?? []).flatMap(message => message.content ?? [])
           .filter(part => part.type === 'text').map(part => part.text).join('');
       }
-      if (run.grant.revision !== 'legacy-single-model' && (!run.usage ||
-          !Number.isSafeInteger(run.usage.input) || !Number.isSafeInteger(run.usage.output) ||
-          run.usage.input < 0 || run.usage.output < 0)) {
+      const complete = measured.length > 0 && measured.every(Boolean);
+      if (!complete && run.grant.revision !== 'legacy-single-model') {
         this.ledger.uncertain(row.id); return;
       }
-      this.ledger.finish(row.id, settled.status === 'done' ? 'completed' : 'failed', { output, settlement: settled, usage: run.usage });
+      const measurement = complete ? {
+        provider: run.grant.provider, protocol: run.grant.protocol, model: run.grant.model,
+        grant_revision: run.grant.revision, provider_requests: measured.length,
+        input_tokens: measured.reduce((n, m) => n + m.input, 0),
+        output_tokens: measured.reduce((n, m) => n + m.output, 0),
+        streamed: measured.every(m => m.streamed),
+        tool_calls: run.toolCalls.size, tool_results: run.toolResults.size,
+      } : null;
+      this.ledger.finish(row.id, settled.status === 'done' ? 'completed' : 'failed', {
+        output, settlement: settled, usage: run.usage, ...(measurement ? { measurement } : {}),
+      });
     } catch { this.ledger.uncertain(row.id); }
     finally { this.active = undefined; }
   }

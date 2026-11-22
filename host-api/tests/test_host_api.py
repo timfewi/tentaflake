@@ -1237,6 +1237,29 @@ else:
             b"GET /v1/runs?request_id=request-1 HTTP/1.0",
         ])
 
+    def test_runner_explicit_session_binding_and_terminal_measurement(self):
+        self.start_runner_api()
+        binding = {"provider": "anthropic", "protocol": "anthropic-messages",
+                   "model": "fixture-model", "revision": "grant-2"}
+        measurement = {"provider": binding["provider"], "protocol": binding["protocol"],
+                       "model": binding["model"], "grant_revision": binding["revision"],
+                       "input_tokens": 20, "output_tokens": 5, "provider_requests": 2,
+                       "streamed": True, "tool_calls": 1, "tool_results": 1}
+        terminal = {"id": "run-1", "state": "completed", "measurement": measurement}
+        legacy = {"id": "run-old", "state": "completed"}
+        observed, files = self.fake_runner([
+            self.runner_json({"available": True, "features": {"runs": True}, "grants": [binding]}),
+            self.runner_json({"session": {"id": "s1"}}), self.runner_json(terminal), self.runner_json(legacy),
+        ])
+        with patch.object(self.service, "runner_file", side_effect=files), patch.object(api, "RUNSC_PI_DURABLE_PEER_UID", api.os.geteuid()):
+            session = self.runner_route("POST", "sessions", {"request_id": "s1", "title": "fixture", "binding": binding})
+            self.assertEqual(session["session"]["id"], "s1")
+            self.assertEqual(self.runner_route("GET", "runs?request_id=new"), terminal)
+            self.assertEqual(self.runner_route("GET", "runs?request_id=old"), legacy)
+        self.assertEqual([row[0] for row in observed], [b"GET /v1/capabilities HTTP/1.0",
+                         b"POST /api/sessions HTTP/1.0", b"GET /v1/runs?request_id=new HTTP/1.0",
+                         b"GET /v1/runs?request_id=old HTTP/1.0"])
+
     def test_runner_uncertain_submission_is_not_replayed_after_restart(self):
         self.start_runner_api()
         observed, files = self.fake_runner([

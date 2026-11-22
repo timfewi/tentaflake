@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { spawn } from 'node:child_process';
 import { openSync, readFileSync, closeSync, writeSync, fsyncSync, linkSync, unlinkSync, constants, fstatSync } from 'node:fs';
@@ -37,11 +38,13 @@ export function modelBoundary({ ledger, models, model, grantedModels, brokerBase
     revision: 'legacy-single-model', provider: model.provider, model: model.id, protocol: 'openai-responses',
     endpoint: `${base.origin}/v1/responses`, budget: { max_output_tokens: 4096 }, tools: [],
   } }]]);
-  const targets = new Set([...grantedModels.values()].map(({ grant }) => grant.endpoint));
+  const grants = [...grantedModels.values()].flatMap(selected =>
+    selected.revisions ? [...selected.revisions.values()] : [selected.grant]);
+  const targets = new Set(grants.map(grant => grant.endpoint));
   const routeFor = protocol => protocol === 'openai-responses' ? '/v1/responses' :
     protocol === 'anthropic-messages' ? '/v1/messages' : '/v1/chat/completions';
-  if ([...grantedModels.values()].some(({ grant }) => { try { const url = new URL(grant.endpoint);
-    return url.origin !== base.origin || url.pathname !== routeFor(grant.protocol) || url.search || url.hash;
+  if (grants.some(grant => { try { const url = new URL(grant.endpoint);
+    return url.href !== base.origin + routeFor(grant.protocol);
   } catch { return true; } }))
     throw new Refusal('Grant endpoint is outside the fixed broker');
   const context = new AsyncLocalStorage();
@@ -49,7 +52,11 @@ export function modelBoundary({ ledger, models, model, grantedModels, brokerBase
   globalThis.fetch = async (input, options = {}) => {
     const operation = context.getStore();
     const url = typeof input === 'string' || input instanceof URL ? String(input) : input.url;
-    if (!operation || operation.sent || url !== operation.grant.endpoint || !targets.has(url) || (options.method ?? input.method ?? 'GET').toUpperCase() !== 'POST')
+    // The pinned Anthropic client uses its beta messages resource with one fixed
+    // query flag. Only that SDK spelling maps to the canonical broker route.
+    const endpoint = operation?.grant.endpoint;
+    const beta = operation?.grant.protocol === 'anthropic-messages' && url === endpoint + '?beta=true';
+    if (!operation || operation.sent || (!beta && url !== endpoint) || !targets.has(endpoint) || (options.method ?? input.method ?? 'GET').toUpperCase() !== 'POST')
       throw new Refusal('Unmediated or repeated model transport denied');
     operation.sent = true;
     // SQLite FULL commit happens before the first byte may reach the broker.
@@ -61,7 +68,19 @@ export function modelBoundary({ ledger, models, model, grantedModels, brokerBase
     // of the capsule's header choices can select an upstream credential.
     headers.delete('x-api-key');
     headers.set('authorization', `Bearer ${operation.brokerToken}`);
-    try { return await originalFetch(input, { ...options, headers, redirect: 'error' }); }
+    for (const name of ['x-tentaflake-grant','x-tentaflake-operation','x-opencode-session']) headers.delete(name);
+    if (operation.grant.brokerBinding === true) {
+      headers.set('x-tentaflake-grant', operation.grant.revision);
+      headers.set('x-tentaflake-operation', createHash('sha256').update(JSON.stringify([operation.runId,operation.taskId])).digest('hex'));
+      if (operation.grant.protocol === 'opencode-go-chat-completions')
+        headers.set('x-opencode-session', createHash('sha256').update(operation.sessionId).digest('hex'));
+    }
+    const target = beta && input instanceof Request ? new Request(endpoint,input) : beta ? endpoint : input;
+    try {
+      const response = await originalFetch(target, { ...options, headers, redirect: 'error' });
+      operation.sse = response.ok && response.headers.get('content-type')?.split(';')[0].trim() === 'text/event-stream';
+      return response;
+    }
     catch (error) { ledger.uncertain(operation.runId); throw error; }
   };
   const lookup = (provider, id) => grantedModels.get(`${provider}\0${id}`)?.model;
@@ -73,24 +92,43 @@ export function modelBoundary({ ledger, models, model, grantedModels, brokerBase
         const selected = grantedModels.get(`${requested.provider}\0${requested.id}`);
         const runGrant = run?.grant ?? selected?.grant;
         if (!run || !run.taskId || run.cancelled || ledger.quarantined || !selected ||
-            requested.id !== runGrant?.model || requested.provider !== runGrant?.provider || selected.grant.revision !== runGrant.revision)
+            requested.id !== runGrant?.model || requested.provider !== runGrant?.provider ||
+            !(selected.revisions ? selected.revisions.has(runGrant.revision) : selected.grant.revision === runGrant.revision))
           throw new Refusal('Missing stable model operation correlation');
-        const { model, grant } = selected;
+        const { model } = selected;
+        const grant = selected.revisions?.get(runGrant.revision) ?? selected.grant;
         const brokerToken = secret(brokerTokenFile);
-        const operation = { runId: run.id, taskId: run.taskId, sent: false, grant, brokerToken };
+        const operation = { runId: run.id, taskId: run.taskId, sessionId: run.sessionId, sent: false, grant, brokerToken };
         run.taskId = undefined;
+        // Anthropic appends /v1/messages itself. Disable its automatic provider
+        // fallback and deferred placeholder tool to keep the declared grant exact.
+        const brokerModel = { ...model, baseUrl: base.href.replace(/\/$/,'') };
+        if (grant.protocol === 'anthropic-messages') {
+          brokerModel.baseUrl = base.origin;
+          brokerModel.compat = { ...model.compat, allowedFallbackModels: [], supportsMidConvoToolChanges: false };
+        }
+        const signal = run.controller?.signal && options?.signal
+          ? AbortSignal.any([run.controller.signal, options.signal]) : run.controller?.signal ?? options?.signal;
         const stream = context.run(operation, () => models.streamSimple(
-          { ...model, baseUrl: grant.endpoint.replace(/\/(?:responses|messages|chat\/completions)$/, '') }, messages,
+          brokerModel,
+          { ...messages, ...(messages?.tools ? { tools: messages.tools.filter(tool => grant.tools.includes(tool.name)) } : {}) },
           { ...options, apiKey: brokerToken, deferred: false, maxRetries: 0,
             maxTokens: Math.min(options?.maxTokens ?? grant.budget.max_output_tokens, grant.budget.max_output_tokens),
-            transport: 'sse', fetch: globalThis.fetch, signal: run.controller?.signal },
+            ...(grant.brokerBinding ? {cacheRetention:'none'} : {}),
+            transport: 'sse', fetch: globalThis.fetch, signal },
         ));
         // A transport response is NOT a durable SDK checkpoint. Keep every
         // operation receipt until the submission + idle barrier is committed.
-        stream.result().then(message => {
+        const generation = stream.result().then(message => {
           run.usage = message.usage ?? null;
-          if (['error', 'aborted'].includes(message.stopReason)) ledger.uncertain(operation.runId);
-        }, () => ledger.uncertain(operation.runId));
+          if (['error', 'aborted'].includes(message.stopReason)) { ledger.uncertain(operation.runId); return null; }
+          const usage = message.usage;
+          if (!operation.sent || !usage) return null;
+          const counts = [usage.input,usage.cacheRead ?? 0,usage.cacheWrite ?? 0,usage.output];
+          if (counts.some(value => !Number.isSafeInteger(value) || value < 0)) return null;
+          return { input: counts[0]+counts[1]+counts[2], output: usage.output, streamed: operation.sse === true };
+        }, () => { ledger.uncertain(operation.runId); return null; });
+        run.generations?.push(generation);
         return stream;
       };
       return () => { throw new Refusal(`Model capability ${String(property)} is unavailable`); };

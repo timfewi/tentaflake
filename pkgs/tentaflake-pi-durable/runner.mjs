@@ -5,41 +5,18 @@ import { resolve, dirname } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { Ledger, Refusal, identity, privateDirectory } from './ledger.mjs';
 import { secret } from './mediation.mjs';
+import { selectGrant } from './grants.mjs';
 import { Engine } from './engine.mjs';
 
 export function projection(row) {
   if (!row) throw new Refusal('Unknown run', 404);
+  const receipt = row.result ? JSON.parse(row.result) : null;
   return { id: row.id, request_id: row.request_id, session_id: row.session_id,
     input: row.input, context_mode: 'persistent', state: row.state === 'uncertain' ? 'interrupted' : row.state,
-    uncertain: row.state === 'uncertain', output: row.result ? JSON.parse(row.result).output : '',
+    uncertain: row.state === 'uncertain', output: receipt?.output ?? '',
+    ...(receipt?.measurement ? { measurement: receipt.measurement } : {}),
     error: row.state === 'uncertain' ? 'External outcome uncertain; instance quarantined' : null,
     grant: row.grant ? JSON.parse(row.grant) : null };
-}
-const protocols = new Set(['openai-responses','anthropic-messages','opencode-go-chat-completions']);
-function exactGrant(value) {
-  if (!value || typeof value !== 'object' || Array.isArray(value) ||
-      Object.keys(value).some(k => !['version','revision','provider','model','protocol','endpoint','pricing','tools','budget'].includes(k)) ||
-      value.version !== 1 || !identity(value.revision) || !identity(value.provider) ||
-      typeof value.model !== 'string' || !value.model || value.model.length > 200 || !protocols.has(value.protocol) ||
-      typeof value.endpoint !== 'string' || !value.endpoint.startsWith('http') ||
-      !value.pricing || value.pricing.currency !== 'USD' || !identity(value.pricing.revision) ||
-      !Number.isSafeInteger(value.pricing.input_microusd_per_million) || value.pricing.input_microusd_per_million <= 0 ||
-      !Number.isSafeInteger(value.pricing.output_microusd_per_million) || value.pricing.output_microusd_per_million <= 0 ||
-      !Array.isArray(value.tools) || new Set(value.tools).size !== value.tools.length || value.tools.some(t => !identity(t)) ||
-      !value.budget || !Number.isSafeInteger(value.budget.max_output_tokens) || value.budget.max_output_tokens <= 0)
-    throw new Refusal('Invalid versioned provider grant');
-  const copy = structuredClone(value);
-  Object.freeze(copy.pricing); Object.freeze(copy.tools); Object.freeze(copy.budget);
-  return Object.freeze(copy);
-}
-function selectGrant(config, binding) {
-  if (binding === undefined) return config.grants.length === 1 ? config.grants[0] : (() => { throw new Refusal('Explicit provider binding required', 400); })();
-  if (!binding || typeof binding !== 'object' || Array.isArray(binding) ||
-      Object.keys(binding).some(k => !['revision','provider','model','protocol'].includes(k)) ||
-      !['revision','provider','model','protocol'].every(k => typeof binding[k] === 'string')) throw new Refusal('Invalid provider binding', 400);
-  const grant = config.grants.find(candidate => ['revision','provider','model','protocol'].every(k => candidate[k] === binding[k]));
-  if (!grant) throw new Refusal('Provider binding is not granted', 403);
-  return grant;
 }
 async function body(request) {
   let size = 0; const chunks = [];
@@ -78,16 +55,23 @@ export async function serve(config) {
       if (request.method === 'POST' && url.pathname === '/api/sessions') {
         const value = await body(request);
         if (!value || typeof value.title !== 'string' || value.title.length > 200 ||
-            Object.keys(value).some(k => !['title','request_id'].includes(k)) ||
+            Object.keys(value).some(k => !['title','request_id','binding'].includes(k)) ||
             (value.request_id !== undefined && !identity(value.request_id))) throw new Refusal('Invalid session request', 400);
         const id = value.request_id ? createHash('sha256').update(`session:${value.request_id}`).digest('hex') : randomUUID();
-        await engine.session(id); json(200, { session: { id } }); return;
+        if (value.binding !== undefined || engine.config.grants.length === 1) {
+          await engine.session(id, selectGrant(engine.config, value.binding));
+        } else {
+          if (!engine.harness || ledger.quarantined) throw new Refusal('Instance unavailable');
+          ledger.reserveSession(id);
+        }
+        json(200, { session: { id } }); return;
       }
       if (request.method === 'POST' && url.pathname === '/v1/runs') {
         const value = await body(request);
         if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Refusal('Invalid run request', 400);
-        if (!ledger.session(value.session_id)) throw new Refusal('Unknown session', 404);
+        if (!ledger.hasSession(value.session_id)) throw new Refusal('Unknown session', 404);
         const grant = selectGrant(engine.config, value.binding);
+        ledger.checkSessionGrant(value.session_id,grant.revision);
         delete value.binding; value.grant = grant;
         const admitted = ledger.admit(value);
         if (!admitted.duplicate) void engine.execute(admitted.row);
@@ -181,11 +165,6 @@ function configuration(path) {
     if (resolve(config[key]) !== config[key]) throw new Refusal('Runtime paths must be canonical absolute paths');
   if (config.workspace === config.stateDir || config.workspace.startsWith(config.stateDir + '/') || config.stateDir.startsWith(config.workspace + '/'))
     throw new Refusal('State and workspace must be disjoint');
-  config.grants = config.grants === undefined ? [exactGrant({ version: 1, revision: 'legacy-single-model', provider: 'openai',
-    model: config.model, protocol: 'openai-responses', endpoint: config.brokerBaseUrl + '/responses',
-    pricing: { revision: 'legacy-host-policy', currency: 'USD', input_microusd_per_million: 1, output_microusd_per_million: 1 },
-    tools: config.tools ?? [], budget: { max_output_tokens: 4096 } })] : config.grants.map(exactGrant);
-  if (!config.grants.length) throw new Refusal('At least one provider grant is required');
   return config;
 }
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
