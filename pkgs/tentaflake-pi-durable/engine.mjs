@@ -1,6 +1,7 @@
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context';
 import { createModels } from '@earendil-works/pi-ai/models';
 import { openaiProvider } from '@earendil-works/pi-ai/providers/openai';
+import { anthropicProvider } from '@earendil-works/pi-ai/providers/anthropic';
 import { Harness, createRegistry, defineExtension, defineTool, hook, GenerationTask, CompactionTask, AssistantEntry } from '@earendil-works/pi-durable';
 import { openNodeSqliteStorage } from '@earendil-works/pi-durable/storage/sqlite/node';
 import { Type } from 'typebox';
@@ -52,10 +53,17 @@ export class Engine {
   }
   async open() {
     if (this.ledger.quarantined) return; // MUST precede writable SDK open.
-    const raw = createModels(); raw.setProvider(openaiProvider());
-    const model = raw.getModel('openai', this.config.model);
-    if (!model || model.api !== 'openai-responses') throw new Refusal('Configured model is not in the pinned supported catalog');
-    this.boundary = modelBoundary({ ledger: this.ledger, models: raw, model,
+    const raw = createModels(); raw.setProvider(openaiProvider()); raw.setProvider(anthropicProvider());
+    const models = new Map();
+    for (const grant of this.config.grants) {
+      const model = raw.getModel(grant.provider, grant.model);
+      const expected = grant.protocol === 'openai-responses' ? 'openai-responses' :
+        grant.protocol === 'anthropic-messages' ? 'anthropic-messages' : 'openai-completions';
+      if (!model || model.api !== expected) throw new Refusal('Granted model/protocol is not in the pinned supported catalog');
+      if (grant.tools.some(tool => !this.config.tools.includes(tool))) throw new Refusal('Grant tools exceed immutable runner policy');
+      models.set(`${grant.provider}\0${grant.model}`, { model, grant });
+    }
+    this.boundary = modelBoundary({ ledger: this.ledger, models: raw, grantedModels: models,
       brokerBaseUrl: this.config.brokerBaseUrl, brokerTokenFile: this.config.brokerTokenFile,
       active: () => this.active });
     const registry = createRegistry();
@@ -109,8 +117,8 @@ export class Engine {
   async invokeTool(name, args, api) {
     // Also enforce selection at dispatch: stale/forged calls never reach a
     // Research request, worker publication or durable operation admission.
-    if (!this.config.tools.includes(name)) throw new Refusal('Tool is not selected by the reviewed runtime policy');
     const run = this.requireActive();
+    if (!this.config.tools.includes(name) || !run.grant?.tools.includes(name)) throw new Refusal('Tool is not selected by the immutable run grant');
     if (name === 'offline_worker') {
       const operation = this.ledger.operation(run.id, taskIdentity(api.taskId), 'worker');
       const id = `pi_durable_${operation.replaceAll('-', '')}`;
@@ -131,10 +139,12 @@ export class Engine {
       throw new Refusal('Instance is stopped or quarantined');
     return this.active;
   }
-  async session(id) {
+  async session(id, grant = this.config.grants[0]) {
     if (!this.harness || this.stopping || this.ledger.quarantined) throw new Refusal('Instance unavailable');
     const existing = this.ledger.session(id);
     if (existing) {
+      const bound = this.ledger.sessionGrant(id);
+      if (bound !== null && bound !== grant.revision) throw new Refusal('Session provider binding conflict');
       const conversation = await this.harness.conversation(existing, context);
       if (!conversation) throw new Refusal('SDK session state is missing');
       return conversation;
@@ -142,8 +152,8 @@ export class Engine {
     // UI sessions are independent host-owned conversations, not the SDK's
     // singleton root or children whose lifetime belongs to a generation task.
     const conversation = await this.harness.createConversation({ ownership: { kind: 'ownerless' },
-      agent: { model: { provider: 'openai', modelId: this.config.model } } }, context);
-    this.ledger.bindSession(id, conversation.id);
+      agent: { model: { provider: grant.provider, modelId: grant.model } } }, context);
+    this.ledger.bindSession(id, conversation.id, grant.revision);
     return conversation;
   }
   async execute(row) {
@@ -151,7 +161,8 @@ export class Engine {
     const run = { id: row.id, controller: new AbortController(), cancelled: false };
     this.active = run;
     try {
-      run.conversation = await this.session(row.session_id);
+      run.grant = JSON.parse(row.grant);
+      run.conversation = await this.session(row.session_id, run.grant);
       const submission = await run.conversation.submit({ type: 'input', content: row.input, requestId: row.request_id }, context);
       this.ledger.bind(row.id, submission.id);
       const settled = await submission.wait(context);
@@ -165,7 +176,12 @@ export class Engine {
         output = (answer?.model ?? []).flatMap(message => message.content ?? [])
           .filter(part => part.type === 'text').map(part => part.text).join('');
       }
-      this.ledger.finish(row.id, settled.status === 'done' ? 'completed' : 'failed', { output, settlement: settled });
+      if (run.grant.revision !== 'legacy-single-model' && (!run.usage ||
+          !Number.isSafeInteger(run.usage.input) || !Number.isSafeInteger(run.usage.output) ||
+          run.usage.input < 0 || run.usage.output < 0)) {
+        this.ledger.uncertain(row.id); return;
+      }
+      this.ledger.finish(row.id, settled.status === 'done' ? 'completed' : 'failed', { output, settlement: settled, usage: run.usage });
     } catch { this.ledger.uncertain(row.id); }
     finally { this.active = undefined; }
   }

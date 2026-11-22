@@ -51,7 +51,7 @@ export class Ledger {
     try {
       this.db = database(join(directory, 'receipts.sqlite'));
       const version = this.db.prepare('PRAGMA user_version').get().user_version;
-      if (version !== 0 && version !== 1) throw new Refusal('Unknown receipt schema');
+      if (version < 0 || version > 2) throw new Refusal('Unknown receipt schema');
       this.db.exec(`CREATE TABLE IF NOT EXISTS runs (
         id TEXT PRIMARY KEY, request_id TEXT UNIQUE NOT NULL, digest TEXT NOT NULL,
         session_id TEXT NOT NULL, input TEXT NOT NULL, state TEXT NOT NULL,
@@ -60,8 +60,15 @@ export class Ledger {
         id TEXT PRIMARY KEY, run_id TEXT NOT NULL, task_id TEXT NOT NULL, kind TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS sessions (id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS flags (name TEXT PRIMARY KEY, value TEXT NOT NULL);
+        CREATE TABLE IF NOT EXISTS events (
+          cursor INTEGER PRIMARY KEY AUTOINCREMENT, run_id TEXT NOT NULL,
+          kind TEXT NOT NULL, value TEXT NOT NULL, created_at INTEGER NOT NULL);
         CREATE UNIQUE INDEX IF NOT EXISTS run_submission ON runs(submission_id);
-        PRAGMA user_version=1;`);
+        PRAGMA user_version=2;`);
+      if (version < 2) {
+        this.db.exec(`ALTER TABLE runs ADD COLUMN grant TEXT;
+          ALTER TABLE sessions ADD COLUMN grant_digest TEXT;`);
+      }
       // An admitted-but-unsettled run is enough to quarantine, even if no send
       // was observed. This also covers the admission/SDK-submit crash window.
       this.db.prepare("UPDATE runs SET state='uncertain' WHERE state IN ('running','stopping')").run();
@@ -73,13 +80,26 @@ export class Ledger {
   get busy() { return !!this.db.prepare("SELECT 1 FROM runs WHERE state IN ('running','stopping') LIMIT 1").get(); }
   byRequest(id) { return this.db.prepare('SELECT * FROM runs WHERE request_id=?').get(id); }
   get(id) { return this.db.prepare('SELECT * FROM runs WHERE id=?').get(id); }
+  events(id, after = 0) {
+    if (!Number.isSafeInteger(after) || after < 0) throw new Refusal('Invalid event cursor', 400);
+    return [...this.db.prepare('SELECT cursor,kind,value FROM events WHERE run_id=? AND cursor>? ORDER BY cursor LIMIT 128').iterate(id, after)]
+      .map(row => ({ cursor: row.cursor, event: row.kind, ...JSON.parse(row.value) }));
+  }
+  event(id, kind, value) {
+    const encoded = JSON.stringify(value);
+    if (Buffer.byteLength(encoded) > 1024 * 1024) throw new Refusal('Event exceeds limit');
+    this.db.prepare('INSERT INTO events(run_id,kind,value,created_at) VALUES(?,?,?,?)').run(id, kind, encoded, Date.now());
+    return this.db.prepare('SELECT last_insert_rowid() AS cursor').get().cursor;
+  }
   admit(body) {
-    const { request_id, session_id, input, context_mode } = body;
+    const { request_id, session_id, input, context_mode, grant } = body;
     if (!identity(request_id) || !identity(session_id) || context_mode !== 'persistent' ||
         typeof input !== 'string' || !input.trim() || Buffer.byteLength(input) > 65536 ||
-        Object.keys(body).some(k => !['request_id','session_id','input','context_mode'].includes(k)))
+        (grant !== undefined && (!grant || typeof grant !== 'object' || Array.isArray(grant))) ||
+        Object.keys(body).some(k => !['request_id','session_id','input','context_mode','grant'].includes(k)))
       throw new Refusal('Invalid persistent run request', 400);
-    const digest = createHash('sha256').update(JSON.stringify([session_id, input, context_mode])).digest('hex');
+    const encodedGrant = grant === undefined ? null : JSON.stringify(grant);
+    const digest = createHash('sha256').update(JSON.stringify([session_id, input, context_mode, grant ?? null])).digest('hex');
     const previous = this.byRequest(request_id);
     if (previous) {
       if (previous.digest !== digest) throw new Refusal('Request identity conflict');
@@ -87,8 +107,9 @@ export class Ledger {
     }
     if (this.stopped || this.quarantined || this.busy) throw new Refusal('Runner stopped, busy or quarantined');
     const id = randomUUID();
-    this.db.prepare("INSERT INTO runs(id,request_id,digest,session_id,input,state,created_at) VALUES(?,?,?,?,?,'running',?)")
-      .run(id, request_id, digest, session_id, input, Date.now());
+    this.db.prepare("INSERT INTO runs(id,request_id,digest,session_id,input,state,created_at,grant) VALUES(?,?,?,?,?,'running',?,?)")
+      .run(id, request_id, digest, session_id, input, Date.now(), encodedGrant);
+    this.event(id, 'run.admitted', { state: 'running' });
     return { row: this.get(id), duplicate: false };
   }
   operation(runId, taskId, kind) {
@@ -98,8 +119,8 @@ export class Ledger {
     this.db.prepare('INSERT INTO operations VALUES(?,?,?,?)').run(id, runId, taskId, kind);
     return id;
   }
-  uncertain(id) { this.db.prepare("UPDATE runs SET state='uncertain' WHERE id=? AND state IN ('running','stopping')").run(id); }
-  stopping(id) { this.db.prepare("UPDATE runs SET state='stopping' WHERE id=? AND state='running'").run(id); }
+  uncertain(id) { const changed = this.db.prepare("UPDATE runs SET state='uncertain' WHERE id=? AND state IN ('running','stopping')").run(id).changes; if (changed) this.event(id, 'run.interrupted', { state: 'interrupted', uncertain: true }); }
+  stopping(id) { const changed = this.db.prepare("UPDATE runs SET state='stopping' WHERE id=? AND state='running'").run(id).changes; if (changed) this.event(id, 'run.stopping', { state: 'stopping' }); }
   bind(id, submission) {
     if (!Number.isSafeInteger(submission) || submission <= 0) throw new Refusal('Invalid SDK submission');
     // SQLite coerces numeric parameters into TEXT as e.g. "9.0"; the
@@ -114,6 +135,7 @@ export class Ledger {
     // Only the caller observing committed SDK settlement and idle state may use
     // this method. Receipts are retained; no automatic reconciliation operation.
     this.db.prepare('UPDATE runs SET state=?,result=? WHERE id=?').run(state, encoded, id);
+    this.event(id, state === 'completed' ? 'run.completed' : 'run.failed', { state, result });
   }
   session(id) {
     const row = this.db.prepare('SELECT conversation_id FROM sessions WHERE id=?').get(id);
@@ -122,9 +144,10 @@ export class Ledger {
     if (!Number.isSafeInteger(value) || value <= 0) throw new Refusal('Invalid persisted SDK session');
     return value;
   }
-  bindSession(id, conversation) {
+  sessionGrant(id) { return this.db.prepare('SELECT grant_digest FROM sessions WHERE id=?').get(id)?.grant_digest ?? null; }
+  bindSession(id, conversation, grantDigest = null) {
     if (!Number.isSafeInteger(conversation) || conversation <= 0) throw new Refusal('Invalid SDK session');
-    this.db.prepare('INSERT INTO sessions VALUES(?,?)').run(id, conversation);
+    this.db.prepare('INSERT INTO sessions(id,conversation_id,grant_digest) VALUES(?,?,?)').run(id, conversation, grantDigest);
   }
   close() {
     if (this.closed) return;

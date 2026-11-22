@@ -1222,6 +1222,12 @@ class Service:
                 if set(values) != {"request_id"} or len(values["request_id"]) != 1 or not RUNNER_ID.fullmatch(values["request_id"][0]):
                     raise APIError("A single runner request_id is required")
                 target += "?request_id=" + values["request_id"][0]
+            elif operation.endswith("/events"):
+                values = parse_qs(query, keep_blank_values=True)
+                if query and (set(values) != {"cursor"} or len(values["cursor"]) != 1 or not re.fullmatch(r"0|[1-9][0-9]{0,15}", values["cursor"][0])):
+                    raise APIError("A valid runner event cursor is required")
+                if query:
+                    target += "?cursor=" + values["cursor"][0]
             elif query:
                 raise APIError("Runner query is not supported")
             return self.runner_exchange(descriptor, method, target, events=operation.endswith("/events"))
@@ -1238,10 +1244,14 @@ class Service:
                 raise APIError("Invalid runner session request")
             target = "/api/sessions"
         elif operation == "runs":
-            if (set(body) != {"request_id", "session_id", "input", "context_mode"}
+            if (set(body) not in ({"request_id", "session_id", "input", "context_mode"},
+                                  {"request_id", "session_id", "input", "context_mode", "binding"})
                     or not isinstance(body["session_id"], str) or not RUNNER_ID.fullmatch(body["session_id"])
                     or body["context_mode"] != "persistent" or not isinstance(body["input"], str)
-                    or not body["input"].strip() or len(body["input"].encode()) > 65536):
+                    or not body["input"].strip() or len(body["input"].encode()) > 65536
+                    or ("binding" in body and (not isinstance(body["binding"], dict)
+                        or set(body["binding"]) != {"revision", "provider", "model", "protocol"}
+                        or any(not isinstance(value, str) or not value for value in body["binding"].values())))):
                 raise APIError("Invalid persistent run request")
         elif not operation.endswith("/stop") or body:
             raise APIError("Invalid runner mutation")
@@ -1266,6 +1276,11 @@ class Service:
             capabilities = self.runner_exchange(descriptor, "GET", "/v1/capabilities")
             if capabilities.get("available") is not True or not isinstance(capabilities.get("features"), dict) or capabilities["features"].get("runs") is not True:
                 raise APIError("Runner submission is unavailable", 409)
+            if operation == "runs" and "binding" in body:
+                grants = capabilities.get("grants")
+                if not isinstance(grants, list) or not any(isinstance(grant, dict) and
+                        all(grant.get(key) == value for key, value in body["binding"].items()) for grant in grants):
+                    raise APIError("Runner provider binding is not granted", 403)
         # Never reissue a mutation after uncertainty, even across daemon restarts.
         result = self.runner_exchange(descriptor, method, target, body)
         with self.lock:
