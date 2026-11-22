@@ -38,7 +38,11 @@ export function modelBoundary({ ledger, models, model, grantedModels, brokerBase
     endpoint: `${base.origin}/v1/responses`, budget: { max_output_tokens: 4096 }, tools: [],
   } }]]);
   const targets = new Set([...grantedModels.values()].map(({ grant }) => grant.endpoint));
-  if ([...targets].some(target => { try { const url = new URL(target); return url.origin !== base.origin || !url.pathname.startsWith('/v1/'); } catch { return true; } }))
+  const routeFor = protocol => protocol === 'openai-responses' ? '/v1/responses' :
+    protocol === 'anthropic-messages' ? '/v1/messages' : '/v1/chat/completions';
+  if ([...grantedModels.values()].some(({ grant }) => { try { const url = new URL(grant.endpoint);
+    return url.origin !== base.origin || url.pathname !== routeFor(grant.protocol) || url.search || url.hash;
+  } catch { return true; } }))
     throw new Refusal('Grant endpoint is outside the fixed broker');
   const context = new AsyncLocalStorage();
   const originalFetch = globalThis.fetch;
@@ -50,7 +54,14 @@ export function modelBoundary({ ledger, models, model, grantedModels, brokerBase
     operation.sent = true;
     // SQLite FULL commit happens before the first byte may reach the broker.
     ledger.operation(operation.runId, operation.taskId, 'model');
-    try { return await originalFetch(input, { ...options, redirect: 'error' }); }
+    const headers = new Headers(input instanceof Request ? input.headers : undefined);
+    new Headers(options.headers).forEach((value, name) => headers.set(name, value));
+    // Provider SDKs express virtual credentials in provider-native headers.
+    // Replace all of them with the one broker-scoped bearer credential; none
+    // of the capsule's header choices can select an upstream credential.
+    headers.delete('x-api-key');
+    headers.set('authorization', `Bearer ${operation.brokerToken}`);
+    try { return await originalFetch(input, { ...options, headers, redirect: 'error' }); }
     catch (error) { ledger.uncertain(operation.runId); throw error; }
   };
   const lookup = (provider, id) => grantedModels.get(`${provider}\0${id}`)?.model;
@@ -65,13 +76,14 @@ export function modelBoundary({ ledger, models, model, grantedModels, brokerBase
             requested.id !== runGrant?.model || requested.provider !== runGrant?.provider || selected.grant.revision !== runGrant.revision)
           throw new Refusal('Missing stable model operation correlation');
         const { model, grant } = selected;
-        const operation = { runId: run.id, taskId: run.taskId, sent: false, grant };
+        const brokerToken = secret(brokerTokenFile);
+        const operation = { runId: run.id, taskId: run.taskId, sent: false, grant, brokerToken };
         run.taskId = undefined;
         const stream = context.run(operation, () => models.streamSimple(
           { ...model, baseUrl: grant.endpoint.replace(/\/(?:responses|messages|chat\/completions)$/, '') }, messages,
-          { ...options, apiKey: secret(brokerTokenFile), deferred: false, maxRetries: 0,
+          { ...options, apiKey: brokerToken, deferred: false, maxRetries: 0,
             maxTokens: Math.min(options?.maxTokens ?? grant.budget.max_output_tokens, grant.budget.max_output_tokens),
-            transport: 'sse', fetch: globalThis.fetch },
+            transport: 'sse', fetch: globalThis.fetch, signal: run.controller?.signal },
         ));
         // A transport response is NOT a durable SDK checkpoint. Keep every
         // operation receipt until the submission + idle barrier is committed.
@@ -87,9 +99,17 @@ export function modelBoundary({ ledger, models, model, grantedModels, brokerBase
   return { models: facade, close() { globalThis.fetch = originalFetch; } };
 }
 
+const researchCapabilities = Object.freeze([
+  'research_browser', 'research_fetch', 'research_job', 'research_read', 'research_search',
+]);
+
 export class Research {
-  constructor(command) {
+  constructor(command, granted = researchCapabilities) {
     if (!/^\/nix\/store\/[^/]+\/bin\/research-client$/.test(command)) throw new Refusal('Research command is not a pinned closure');
+    if (!Array.isArray(granted) || new Set(granted).size !== granted.length ||
+        granted.some(name => !researchCapabilities.includes(name)))
+      throw new Refusal('Invalid Research capability grant');
+    this.granted = new Set(granted);
     this.child = spawn(command, ['--socket', '/run/tentaflake-research/socket'], {
       stdio: ['pipe', 'pipe', 'ignore'], env: { PATH: '', LANG: 'C.UTF-8' },
     });
@@ -120,6 +140,9 @@ export class Research {
   }
   async request(method, params, signal) {
     if (this.closed || signal?.aborted || this.pending.size >= 4) throw new Refusal('Research unavailable');
+    if (method === 'tools/call' && (!params || typeof params !== 'object' ||
+        typeof params.name !== 'string' || !this.granted.has(params.name)))
+      throw new Refusal('Research capability is not granted');
     const id = ++this.sequence;
     let timer, abort;
     try {
@@ -139,8 +162,9 @@ export class Research {
     if (result?.protocolVersion !== '2025-11-25') throw new Refusal('Research protocol mismatch');
     this.child.stdin.write(JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' }) + '\n');
     const resultTools = await this.request('tools/list', {});
-    const expected = ['research_browser','research_fetch','research_job','research_read','research_search'];
-    if (JSON.stringify(resultTools.tools?.map(t => t.name).sort()) !== JSON.stringify(expected))
+    if (!Array.isArray(resultTools?.tools) || resultTools.tools.some(tool => !tool || typeof tool !== 'object' ||
+        typeof tool.name !== 'string' || !tool.name || tool.name.length > 128) ||
+        researchCapabilities.some(name => resultTools.tools.filter(tool => tool.name === name).length !== 1))
       throw new Refusal('Research capability mismatch');
   }
   close() {

@@ -248,20 +248,31 @@ or automatic reconciliation API. Restoring historical snapshots is not an admitt
 resumption procedure; an internally consistent rollback cannot be detected by a
 local receipt database alone.
 
-The only model path is the pinned OpenAI Responses `streamSimple` implementation,
-with one fixed broker model, a virtual key, SSE, zero retries, no redirects and
-an injected guarded fetch. The source forwards that fetch through
-`ai/src/api/simple-options.ts` to `openai-responses.ts`; the latter also sets the
-OpenAI SDK's own `maxRetries` to zero. Each physical send requires a one-use task
-correlation and the persisted barrier. All other Models facade methods, including
+The only model method is the pinned SDK's `streamSimple` implementation. Its
+immutable per-run grant binds one catalog provider/model, one of OpenAI Responses,
+Anthropic Messages, or OpenCode-compatible chat completions, an exact broker
+route, pricing revision, output ceiling and tool subset. Provider-native virtual
+credential headers are replaced by the one broker-scoped bearer credential.
+Each physical send requires a one-use task correlation and the persisted barrier;
+the guarded fetch allows no redirect or resend and propagates cancellation. All
+other Models facade methods, including
 deferred responses, images, classification, login, refresh and ordinary completion,
 are denied. Compaction is disabled and its completion path is unavailable.
 Public/invalid broker addresses are rejected; production configuration comes only
 from the exact broker instance, not agent settings.
 
+The shipped host provisioning policy remains the singleton OpenAI Responses
+configuration described below. The additional runner protocol contexts and
+ordinary local synthetic wire fixtures do not by themselves configure a
+multi-provider host broker, establish live vendor compatibility, or qualify
+provider pricing and currency conversion.
+
 Research runs only the pinned `${researchClient}/bin/research-client --socket
-/run/tentaflake-research/socket` stdio client, with the five-tool manifest and
-bounded MCP initialization. That client, not this runner, implements the framed
+/run/tentaflake-research/socket` stdio client, with bounded MCP initialization.
+The relay may advertise additional legitimate server capabilities, but every
+five reviewed Research capabilities must be present exactly once and only the
+immutable configured subset is callable. Missing, duplicated or malformed
+reviewed capabilities refuse initialization. That client, not this runner, implements the framed
 relay protocol and Hello/version/tool validation. The pinned relay authenticates
 the client UID; the client does **not** perform reciprocal server `SO_PEERCRED`
 authentication. Exact root-owned socket provenance and read-only closure/mounts

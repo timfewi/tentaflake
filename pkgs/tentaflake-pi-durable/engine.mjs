@@ -105,7 +105,8 @@ export class Engine {
     } catch (error) { this.ledger.quarantine(); throw error; }
     finally { if (viewer) await viewer.close(context); else await storage.close(context); }
     if (this.ledger.quarantined) return;
-    this.research = new Research(this.config.researchCommand);
+    this.research = new Research(this.config.researchCommand,
+      this.config.tools.filter(name => name.startsWith('research_')));
     await this.research.initialize();
     this.harness = await Harness.open(await openNodeSqliteStorage(path), options, context);
     // No unconditional resume. A clean ledger permits only a new explicit

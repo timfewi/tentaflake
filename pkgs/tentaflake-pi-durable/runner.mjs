@@ -28,7 +28,9 @@ function exactGrant(value) {
       !Array.isArray(value.tools) || new Set(value.tools).size !== value.tools.length || value.tools.some(t => !identity(t)) ||
       !value.budget || !Number.isSafeInteger(value.budget.max_output_tokens) || value.budget.max_output_tokens <= 0)
     throw new Refusal('Invalid versioned provider grant');
-  return Object.freeze(structuredClone(value));
+  const copy = structuredClone(value);
+  Object.freeze(copy.pricing); Object.freeze(copy.tools); Object.freeze(copy.budget);
+  return Object.freeze(copy);
 }
 function selectGrant(config, binding) {
   if (binding === undefined) return config.grants.length === 1 ? config.grants[0] : (() => { throw new Refusal('Explicit provider binding required', 400); })();
