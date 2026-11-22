@@ -150,6 +150,23 @@ async function runnerFixture(mode) {
     assert.equal((await runtime.engine.session('ui-session-one')).id, first.id);
     assert.equal((await runtime.engine.session('ui-session-two')).id, second.id);
   }
+  if (mode === 'runner-history') {
+    const input = { request_id: 'history', session_id: 'session', input: 'synthetic', context_mode: 'persistent' };
+    const { row } = runtime.ledger.admit(input);
+    for (let n = 0; n < 280; n++) runtime.ledger.event(row.id, 'run.progress', { n, detail: 'x'.repeat(320) });
+    runtime.ledger.finish(row.id,'completed',{ output: 'done' });
+    for (const after of [0,128]) {
+      const records = await new Promise((resolve, reject) => {
+        http.get({ socketPath, path: `/v1/runs/${row.id}/events?cursor=${after}`, headers: { Authorization: 'Bearer synthetic-api-token' } }, response => {
+          assert.equal(response.statusCode,200);
+          let stream = ''; response.setEncoding('utf8'); response.on('data', part => { stream += part; });
+          response.on('end', () => resolve(stream.split('\n').filter(line => line.startsWith('data: ')).map(line => JSON.parse(line.slice(6)))));
+        }).on('error',reject);
+      });
+      assert.deepEqual(records.map(e => e.cursor),Array.from({length: 282 - after},(_,i) => after+i+1));
+      assert.equal(records.at(-1).event,'run.completed');
+    }
+  }
   const sdkClose = runtime.engine.harness.close.bind(runtime.engine.harness);
   const ledgerClose = runtime.ledger.close.bind(runtime.ledger);
   const sdkError = new Error('synthetic SDK close failure');

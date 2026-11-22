@@ -73,7 +73,7 @@ for (const interruption of ['crash', 'close', 'restored-crash', 'restored-close'
 
 // Lifecycle regression: actual runner, HTTP Unix socket, SDK SQLite and Research
 // child close; synthetic Research/abort transport only, with no provider dispatch.
-for (const mode of ['idle', 'capabilities', 'tools-none', 'tools-search', 'tools-all', 'sessions', 'already-closed', 'sdk-error', 'storage-error', 'both-errors', 'cancel-error', 'cancel-sdk-error']) {
+for (const mode of ['idle', 'capabilities', 'tools-none', 'tools-search', 'tools-all', 'sessions', 'history', 'already-closed', 'sdk-error', 'storage-error', 'both-errors', 'cancel-error', 'cancel-sdk-error']) {
   const name = mode === 'capabilities' ? 'real runner tool selection omission reports the active configured model and fixed registry without inference'
     : mode.startsWith('tools-') ? `real runner tool selection: ${mode}`
     : `real runner shutdown: ${mode}`;

@@ -50,6 +50,7 @@ export class Ledger {
     }
     try {
       this.db = database(join(directory, 'receipts.sqlite'));
+      this.db.exec('BEGIN IMMEDIATE');
       const version = this.db.prepare('PRAGMA user_version').get().user_version;
       if (version < 0 || version > 2) throw new Refusal('Unknown receipt schema');
       this.db.exec(`CREATE TABLE IF NOT EXISTS runs (
@@ -64,15 +65,16 @@ export class Ledger {
         CREATE TABLE IF NOT EXISTS events (
           cursor INTEGER PRIMARY KEY AUTOINCREMENT, run_id TEXT NOT NULL,
           kind TEXT NOT NULL, value TEXT NOT NULL, created_at INTEGER NOT NULL);
-        CREATE UNIQUE INDEX IF NOT EXISTS run_submission ON runs(submission_id);
-        PRAGMA user_version=2;`);
-      if (version < 2) {
-        this.db.exec(`ALTER TABLE runs ADD COLUMN grant TEXT;
-          ALTER TABLE sessions ADD COLUMN grant_digest TEXT;`);
-      }
+        CREATE UNIQUE INDEX IF NOT EXISTS run_submission ON runs(submission_id);`);
+      if (!this.db.prepare("SELECT 1 FROM pragma_table_info('runs') WHERE name='grant'").get())
+        this.db.exec('ALTER TABLE runs ADD COLUMN grant TEXT');
+      if (!this.db.prepare("SELECT 1 FROM pragma_table_info('sessions') WHERE name='grant_digest'").get())
+        this.db.exec('ALTER TABLE sessions ADD COLUMN grant_digest TEXT');
       // An admitted-but-unsettled run is enough to quarantine, even if no send
       // was observed. This also covers the admission/SDK-submit crash window.
-      this.db.prepare("UPDATE runs SET state='uncertain' WHERE state IN ('running','stopping')").run();
+      for (const { id } of this.db.prepare("SELECT id FROM runs WHERE state IN ('running','stopping')").all())
+        this.uncertain(id);
+      this.db.exec('PRAGMA user_version=2; COMMIT');
     } catch (e) { this.db?.close(); this.owner.close(); throw e; }
     this.stopped = false;
   }
@@ -92,7 +94,7 @@ export class Ledger {
     this.db.prepare('INSERT INTO events(run_id,kind,value,created_at) VALUES(?,?,?,?)').run(id, kind, encoded, Date.now());
     return this.db.prepare('SELECT last_insert_rowid() AS cursor').get().cursor;
   }
-  admit(body) {
+  admit(body, { legacySingleton = false } = {}) {
     const { request_id, session_id, input, context_mode, grant } = body;
     if (!identity(request_id) || !identity(session_id) || context_mode !== 'persistent' ||
         typeof input !== 'string' || !input.trim() || Buffer.byteLength(input) > 65536 ||
@@ -103,7 +105,11 @@ export class Ledger {
     const digest = createHash('sha256').update(JSON.stringify([session_id, input, context_mode, grant ?? null])).digest('hex');
     const previous = this.byRequest(request_id);
     if (previous) {
-      if (previous.digest !== digest) throw new Refusal('Request identity conflict');
+      if (previous.digest !== digest) {
+        const legacyDigest = createHash('sha256').update(JSON.stringify([session_id, input, context_mode])).digest('hex');
+        if (previous.grant !== null || (grant !== undefined && !legacySingleton) || previous.digest !== legacyDigest)
+          throw new Refusal('Request identity conflict');
+      }
       return { row: previous, duplicate: true };
     }
     if (this.stopped || this.quarantined || this.busy) throw new Refusal('Runner stopped, busy or quarantined');
@@ -152,9 +158,9 @@ export class Ledger {
     return value;
   }
   sessionGrant(id) { return this.db.prepare('SELECT grant_digest FROM sessions WHERE id=?').get(id)?.grant_digest ?? null; }
-  checkSessionGrant(id, revision) {
+  checkSessionGrant(id, revision, legacySingleton = false) {
     const row = this.db.prepare('SELECT grant_digest FROM sessions WHERE id=?').get(id);
-    if (row && (row.grant_digest ?? 'legacy-single-model') !== revision)
+    if (row && !(row.grant_digest === null ? legacySingleton : row.grant_digest === revision))
       throw new Refusal('Session provider binding conflict');
   }
   bindSession(id, conversation, grantDigest = null) {

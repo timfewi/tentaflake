@@ -4,6 +4,8 @@ import { mkdtempSync, chmodSync, rmSync, symlinkSync, mkdirSync, linkSync } from
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Ledger, privateDirectory } from '../ledger.mjs';
+import { DatabaseSync } from 'node:sqlite';
+import { createHash } from 'node:crypto';
 
 const input = { request_id: 'stable-request', session_id: 'session', input: 'hello', context_mode: 'persistent' };
 function fixture(t, close = () => {}) {
@@ -21,6 +23,45 @@ test('exclusive writer, stable duplicates and conflicting intent', t => {
   assert.throws(() => ledger.admit({ ...input, input: 'different' }), /conflict/);
   assert.throws(() => ledger.admit({ ...input, request_id: 'second' }), /busy/);
   assert.throws(() => ledger.operation(first.row.id, undefined, 'model'), /denied/);
+});
+for (const version of [1, 2]) {
+  test(`upgrades v${version} receipt storage and replays only the original singleton intent`, t => {
+    let ledger; const root = fixture(t, () => ledger?.close());
+    const path = join(root, 'receipts.sqlite');
+    const old = new DatabaseSync(path); chmodSync(path, 0o600);
+    old.exec(`CREATE TABLE runs (id TEXT PRIMARY KEY,request_id TEXT UNIQUE NOT NULL,digest TEXT NOT NULL,
+      session_id TEXT NOT NULL,input TEXT NOT NULL,state TEXT NOT NULL,result TEXT,submission_id TEXT,created_at INTEGER NOT NULL);
+      CREATE TABLE sessions(id TEXT PRIMARY KEY,conversation_id TEXT NOT NULL);
+      INSERT INTO sessions VALUES ('session','45');
+      PRAGMA user_version=${version};`);
+    const digest = createHash('sha256').update(JSON.stringify([input.session_id,input.input,input.context_mode])).digest('hex');
+    old.prepare('INSERT INTO runs VALUES(?,?,?,?,?,?,?,?,?)').run('historical', input.request_id, digest, 'session', input.input, 'completed', '{"output":"original answer"}', '7', 1);
+    if (version === 2) old.exec('ALTER TABLE runs ADD COLUMN grant TEXT');
+    old.close();
+    ledger = new Ledger(root);
+    const grant = { revision: 'published-singleton' };
+    assert.doesNotThrow(() => ledger.checkSessionGrant('session', grant.revision, true));
+    assert.throws(() => ledger.checkSessionGrant('session', grant.revision, false), /conflict/);
+    const replay = ledger.admit({ ...input, grant }, { legacySingleton: true });
+    assert.equal(replay.duplicate,true);
+    assert.equal(replay.row.id,'historical');
+    assert.equal(JSON.parse(replay.row.result).output,'original answer');
+    assert.throws(() => ledger.admit({ ...input,grant }), /conflict/);
+    assert.throws(() => ledger.admit({ ...input,input: 'different',grant }, { legacySingleton: true }), /conflict/);
+    assert.equal(ledger.db.prepare('SELECT count(*) AS n FROM operations').get().n,0);
+  });
+}
+test('failed migration rolls back both the schema changes and version marker', t => {
+  const root = fixture(t); const path = join(root, 'receipts.sqlite');
+  const old = new DatabaseSync(path); chmodSync(path, 0o600);
+  old.exec('CREATE TABLE runs(id TEXT,submission_id TEXT); CREATE VIEW sessions AS SELECT 1 AS id; PRAGMA user_version=1');
+  old.close();
+  assert.throws(() => new Ledger(root), /view/);
+  const db = new DatabaseSync(path);
+  try {
+    assert.equal(db.prepare('PRAGMA user_version').get().user_version, 1);
+    assert.equal(db.prepare("SELECT 1 FROM pragma_table_info('runs') WHERE name='grant'").get(), undefined);
+  } finally { db.close(); }
 });
 test('immutable provider grant participates in idempotency and durable event cursors', t => {
   let ledger; const root = fixture(t, () => ledger?.close()); ledger = new Ledger(root);
@@ -46,6 +87,11 @@ test('crash window is quarantined even before SDK submission or first dispatch',
   ledger = new Ledger(root);
   assert.equal(ledger.quarantined, true);
   assert.equal(ledger.get(row.id).state, 'uncertain');
+  const interrupted = ledger.events(row.id);
+  assert.deepEqual(interrupted.map(e => e.event), ['run.admitted','run.interrupted']);
+  assert.equal(interrupted[1].uncertain,true);
+  ledger.close(); ledger = new Ledger(root);
+  assert.deepEqual(ledger.events(row.id, interrupted[0].cursor),[interrupted[1]]);
   assert.equal(ledger.admit(input).row.id, row.id);
   assert.throws(() => ledger.admit({ ...input, request_id: 'new' }), /quarantined/);
   assert.throws(() => ledger.operation(row.id, 'task', 'research_fetch'), /denied/);

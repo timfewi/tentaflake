@@ -56,6 +56,11 @@ function exactGrant(value) {
   Object.freeze(copy.budget);
   return Object.freeze(copy);
 }
+export function isLegacySingleton(config, grant) {
+  return config.grants.length === 1 && !grant.brokerBinding && grant.model === config.model
+    && grant.provider === 'openai' && grant.protocol === 'openai-responses';
+}
+
 export function selectGrant(config, binding) {
   if (binding === undefined) {
     if (config.grants.length !== 1) throw new Refusal('Explicit provider binding required', 400);

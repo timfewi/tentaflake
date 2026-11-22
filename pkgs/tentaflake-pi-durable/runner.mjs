@@ -5,7 +5,7 @@ import { resolve, dirname } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { Ledger, Refusal, identity, privateDirectory } from './ledger.mjs';
 import { secret } from './mediation.mjs';
-import { selectGrant } from './grants.mjs';
+import { selectGrant, isLegacySingleton } from './grants.mjs';
 import { Engine } from './engine.mjs';
 
 export function projection(row) {
@@ -71,9 +71,12 @@ export async function serve(config) {
         if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Refusal('Invalid run request', 400);
         if (!ledger.hasSession(value.session_id)) throw new Refusal('Unknown session', 404);
         const grant = selectGrant(engine.config, value.binding);
-        ledger.checkSessionGrant(value.session_id,grant.revision);
+        const legacySingleton = value.binding === undefined && isLegacySingleton(engine.config, grant);
+        ledger.checkSessionGrant(value.session_id, grant.revision, legacySingleton);
+        if (legacySingleton && ledger.session(value.session_id) && ledger.sessionGrant(value.session_id) === null && engine.harness)
+          await engine.session(value.session_id, grant);
         delete value.binding; value.grant = grant;
-        const admitted = ledger.admit(value);
+        const admitted = ledger.admit(value, { legacySingleton });
         if (!admitted.duplicate) void engine.execute(admitted.row);
         json(200, { run_id: admitted.row.id }); return;
       }
@@ -102,16 +105,25 @@ export async function serve(config) {
       let timer;
       const deadline = Date.now() + 3900000;
       const emit = () => {
-        if (Date.now() >= deadline || response.writableLength > 65536) { response.destroy(); return; }
+        if (response.destroyed) return;
+        if (Date.now() >= deadline) { response.destroy(); return; }
         const events = ledger.events(id, cursor);
-        for (const event of events) { cursor = event.cursor; response.write(`id: ${cursor}\ndata: ${JSON.stringify(event)}\n\n`); }
+        for (const event of events) {
+          cursor = event.cursor;
+          if (!response.write(`id: ${cursor}\ndata: ${JSON.stringify(event)}\n\n`)) {
+            response.once('drain', emit);
+            return;
+          }
+        }
+        if (events.length === 128) { timer = setTimeout(emit, 0); return; }
         const row = projection(ledger.get(id));
-        if (['running','stopping'].includes(row.state)) { response.write(': waiting\n\n'); return; }
-        clearInterval(timer);
+        if (['running','stopping'].includes(row.state)) {
+          response.write(': waiting\n\n');
+          timer = setTimeout(emit, 1000); return;
+        }
         response.end();
       };
-      timer = setInterval(emit, 1000);
-      response.on('close', () => clearInterval(timer)); emit();
+      response.on('close', () => clearTimeout(timer)); emit();
     } catch (error) {
       if (!response.headersSent) json(error instanceof Refusal ? error.status : 503, { error: error instanceof Refusal ? error.message : 'Runtime unavailable' });
       else response.destroy();

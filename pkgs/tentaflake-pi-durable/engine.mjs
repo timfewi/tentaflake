@@ -2,7 +2,7 @@ import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context';
 import { createModels } from '@earendil-works/pi-ai/models';
 import { openaiProvider } from '@earendil-works/pi-ai/providers/openai';
 import { opencodeGoProvider } from '@earendil-works/pi-ai/providers/opencode-go';
-import { configuredGrants } from './grants.mjs';
+import { configuredGrants, isLegacySingleton } from './grants.mjs';
 import { anthropicProvider } from '@earendil-works/pi-ai/providers/anthropic';
 import { Harness, createRegistry, defineExtension, defineTool, hook, GenerationTask, CompactionTask, AssistantEntry } from '@earendil-works/pi-durable';
 import { openNodeSqliteStorage } from '@earendil-works/pi-durable/storage/sqlite/node';
@@ -176,9 +176,14 @@ export class Engine {
     if (!this.harness || this.stopping || this.ledger.quarantined) throw new Refusal('Instance unavailable');
     const existing = this.ledger.session(id);
     if (existing) {
-      this.ledger.checkSessionGrant(id,grant.revision);
+      this.ledger.checkSessionGrant(id, grant.revision, isLegacySingleton(this.config, grant));
       const conversation = await this.harness.conversation(existing, context);
       if (!conversation) throw new Refusal('SDK session state is missing');
+      if (this.ledger.sessionGrant(id) === null) {
+        const { model } = await conversation.agent(context);
+        if (model?.provider !== grant.provider || model.modelId !== grant.model)
+          throw new Refusal('Session provider binding conflict');
+      }
       return conversation;
     }
     // UI sessions are independent host-owned conversations, not the SDK's
