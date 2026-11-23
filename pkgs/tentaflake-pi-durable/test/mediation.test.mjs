@@ -4,6 +4,7 @@ import { mkdtempSync, writeFileSync, readFileSync, rmSync, chmodSync, symlinkSyn
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { modelBoundary, secret, worker, Research } from '../mediation.mjs';
+import { startupStep } from '../ledger.mjs';
 
 async function fixture(run) {
   const root = mkdtempSync(join(tmpdir(), 'pi-durable-mediation-'));
@@ -44,7 +45,8 @@ test('Research initialization requires the exact reviewed manifest for all tool 
         { tools: manifest.map(value => typeof value === 'string' ? { name: value } : value) };
     };
     if (accepted) await research.initialize();
-    else await assert.rejects(research.initialize(), /capability mismatch/);
+    else await assert.rejects(startupStep('Research handshake', () => research.initialize()),
+      { message: 'Research handshake: Research capability mismatch (expected exactly the five reviewed tools)' });
     assert.deepEqual(methods, ['initialize', 'tools/list']);
   }
 });

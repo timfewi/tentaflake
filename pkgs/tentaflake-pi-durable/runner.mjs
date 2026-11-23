@@ -3,7 +3,7 @@ import { readFileSync, lstatSync, chmodSync } from 'node:fs';
 import { randomUUID, createHash, timingSafeEqual } from 'node:crypto';
 import { resolve, dirname } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { Ledger, Refusal, identity, privateDirectory } from './ledger.mjs';
+import { Ledger, Refusal, identity, privateDirectory, startupStep } from './ledger.mjs';
 import { secret } from './mediation.mjs';
 import { selectGrant, isLegacySingleton } from './grants.mjs';
 import { Engine } from './engine.mjs';
@@ -29,11 +29,11 @@ async function body(request) {
   catch { throw new Refusal('Invalid JSON', 400); }
 }
 export async function serve(config) {
-  const token = Buffer.from(secret(config.apiTokenFile, { sharedApi: true }));
+  const token = await startupStep('API credential', () => Buffer.from(secret(config.apiTokenFile, { sharedApi: true })));
   privateDirectory(dirname(config.socketPath), { groupTraverse: true });
   try { lstatSync(config.socketPath); throw new Refusal('Runtime endpoint already exists'); }
   catch (error) { if (error.code !== 'ENOENT') throw error; }
-  const ledger = new Ledger(config.stateDir);
+  const ledger = await startupStep('Receipt ledger', () => new Ledger(config.stateDir));
   let engine;
   try { engine = new Engine(config, ledger); await engine.open(); }
   catch (error) { try { await engine?.close(); } finally { ledger.close(); } throw error; }
@@ -201,9 +201,13 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   if (process.argv.length !== 3) { console.error('Usage: tentaflake-pi-durable CONFIG'); process.exitCode = 2; }
   else {
     try {
-      const runtime = await serve(configuration(process.argv[2]));
+      const config = await startupStep('Runtime configuration', () => configuration(process.argv[2]));
+      const runtime = await serve(config);
       const stop = () => { runtime.close().then(() => { process.exitCode = 0; }, () => { process.exitCode = 1; }); };
       process.once('SIGTERM', stop); process.once('SIGINT', stop);
-    } catch { console.error('Pi Durable runtime refused startup'); process.exitCode = 1; }
+    } catch (error) {
+      console.error('Pi Durable runtime refused startup:', error instanceof Refusal ? error.message : 'Runner initialization failed');
+      process.exitCode = 1;
+    }
   }
 }

@@ -6,6 +6,18 @@ import { createHash, randomUUID } from 'node:crypto';
 export class Refusal extends Error {
   constructor(message, status = 409) { super(message); this.status = status; }
 }
+
+// Only runner-authored refusals are safe to print. SDK, filesystem and parser
+// errors can quote paths, configuration or remote payloads in their messages.
+export async function startupStep(stage, action) {
+  try { return await action(); }
+  catch (error) {
+    if (error instanceof Refusal) throw new Refusal(`${stage}: ${error.message}`, error.status);
+    const code = ['EACCES', 'ENOENT', 'EPERM', 'ENOSPC', 'EROFS', 'EADDRINUSE', 'ERR_SQLITE_ERROR'].find(value => value === error?.code);
+    const sqlite = code === 'ERR_SQLITE_ERROR' && Number.isInteger(error.errcode) ? ` ${error.errcode}` : '';
+    throw new Refusal(code ? `${stage} failed (${code}${sqlite})` : `${stage} failed`);
+  }
+}
 export const identity = value => typeof value === 'string' && /^[A-Za-z0-9_.:-]{1,128}$/.test(value);
 export function privateDirectory(path, { groupTraverse = false } = {}) {
   if (resolve(path) !== path) throw new Refusal('Noncanonical state directory');

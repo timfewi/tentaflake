@@ -35,17 +35,17 @@
     "pi-durable-upstream": {
       "flake": false,
       "locked": {
-        "lastModified": 1793402276,
-        "narHash": "sha256-wq8X5a4IJBnpHRbYD2WAD/2syM4q6ba2XS1+3mCO0oM=",
+        "lastModified": 1794312108,
+        "narHash": "sha256-0dKtABQqfvCLF0WOydu5rpycMqC+N8Pc9Ex4BWKElyw=",
         "owner": "earendil-works",
         "repo": "pi",
-        "rev": "35dfa757378bd7a8570670e99c2687bdd1039a06",
+        "rev": "b4afdddf44e059c67ccf5097e5317d913521b470",
         "type": "github"
       },
       "original": {
         "owner": "earendil-works",
         "repo": "pi",
-        "rev": "35dfa757378bd7a8570670e99c2687bdd1039a06",
+        "rev": "b4afdddf44e059c67ccf5097e5317d913521b470",
         "type": "github"
       }
     },

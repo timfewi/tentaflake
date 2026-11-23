@@ -12,6 +12,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `status --json`, `help`, the contributor dev shell and the host API's
   `GET /v1/info` (`tentaflake_version`) now name the Tentaflake version.
 ### Changed
+- Pi Durable now builds the Pi 1.5.2 SDK and model catalog, including
+  `gpt-6-luna` and `gpt-6.1-terra` for OpenAI Responses. Startup refusals
+  identify failed checks such as the Research handshake in the unit journal.
 - Versioned branches are mandatory: every branch is named
   `<type>/vX.Y.Z-<topic>` for the next release and adds CHANGELOG notes; only
   `release/vX.Y.Z` changes the declared version. A `Versioning` pull-request

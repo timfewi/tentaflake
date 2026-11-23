@@ -92,9 +92,9 @@ let
     }
     const research = new Research(process.argv[2]);
     try {
+      assert.ok(fs.statSync('/run/tentaflake-research/socket').isSocket());
       await research.initialize();
-      // Exact babdca58 src/api.rs + service.rs: readiness is network-free and
-      // reports the upstream-authenticated relay UID, not the capsule UID.
+      // Network-free readiness reports the service-authenticated relay UID.
       const readiness = await research.request('tools/call', {name:'research_job', arguments:{operation:'readiness'}});
       assert.equal(readiness.isError ?? false, false);
       assert.equal(readiness.structuredContent.caller_uid, Number(process.argv[3]));
@@ -281,7 +281,7 @@ pkgs.testers.runNixOSTest {
                         {
                           provider = "openai";
                           protocol = "openai-responses";
-                          name = "gpt-4.1-mini";
+                          name = "gpt-6-luna";
                           path = "/v1/responses";
                         }
                         {
@@ -302,11 +302,9 @@ pkgs.testers.runNixOSTest {
                 {
                   upstreamBaseUrl = "https://127.0.0.1:9443/v1/";
                   providerCredentialFile = "/run/pi-durable-fixture/provider";
-                  # Present in the hash-pinned pi-durable-ai 1.4.0 openai-responses catalog;
-                  # only its name is used for runner initialization, never a request.
                   allowedModels = [
                     {
-                      name = "gpt-4.1-mini";
+                      name = "gpt-6.1-terra";
                       inputMicrousdPerMillion = 1;
                       outputMicrousdPerMillion = 1;
                     }
@@ -392,9 +390,16 @@ pkgs.testers.runNixOSTest {
     machine.wait_for_unit("pi-durable-fixture-listener.service", timeout=15)
     for address in ["198.18.0.1", "198.18.0.2", "198.18.0.3"]:
         machine.wait_until_succeeds(f"curl --noproxy '*' --fail --silent --max-time 2 http://{address}:18443/ > /dev/null", timeout=15)
-    machine.succeed("systemctl start docker-agent-pi-durable-a.service docker-agent-pi-durable-b.service", timeout=300)
-    for index, name in enumerate(["agent-pi-durable-a", "agent-pi-durable-b"]):
-        machine.wait_until_succeeds(f"test -S /run/tentaflake-pi-durable/{name}/control/runner.sock", timeout=120)
+    names = ["agent-pi-durable-a", "agent-pi-durable-b"]
+    try:
+        machine.succeed("systemctl start docker-agent-pi-durable-a.service docker-agent-pi-durable-b.service", timeout=300)
+        for name in names:
+            machine.wait_until_succeeds(f"test -S /run/tentaflake-pi-durable/{name}/control/runner.sock", timeout=120)
+    except Exception:
+        for name in names:
+            print(machine.execute(f"journalctl -b -u docker-{name}.service --grep='Pi Durable runtime refused startup' --no-pager -n 10 -o cat")[1])
+        raise
+    for index, name in enumerate(names):
         data = json.loads(machine.succeed(f"docker inspect {name}"))[0]
         host = data["HostConfig"]
         assert host["Runtime"] == "runsc-pi-durable"
@@ -432,6 +437,7 @@ pkgs.testers.runNixOSTest {
     runner = "http://localhost/v1/agents/agent-pi-durable-a/runner/"
     capabilities = json.loads(machine.succeed(f"{peer} {runner}capabilities"))
     grants = capabilities["grants"]
+    assert capabilities["available"] and grants[0]["model"] == "gpt-6-luna"
     assert [g["provider"] for g in grants] == ["openai","anthropic","opencode-go"]
     assert all(g["brokerBinding"] and g["tools"] == ["research_read"] for g in grants)
     binding = {k:grants[1][k] for k in ["revision","model","provider","protocol"]}

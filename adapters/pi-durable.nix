@@ -23,7 +23,7 @@ let
     policy.enable
     && lib.isDerivation policy.package
     && lib.isDerivation policy.bundle
-    && (policy.package.upstreamRevision or null) == "35dfa757378bd7a8570670e99c2687bdd1039a06"
+    && (policy.package.upstreamRevision or null) == "b4afdddf44e059c67ccf5097e5317d913521b470"
     && (policy.bundle.runtimePackage or null) == policy.package
     && (policy.bundle.imageVerificationVersion or null) == 1
     && policy.image != null
@@ -63,7 +63,7 @@ let
       schemaVersion = 1;
       identity = {
         id = "pi-durable";
-        version = "1.4.0";
+        version = "1.5.2";
         status = "scaffold";
       };
       artifact = {

@@ -3,17 +3,18 @@
 { pkgs, source }:
 let
   inherit (pkgs) lib;
-  sourceRevision = "35dfa757378bd7a8570670e99c2687bdd1039a06";
+  sourceRevision = "b4afdddf44e059c67ccf5097e5317d913521b470";
   original = builtins.fromJSON (builtins.readFile (source + "/package.json"));
   originalLock = builtins.fromJSON (builtins.readFile (source + "/package-lock.json"));
   # Git deliberately omits generated provider JSON. Supply only that data from
   # the versioned MIT npm artifact; the pinned source's unchanged offline check
   # validates the full provider/model/API structure, manifest and file hashes.
   modelDataPackage = pkgs.fetchurl {
-    url = "https://registry.npmjs.org/@earendil-works/pi-ai/-/pi-ai-1.4.0.tgz";
-    hash = "sha256-tA4rqLtvwzKQj4uW6DfcLR/ftF65zTgvWu0RFGKYHjw=";
+    url = "https://registry.npmjs.org/@earendil-works/pi-ai/-/pi-ai-1.5.2.tgz";
+    hash = "sha256-1XFe+oNMI7/fEKBCtJ307hacyZAAvxbXmY+rLVM7Rfg=";
   };
   selected = [
+    "schema"
     "telemetry"
     "chord"
     "codemode"
@@ -27,15 +28,19 @@ let
       builtins.readFile (source + "/packages/${name}/package.json")
     )) [ "devDependencies" ]
   );
-  buildDependencies = lib.getAttrs [
-    "typescript"
-    "shx"
-    "@types/node"
-    "esbuild"
-  ] original.devDependencies;
+  buildDependencies =
+    lib.getAttrs [
+      "typescript"
+      "@types/node"
+      "esbuild"
+    ] original.devDependencies
+    // lib.getAttrs [
+      "@types/react"
+      "@types/ws"
+    ] originalLock.packages."packages/chord".devDependencies;
   package = {
     name = "tentaflake-pi-durable-sdk";
-    version = "1.4.0";
+    version = "1.5.2";
     private = true;
     type = "module";
     workspaces = workspacePaths;
@@ -121,6 +126,8 @@ let
         cp ${pkgs.writeText "pi-durable-sdk-package.json" (builtins.toJSON package)} "$out/package.json"
         cp ${pkgs.writeText "pi-durable-sdk-package-lock.json" (builtins.toJSON packageLock)} "$out/package-lock.json"
         cp ${source}/tsconfig.base.json "$out/tsconfig.base.json"
+        mkdir -p "$out/scripts"
+        cp ${source}/scripts/package-files.mjs "$out/scripts/"
         cp ${source}/LICENSE "$out/LICENSE"
         ${lib.concatMapStringsSep "\n" (name: ''
           cp -r ${source}/packages/${name} "$out/packages/${name}"
@@ -134,7 +141,7 @@ let
       '';
   runtime = pkgs.buildNpmPackage {
     pname = "tentaflake-pi-durable-sdk";
-    version = "1.4.0";
+    version = "1.5.2";
     src = preparedSource;
     nodejs = pkgs.nodejs_24;
     npmDeps = pkgs.importNpmLock {
@@ -156,6 +163,7 @@ let
         mkdir -p "node_modules/@earendil-works"
         ln -s "../../packages/${name}" "node_modules/${manifests.${name}.name}"
       '') selected}
+      npm --workspace @earendil-works/pi-schema run build --ignore-scripts
       npm --workspace @earendil-works/pi-telemetry run build --ignore-scripts
       npm --workspace @earendil-works/chord run build --ignore-scripts
       npm --workspace @earendil-works/pi-codemode run build --ignore-scripts

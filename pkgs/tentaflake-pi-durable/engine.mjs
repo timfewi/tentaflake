@@ -6,9 +6,9 @@ import { configuredGrants, isLegacySingleton } from './grants.mjs';
 import { anthropicProvider } from '@earendil-works/pi-ai/providers/anthropic';
 import { Harness, createRegistry, defineExtension, defineTool, hook, GenerationTask, CompactionTask, AssistantEntry } from '@earendil-works/pi-durable';
 import { openNodeSqliteStorage } from '@earendil-works/pi-durable/storage/sqlite/node';
-import { Type } from 'typebox';
+import { arr, int, obj, str } from '@earendil-works/pi-schema';
 import { join } from 'node:path';
-import { Refusal, stateFile } from './ledger.mjs';
+import { Refusal, startupStep, stateFile } from './ledger.mjs';
 import { modelBoundary, Research, worker } from './mediation.mjs';
 
 const context = BACKGROUND_CONTEXT;
@@ -78,13 +78,13 @@ export class Engine {
     const registry = createRegistry();
     const tools = this.config.tools.map(name => name === 'offline_worker' ? defineTool({
       name, description: 'Submit one local-reversible command to the isolated offline worker. No host shell or network.',
-      parameters: Type.Object({ argv: Type.Array(Type.String({ maxLength: 4096 }), { minItems: 1, maxItems: 128 }),
-        timeout_seconds: Type.Integer({ minimum: 1, maximum: 3600 }) }, { additionalProperties: false }),
+      parameters: obj({ argv: arr(str({ maxLength: 4096 }), { minItems: 1, maxItems: 128 }),
+        timeout_seconds: int({ minimum: 1, maximum: 3600 }) }),
       replay: 'unsafe',
       execute: (args, api) => this.invokeTool(name, args, api),
     }) : defineTool({
       name, description: `Call the isolated ${name} capability. Supply its JSON arguments as a string.`,
-      parameters: Type.Object({ arguments: Type.String({ maxLength: 60000 }) }, { additionalProperties: false }),
+      parameters: obj({ arguments: str({ maxLength: 60000 }) }),
       replay: 'unsafe',
       execute: (args, api) => this.invokeTool(name, args, api),
     }));
@@ -106,18 +106,26 @@ export class Engine {
     };
     const path = join(this.config.stateDir, 'durable.sqlite');
     for (const suffix of ['', '-journal', '-wal', '-shm']) stateFile(path + suffix);
-    const storage = await openNodeSqliteStorage(path);
-    let viewer;
-    try {
-      viewer = await Harness.open(storage, { ...options, readOnly: true }, context);
-      if (!await auditCheckpoint(storage, viewer, this.ledger)) this.ledger.quarantine();
-    } catch (error) { this.ledger.quarantine(); throw error; }
-    finally { if (viewer) await viewer.close(context); else await storage.close(context); }
+    const storage = await startupStep('SDK SQLite open', () => openNodeSqliteStorage(path));
+    await startupStep('SDK checkpoint audit', async () => {
+      let viewer;
+      try {
+        viewer = await Harness.open(storage, { ...options, readOnly: true }, context);
+        if (!await auditCheckpoint(storage, viewer, this.ledger)) this.ledger.quarantine();
+      } catch (error) { this.ledger.quarantine(); throw error; }
+      finally { if (viewer) await viewer.close(context); else await storage.close(context); }
+    });
     if (this.ledger.quarantined) return;
-    this.research = new Research(this.config.researchCommand,
-      this.config.tools.filter(name => name.startsWith('research_')));
-    await this.research.initialize();
-    this.harness = await Harness.open(await openNodeSqliteStorage(path), options, context);
+    await startupStep('Research handshake', async () => {
+      this.research = new Research(this.config.researchCommand,
+        this.config.tools.filter(name => name.startsWith('research_')));
+      await this.research.initialize();
+    });
+    this.harness = await startupStep('SDK writable Harness.open', async () => {
+      const writable = await openNodeSqliteStorage(path);
+      try { return await Harness.open(writable, options, context); }
+      catch (error) { await writable.close(context); throw error; }
+    });
     // No unconditional resume. A clean ledger permits only a new explicit
     // submission. All interrupted admissions were quarantined by Ledger.open.
   }

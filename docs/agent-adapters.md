@@ -140,7 +140,7 @@ real vendor acceptance.
 | generic | 1 | definition | source-regression | operator-owned |
 | hermes | image-snapshot-2026-07-18 | compatibility | source-regression | pending |
 | openclaw | 2026.9.7 | scaffold | refusal-regression | pending |
-| pi-durable | 1.4.0 | scaffold | refusal-regression | pending |
+| pi-durable | 1.5.2 | scaffold | refusal-regression | pending |
 | zeroclaw | 0.8.2 | compatibility | source-regression | pending |
 
 <!-- runtime-catalog:end -->
@@ -157,43 +157,49 @@ the runtime/socket configuration; retain existing private state and workspace
 paths and review uncertain work before restarting.
 
 The runner compiles the reviewed, immutable **upstream source**
-[`earendil-works/pi` revision `35dfa757378bd7a8570670e99c2687bdd1039a06`](https://github.com/earendil-works/pi/tree/35dfa757378bd7a8570670e99c2687bdd1039a06).
-Its [`packages/durable/package.json`](https://github.com/earendil-works/pi/blob/35dfa757378bd7a8570670e99c2687bdd1039a06/packages/durable/package.json)
-names `@earendil-works/pi-durable` **1.4.0**, ESM, Node **>=22.19.0**.
-The [root MIT license](https://github.com/earendil-works/pi/blob/35dfa757378bd7a8570670e99c2687bdd1039a06/LICENSE)
+[`earendil-works/pi` revision `b4afdddf44e059c67ccf5097e5317d913521b470`](https://github.com/earendil-works/pi/tree/b4afdddf44e059c67ccf5097e5317d913521b470).
+Its [`packages/durable/package.json`](https://github.com/earendil-works/pi/blob/b4afdddf44e059c67ccf5097e5317d913521b470/packages/durable/package.json)
+names `@earendil-works/pi-durable` **1.5.2**, ESM, Node **>=22.19.0**.
+The [root MIT license](https://github.com/earendil-works/pi/blob/b4afdddf44e059c67ccf5097e5317d913521b470/LICENSE)
 is copyright 2025 Mario Zechner and requires retaining its copyright and
 permission notice. The package declares MIT too. This is not a dependency-wide
 license audit or proof that a published tarball matches this source revision.
-Declared upstream runtime dependencies are Chord, Pi AI, Pi Codemode and Pi
-Telemetry 1.4.0, Photon 0.3.3, diff 8.0.4 and typebox 1.3.27.
+Declared upstream runtime dependencies are Chord, Pi AI, Pi Codemode, Pi Schema and Pi
+Telemetry 1.5.2, Photon 0.3.3 and diff 8.0.4.
 `pkgs/tentaflake-pi-durable/upstream.nix` builds the selected workspace closure with the
 upstream lock, not a global npm installation. The runner uses pinned Nixpkgs
 Node 24. Generated provider JSON and its manifest come from the separately hashed
-MIT `@earendil-works/pi-ai` 1.4.0 archive
-(`sha256-tA4rqLtvwzKQj4uW6DfcLR/ftF65zTgvWu0RFGKYHjw=`); packaged JavaScript is
+MIT `@earendil-works/pi-ai` 1.5.2 archive
+(`sha256-1XFe+oNMI7/fEKBCtJ307hacyZAAvxbXmY+rLVM7Rfg=`); packaged JavaScript is
 not substituted for reviewed source. Upstream model-data checks remain enabled.
 The retained upstream notice is `pkgs/tentaflake-pi-durable/UPSTREAM-LICENSE`.
+
+The OpenAI Responses catalog includes `gpt-6-luna` and `gpt-6.1-terra`.
+Each model still needs a matching host grant. On a startup refusal, read the
+container unit journal for the runner's check or failed start phase. SQLite
+and SDK errors report the phase and recognized error codes. Raw exception
+text, configuration contents and Research responses stay out of the diagnostic.
 
 The exact **default upstream recovery hazard**, avoided by the runner, is graceful
 close followed by resume:
 
-- [`scheduler.ts`, `join()`, lines 563–583](https://github.com/earendil-works/pi/blob/35dfa757378bd7a8570670e99c2687bdd1039a06/packages/durable/src/harness/scheduler.ts#L563-L583)
+- [`scheduler.ts`, `join()`, lines 587–607](https://github.com/earendil-works/pi/blob/b4afdddf44e059c67ccf5097e5317d913521b470/packages/durable/src/harness/scheduler.ts#L587-L607)
   aborts invocations and writes still-running tasks back as `pending`; its
   comment explicitly says the next open counts no restart.
-- [`generation.ts`, request phase, lines 264–268](https://github.com/earendil-works/pi/blob/35dfa757378bd7a8570670e99c2687bdd1039a06/packages/durable/src/harness/generation.ts#L264-L268)
+- [`generation.ts`, request phase, lines 270–276](https://github.com/earendil-works/pi/blob/b4afdddf44e059c67ccf5097e5317d913521b470/packages/durable/src/harness/generation.ts#L270-L276)
   takes the interrupted-attempt branch only when `task.restarts` is defined.
   Consequently disabling `settings.retry.enabled` does not prevent this
   pending request from being sent again after close/reopen/resume.
 - The upstream
-  [`harness-generation-recovery.test.ts`, lines 125–165](https://github.com/earendil-works/pi/blob/35dfa757378bd7a8570670e99c2687bdd1039a06/packages/durable/test/harness-generation-recovery.test.ts#L125-L165)
+  [`harness-generation-recovery.test.ts`, lines 125–165](https://github.com/earendil-works/pi/blob/b4afdddf44e059c67ccf5097e5317d913521b470/packages/durable/test/harness-generation-recovery.test.ts#L125-L165)
   explicitly expects a committed partial to become an aborted entry and the
   same messages to be sent again. These are inspected test sources, not tests
   executed by Tentaflake.
 
 This is **not** a claim that upstream lacks all recovery controls.
-[`generation.ts`, `interrupted()`, lines 496–544](https://github.com/earendil-works/pi/blob/35dfa757378bd7a8570670e99c2687bdd1039a06/packages/durable/src/harness/generation.ts#L496-L544)
+[`generation.ts`, `interrupted()`, lines 508–551](https://github.com/earendil-works/pi/blob/b4afdddf44e059c67ccf5097e5317d913521b470/packages/durable/src/harness/generation.ts#L508-L551)
 does honor disabled retries for a crash-marked request.
-[`tool.ts`, lines 193–207](https://github.com/earendil-works/pi/blob/35dfa757378bd7a8570670e99c2687bdd1039a06/packages/durable/src/harness/tool.ts#L193-L207)
+[`tool.ts`, lines 196–210](https://github.com/earendil-works/pi/blob/b4afdddf44e059c67ccf5097e5317d913521b470/packages/durable/src/harness/tool.ts#L196-L210)
 commits execution intent with default `replay: "unsafe"` and re-executes only
 when both stored and current tool policy say `"safe"`. These are useful
 prerequisites for Research and worker mediation, not end-to-end acceptance.
@@ -205,19 +211,19 @@ submission ID is insufficient. No replacement model loop is supplied.
 
 The public seam needs care beyond these retry flags:
 
-- [`scheduler.ts`, lines 2627–2643](https://github.com/earendil-works/pi/blob/35dfa757378bd7a8570670e99c2687bdd1039a06/packages/durable/src/harness/scheduler.ts#L2627-L2643)
+- [`scheduler.ts`, lines 2662–2679](https://github.com/earendil-works/pi/blob/b4afdddf44e059c67ccf5097e5317d913521b470/packages/durable/src/harness/scheduler.ts#L2662-L2679)
   catches generation-hook failures and reports `extension_error`, continuing
   unless the invocation is already aborted. A thrown journal/fsync failure in
   `beforeRequest` or `beforeProviderRequest` is not an authorization barrier.
-- [`harness/types.ts`, lines 945–987](https://github.com/earendil-works/pi/blob/35dfa757378bd7a8570670e99c2687bdd1039a06/packages/durable/src/harness/types.ts#L945-L987)
+- [`harness/types.ts`, lines 972–1014](https://github.com/earendil-works/pi/blob/b4afdddf44e059c67ccf5097e5317d913521b470/packages/durable/src/harness/types.ts#L972-L1014)
   supplies hooks with stable task/conversation identities, but `afterResponse`
   runs before classification. Clearing an outer intent there loses protection
   if the process dies before the SDK commits its result.
-- [`compaction.ts`, lines 164–190](https://github.com/earendil-works/pi/blob/35dfa757378bd7a8570670e99c2687bdd1039a06/packages/durable/src/harness/compaction.ts#L164-L190)
+- [`compaction.ts`, lines 164–190](https://github.com/earendil-works/pi/blob/b4afdddf44e059c67ccf5097e5317d913521b470/packages/durable/src/harness/compaction.ts#L164-L190)
   calls `models.completeSimple` without generation request hooks or the
   generation task's interrupted-attempt guard. Recovery can repeat the summary
   request; disabled retry settings alone do not cover this path.
-- [`ai/src/models.ts`, lines 258–367](https://github.com/earendil-works/pi/blob/35dfa757378bd7a8570670e99c2687bdd1039a06/packages/ai/src/models.ts#L258-L367)
+- [`ai/src/models.ts`, lines 266–375](https://github.com/earendil-works/pi/blob/b4afdddf44e059c67ccf5097e5317d913521b470/packages/ai/src/models.ts#L266-L375)
   is a public structural interface accepted by `HarnessOptions.models`. A
   fail-closed facade could mediate all model methods, while independently
   refusing catalog refresh, login, images, classification and deferred requests
@@ -292,6 +298,10 @@ relay protocol and Hello/version/tool validation. The pinned relay authenticates
 the client UID; the client does **not** perform reciprocal server `SO_PEERCRED`
 authentication. Exact root-owned socket provenance and read-only closure/mounts
 therefore remain required. There is no generic MCP server configuration.
+A `Research capability mismatch` after SQLite creation means the client's
+`tools/list` response differs from the reviewed five-tool manifest. Use the
+same Tentaflake-pinned Research revision for the client, relay and service.
+A successful socket connection alone only establishes transport.
 Execution publishes only versioned `local-reversible` requests to the existing
 offline worker queue; native bash, arbitrary extension loading, direct execution,
 direct internet access and unrelated host/engine sockets are unavailable.
