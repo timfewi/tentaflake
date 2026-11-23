@@ -83,9 +83,9 @@ export class Ledger {
   get busy() { return !!this.db.prepare("SELECT 1 FROM runs WHERE state IN ('running','stopping') LIMIT 1").get(); }
   byRequest(id) { return this.db.prepare('SELECT * FROM runs WHERE request_id=?').get(id); }
   get(id) { return this.db.prepare('SELECT * FROM runs WHERE id=?').get(id); }
-  events(id, after = 0) {
+  events(id, after = 0, limit = 128) {
     if (!Number.isSafeInteger(after) || after < 0) throw new Refusal('Invalid event cursor', 400);
-    return [...this.db.prepare('SELECT cursor,kind,value FROM events WHERE run_id=? AND cursor>? ORDER BY cursor LIMIT 128').iterate(id, after)]
+    return [...this.db.prepare('SELECT cursor,kind,value FROM events WHERE run_id=? AND cursor>? ORDER BY cursor LIMIT ?').iterate(id, after, limit)]
       .map(row => ({ cursor: row.cursor, event: row.kind, ...JSON.parse(row.value) }));
   }
   event(id, kind, value) {

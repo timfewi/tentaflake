@@ -200,3 +200,60 @@ test('offline worker refuses pre-cancelled, symlinked and duplicate publications
   assert.equal(readFileSync(path, 'utf8'), original);
   assert.equal(JSON.parse(original).action_class, 'local-reversible');
 });
+
+test('the aggregate run allowance is reserved before each paid provider call', async t => {
+  const directory = mkdtempSync(join(tmpdir(), 'pi-run-budget-'));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  const key = join(directory, 'token');
+  writeFileSync(key, 'synthetic', { mode: 0o600 });
+  const original = globalThis.fetch;
+  const completion = 8;
+  for (const [provider, protocol, route, limitField] of [
+    ['openai', 'openai-responses', '/v1/responses', 'max_output_tokens'],
+    ['anthropic', 'anthropic-messages', '/v1/messages', 'max_tokens'],
+    ['opencode', 'opencode-go-chat-completions', '/v1/chat/completions', 'max_completion_tokens'],
+  ]) {
+    const endpoint = 'http://127.0.0.1:4321' + route;
+    const body = JSON.stringify({ model: 'synthetic-model', [limitField]: completion, stream: true });
+    const reserve = Buffer.byteLength(body) + completion;
+    for (const limited of ['max_tokens', 'max_cost_microusd']) {
+      const grant = { version: 1, revision: 'budget-grant', provider, protocol, model: 'synthetic-model',
+        endpoint, tools: [], budget: { max_output_tokens: completion },
+        pricing: { input_microusd_per_million: 1000000, output_microusd_per_million: 1000000 },
+        run_budget: { max_tokens: 2 * reserve, max_cost_microusd: 2 * reserve, [limited]: reserve },
+      };
+      const model = { id: grant.model, provider };
+      const sends = [], operations = [];
+      globalThis.fetch = async (url, options) => {
+        sends.push([url, options.body]);
+        return new Response('data: done\n\n', { headers: { 'content-type': 'text/event-stream' } });
+      };
+      const active = { id: 'run', taskId: '1', grant, generations: [] };
+      const models = { streamSimple(_model, _messages, options) {
+        const done = options.fetch(endpoint, { method: 'POST', body }).then(() => ({
+          stopReason: 'stop', usage: { input: 3, output: 2 },
+        }));
+        return { result: () => done };
+      } };
+      const ledger = { quarantined: false, operation(...args) { operations.push(args); },
+        uncertain() { assert.fail('a local budget denial must not become uncertain'); } };
+      const resource = modelBoundary({ ledger, models, active: () => active, allowLoopback: true,
+        brokerBaseUrl: 'http://127.0.0.1:4321/v1', brokerTokenFile: key,
+        grantedModels: new Map([[`${provider}\0${grant.model}`, { model, grant }]]),
+      });
+      try {
+        await resource.models.streamSimple(model, {}, {}).result();
+        active.taskId = '2';
+        await assert.rejects(resource.models.streamSimple(model, {}, {}).result(), /Run budget/);
+        const outcomes = await Promise.all(active.generations);
+        assert.deepEqual(sends, [[endpoint, body]]);
+        assert.equal(operations.length, 1);
+        assert.deepEqual(outcomes.map(({ sent }) => sent), [true, false]);
+        assert.equal(active.budgetExhausted, true);
+      } finally {
+        resource.close();
+        globalThis.fetch = original;
+      }
+    }
+  }
+});

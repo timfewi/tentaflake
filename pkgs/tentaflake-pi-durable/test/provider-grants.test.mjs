@@ -498,7 +498,7 @@ test("installed SDK binds individual grants, mediates each generation and projec
         session_id: sid,
         input: "Synthetic local fixture",
         context_mode: "persistent",
-        grant,
+        grant: { ...grant, run_budget: { max_tokens: 50000, max_cost_microusd: 100 } },
       }).row;
       await engine.execute(row);
       const publicRow = projection(ledger.get(row.id));
@@ -508,6 +508,10 @@ test("installed SDK binds individual grants, mediates each generation and projec
         JSON.stringify({ wire, seen, brokerError }),
       );
       assert.equal(publicRow.output, "ready");
+      const tools = ledger.events(row.id).filter(event => event.event.startsWith("run.tool_"));
+      assert.deepEqual(tools.map(({ event, tool, invocation }) => [event, tool, invocation]), [
+        ["run.tool_started", "research_search", 1], ["run.tool_completed", "research_search", 1],
+      ]);
       assert.equal(ledger.sessionGrant(sid), grant.revision);
       assert.deepEqual(publicRow.measurement, {
         provider: grant.provider,
@@ -554,6 +558,18 @@ test("installed SDK binds individual grants, mediates each generation and projec
     assert.match(wire[4].affinity, /^[0-9a-f]{64}$/);
     assert.equal(wire[4].affinity, wire[5].affinity);
     assert.equal(wire[4].affinity, wire[6].affinity);
+    const unfunded = ledger.admit({
+      ...follow, request_id: "unfunded", grant: { ...grants[2],
+        run_budget: { max_tokens: 1, max_cost_microusd: 1 } },
+    });
+    await engine.execute(unfunded.row);
+    const refused = projection(ledger.get(unfunded.row.id));
+    assert.equal(refused.state, "failed");
+    assert.equal(refused.measurement.provider_requests, 0);
+    assert.equal(refused.measurement.input_tokens + refused.measurement.output_tokens, 0);
+    assert.equal(refused.measurement.streamed, false);
+    assert.equal(wire.length, 7);
+    assert.equal(ledger.quarantined, false);
     await engine.close();
     for (const grant of grants) {
       failingProvider = grant.provider;

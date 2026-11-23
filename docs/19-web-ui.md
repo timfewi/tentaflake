@@ -312,11 +312,12 @@ All routes below are relative to `/v1/agents/{canonical-id}/runner`:
 | Route | Grant | Runner request/result |
 | --- | --- | --- |
 | `GET /capabilities` | `run_read` | Fixed `GET /v1/capabilities`; live application readiness, not host security evidence |
-| `POST /sessions` | `run_submit` | Fixed `POST /api/sessions`, exactly `{title, request_id}`; returns `{session:{id}}` |
-| `POST /runs` | `run_submit` | The legacy four fields or those fields plus exact `{binding:{revision,provider,model,protocol}}`; returns `{run_id}` |
+| `POST /sessions` | `run_submit` | Fixed `POST /api/sessions`, `{title, request_id}` with an optional provider binding; returns `{session:{id}}` |
+| `POST /runs` | `run_submit` | The legacy four fields, optional `binding` and an optional per-run `budget` on a broker-bound grant; returns `{run_id}` |
 | `GET /runs?request_id=…` | `run_read` | Same-ID reconciliation; returns runner projection |
 | `GET /runs/{run_id}` | `run_read` | Runner projection including `state`, `uncertain`, `output` and `error` |
 | `GET /runs/{run_id}/events?cursor=…` | `run_read` | Durable normalized receipt events after the optional nonnegative cursor; a waiting heartbeat returns an empty array |
+| `GET /runs/{run_id}/events?format=page&cursor=…` | `run_read` | JSON object with up to four ordered events after the cursor (default zero). Resume from the last returned cursor. An empty page means the client is caught up. |
 | `POST /runs/{run_id}/stop` | `run_stop` | Exactly `{}`; returns runner projection, not evidence that an external effect was undone |
 
 The live runner capability response includes `runtime:"pi-durable"`, `version:2`,
@@ -365,6 +366,21 @@ It reports `provider`, `protocol`, `model`, `grant_revision`, integer
 dispatched generation, including follow-up turns after tool results. The tool
 counts cover correlated calls and results. Legacy receipts without measurements
 omit this field.
+
+With `features.run_budgets`, an explicitly broker-bound run may include
+`budget: {"max_tokens": 5000, "max_cost_microusd": 20}`. Both values must be
+positive safe integers. Before each provider request the runner reserves the
+UTF-8 request bytes as input tokens and the requested completion limit as
+output tokens, at the selected grant's prices rounded up to a microdollar per
+request. The reservations accumulate for the run. A request that would exceed
+either limit stays local. The failed run's receipt counts prior sends and their
+measured usage. A retry with a changed allowance conflicts with the original.
+
+With `features.event_pages`, poll `format=page` for lifecycle events, text
+deltas (up to 512 Unicode code points with a generation ID), and tool starts
+and completions (tool name and invocation number). Every event identifies the
+run and cursor. Terminal pages omit the full result. Read the run projection
+for the final output and measurement.
 
 Session titles are at most 200 characters. Request/session identifiers match
 `[A-Za-z0-9_.:-]{1,128}`; run path IDs match `[A-Za-z0-9-]{1,128}`.

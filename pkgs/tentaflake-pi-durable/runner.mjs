@@ -50,7 +50,8 @@ export async function serve(config) {
         json(200, { runtime: 'pi-durable', version: 2, model: engine.config.model, grants: engine.config.grants, available: !ledger.quarantined,
           quarantined: ledger.quarantined, tools: engine.registeredTools(),
           features: { runs: !ledger.quarantined, persistent_sessions: true, tool_selection: true,
-            live_inputs: false, session_import: false, streaming: false, cancellation: true } }); return;
+            live_inputs: false, session_import: false, streaming: true, event_pages: true,
+            run_budgets: engine.config.grants.some(grant => grant.brokerBinding === true), cancellation: true } }); return;
       }
       if (request.method === 'POST' && url.pathname === '/api/sessions') {
         const value = await body(request);
@@ -71,11 +72,19 @@ export async function serve(config) {
         if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Refusal('Invalid run request', 400);
         if (!ledger.hasSession(value.session_id)) throw new Refusal('Unknown session', 404);
         const grant = selectGrant(engine.config, value.binding);
+        const budget = value.budget;
+        if (budget !== undefined && (!value.binding || !grant.brokerBinding || !budget ||
+            typeof budget !== 'object' || Array.isArray(budget) || Object.keys(budget).length !== 2 ||
+            ![budget.max_tokens, budget.max_cost_microusd].every(n => Number.isSafeInteger(n) && n > 0)))
+          throw new Refusal('Invalid run budget or unpriced binding', 400);
         const legacySingleton = value.binding === undefined && isLegacySingleton(engine.config, grant);
         ledger.checkSessionGrant(value.session_id, grant.revision, legacySingleton);
         if (legacySingleton && ledger.session(value.session_id) && ledger.sessionGrant(value.session_id) === null && engine.harness)
           await engine.session(value.session_id, grant);
-        delete value.binding; value.grant = grant;
+        delete value.budget;
+        delete value.binding;
+        value.grant = budget === undefined ? grant : { ...grant,
+          run_budget: { max_tokens: budget.max_tokens, max_cost_microusd: budget.max_cost_microusd } };
         const admitted = ledger.admit(value, { legacySingleton });
         if (!admitted.duplicate) void engine.execute(admitted.row);
         json(200, { run_id: admitted.row.id }); return;
@@ -98,10 +107,17 @@ export async function serve(config) {
       if (operation !== 'events') throw new Refusal('Capability unavailable', 404);
       projection(ledger.get(id));
       const cursorRaw = url.searchParams.get('cursor');
-      if ([...url.searchParams.keys()].some(k => k !== 'cursor') || url.searchParams.getAll('cursor').length > 1 ||
+      const format = url.searchParams.get('format');
+      if ([...url.searchParams.keys()].some(k => !['cursor', 'format'].includes(k)) ||
+          url.searchParams.getAll('cursor').length > 1 || url.searchParams.getAll('format').length > 1 ||
+          (format !== null && format !== 'page') ||
           (cursorRaw !== null && (!/^(?:0|[1-9][0-9]{0,15})$/.test(cursorRaw) || !Number.isSafeInteger(Number(cursorRaw)))))
         throw new Refusal('Invalid event cursor', 400);
       let cursor = cursorRaw === null ? 0 : Number(cursorRaw);
+      if (format === 'page') {
+        const events = ledger.events(id, cursor, 4).map(({ result, ...event }) => ({ ...event, run_id: id }));
+        json(200, { events }); return;
+      }
       response.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-store' });
       let timer;
       const deadline = Date.now() + 3900000;
@@ -111,7 +127,7 @@ export async function serve(config) {
         const events = ledger.events(id, cursor);
         for (const event of events) {
           cursor = event.cursor;
-          if (!response.write(`id: ${cursor}\ndata: ${JSON.stringify(event)}\n\n`)) {
+          if (!response.write(`id: ${cursor}\ndata: ${JSON.stringify({ ...event, run_id: id })}\n\n`)) {
             response.once('drain', emit);
             return;
           }

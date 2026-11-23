@@ -343,7 +343,10 @@ The bearer-authenticated native socket supports `POST /api/sessions`,
 `GET /v1/runs/{id}`, lookup by `request_id`, `/result`, `/events`, and
 `POST /v1/runs/{id}/stop`. Responses carry a client-compatible `run_id` and native
 run projection; uncertain work is `state: "interrupted", uncertain: true`.
-SSE carries terminal results only, not fabricated token deltas. Capabilities
+The SSE stream includes SDK text deltas, tool milestones and terminal results.
+Use `/events?format=page&cursor=…` for bounded JSON polling. Broker-bound runs
+also accept aggregate token and cost limits in the [run budget](19-web-ui.md).
+Capabilities
 explicitly deny live inputs and session import. Isolated context is unsupported.
 Task ownership stays with the client's own task system; the runner API does
 not grant enterprise approvals, connector permissions, or standalone UI admission.

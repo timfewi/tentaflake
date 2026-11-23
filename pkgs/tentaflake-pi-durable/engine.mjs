@@ -134,12 +134,15 @@ export class Engine {
     if (typeof api.callId !== 'string' || !api.callId || run.toolCalls.has(call))
       throw new Refusal('Tool execution has no unique invocation');
     run.toolCalls.add(call);
+    const invocation = run.toolCalls.size;
+    this.ledger.event(run.id, 'run.tool_started', { tool: name, invocation });
     if (name === 'offline_worker') {
       const operation = this.ledger.operation(run.id, taskIdentity(api.taskId), 'worker');
       const id = `pi_durable_${operation.replaceAll('-', '')}`;
       try {
         const result = await worker({ ...args, id, workspace: this.config.workspace, signal: run.controller.signal });
         run.toolResults.add(call);
+        this.ledger.event(run.id, 'run.tool_completed', { tool: name, invocation });
         return { output: [{ type: 'text', text: JSON.stringify(result) }] };
       }
       catch (error) { this.ledger.uncertain(run.id); throw error; }
@@ -151,6 +154,7 @@ export class Engine {
       const response = await this.research.request('tools/call', { name, arguments: parameters }, run.controller.signal);
       if (response?.isError) throw new Refusal('Research outcome requires reconciliation');
       run.toolResults.add(call);
+      this.ledger.event(run.id, 'run.tool_completed', { tool: name, invocation });
       return { output: [{ type: 'text', text: JSON.stringify(response) }] };
     } catch (error) { this.ledger.uncertain(run.id); throw error; }
   }
@@ -218,18 +222,19 @@ export class Engine {
           .filter(part => part.type === 'text').map(part => part.text).join('');
       }
       const complete = measured.length > 0 && measured.every(Boolean);
+      const sends = measured.filter(item => item?.sent === true);
       if (!complete && run.grant.revision !== 'legacy-single-model') {
         this.ledger.uncertain(row.id); return;
       }
       const measurement = complete ? {
         provider: run.grant.provider, protocol: run.grant.protocol, model: run.grant.model,
-        grant_revision: run.grant.revision, provider_requests: measured.length,
+        grant_revision: run.grant.revision, provider_requests: sends.length,
         input_tokens: measured.reduce((n, m) => n + m.input, 0),
         output_tokens: measured.reduce((n, m) => n + m.output, 0),
-        streamed: measured.every(m => m.streamed),
+        streamed: sends.length > 0 && sends.every(m => m.streamed),
         tool_calls: run.toolCalls.size, tool_results: run.toolResults.size,
       } : null;
-      this.ledger.finish(row.id, settled.status === 'done' ? 'completed' : 'failed', {
+      this.ledger.finish(row.id, settled.status === 'done' && !run.budgetExhausted ? 'completed' : 'failed', {
         output, settlement: settled, usage: run.usage, ...(measurement ? { measurement } : {}),
       });
     } catch { this.ledger.uncertain(row.id); }

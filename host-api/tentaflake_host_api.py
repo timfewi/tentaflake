@@ -1222,6 +1222,7 @@ class Service:
             raise APIError("Agent runner is not admitted", 404)
         target = "/v1/" + operation
         if method == "GET":
+            event_stream = operation.endswith("/events")
             if body is not None or operation == "sessions" or operation.endswith("/stop"):
                 raise APIError("Invalid runner read")
             if operation == "runs":
@@ -1229,15 +1230,23 @@ class Service:
                 if set(values) != {"request_id"} or len(values["request_id"]) != 1 or not RUNNER_ID.fullmatch(values["request_id"][0]):
                     raise APIError("A single runner request_id is required")
                 target += "?request_id=" + values["request_id"][0]
-            elif operation.endswith("/events"):
+            elif event_stream:
                 values = parse_qs(query, keep_blank_values=True)
-                if query and (set(values) != {"cursor"} or len(values["cursor"]) != 1 or not re.fullmatch(r"0|[1-9][0-9]{0,15}", values["cursor"][0])):
+                cursor = values.get("cursor", ["0"])
+                page = values.get("format")
+                if (set(values) - {"cursor", "format"} or len(cursor) != 1
+                        or not re.fullmatch(r"0|[1-9][0-9]{0,15}", cursor[0])
+                        or int(cursor[0]) > (1 << 53) - 1
+                        or (page is not None and page != ["page"])):
                     raise APIError("A valid runner event cursor is required")
-                if query:
-                    target += "?cursor=" + values["cursor"][0]
+                if page:
+                    event_stream = False
+                    target += "?format=page&cursor=" + cursor[0]
+                elif query:
+                    target += "?cursor=" + cursor[0]
             elif query:
                 raise APIError("Runner query is not supported")
-            return self.runner_exchange(descriptor, method, target, events=operation.endswith("/events"))
+            return self.runner_exchange(descriptor, method, target, events=event_stream)
         if method != "POST" or query or not isinstance(body, dict):
             raise APIError("Invalid runner mutation")
         try:
@@ -1257,12 +1266,19 @@ class Service:
                 raise APIError("Invalid runner session request")
             target = "/api/sessions"
         elif operation == "runs":
-            if (set(body) not in ({"request_id", "session_id", "input", "context_mode"},
+            if (set(body) - {"budget"} not in ({"request_id", "session_id", "input", "context_mode"},
                                   {"request_id", "session_id", "input", "context_mode", "binding"})
                     or not isinstance(body["session_id"], str) or not RUNNER_ID.fullmatch(body["session_id"])
                     or body["context_mode"] != "persistent" or not isinstance(body["input"], str)
                     or not body["input"].strip() or len(body["input"].encode()) > 65536):
                 raise APIError("Invalid persistent run request")
+            if "budget" in body:
+                budget = body["budget"]
+                if ("binding" not in body or not isinstance(budget, dict)
+                        or set(budget) != {"max_tokens", "max_cost_microusd"}
+                        or any(type(value) is not int or not 0 < value <= (1 << 53) - 1
+                               for value in budget.values())):
+                    raise APIError("Invalid run budget")
         elif not operation.endswith("/stop") or body:
             raise APIError("Invalid runner mutation")
         rid = operation if operation.endswith("/stop") else body.get("request_id")
@@ -1286,6 +1302,8 @@ class Service:
             capabilities = self.runner_exchange(descriptor, "GET", "/v1/capabilities")
             if capabilities.get("available") is not True or not isinstance(capabilities.get("features"), dict) or capabilities["features"].get("runs") is not True:
                 raise APIError("Runner submission is unavailable", 409)
+            if "budget" in body and capabilities["features"].get("run_budgets") is not True:
+                raise APIError("Runner does not support run budgets", 409)
             declared = descriptor.get("grant_hashes")
             offered = capabilities.get("grants", [])
             if declared is not None:

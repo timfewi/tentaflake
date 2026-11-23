@@ -1353,6 +1353,51 @@ else:
             self.assertEqual(self.runner_route("GET", "runs/run-1/events")["events"][0]["event"], "run.completed")
         self.assertEqual(len(observed), 2)
 
+    def test_runner_event_pages_forward_cursor_and_expect_json(self):
+        self.start_runner_api()
+        page = {"events": [{"cursor": 8, "run_id": "run-1", "event": "run.completed"}]}
+        observed, files = self.fake_runner([self.runner_json(page), self.runner_json({"events": []})])
+        with patch.object(self.service, "runner_file", side_effect=files), patch.object(api, "RUNSC_PI_DURABLE_PEER_UID", api.os.geteuid()):
+            self.assertEqual(self.runner_route("GET", "runs/run-1/events?format=page"), page)
+            self.assertEqual(self.runner_route("GET", "runs/run-1/events?cursor=8&format=page"), {"events": []})
+        self.assertEqual([row[0] for row in observed], [
+            b"GET /v1/runs/run-1/events?format=page&cursor=0 HTTP/1.0",
+            b"GET /v1/runs/run-1/events?format=page&cursor=8 HTTP/1.0",
+        ])
+        with patch.object(self.service, "runner_file") as files:
+            for query in ("format=", "format=page&format=page", "format=json", "cursor=9007199254740992"):
+                with self.subTest(query=query), self.assertRaises(api.APIError):
+                    self.runner_route("GET", "runs/run-1/events?" + query)
+            files.assert_not_called()
+
+    def test_budgeted_run_validates_and_binds_both_limits(self):
+        self.start_runner_api()
+        binding = {"revision": "r", "provider": "openai", "model": "fixture", "protocol": "openai-responses"}
+        base = {"request_id": "budgeted", "session_id": "s", "input": "Hello", "context_mode": "persistent"}
+        budget = {"max_tokens": 5000, "max_cost_microusd": 5}
+        body = {**base, "binding": binding, "budget": budget}
+        with patch.object(self.service, "runner_file") as files:
+            with self.assertRaises(api.APIError):
+                self.runner_route("POST", "runs", {**base, "budget": budget})
+            for invalid in ({}, {**budget, "extra": 1}, {**budget, "max_tokens": True},
+                            {**budget, "max_tokens": 0}, {**budget, "max_cost_microusd": 1 << 53}):
+                with self.subTest(budget=invalid), self.assertRaises(api.APIError):
+                    self.runner_route("POST", "runs", {**body, "budget": invalid})
+            files.assert_not_called()
+        caps = {"available": True, "grants": [binding], "features": {"runs": True}}
+        observed, files = self.fake_runner([self.runner_json(caps),
+            self.runner_json({**caps, "features": {"runs": True, "run_budgets": True}}),
+            self.runner_json({"run_id": "run-1"})])
+        with patch.object(self.service, "runner_file", side_effect=files), patch.object(api, "RUNSC_PI_DURABLE_PEER_UID", api.os.geteuid()):
+            with self.assertRaisesRegex(api.APIError, "does not support run budgets"):
+                self.runner_route("POST", "runs", {**body, "request_id": "older-runner"})
+            for _ in range(2):
+                self.assertEqual(self.runner_route("POST", "runs", body), {"run_id": "run-1"})
+            with self.assertRaisesRegex(api.APIError, "identity conflict"):
+                self.runner_route("POST", "runs", {**body, "budget": {**budget, "max_tokens": 6000}})
+        self.assertEqual(len(observed), 3)
+        self.assertEqual(json.loads(observed[-1][1]), body)
+
     def test_runner_descriptors_are_fixed_to_exact_inventory_id(self):
         descriptor = {"socket": "/run/tentaflake-pi-durable/agent-coding/control/runner.sock",
                       "token": "/run/tentaflake-pi-durable/agent-coding/api-token",

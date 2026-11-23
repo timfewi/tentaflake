@@ -22,6 +22,31 @@ export function secret(path, { sharedApi = false } = {}) {
   } finally { closeSync(fd); }
 }
 
+async function reserveRunBudget(operation, input, options) {
+  const { run, grant } = operation;
+  const body = options.body ?? (input instanceof Request ? new Uint8Array(await input.clone().arrayBuffer()) : null);
+  const encoded = typeof body === 'string' ? Buffer.from(body) :
+    ArrayBuffer.isView(body) ? Buffer.from(body.buffer, body.byteOffset, body.byteLength) : null;
+  if (!encoded || encoded.length === 0 || encoded.length > 65536)
+    throw new Refusal('Provider request has no bounded JSON body');
+  const payload = JSON.parse(encoded);
+  const completion = grant.protocol === 'openai-responses' ? payload.max_output_tokens :
+    payload.max_completion_tokens ?? payload.max_tokens;
+  if (!Number.isSafeInteger(completion) || completion < 1 || completion > grant.budget.max_output_tokens)
+    throw new Refusal('Provider request has no approved completion limit');
+  const tokens = BigInt(encoded.length) + BigInt(completion);
+  const cost = (BigInt(encoded.length) * BigInt(grant.pricing.input_microusd_per_million) +
+    BigInt(completion) * BigInt(grant.pricing.output_microusd_per_million) + 999999n) / 1000000n;
+  const used = run.reserved ?? { tokens: 0n, cost: 0n };
+  const limit = run.grant.run_budget;
+  if (run.budgetExhausted || used.tokens + tokens > BigInt(limit.max_tokens) || used.cost + cost > BigInt(limit.max_cost_microusd)) {
+    operation.budgetDenied = true;
+    run.budgetExhausted = true;
+    throw new Refusal('Run budget cannot fund another provider request');
+  }
+  run.reserved = { tokens: used.tokens + tokens, cost: used.cost + cost };
+}
+
 // All methods except fixed model lookup and one supported stream are absent as
 // authority, rather than inherited from the provider registry. The SDK remains
 // the only model loop. No CodingTools, execution environment or extension load.
@@ -56,8 +81,10 @@ export function modelBoundary({ ledger, models, model, grantedModels, brokerBase
     // query flag. Only that SDK spelling maps to the canonical broker route.
     const endpoint = operation?.grant.endpoint;
     const beta = operation?.grant.protocol === 'anthropic-messages' && url === endpoint + '?beta=true';
-    if (!operation || operation.sent || (!beta && url !== endpoint) || !targets.has(endpoint) || (options.method ?? input.method ?? 'GET').toUpperCase() !== 'POST')
+    if (!operation || operation.attempted || (!beta && url !== endpoint) || !targets.has(endpoint) || (options.method ?? input.method ?? 'GET').toUpperCase() !== 'POST')
       throw new Refusal('Unmediated or repeated model transport denied');
+    operation.attempted = true;
+    if (operation.run.grant?.run_budget) await reserveRunBudget(operation, input, options);
     operation.sent = true;
     // SQLite FULL commit happens before the first byte may reach the broker.
     ledger.operation(operation.runId, operation.taskId, 'model');
@@ -98,7 +125,7 @@ export function modelBoundary({ ledger, models, model, grantedModels, brokerBase
         const { model } = selected;
         const grant = selected.revisions?.get(runGrant.revision) ?? selected.grant;
         const brokerToken = secret(brokerTokenFile);
-        const operation = { runId: run.id, taskId: run.taskId, sessionId: run.sessionId, sent: false, grant, brokerToken };
+        const operation = { run, runId: run.id, taskId: run.taskId, sessionId: run.sessionId, sent: false, grant, brokerToken };
         run.taskId = undefined;
         // Anthropic appends /v1/messages itself. Disable its automatic provider
         // fallback and deferred placeholder tool to keep the declared grant exact.
@@ -119,17 +146,39 @@ export function modelBoundary({ ledger, models, model, grantedModels, brokerBase
         ));
         // A transport response is NOT a durable SDK checkpoint. Keep every
         // operation receipt until the submission + idle barrier is committed.
+        const noSend = { input: 0, output: 0, streamed: false, sent: false };
         const generation = stream.result().then(message => {
+          if (operation.budgetDenied) return noSend;
           run.usage = message.usage ?? null;
           if (['error', 'aborted'].includes(message.stopReason)) { ledger.uncertain(operation.runId); return null; }
           const usage = message.usage;
           if (!operation.sent || !usage) return null;
           const counts = [usage.input,usage.cacheRead ?? 0,usage.cacheWrite ?? 0,usage.output];
           if (counts.some(value => !Number.isSafeInteger(value) || value < 0)) return null;
-          return { input: counts[0]+counts[1]+counts[2], output: usage.output, streamed: operation.sse === true };
-        }, () => { ledger.uncertain(operation.runId); return null; });
+          return { input: counts[0]+counts[1]+counts[2], output: usage.output, streamed: operation.sse === true, sent: true };
+        }, () => {
+          if (operation.budgetDenied) return noSend;
+          ledger.uncertain(operation.runId);
+          return null;
+        });
         run.generations?.push(generation);
-        return stream;
+        return {
+          result: () => stream.result(),
+          async *[Symbol.asyncIterator]() {
+            for await (const event of stream) {
+              if (event.type === 'text_delta' && event.delta && !ledger.quarantined) {
+                const characters = Array.from(event.delta);
+                for (let offset = 0; offset < characters.length; offset += 512) {
+                  ledger.event(run.id, 'run.text_delta', {
+                    generation: Number(operation.taskId),
+                    text: characters.slice(offset, offset + 512).join(''),
+                  });
+                }
+              }
+              yield event;
+            }
+          },
+        };
       };
       return () => { throw new Refusal(`Model capability ${String(property)} is unavailable`); };
     },
