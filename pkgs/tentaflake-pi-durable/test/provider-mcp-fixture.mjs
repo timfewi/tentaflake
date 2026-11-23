@@ -7,8 +7,6 @@ const tools = [
   'research_job',
   'research_read',
   'research_search',
-  'research_leads',
-  'research_enrich',
 ];
 for await (const line of createInterface({ input: process.stdin })) {
   const request = JSON.parse(line);
