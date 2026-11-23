@@ -1,8 +1,8 @@
 # Optional web UI and local host API
 
-This guide describes unreleased development. Pin compatible revisions of the
-host and your chosen UI before using them. The released documentation site may
-still describe an earlier release.
+The host API ships with Tentaflake since v0.5.0. Pin compatible revisions of
+the host and your chosen UI; `GET /v1/info` reports the host's
+`tentaflake_version` so a UI can show which release it is connected to.
 
 Tentaflake works without a web UI or control service. The optional host API
 lets an operator UI inspect the same declared agents and control their current
@@ -134,7 +134,7 @@ check the version and advertised capabilities before offering actions.
 
 | Method and route | Result |
 | --- | --- |
-| `GET /v1/info` | Host/backend/security profile and enabled capabilities |
+| `GET /v1/info` | `tentaflake_version`, host/backend/security profile and enabled capabilities |
 | `GET /v1/agents` | Stable instance `id`, display name, runtime, observed state, `runnable` and capabilities |
 | `GET /v1/health` | `healthy` and the structured CLI health report |
 | `GET /v1/agents/{id}/logs?lines=100` | Up to 200 journal entries, timestamps and explicit truncation |

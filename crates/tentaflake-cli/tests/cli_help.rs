@@ -135,3 +135,44 @@ fn templates_are_configuration_free_and_preserve_vendor_arguments_after_separato
     assert_eq!(template["agents"][0]["name"], "research");
     assert_eq!(template["agents"][0]["autoStart"], false);
 }
+
+#[test]
+fn version_is_configuration_free_and_matches_the_workspace() {
+    for flag in ["version", "--version", "-V"] {
+        let output = Command::new(env!("CARGO_BIN_EXE_tentaflake"))
+            .arg(flag)
+            .env("TENTAFLAKE_CONFIG", "/dev/null")
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{flag}");
+        assert_eq!(
+            String::from_utf8(output.stdout).unwrap(),
+            format!("tentaflake {}\n", env!("CARGO_PKG_VERSION"))
+        );
+    }
+    let json = Command::new(env!("CARGO_BIN_EXE_tentaflake"))
+        .args(["version", "--json"])
+        .env("TENTAFLAKE_CONFIG", "/dev/null")
+        .output()
+        .unwrap();
+    assert!(json.status.success());
+    let report: serde_json::Value = serde_json::from_slice(&json.stdout).unwrap();
+    assert_eq!(report["name"], "tentaflake");
+    assert_eq!(report["version"], env!("CARGO_PKG_VERSION"));
+    let help = Command::new(env!("CARGO_BIN_EXE_tentaflake"))
+        .arg("help")
+        .env("TENTAFLAKE_CONFIG", "/dev/null")
+        .output()
+        .unwrap();
+    assert!(
+        String::from_utf8(help.stdout)
+            .unwrap()
+            .starts_with(&format!("Tentaflake v{} ", env!("CARGO_PKG_VERSION")))
+    );
+    let extra = Command::new(env!("CARGO_BIN_EXE_tentaflake"))
+        .args(["version", "unexpected"])
+        .env("TENTAFLAKE_CONFIG", "/dev/null")
+        .output()
+        .unwrap();
+    assert_eq!(extra.status.code(), Some(2));
+}
