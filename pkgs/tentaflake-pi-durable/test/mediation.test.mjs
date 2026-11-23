@@ -212,10 +212,10 @@ test('the aggregate run allowance is reserved before each paid provider call', a
   for (const [provider, protocol, route, limitField] of [
     ['openai', 'openai-responses', '/v1/responses', 'max_output_tokens'],
     ['anthropic', 'anthropic-messages', '/v1/messages', 'max_tokens'],
-    ['opencode', 'opencode-go-chat-completions', '/v1/chat/completions', 'max_completion_tokens'],
+    ['opencode-go', 'opencode-go-chat-completions', '/v1/chat/completions', 'max_completion_tokens'],
   ]) {
     const endpoint = 'http://127.0.0.1:4321' + route;
-    const body = JSON.stringify({ model: 'synthetic-model', [limitField]: completion, stream: true });
+    const body = JSON.stringify({ model: 'synthetic-model', input: 'x'.repeat(65536), [limitField]: completion, stream: true });
     const reserve = Buffer.byteLength(body) + completion;
     for (const limited of ['max_tokens', 'max_cost_microusd']) {
       const grant = { version: 1, revision: 'budget-grant', provider, protocol, model: 'synthetic-model',
@@ -226,12 +226,13 @@ test('the aggregate run allowance is reserved before each paid provider call', a
       const model = { id: grant.model, provider };
       const sends = [], operations = [];
       globalThis.fetch = async (url, options) => {
-        sends.push([url, options.body]);
+        sends.push([url, Buffer.from(options.body).toString()]);
         return new Response('data: done\n\n', { headers: { 'content-type': 'text/event-stream' } });
       };
       const active = { id: 'run', taskId: '1', grant, generations: [] };
+      let providerBody = body;
       const models = { streamSimple(_model, _messages, options) {
-        const done = options.fetch(endpoint, { method: 'POST', body }).then(() => ({
+        const done = options.fetch(new Request(endpoint, { method: 'POST', body: providerBody })).then(() => ({
           stopReason: 'stop', usage: { input: 3, output: 2 },
         }));
         return { result: () => done };
@@ -250,7 +251,13 @@ test('the aggregate run allowance is reserved before each paid provider call', a
         assert.deepEqual(sends, [[endpoint, body]]);
         assert.equal(operations.length, 1);
         assert.deepEqual(outcomes.map(({ sent }) => sent), [true, false]);
-        assert.equal(active.budgetExhausted, true);
+        assert.equal(active.locallyRefused, true);
+        const fresh = { ...active, taskId: '3', generations: [], reserved: undefined, locallyRefused: false };
+        Object.assign(active, fresh);
+        providerBody = 'x'.repeat(1024 * 1024 + 1);
+        await assert.rejects(resource.models.streamSimple(model, {}, {}).result(), /broker body limit/);
+        assert.equal((await active.generations[0]).sent, false);
+        assert.equal(sends.length, 1);
       } finally {
         resource.close();
         globalThis.fetch = original;

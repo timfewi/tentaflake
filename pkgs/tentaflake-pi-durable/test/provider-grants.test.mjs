@@ -241,6 +241,8 @@ test("installed SDK binds individual grants, mediates each generation and projec
     rmSync(dir, { recursive: true });
     return t.skip("requires the packaged Rust broker");
   }
+  const oldMask = process.umask(0o077);
+  t.after(() => process.umask(oldMask));
   const catalog = createModels();
   for (const provider of [
     openaiProvider(),
@@ -570,6 +572,10 @@ test("installed SDK binds individual grants, mediates each generation and projec
     assert.equal(refused.measurement.streamed, false);
     assert.equal(wire.length, 7);
     assert.equal(ledger.quarantined, false);
+    await engine.close();
+    engine = new Engine(engine.config, ledger);
+    await engine.open();
+    assert.equal(ledger.quarantined, false, "local refusal permits clean recovery");
     await engine.close();
     for (const grant of grants) {
       failingProvider = grant.provider;

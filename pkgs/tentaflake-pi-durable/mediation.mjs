@@ -22,13 +22,17 @@ export function secret(path, { sharedApi = false } = {}) {
   } finally { closeSync(fd); }
 }
 
-async function reserveRunBudget(operation, input, options) {
+async function reserveRunBudget(operation, request, maxBytes) {
   const { run, grant } = operation;
-  const body = options.body ?? (input instanceof Request ? new Uint8Array(await input.clone().arrayBuffer()) : null);
-  const encoded = typeof body === 'string' ? Buffer.from(body) :
-    ArrayBuffer.isView(body) ? Buffer.from(body.buffer, body.byteOffset, body.byteLength) : null;
-  if (!encoded || encoded.length === 0 || encoded.length > 65536)
-    throw new Refusal('Provider request has no bounded JSON body');
+  let size = 0;
+  const chunks = [];
+  if (!request.body) throw new Refusal('Missing provider request body');
+  for await (const chunk of request.body) {
+    size += chunk.byteLength;
+    if (size > maxBytes) throw new Refusal('Provider request exceeds the broker body limit');
+    chunks.push(chunk);
+  }
+  const encoded = Buffer.concat(chunks, size);
   const payload = JSON.parse(encoded);
   const completion = grant.protocol === 'openai-responses' ? payload.max_output_tokens :
     payload.max_completion_tokens ?? payload.max_tokens;
@@ -39,18 +43,19 @@ async function reserveRunBudget(operation, input, options) {
     BigInt(completion) * BigInt(grant.pricing.output_microusd_per_million) + 999999n) / 1000000n;
   const used = run.reserved ?? { tokens: 0n, cost: 0n };
   const limit = run.grant.run_budget;
-  if (run.budgetExhausted || used.tokens + tokens > BigInt(limit.max_tokens) || used.cost + cost > BigInt(limit.max_cost_microusd)) {
-    operation.budgetDenied = true;
-    run.budgetExhausted = true;
+  if (run.locallyRefused || used.tokens + tokens > BigInt(limit.max_tokens) || used.cost + cost > BigInt(limit.max_cost_microusd)) {
     throw new Refusal('Run budget cannot fund another provider request');
   }
   run.reserved = { tokens: used.tokens + tokens, cost: used.cost + cost };
+  return encoded;
 }
 
 // All methods except fixed model lookup and one supported stream are absent as
 // authority, rather than inherited from the provider registry. The SDK remains
 // the only model loop. No CodingTools, execution environment or extension load.
-export function modelBoundary({ ledger, models, model, grantedModels, brokerBaseUrl, brokerTokenFile, active, allowLoopback = false }) {
+export function modelBoundary({ ledger, models, model, grantedModels, brokerBaseUrl, brokerTokenFile, active, allowLoopback = false, brokerMaxRequestBytes = 1024 * 1024 }) {
+  if (!Number.isSafeInteger(brokerMaxRequestBytes) || brokerMaxRequestBytes < 1)
+    throw new Refusal('Invalid broker request body limit');
   const parsed = /^http:\/\/((?:[0-9]{1,3}\.){3}[0-9]{1,3})(?::([1-9][0-9]{0,4}))?\/v1\/?$/.exec(brokerBaseUrl);
   const octets = parsed?.[1].split('.').map(Number);
   if (!octets || octets.some((value, index) => value > 255 || String(value) !== parsed[1].split('.')[index]) ||
@@ -84,7 +89,18 @@ export function modelBoundary({ ledger, models, model, grantedModels, brokerBase
     if (!operation || operation.attempted || (!beta && url !== endpoint) || !targets.has(endpoint) || (options.method ?? input.method ?? 'GET').toUpperCase() !== 'POST')
       throw new Refusal('Unmediated or repeated model transport denied');
     operation.attempted = true;
-    if (operation.run.grant?.run_budget) await reserveRunBudget(operation, input, options);
+    if (operation.run.grant?.run_budget) {
+      try {
+        const request = new Request(input, options);
+        const body = await reserveRunBudget(operation, request, brokerMaxRequestBytes);
+        options = { ...options, method: request.method, signal: request.signal, headers: request.headers, body };
+        input = url;
+      } catch (error) {
+        operation.locallyRefused = true;
+        operation.run.locallyRefused = true;
+        throw error;
+      }
+    }
     operation.sent = true;
     // SQLite FULL commit happens before the first byte may reach the broker.
     ledger.operation(operation.runId, operation.taskId, 'model');
@@ -148,7 +164,7 @@ export function modelBoundary({ ledger, models, model, grantedModels, brokerBase
         // operation receipt until the submission + idle barrier is committed.
         const noSend = { input: 0, output: 0, streamed: false, sent: false };
         const generation = stream.result().then(message => {
-          if (operation.budgetDenied) return noSend;
+          if (operation.locallyRefused) return noSend;
           run.usage = message.usage ?? null;
           if (['error', 'aborted'].includes(message.stopReason)) { ledger.uncertain(operation.runId); return null; }
           const usage = message.usage;
@@ -157,7 +173,7 @@ export function modelBoundary({ ledger, models, model, grantedModels, brokerBase
           if (counts.some(value => !Number.isSafeInteger(value) || value < 0)) return null;
           return { input: counts[0]+counts[1]+counts[2], output: usage.output, streamed: operation.sse === true, sent: true };
         }, () => {
-          if (operation.budgetDenied) return noSend;
+          if (operation.locallyRefused) return noSend;
           ledger.uncertain(operation.runId);
           return null;
         });

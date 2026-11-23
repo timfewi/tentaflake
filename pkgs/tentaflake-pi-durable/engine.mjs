@@ -74,7 +74,7 @@ export class Engine {
     }
     this.boundary = modelBoundary({ ledger: this.ledger, models: raw, grantedModels: models,
       brokerBaseUrl: this.config.brokerBaseUrl, brokerTokenFile: this.config.brokerTokenFile,
-      active: () => this.active });
+      brokerMaxRequestBytes: this.config.brokerMaxRequestBytes, active: () => this.active });
     const registry = createRegistry();
     const tools = this.config.tools.map(name => name === 'offline_worker' ? defineTool({
       name, description: 'Submit one local-reversible command to the isolated offline worker. No host shell or network.',
@@ -234,7 +234,7 @@ export class Engine {
         streamed: sends.length > 0 && sends.every(m => m.streamed),
         tool_calls: run.toolCalls.size, tool_results: run.toolResults.size,
       } : null;
-      this.ledger.finish(row.id, settled.status === 'done' && !run.budgetExhausted ? 'completed' : 'failed', {
+      this.ledger.finish(row.id, settled.status === 'done' && !run.locallyRefused ? 'completed' : 'failed', {
         output, settlement: settled, usage: run.usage, ...(measurement ? { measurement } : {}),
       });
     } catch { this.ledger.uncertain(row.id); }

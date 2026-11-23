@@ -188,7 +188,7 @@ function configuration(path) {
     throw new Refusal('Unsafe runtime configuration');
   const config = JSON.parse(readFileSync(path, 'utf8'));
   const fields = ['stateDir','socketPath','apiTokenFile','brokerBaseUrl','brokerTokenFile','model','researchCommand','workspace'];
-  if (fields.some(k => typeof config[k] !== 'string') || Object.keys(config).some(k => !fields.includes(k) && !['tools','grants'].includes(k)))
+  if (fields.some(k => typeof config[k] !== 'string') || Object.keys(config).some(k => !fields.includes(k) && !['tools','grants','brokerMaxRequestBytes'].includes(k)))
     throw new Refusal('Invalid runtime configuration');
   for (const key of ['stateDir','socketPath','apiTokenFile','brokerTokenFile','researchCommand','workspace'])
     if (resolve(config[key]) !== config[key]) throw new Refusal('Runtime paths must be canonical absolute paths');

@@ -506,6 +506,7 @@ pkgs.runCommand "tentaflake-pi-durable-provisioning" { } ''
   import json, sys
   from pathlib import Path
   runner, broker = [json.loads(Path(p).read_text()) for p in sys.argv[1:]]
+  assert runner["brokerMaxRequestBytes"] == broker["max_request_bytes"]
   grants = broker["llm"]["grants"]
   assert [g["provider"] for g in grants] == ["openai", "anthropic", "opencode-go"]
   for host, capsule in zip(grants, runner["grants"], strict=True):

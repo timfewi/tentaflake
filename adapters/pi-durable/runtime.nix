@@ -97,6 +97,7 @@ let
     socketPath = "/run/tentaflake-pi-durable/control/runner.sock";
     apiTokenFile = "/run/tentaflake-pi-durable/api-token";
     brokerTokenFile = "/run/tentaflake-pi-durable/broker-token";
+    brokerMaxRequestBytes = if brokerEnabled then broker.maxRequestBytes else 0;
     brokerBaseUrl =
       if brokerEnabled then "http://${broker.gateway}:${toString broker.llm.port}/v1" else "";
     model = if effectiveGrants == [ ] then "" else (builtins.head effectiveGrants).model;
