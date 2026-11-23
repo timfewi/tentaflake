@@ -23,6 +23,7 @@ Do not hand-edit them. Change the Nix configuration and rebuild explicitly.
 
 ```text
 tentaflake help
+tentaflake version [--json]
 tentaflake runtimes [--json]
 tentaflake agent template <preset> <name>
 tentaflake config validate <tentaflake.toml> [--json]
@@ -56,7 +57,13 @@ filename, legacy-sibling and migration restrictions.
 
 `status` is the default command. `--json` provides machine-readable status;
 `--hide` redacts the host and agent names. `tentaflake-status` invokes the same
-status renderer and is used by the login banner.
+status renderer and is used by the login banner. Its first line and the JSON
+`version` field name the installed Tentaflake release, for example
+`tentaflake v0.5.0 · agent-host · docker · security balanced`.
+
+`version` (also `--version` and `-V`) prints `tentaflake <version>`; with
+`--json` it prints `{"name":"tentaflake","version":"<version>"}`. The version
+is the Cargo workspace version the CLI was built from.
 
 JSON status entries include a canonical container `id` and `runnable` flag.
 Use that ID for automation: exact container IDs take precedence over display
@@ -69,7 +76,7 @@ can expose this inventory to an independently installed web interface.
 image downloads. See [generic workloads](agent-adapters.md#generic-isolated-workload).
 
 Top-level `help`, `--help`, and `-h` display usage even when the generated host
-configuration or inventory is missing or invalid. `runtimes`, `agent template`
+configuration or inventory is missing or invalid. `version`, `runtimes`, `agent template`
 and `config validate|normalize|migrate` are also independent of those inputs;
 other management commands require them. Use `tentaflake help` for the command
 summary: `config` does not implement subcommand-specific `--help`.

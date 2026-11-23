@@ -51,6 +51,33 @@ review the diff and synchronize docs/examples/instructions/shared skills. Fill
 all applicable sections of `.github/PULL_REQUEST_TEMPLATE.md`, leaving
 inapplicable checklist entries unchecked. Preserve unrelated dirty work.
 
+## Versioned branches
+
+Every branch names the release it targets, so each PR states its SemVer impact.
+The `Versioning` CI check (`scripts/check-versioning.sh`) enforces this rule on
+every pull request:
+
+- Change branches are `<type>/v<MAJOR>.<MINOR>.<PATCH>-<topic>`, for example
+  `feat/v0.5.1-show-version` or `fix/v0.5.1-broker-timeout`. `<type>` is a
+  Conventional Commit type (`feat`, `fix`, `docs`, `chore`, `refactor`, `perf`,
+  `test`, `ci`, `build`, `style`, `revert`); the topic uses lowercase letters,
+  digits, dots and hyphens.
+- The target is the next patch, minor or major release after the newest
+  released `CHANGELOG.md` section. Before 1.0, breaking changes raise the minor
+  version and everything else raises the patch version; after 1.0, follow
+  SemVer exactly. Branches for the same release share its target.
+- Each branch adds its user-visible notes under `## [Unreleased]` in
+  `CHANGELOG.md`. Only `release/vX.Y.Z` changes the declared version: it moves
+  `[Unreleased]` to a dated `## [X.Y.Z] - YYYY-MM-DD` section and sets the Cargo
+  workspace version, which every first-party package derives from, and the
+  README's current-release link. After it
+  merges, tag the merge with `just tag vX.Y.Z` and publish the release notes.
+- Automated dependency branches (`dependabot/*`, `update_flake_lock_action`)
+  are exempt; their changes reach the CHANGELOG with the next release.
+
+Run the check locally before opening a PR:
+`scripts/check-versioning.sh "$(git branch --show-current)" origin/main`.
+
 ## Documentation, modules and disclosure
 
 The public repository owns guides; the website mirrors a pinned release.

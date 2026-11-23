@@ -19,6 +19,8 @@ import time
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlsplit
 
+# The package build replaces this with the Cargo workspace version.
+TENTAFLAKE_VERSION = "development"
 IDENTIFIER = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,127}\Z")
 UNIT = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.@:-]{0,200}\.service\Z")
 MAX_BODY = 4096
@@ -447,6 +449,7 @@ class Service:
     def info(self, grant=None):
         return {
             "schema_version": 1,
+            "tentaflake_version": TENTAFLAKE_VERSION,
             "host": self.config["host"],
             "backend": self.config["backend"],
             "security_profile": self.config["security_profile"],

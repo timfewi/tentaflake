@@ -16,6 +16,7 @@ const RUNTIME_CATALOG: &str = include_str!("../../../adapters/catalog.json");
 mod desired_system;
 mod onboarding;
 
+const VERSION: &str = env!("CARGO_PKG_VERSION");
 const DEFAULT_CONFIG: &str = "/etc/tentaflake/cli.conf";
 const DEFAULT_AGENTS: &str = "/etc/tentaflake/agents.tsv";
 
@@ -206,6 +207,7 @@ fn run(mut args: Vec<String>) -> Result<u8, String> {
             print_help();
             return Ok(0);
         }
+        "version" | "--version" | "-V" => return version(&args[1..], mode),
         _ => {}
     }
     let config = load_config()?;
@@ -229,6 +231,21 @@ fn run(mut args: Vec<String>) -> Result<u8, String> {
         "agent" => onboarding::run(&config, &agents, &args[1..], mode),
         other => Err(format!("unknown command `{other}`; run `tentaflake help`")),
     }
+}
+
+fn version(args: &[String], mode: OutputMode) -> Result<u8, String> {
+    if !args.is_empty() {
+        return Err("version accepts only --json".into());
+    }
+    if mode.json {
+        println!(
+            "{}",
+            serde_json::json!({ "name": "tentaflake", "version": VERSION })
+        );
+    } else {
+        println!("tentaflake {VERSION}");
+    }
+    Ok(0)
 }
 
 fn runtimes(args: &[String], mode: OutputMode) -> Result<u8, String> {
@@ -2287,7 +2304,7 @@ fn status(config: &Config, agents: &[Agent], mode: OutputMode) -> Result<u8, Str
 
     if mode.json {
         print!(
-            "{{\"host\":\"{}\",\"backend\":\"{}\",\"security_profile\":\"{}\",\"agents\":[",
+            "{{\"version\":\"{VERSION}\",\"host\":\"{}\",\"backend\":\"{}\",\"security_profile\":\"{}\",\"agents\":[",
             json_escape(mode.host(&config.host_name)),
             json_escape(&config.backend),
             json_escape(&config.security_profile)
@@ -2314,7 +2331,7 @@ fn status(config: &Config, agents: &[Agent], mode: OutputMode) -> Result<u8, Str
     let color = io::stdout().is_terminal() && env::var_os("NO_COLOR").is_none();
     let host = mode.host(&config.host_name);
     println!(
-        "tentaflake {host} · {} · security {}",
+        "tentaflake v{VERSION} · {host} · {} · security {}",
         config.backend, config.security_profile
     );
     if config.security_profile == "dev" {
@@ -2747,9 +2764,10 @@ fn json_escape(input: &str) -> String {
 
 fn print_help() {
     println!(
-        "Tentaflake — manage declarative agent containers with Docker or Podman\n\n\
+        "Tentaflake v{VERSION} — manage declarative agent containers with Docker or Podman\n\n\
          USAGE\n\
            tentaflake help|--help|-h\n\
+           tentaflake version|--version|-V [--json]\n\
            tentaflake runtimes [--json]\n\
            tentaflake agent template <preset> <name> [--image <digest-reference> -- <command>...]\n\
            tentaflake agent validate|plan|import <file> [--json] [--hide]\n\
