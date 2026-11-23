@@ -249,9 +249,8 @@ export class Research {
     if (result?.protocolVersion !== '2025-11-25') throw new Refusal('Research protocol mismatch');
     this.child.stdin.write(JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' }) + '\n');
     const resultTools = await this.request('tools/list', {});
-    if (!Array.isArray(resultTools?.tools) || resultTools.tools.some(tool => !tool || typeof tool !== 'object' ||
-        typeof tool.name !== 'string' || !tool.name || tool.name.length > 128) ||
-        researchCapabilities.some(name => resultTools.tools.filter(tool => tool.name === name).length !== 1))
+    if (!Array.isArray(resultTools?.tools) || resultTools.tools.length !== researchCapabilities.length ||
+        !researchCapabilities.every(name => resultTools.tools.some(tool => tool?.name === name)))
       throw new Refusal('Research capability mismatch');
   }
   close() {

@@ -21,12 +21,13 @@ async function fixture(run) {
     await run({ ledger, active, model, events, create });
   } finally { boundary?.close(); globalThis.fetch = saved; rmSync(root, { recursive: true, force: true }); }
 }
-test('Research initialization requires every granted capability but permits harmless advertised supersets', async () => {
+test('Research initialization requires the exact reviewed manifest for all tool selections', async () => {
   const expected = ['research_browser', 'research_fetch', 'research_job', 'research_read', 'research_search'];
   for (const [manifest, granted, accepted] of [
     [expected, expected, true],
-    [[...expected, 'server_status'], expected, true],
-    [[...expected, 'server_status'], ['research_search'], true],
+    [[...expected, 'server_status'], expected, false],
+    [expected, ['research_search'], true],
+    [[...expected, 'server_status'], ['research_search'], false],
     [expected.slice(1), ['research_search'], false],
     [[...expected, 'research_search'], expected, false],
     [[...expected.map(name => ({ name })), { name: 3 }], expected, false],

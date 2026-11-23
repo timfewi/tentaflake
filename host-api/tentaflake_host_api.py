@@ -1194,6 +1194,8 @@ class Service:
                         return {"events": [decode(line[6:]) for line in frame.splitlines() if line.startswith(b"data: ")]}
                 if length is not None and len(raw) != int(length):
                     raise APIError("Incomplete runner response", 502)
+                if events and status == 200 and not raw:
+                    return {"events": []}
                 value = decode(raw)
                 if not isinstance(value, dict):
                     raise APIError("Invalid runner JSON response", 502)

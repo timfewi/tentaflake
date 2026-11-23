@@ -1347,11 +1347,13 @@ else:
         observed, files = self.fake_runner([
             b"HTTP/1.0 200 OK\r\nContent-Type: text/event-stream\r\n\r\n: waiting\n\n",
             b'HTTP/1.0 200 OK\r\nContent-Type: text/event-stream\r\n\r\ndata: {"event":"run.completed","run_id":"run-1"}\n\n',
+            b"HTTP/1.0 200 OK\r\nContent-Type: text/event-stream\r\n\r\n",
         ])
         with patch.object(self.service, "runner_file", side_effect=files), patch.object(api, "RUNSC_PI_DURABLE_PEER_UID", api.os.geteuid()):
             self.assertEqual(self.runner_route("GET", "runs/run-1/events"), {"events": []})
             self.assertEqual(self.runner_route("GET", "runs/run-1/events")["events"][0]["event"], "run.completed")
-        self.assertEqual(len(observed), 2)
+            self.assertEqual(self.runner_route("GET", "runs/run-1/events?cursor=1"), {"events": []})
+        self.assertEqual(len(observed), 3)
 
     def test_runner_event_pages_forward_cursor_and_expect_json(self):
         self.start_runner_api()
