@@ -74,8 +74,15 @@ if [[ $kind == release ]]; then
 else
   [[ $declared == "$base_declared" ]] ||
     fail "only release branches change the declared version ($base_declared -> $declared)"
-  unreleased=$(sed -n '/^## \[Unreleased\]/,/^## \[/p' CHANGELOG.md | sed '1d;$d' | grep -cE '^[-*] ' || true)
-  [[ $unreleased -gt 0 ]] || fail "the [Unreleased] CHANGELOG section has no entries"
+  unreleased_entries() {
+    awk '/^## / { active = ($0 == "## [Unreleased]") }
+         active && /^[-*] [^[:space:]]/ { print substr($0, 3) }' | LC_ALL=C sort -u
+  }
+  ancestor=$(git merge-base "$base" HEAD)
+  base_entries=$(git show "$ancestor:CHANGELOG.md" | unreleased_entries)
+  head_entries=$(unreleased_entries <CHANGELOG.md)
+  added=$(LC_ALL=C comm -13 <(printf '%s\n' "$base_entries") <(printf '%s\n' "$head_entries"))
+  [[ -n $added ]] || fail "add a branch-specific entry under [Unreleased]"
 fi
 
 runner=$(sed -nE 's/^  "version": "([^"]+)",?$/\1/p' pkgs/tentaflake-pi-durable/package.json)
