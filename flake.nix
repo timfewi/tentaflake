@@ -181,6 +181,7 @@
             { nativeBuildInputs = [ self.packages.${system}.tentaflake-pi-durable ]; }
             ''
               export HOME="$TMPDIR"
+              export TENTAFLAKE_TEST_BROKER="${self.packages.${system}.tentaflake-broker}/bin/tentaflake-broker"
               tentaflake-pi-durable-test
               touch "$out"
             '';

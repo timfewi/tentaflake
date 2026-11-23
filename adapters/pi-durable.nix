@@ -46,7 +46,7 @@ let
     && !broker.fetch.enable
     && broker.llm.streaming.enable
     && !broker.llm.strictCostEnvelope
-    && lib.length broker.llm.allowedModels == 1
+    && (lib.length broker.llm.allowedModels == 1 || (broker.llm.providerGrants or [ ]) != [ ])
     && worker != null
     && worker.enable
     && worker.workspace == "${root}/workspace"

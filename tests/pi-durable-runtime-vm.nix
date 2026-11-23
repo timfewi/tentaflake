@@ -202,6 +202,9 @@ pkgs.testers.runNixOSTest {
         "d /run/research-vpn 0755 root root -"
         "d /run/pi-durable-fixture 0700 root root -"
         "f /run/pi-durable-fixture/provider 0400 root root - synthetic-never-used"
+        "f /run/pi-durable-fixture/provider-openai 0400 root root - synthetic-a"
+        "f /run/pi-durable-fixture/provider-anthropic 0400 root root - synthetic-b"
+        "f /run/pi-durable-fixture/provider-opencode-go 0400 root root - synthetic-c"
       ];
     };
     tentaflake = {
@@ -232,6 +235,14 @@ pkgs.testers.runNixOSTest {
             "run_read"
           ];
         }
+        {
+          uid = 12346;
+          agents = [ "agent-pi-durable-a" ];
+          permissions = [
+            "run_read"
+            "run_submit"
+          ];
+        }
       ];
       research.agents = {
         agent-pi-durable-a.uid = 62101;
@@ -247,18 +258,61 @@ pkgs.testers.runNixOSTest {
             llm = {
               enable = true;
               streaming.enable = true;
-              upstreamBaseUrl = "https://127.0.0.1:9443/v1/";
-              providerCredentialFile = "/run/pi-durable-fixture/provider";
-              # Present in the hash-pinned pi-durable-ai 1.4.0 openai-responses catalog;
-              # only its name is used for runner initialization, never a request.
-              allowedModels = [
+            }
+            // (
+              if index == 0 then
                 {
-                  name = "gpt-4.1-mini";
-                  inputMicrousdPerMillion = 1;
-                  outputMicrousdPerMillion = 1;
+                  providerGrants =
+                    map
+                      (p: {
+                        inherit (p) provider protocol;
+                        upstreamEndpoint = "https://127.0.0.1:9443${p.path}";
+                        providerCredentialFile = "/run/pi-durable-fixture/provider-${p.provider}";
+                        model = {
+                          inherit (p) name;
+                          inputMicrousdPerMillion = 1;
+                          outputMicrousdPerMillion = 2;
+                        };
+                        pricingRevision = "fixture-price";
+                        maxOutputTokens = 128;
+                        tools = [ "research_read" ];
+                      })
+                      [
+                        {
+                          provider = "openai";
+                          protocol = "openai-responses";
+                          name = "gpt-4.1-mini";
+                          path = "/v1/responses";
+                        }
+                        {
+                          provider = "anthropic";
+                          protocol = "anthropic-messages";
+                          name = "claude-haiku-4-5";
+                          path = "/v1/messages";
+                        }
+                        {
+                          provider = "opencode-go";
+                          protocol = "opencode-go-chat-completions";
+                          name = "deepseek-v4-pro";
+                          path = "/inference/go/openai/v1/chat/completions";
+                        }
+                      ];
                 }
-              ];
-            };
+              else
+                {
+                  upstreamBaseUrl = "https://127.0.0.1:9443/v1/";
+                  providerCredentialFile = "/run/pi-durable-fixture/provider";
+                  # Present in the hash-pinned pi-durable-ai 1.4.0 openai-responses catalog;
+                  # only its name is used for runner initialization, never a request.
+                  allowedModels = [
+                    {
+                      name = "gpt-4.1-mini";
+                      inputMicrousdPerMillion = 1;
+                      outputMicrousdPerMillion = 1;
+                    }
+                  ];
+                }
+            );
           };
         }) names
       );
@@ -374,6 +428,16 @@ pkgs.testers.runNixOSTest {
     assert api_status("agent-pi-durable-a", 12345) == "200"
     assert api_status("agent-pi-durable-b", 12345) == "403"
     assert api_status("agent-pi-durable-a", 0) == "403"
+    peer = "setpriv --reuid=12346 --regid=12346 --clear-groups curl --fail-with-body --silent --unix-socket /run/tentaflake-api/host.sock"
+    runner = "http://localhost/v1/agents/agent-pi-durable-a/runner/"
+    capabilities = json.loads(machine.succeed(f"{peer} {runner}capabilities"))
+    grants = capabilities["grants"]
+    assert [g["provider"] for g in grants] == ["openai","anthropic","opencode-go"]
+    assert all(g["brokerBinding"] and g["tools"] == ["research_read"] for g in grants)
+    binding = {k:grants[1][k] for k in ["revision","model","provider","protocol"]}
+    body = shlex.quote(json.dumps({"request_id":"fixture-session","title":"fixture","binding":binding}))
+    session = json.loads(machine.succeed(f"{peer} -H 'Content-Type: application/json' --data {body} {runner}sessions"))
+    assert len(session["session"]["id"]) == 64
     # Concrete provenance negatives run with the same empty-capability identity.
     def refusal():
         machine.succeed("systemd-run --wait --collect -p User=root -p SupplementaryGroups=10100 -p CapabilityBoundingSet= -p AmbientCapabilities= -p NoNewPrivileges=yes ${pkgs.python3}/bin/python /etc/pi-durable-fixture-probe agent-pi-durable-a refuse")

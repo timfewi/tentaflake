@@ -5,14 +5,18 @@ import { resolve, dirname } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { Ledger, Refusal, identity, privateDirectory } from './ledger.mjs';
 import { secret } from './mediation.mjs';
+import { selectGrant, isLegacySingleton } from './grants.mjs';
 import { Engine } from './engine.mjs';
 
 export function projection(row) {
   if (!row) throw new Refusal('Unknown run', 404);
+  const receipt = row.result ? JSON.parse(row.result) : null;
   return { id: row.id, request_id: row.request_id, session_id: row.session_id,
     input: row.input, context_mode: 'persistent', state: row.state === 'uncertain' ? 'interrupted' : row.state,
-    uncertain: row.state === 'uncertain', output: row.result ? JSON.parse(row.result).output : '',
-    error: row.state === 'uncertain' ? 'External outcome uncertain; instance quarantined' : null };
+    uncertain: row.state === 'uncertain', output: receipt?.output ?? '',
+    ...(receipt?.measurement ? { measurement: receipt.measurement } : {}),
+    error: row.state === 'uncertain' ? 'External outcome uncertain; instance quarantined' : null,
+    grant: row.grant ? JSON.parse(row.grant) : null };
 }
 async function body(request) {
   let size = 0; const chunks = [];
@@ -43,24 +47,45 @@ export async function serve(config) {
       if (closing) throw new Refusal('Runner is stopping', 503);
       const url = new URL(request.url, 'http://localhost');
       if (request.method === 'GET' && url.pathname === '/v1/capabilities') {
-        json(200, { runtime: 'pi-durable', version: 1, model: engine.config.model, available: !ledger.quarantined,
+        json(200, { runtime: 'pi-durable', version: 2, model: engine.config.model, grants: engine.config.grants, available: !ledger.quarantined,
           quarantined: ledger.quarantined, tools: engine.registeredTools(),
           features: { runs: !ledger.quarantined, persistent_sessions: true, tool_selection: true,
-            live_inputs: false, session_import: false, streaming: false, cancellation: true } }); return;
+            live_inputs: false, session_import: false, streaming: true, event_pages: true,
+            run_budgets: engine.config.grants.some(grant => grant.brokerBinding === true), cancellation: true } }); return;
       }
       if (request.method === 'POST' && url.pathname === '/api/sessions') {
         const value = await body(request);
         if (!value || typeof value.title !== 'string' || value.title.length > 200 ||
-            Object.keys(value).some(k => !['title','request_id'].includes(k)) ||
+            Object.keys(value).some(k => !['title','request_id','binding'].includes(k)) ||
             (value.request_id !== undefined && !identity(value.request_id))) throw new Refusal('Invalid session request', 400);
         const id = value.request_id ? createHash('sha256').update(`session:${value.request_id}`).digest('hex') : randomUUID();
-        await engine.session(id); json(200, { session: { id } }); return;
+        if (value.binding !== undefined || engine.config.grants.length === 1) {
+          await engine.session(id, selectGrant(engine.config, value.binding));
+        } else {
+          if (!engine.harness || ledger.quarantined) throw new Refusal('Instance unavailable');
+          ledger.reserveSession(id);
+        }
+        json(200, { session: { id } }); return;
       }
       if (request.method === 'POST' && url.pathname === '/v1/runs') {
         const value = await body(request);
         if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Refusal('Invalid run request', 400);
-        if (!ledger.session(value.session_id)) throw new Refusal('Unknown session', 404);
-        const admitted = ledger.admit(value);
+        if (!ledger.hasSession(value.session_id)) throw new Refusal('Unknown session', 404);
+        const grant = selectGrant(engine.config, value.binding);
+        const budget = value.budget;
+        if (budget !== undefined && (!value.binding || !grant.brokerBinding || !budget ||
+            typeof budget !== 'object' || Array.isArray(budget) || Object.keys(budget).length !== 2 ||
+            ![budget.max_tokens, budget.max_cost_microusd].every(n => Number.isSafeInteger(n) && n > 0)))
+          throw new Refusal('Invalid run budget or unpriced binding', 400);
+        const legacySingleton = value.binding === undefined && isLegacySingleton(engine.config, grant);
+        ledger.checkSessionGrant(value.session_id, grant.revision, legacySingleton);
+        if (legacySingleton && ledger.session(value.session_id) && ledger.sessionGrant(value.session_id) === null && engine.harness)
+          await engine.session(value.session_id, grant);
+        delete value.budget;
+        delete value.binding;
+        value.grant = budget === undefined ? grant : { ...grant,
+          run_budget: { max_tokens: budget.max_tokens, max_cost_microusd: budget.max_cost_microusd } };
+        const admitted = ledger.admit(value, { legacySingleton });
         if (!admitted.duplicate) void engine.execute(admitted.row);
         json(200, { run_id: admitted.row.id }); return;
       }
@@ -81,19 +106,41 @@ export async function serve(config) {
       if (!operation || operation === 'result') { json(200, projection(ledger.get(id))); return; }
       if (operation !== 'events') throw new Refusal('Capability unavailable', 404);
       projection(ledger.get(id));
+      const cursorRaw = url.searchParams.get('cursor');
+      const format = url.searchParams.get('format');
+      if ([...url.searchParams.keys()].some(k => !['cursor', 'format'].includes(k)) ||
+          url.searchParams.getAll('cursor').length > 1 || url.searchParams.getAll('format').length > 1 ||
+          (format !== null && format !== 'page') ||
+          (cursorRaw !== null && (!/^(?:0|[1-9][0-9]{0,15})$/.test(cursorRaw) || !Number.isSafeInteger(Number(cursorRaw)))))
+        throw new Refusal('Invalid event cursor', 400);
+      let cursor = cursorRaw === null ? 0 : Number(cursorRaw);
+      if (format === 'page') {
+        const events = ledger.events(id, cursor, 4).map(({ result, ...event }) => ({ ...event, run_id: id }));
+        json(200, { events }); return;
+      }
       response.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-store' });
       let timer;
       const deadline = Date.now() + 3900000;
       const emit = () => {
-        if (Date.now() >= deadline || response.writableLength > 65536) { response.destroy(); return; }
+        if (response.destroyed) return;
+        if (Date.now() >= deadline) { response.destroy(); return; }
+        const events = ledger.events(id, cursor);
+        for (const event of events) {
+          cursor = event.cursor;
+          if (!response.write(`id: ${cursor}\ndata: ${JSON.stringify({ ...event, run_id: id })}\n\n`)) {
+            response.once('drain', emit);
+            return;
+          }
+        }
+        if (events.length === 128) { timer = setTimeout(emit, 0); return; }
         const row = projection(ledger.get(id));
-        if (['running','stopping'].includes(row.state)) { response.write(': waiting\n\n'); return; }
-        clearInterval(timer);
-        const event = row.state === 'completed' ? 'run.completed' : 'run.failed';
-        response.end(`data: ${JSON.stringify({ event, run_id: id, output: row.output, state: row.state, uncertain: row.uncertain, error: row.error })}\n\n`);
+        if (['running','stopping'].includes(row.state)) {
+          response.write(': waiting\n\n');
+          timer = setTimeout(emit, 1000); return;
+        }
+        response.end();
       };
-      timer = setInterval(emit, 1000);
-      response.on('close', () => clearInterval(timer)); emit();
+      response.on('close', () => clearTimeout(timer)); emit();
     } catch (error) {
       if (!response.headersSent) json(error instanceof Refusal ? error.status : 503, { error: error instanceof Refusal ? error.message : 'Runtime unavailable' });
       else response.destroy();
@@ -141,7 +188,7 @@ function configuration(path) {
     throw new Refusal('Unsafe runtime configuration');
   const config = JSON.parse(readFileSync(path, 'utf8'));
   const fields = ['stateDir','socketPath','apiTokenFile','brokerBaseUrl','brokerTokenFile','model','researchCommand','workspace'];
-  if (fields.some(k => typeof config[k] !== 'string') || Object.keys(config).some(k => !fields.includes(k) && k !== 'tools'))
+  if (fields.some(k => typeof config[k] !== 'string') || Object.keys(config).some(k => !fields.includes(k) && !['tools','grants','brokerMaxRequestBytes'].includes(k)))
     throw new Refusal('Invalid runtime configuration');
   for (const key of ['stateDir','socketPath','apiTokenFile','brokerTokenFile','researchCommand','workspace'])
     if (resolve(config[key]) !== config[key]) throw new Refusal('Runtime paths must be canonical absolute paths');

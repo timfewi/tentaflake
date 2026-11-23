@@ -265,14 +265,21 @@ class Service:
                 aid not in self.agents or not self.agents[aid]["runnable"]
                 or self.agents[aid]["runtime"] != "pi-durable"
                 or not isinstance(descriptor, dict)
-                or set(descriptor) != {"socket", "token", "transport"}
-                or descriptor != {
+                or {k: v for k, v in descriptor.items() if k != "grant_hashes"} != {
                     "socket": f"/run/tentaflake-pi-durable/{aid}/control/runner.sock",
                     "token": f"/run/tentaflake-pi-durable/{aid}/api-token",
                     "transport": "runsc-pi-durable-v1",
                 }
             ):
                 raise ValueError("Invalid runner inventory")
+            if "grant_hashes" in descriptor:
+                hashes = descriptor["grant_hashes"]
+                if not isinstance(hashes, dict) or not 1 <= len(hashes) <= 64 or any(
+                    not isinstance(key, str) or not RUNNER_ID.fullmatch(key)
+                    or not isinstance(value, str) or not re.fullmatch(r"[a-f0-9]{64}", value)
+                    for key, value in hashes.items()
+                ):
+                    raise ValueError("Invalid host runner grant digests")
         self.peer_grants = None
         peers = config.get("peer_grants")
         if peers is not None:
@@ -1190,6 +1197,8 @@ class Service:
                         return {"events": [decode(line[6:]) for line in frame.splitlines() if line.startswith(b"data: ")]}
                 if length is not None and len(raw) != int(length):
                     raise APIError("Incomplete runner response", 502)
+                if events and status == 200 and not raw:
+                    return {"events": []}
                 value = decode(raw)
                 if not isinstance(value, dict):
                     raise APIError("Invalid runner JSON response", 502)
@@ -1218,6 +1227,7 @@ class Service:
             raise APIError("Agent runner is not admitted", 404)
         target = "/v1/" + operation
         if method == "GET":
+            event_stream = operation.endswith("/events")
             if body is not None or operation == "sessions" or operation.endswith("/stop"):
                 raise APIError("Invalid runner read")
             if operation == "runs":
@@ -1225,9 +1235,23 @@ class Service:
                 if set(values) != {"request_id"} or len(values["request_id"]) != 1 or not RUNNER_ID.fullmatch(values["request_id"][0]):
                     raise APIError("A single runner request_id is required")
                 target += "?request_id=" + values["request_id"][0]
+            elif event_stream:
+                values = parse_qs(query, keep_blank_values=True)
+                cursor = values.get("cursor", ["0"])
+                page = values.get("format")
+                if (set(values) - {"cursor", "format"} or len(cursor) != 1
+                        or not re.fullmatch(r"0|[1-9][0-9]{0,15}", cursor[0])
+                        or int(cursor[0]) > (1 << 53) - 1
+                        or (page is not None and page != ["page"])):
+                    raise APIError("A valid runner event cursor is required")
+                if page:
+                    event_stream = False
+                    target += "?format=page&cursor=" + cursor[0]
+                elif query:
+                    target += "?cursor=" + cursor[0]
             elif query:
                 raise APIError("Runner query is not supported")
-            return self.runner_exchange(descriptor, method, target, events=operation.endswith("/events"))
+            return self.runner_exchange(descriptor, method, target, events=event_stream)
         if method != "POST" or query or not isinstance(body, dict):
             raise APIError("Invalid runner mutation")
         try:
@@ -1236,16 +1260,30 @@ class Service:
             raise APIError("Invalid runner JSON body") from exc
         if size > (70000 if operation == "runs" else MAX_BODY):
             raise APIError("Runner request exceeds limit", 413)
+        if "binding" in body and (
+            not isinstance(body["binding"], dict)
+            or set(body["binding"]) != {"revision", "provider", "model", "protocol"}
+            or any(not isinstance(value, str) or not value for value in body["binding"].values())
+        ):
+            raise APIError("Invalid runner provider binding")
         if operation == "sessions":
-            if set(body) != {"title", "request_id"} or not isinstance(body["title"], str) or len(body["title"]) > 200:
+            if set(body) not in ({"title", "request_id"}, {"title", "request_id", "binding"}) or not isinstance(body["title"], str) or len(body["title"]) > 200:
                 raise APIError("Invalid runner session request")
             target = "/api/sessions"
         elif operation == "runs":
-            if (set(body) != {"request_id", "session_id", "input", "context_mode"}
+            if (set(body) - {"budget"} not in ({"request_id", "session_id", "input", "context_mode"},
+                                  {"request_id", "session_id", "input", "context_mode", "binding"})
                     or not isinstance(body["session_id"], str) or not RUNNER_ID.fullmatch(body["session_id"])
                     or body["context_mode"] != "persistent" or not isinstance(body["input"], str)
                     or not body["input"].strip() or len(body["input"].encode()) > 65536):
                 raise APIError("Invalid persistent run request")
+            if "budget" in body:
+                budget = body["budget"]
+                if ("binding" not in body or not isinstance(budget, dict)
+                        or set(budget) != {"max_tokens", "max_cost_microusd"}
+                        or any(type(value) is not int or not 0 < value <= (1 << 53) - 1
+                               for value in budget.values())):
+                    raise APIError("Invalid run budget")
         elif not operation.endswith("/stop") or body:
             raise APIError("Invalid runner mutation")
         rid = operation if operation.endswith("/stop") else body.get("request_id")
@@ -1269,6 +1307,32 @@ class Service:
             capabilities = self.runner_exchange(descriptor, "GET", "/v1/capabilities")
             if capabilities.get("available") is not True or not isinstance(capabilities.get("features"), dict) or capabilities["features"].get("runs") is not True:
                 raise APIError("Runner submission is unavailable", 409)
+            if "budget" in body and capabilities["features"].get("run_budgets") is not True:
+                raise APIError("Runner does not support run budgets", 409)
+            declared = descriptor.get("grant_hashes")
+            offered = capabilities.get("grants", [])
+            if declared is not None:
+                if not isinstance(offered, list) or len(offered) != len(declared):
+                    raise APIError("Runner configuration differs from host grants", 409)
+                observed = {}
+                for entry in offered:
+                    if not isinstance(entry, dict) or not isinstance(entry.get("revision"), str):
+                        raise APIError("Invalid runner provider grant", 409)
+                    encoded = json.dumps(entry, sort_keys=True, ensure_ascii=False, separators=(",", ":"), allow_nan=False)
+                    observed[entry["revision"]] = hashlib.sha256(encoded.encode()).hexdigest()
+                if observed != declared:
+                    raise APIError("Runner configuration differs from host grants", 409)
+                if operation == "runs" and "binding" not in body:
+                    if len(offered) != 1:
+                        raise APIError("Explicit runner provider binding required", 400)
+                    body = {**body, "binding": {key: offered[0][key] for key in ("revision", "provider", "model", "protocol")}}
+            elif isinstance(offered, list) and any(isinstance(entry, dict) and entry.get("brokerBinding") is True for entry in offered):
+                raise APIError("Bound runner providers require a host grant", 403)
+            if "binding" in body:
+                grants = capabilities.get("grants")
+                if not isinstance(grants, list) or not any(isinstance(grant, dict) and
+                        all(grant.get(key) == value for key, value in body["binding"].items()) for grant in grants):
+                    raise APIError("Runner provider binding is not granted", 403)
         # Never reissue a mutation after uncertainty, even across daemon restarts.
         result = self.runner_exchange(descriptor, method, target, body)
         with self.lock:

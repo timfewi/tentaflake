@@ -312,24 +312,26 @@ All routes below are relative to `/v1/agents/{canonical-id}/runner`:
 | Route | Grant | Runner request/result |
 | --- | --- | --- |
 | `GET /capabilities` | `run_read` | Fixed `GET /v1/capabilities`; live application readiness, not host security evidence |
-| `POST /sessions` | `run_submit` | Fixed `POST /api/sessions`, exactly `{title, request_id}`; returns `{session:{id}}` |
-| `POST /runs` | `run_submit` | Exactly `{request_id, session_id, input, context_mode:"persistent"}`; returns `{run_id}` |
+| `POST /sessions` | `run_submit` | Fixed `POST /api/sessions`, `{title, request_id}` with an optional provider binding; returns `{session:{id}}` |
+| `POST /runs` | `run_submit` | The legacy four fields, optional `binding` and an optional per-run `budget` on a broker-bound grant; returns `{run_id}` |
 | `GET /runs?request_id=…` | `run_read` | Same-ID reconciliation; returns runner projection |
 | `GET /runs/{run_id}` | `run_read` | Runner projection including `state`, `uncertain`, `output` and `error` |
-| `GET /runs/{run_id}/events` | `run_read` | One bounded SSE frame converted to `{events:[…]}`; a waiting heartbeat returns an empty array |
+| `GET /runs/{run_id}/events?cursor=…` | `run_read` | Durable normalized receipt events after the optional nonnegative cursor; a waiting heartbeat returns an empty array |
+| `GET /runs/{run_id}/events?format=page&cursor=…` | `run_read` | JSON object with up to four ordered events after the cursor (default zero). Resume from the last returned cursor. An empty page means the client is caught up. |
 | `POST /runs/{run_id}/stop` | `run_stop` | Exactly `{}`; returns runner projection, not evidence that an external effect was undone |
 
-The live runner capability response includes `runtime:"pi-durable"`, `version:1`,
-`model` from the running engine's fixed configuration, `available`, `quarantined`,
+The live runner capability response includes `runtime:"pi-durable"`, `version:2`,
+the compatibility `model`, complete non-secret immutable `grants`, `available`, `quarantined`,
 the actual SDK registry's stable-ID `tools` array and `features` with
-`tool_selection:true`. The host mediator passes these fields through unchanged. Model
-selection is not a request field or a mutable runner operation. A consumer that
-claims effective model readiness must require this active-model evidence and
-match it to the exact singleton broker model in peer-verified policy details;
-older runners without `model`, unreadable evidence and disagreement stay
-unverified. This is configured-engine evidence, not a successful inference or
-provider-acceptance test, and the current run request does not bind a policy
-revision/model atomically against host changes after the last read.
+`tool_selection:true`. The host mediator passes these fields through unchanged.
+When more than one grant exists, a run must select one by its exact revision,
+provider, model and protocol. The runner resolves that selector to the complete
+versioned grant (fixed broker endpoint, pricing revision and positive USD token
+prices, allowed tools and output-token budget) before admission and includes the
+complete grant in the durable request digest. A matching retry returns the old
+receipt even after policy changes; changed content or binding conflicts before
+another provider effect. A single grant preserves the older request shape.
+This is configured-engine evidence, not live vendor qualification.
 
 For reviewed Pi `agents[].tools`, peer-verified details include
 `policy.runtime = {adapter:"pi-durable", tool_selection:true, tools:[...]}` in
@@ -340,7 +342,8 @@ and require `features.tool_selection:true` before claiming applied per-tool
 selection. Missing old-host/runner evidence is unsupported or unverified, never
 an invented empty/applied selection. The details field alone is not observation.
 Tool changes use reviewed public source/build plus separate owner activation,
-not this service's limited configuration-proposal fields or run-request fields.
+not this service's limited configuration-proposal fields. A run may only narrow
+to the tool set already present in its immutable host grant.
 An active run keeps its accepted configuration; a private equip/unequip does
 not instantly revoke it. The existing read-versus-submit cutover race above
 also applies to tool evidence.
@@ -353,12 +356,40 @@ operation. A search-only subset needs an already approved bounded `job_id`
 supplied in context when `research_job` is unselected. No dependency or new
 connection is implicitly authorized.
 
+Session creation accepts an optional `binding` with `revision`, `provider`, `model`
+and `protocol`. On a multi-grant runner an unbound session takes the binding of
+its first explicitly bound run. A confirmed result from
+`GET /v1/agents/{agent}/runner/runs?request_id=…` can include `measurement`.
+It reports `provider`, `protocol`, `model`, `grant_revision`, integer
+`input_tokens`, `output_tokens`, `provider_requests`, `tool_calls` and
+`tool_results`, and the boolean `streamed`. Provider requests count every
+dispatched generation, including follow-up turns after tool results. The tool
+counts cover correlated calls and results. Legacy receipts without measurements
+omit this field.
+
+With `features.run_budgets`, an explicitly broker-bound run may include
+`budget: {"max_tokens": 5000, "max_cost_microusd": 20}`. Both values must be
+positive safe integers. Before each provider request the runner reserves the
+UTF-8 request bytes as input tokens and the requested completion limit as
+output tokens, at the selected grant's prices rounded up to a microdollar per
+request. The reservations accumulate for the run. A request that would exceed
+either limit stays local. The failed run's receipt counts prior sends and their
+measured usage. A retry with a changed allowance conflicts with the original.
+
+With `features.event_pages`, poll `format=page` for lifecycle events, text
+deltas (up to 512 Unicode code points with a generation ID), and tool starts
+and completions (tool name and invocation number). Every event identifies the
+run and cursor. Terminal pages omit the full result. Read the run projection
+for the final output and measurement.
+
 Session titles are at most 200 characters. Request/session identifiers match
 `[A-Za-z0-9_.:-]{1,128}`; run path IDs match `[A-Za-z0-9-]{1,128}`.
 Run input is nonblank and at most 65,536 UTF-8 bytes; its entire incoming JSON
 body is bounded to 70,000 bytes. Other host bodies retain the 4,096-byte limit.
 No arbitrary path, URL, query, header, socket or credential argument is accepted.
-Encoded runner paths are rejected. Poll bounded events and run state rather than
+Encoded runner paths are rejected. Receipt event cursors increase monotonically
+in the runner ledger and remain keyed to the existing run ID across reconnects;
+reconnecting never restarts work. Poll bounded events and run state rather than
 holding an unbounded event stream through the host API.
 
 The trusted root host API mediates an untrusted application. It retains an empty

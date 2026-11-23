@@ -160,6 +160,11 @@ async function assertCompleted(row, index) {
   assert.equal(ledger.quarantined, false);
   const receipt = JSON.parse(row.result);
   assert.equal(receipt.output, outputs[index]);
+  const deltas = ledger.events(row.id).filter(event => event.event === 'run.text_delta');
+  assert.ok(deltas.length);
+  assert.ok(deltas.every(event => Number.isSafeInteger(event.generation) && event.generation > 0));
+  assert.equal(deltas.map(event => event.text).join(''), outputs[index]);
+  assert.ok(deltas.every(event => Object.keys(event).sort().join(',') === 'cursor,event,generation,text'));
   assert.equal(receipt.settlement.status, 'done');
   assert.equal(receipt.settlement.type, 'input');
   assert.equal(String(receipt.settlement.id), row.submission_id);

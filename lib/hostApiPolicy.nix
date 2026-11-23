@@ -37,7 +37,7 @@ let
             inherit (model) name;
             input_microusd_per_million = model.inputMicrousdPerMillion;
             output_microusd_per_million = model.outputMicrousdPerMillion;
-          }) broker.llm.allowedModels
+          }) (broker.llm.allowedModels ++ map (grant: grant.model) (broker.llm.providerGrants or [ ]))
         );
         max_completion_tokens = if llmEnabled then broker.llm.maxCompletionTokens else null;
         streaming = llmEnabled && broker.llm.streaming.enable;

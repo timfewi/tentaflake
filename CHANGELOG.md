@@ -20,6 +20,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The Pi Durable runner package takes its version from the Cargo workspace
   instead of a separate `0.1.0`.
 
+- Page through Pi Durable text and tool events by cursor. Bound the aggregate
+  tokens and cost of a run across all of its provider requests.
+
+- Bind Pi Durable run identities to a complete immutable versioned provider grant,
+  retain legacy singleton requests, and expose durable cursor-addressed receipt
+  events without treating synthetic provider fixtures as production qualification.
+
 ## [0.5.0] - 2026-11-14
 ### Direction
 - Keep declarative TOML onboarding, installation and Nix host policy

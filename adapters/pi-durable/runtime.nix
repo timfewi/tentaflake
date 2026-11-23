@@ -46,15 +46,62 @@ let
       (builtins.head broker.llm.allowedModels).name
     else
       "";
+  modelPolicy = if model == "" then null else builtins.head broker.llm.allowedModels;
+  legacyGrant =
+    if modelPolicy == null then
+      null
+    else
+      rec {
+        version = 1;
+        provider = "openai";
+        inherit model;
+        protocol = "openai-responses";
+        endpoint = "http://${broker.gateway}:${toString broker.llm.port}/v1/responses";
+        pricing = {
+          revision = builtins.hashString "sha256" (
+            builtins.toJSON {
+              inherit model;
+              inherit (modelPolicy) inputMicrousdPerMillion outputMicrousdPerMillion;
+            }
+          );
+          currency = "USD";
+          input_microusd_per_million = modelPolicy.inputMicrousdPerMillion;
+          output_microusd_per_million = modelPolicy.outputMicrousdPerMillion;
+        };
+        inherit tools;
+        budget.max_output_tokens = broker.llm.maxCompletionTokens;
+        revision = builtins.hashString "sha256" (
+          builtins.toJSON {
+            inherit
+              version
+              provider
+              model
+              protocol
+              endpoint
+              pricing
+              tools
+              budget
+              ;
+          }
+        );
+      };
+  projections = import ../../lib/piProviderGrants.nix { inherit lib; };
+  effectiveGrants =
+    if brokerEnabled && (broker.llm.providerGrants or [ ]) != [ ] then
+      map (projections.runner "http://${broker.gateway}:${toString broker.llm.port}") broker.llm.providerGrants
+    else
+      lib.optional (legacyGrant != null) legacyGrant;
   configuration = (pkgs.formats.json { }).generate "${container}-pi-durable.json" {
     stateDir = "/state";
     workspace = "/workspace";
     socketPath = "/run/tentaflake-pi-durable/control/runner.sock";
     apiTokenFile = "/run/tentaflake-pi-durable/api-token";
     brokerTokenFile = "/run/tentaflake-pi-durable/broker-token";
+    brokerMaxRequestBytes = if brokerEnabled then broker.maxRequestBytes else 0;
     brokerBaseUrl =
       if brokerEnabled then "http://${broker.gateway}:${toString broker.llm.port}/v1" else "";
-    inherit model;
+    model = if effectiveGrants == [ ] then "" else (builtins.head effectiveGrants).model;
+    grants = effectiveGrants;
     inherit tools;
     researchCommand = "${researchPackage}/bin/research-client";
   };
@@ -156,8 +203,11 @@ in
       message = "tentaflake: Pi Durable image bundle must be built from the selected reviewed runner package.";
     }
     {
-      assertion = brokerEnabled && model != "";
-      message = "tentaflake: Pi Durable requires one exact SSE-enabled Responses broker model, no legacy fetch, and no incompatible chat-only strict-cost policy; policy is never silently downgraded.";
+      assertion =
+        brokerEnabled
+        && effectiveGrants != [ ]
+        && lib.all (grant: lib.all (tool: lib.elem tool tools) grant.tools) effectiveGrants;
+      message = "tentaflake: Pi Durable requires SSE-enabled model grants limited to the capsule tools, with fetch and chat-only strict cost disabled.";
     }
     {
       assertion = researchEnabled;

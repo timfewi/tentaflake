@@ -125,7 +125,9 @@
   "broker": {
     "paths": [
       "crates/tentaflake-broker/**",
-      "pkgs/tentaflake-broker/**"
+      "pkgs/tentaflake-broker/**",
+      "tests/broker-provider-grants.py",
+      "lib/piProviderGrants.nix"
     ],
     "checks": [
       "runtime",
@@ -210,6 +212,7 @@
     "paths": [
       "pkgs/tentaflake-pi-durable/**",
       "lib/piDurableTransport.nix",
+      "lib/piProviderGrants.nix",
       "lib/piDurableProvisioning.nix",
       "lib/piDurableTools.nix",
       "modules/pi-durable-provisioning.nix",

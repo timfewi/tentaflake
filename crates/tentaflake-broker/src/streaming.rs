@@ -16,9 +16,29 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::time::{Instant, timeout_at};
 
+pub(crate) fn provider_headers(
+    route: &str,
+    credential: &str,
+) -> Result<reqwest::header::HeaderMap, reqwest::header::InvalidHeaderValue> {
+    use reqwest::header::{AUTHORIZATION, HeaderMap, HeaderValue};
+    let mut headers = HeaderMap::new();
+    if route == "/v1/messages" {
+        headers.insert("x-api-key", HeaderValue::from_str(credential)?);
+        headers.insert("anthropic-version", HeaderValue::from_static("2023-06-01"));
+    } else {
+        headers.insert(
+            AUTHORIZATION,
+            HeaderValue::from_str(&format!("Bearer {credential}"))?,
+        );
+    }
+    Ok(headers)
+}
+
 pub struct StreamingResponse {
     pub activity: Option<tentaflake_activity::Guard>,
     pub target: ResolvedTarget,
+    pub grant_revision: Option<String>,
+    pub operation: Option<String>,
     pub credential: String,
     pub session_id: Option<String>,
     pub body: Vec<u8>,
@@ -123,6 +143,7 @@ impl StreamingResponse {
                 let audited = self.audit.record(&self.agent, "llm", "stream_aborted", json!({
                     "route": self.route, "model": self.model_policy.name,
                     "provider": self.target.host, "reason": failure.reason,
+                    "grant_revision": self.grant_revision, "operation": self.operation,
                 })).is_ok();
                 let mut delivered = false;
                 if !headers_sent && failure.status != 0 && Instant::now() < total {
@@ -191,7 +212,10 @@ impl StreamingResponse {
         let mut response = guarded(reader, first, async {
             let mut upstream = client
                 .post(self.target.url.clone())
-                .bearer_auth(&self.credential)
+                .headers(
+                    provider_headers(&self.route, &self.credential)
+                        .map_err(|_| Failure::upstream("provider credential is unavailable"))?,
+                )
                 .header(CONTENT_TYPE, "application/json")
                 .header(ACCEPT, "text/event-stream")
                 .body(self.body.clone());
@@ -250,10 +274,11 @@ impl StreamingResponse {
         }
         let mut parser = SseParser::new(self.policy.max_event_bytes);
         let mut protocol = Protocol::new(self.route == "/v1/responses");
+        protocol.anthropic = self.route == "/v1/messages";
         if let Some(guard) = &self.usage_guard {
             protocol.accounting = Some((guard, &self.model_policy));
         }
-        if self.settlement.is_some() {
+        if self.settlement.is_some() || self.grant_revision.is_some() {
             protocol.expected_model = Some(&self.model_policy.name);
         }
         let mut received = 0_usize;
@@ -295,12 +320,21 @@ impl StreamingResponse {
                     write_bytes(reader, writer, deadline, b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\nConnection: close\r\nCache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\n\r\n").await?;
                 }
                 if let Some(outcome) = event.terminal {
+                    let cost = crate::broker::parse_usage(Some(&protocol.usage)).and_then(
+                        |(input, output, _)| {
+                            crate::broker::estimate_cost(&self.model_policy, input, output)
+                        },
+                    );
+                    if self.grant_revision.is_some() && outcome == "completed" && cost.is_none() {
+                        return Err(Failure::upstream("terminal provider usage missing"));
+                    }
                     // Persist completion admission before releasing the terminal marker.
                     self.audit.record(&self.agent, "llm", outcome, json!({
                         "route": self.route, "provider": self.target.host,
                         "model": self.model_policy.name, "streaming": true, "status": 200,
                         "response_bytes": received, "latency_ms": started.elapsed().as_millis(),
-                        "usage": protocol.usage,
+                        "grant_revision":self.grant_revision, "operation":self.operation,
+                        "measured_cost_microusd":cost, "usage": protocol.usage,
                     })).map_err(|_| Failure { status: 503, reason: "audit log is unavailable" })?;
                 }
                 let prefix = format!("{:x}\r\n", frame.len());
@@ -376,6 +410,7 @@ struct Event {
 }
 
 struct Protocol<'a> {
+    anthropic: bool,
     responses: bool,
     chat_finished: bool,
     usage: Value,
@@ -389,6 +424,7 @@ impl<'a> Protocol<'a> {
     fn new(responses: bool) -> Self {
         Self {
             responses,
+            anthropic: false,
             chat_finished: false,
             usage: Value::Null,
             expected_model: None,
@@ -396,6 +432,90 @@ impl<'a> Protocol<'a> {
             completion_id: None,
             first_frame: true,
         }
+    }
+
+    fn anthropic_event(&mut self, kind: Option<&str>, value: &Value) -> Result<Event, Failure> {
+        let event = value["type"]
+            .as_str()
+            .ok_or_else(|| Failure::upstream("message event has no type"))?;
+        if kind.is_some_and(|name| name != event) {
+            return Err(Failure::upstream(
+                "message event type disagrees with its SSE field",
+            ));
+        }
+        let terminal = match event {
+            "ping" => None,
+            "error" => Some("failed"),
+            "message_start" if self.completion_id.is_none() => {
+                let message = &value["message"];
+                let model = message["model"]
+                    .as_str()
+                    .ok_or_else(|| Failure::upstream("missing message model"))?;
+                if self
+                    .expected_model
+                    .is_some_and(|required| !crate::broker::provider_model_matches(required, model))
+                    || message["role"] != "assistant"
+                    || message["type"] != "message"
+                {
+                    return Err(Failure::upstream(
+                        "message does not match the provider grant",
+                    ));
+                }
+                self.completion_id = Some(
+                    message["id"]
+                        .as_str()
+                        .filter(|id| !id.is_empty())
+                        .ok_or_else(|| Failure::upstream("missing message identity"))?
+                        .to_owned(),
+                );
+                let usage = &message["usage"];
+                let input = usage["input_tokens"]
+                    .as_u64()
+                    .ok_or_else(|| Failure::upstream("missing message input usage"))?;
+                if ["cache_creation_input_tokens", "cache_read_input_tokens"]
+                    .iter()
+                    .any(|key| usage.get(*key).is_some_and(|v| v.as_u64() != Some(0)))
+                {
+                    return Err(Failure::upstream("cache usage has no configured price"));
+                }
+                self.usage = json!({"input_tokens":input});
+                None
+            }
+            "content_block_start" | "content_block_delta" | "content_block_stop"
+                if self.completion_id.is_some() && !self.chat_finished =>
+            {
+                None
+            }
+            "message_delta" if self.completion_id.is_some() && !self.chat_finished => {
+                let output = value
+                    .pointer("/usage/output_tokens")
+                    .and_then(Value::as_u64)
+                    .ok_or_else(|| Failure::upstream("missing message output usage"))?;
+                let input = self.usage["input_tokens"]
+                    .as_u64()
+                    .ok_or_else(|| Failure::upstream("missing message input usage"))?;
+                let total = input
+                    .checked_add(output)
+                    .ok_or_else(|| Failure::upstream("invalid message usage"))?;
+                self.usage =
+                    json!({"input_tokens":input,"output_tokens":output,"total_tokens":total});
+                if let Some((guard, model)) = self.accounting {
+                    observe_usage(guard, model, Some(&self.usage))
+                        .map_err(|_| Failure::upstream("budget accounting is unavailable"))?;
+                }
+                self.chat_finished = matches!(
+                    value.pointer("/delta/stop_reason").and_then(Value::as_str),
+                    Some("end_turn" | "stop_sequence" | "max_tokens" | "tool_use" | "refusal")
+                );
+                None
+            }
+            "message_stop" if self.chat_finished => Some("completed"),
+            _ => return Err(Failure::upstream("unexpected message stream state")),
+        };
+        Ok(Event {
+            has_data: true,
+            terminal,
+        })
     }
 
     fn inspect(&mut self, frame: &[u8]) -> Result<Event, Failure> {
@@ -425,7 +545,7 @@ impl<'a> Protocol<'a> {
             });
         }
         let data = data.join("\n");
-        if !self.responses && data == "[DONE]" {
+        if !self.responses && !self.anthropic && data == "[DONE]" {
             if !self.chat_finished {
                 return Err(Failure::upstream(
                     "completion ended without a finish reason",
@@ -445,6 +565,9 @@ impl<'a> Protocol<'a> {
             .map_err(|_| Failure::upstream("event data is not valid JSON"))?;
         if !value.is_object() {
             return Err(Failure::upstream("event data must be a JSON object"));
+        }
+        if self.anthropic {
+            return self.anthropic_event(name, &value);
         }
         if let Some((guard, model)) = self.accounting {
             let usage = if self.responses {
@@ -477,6 +600,14 @@ impl<'a> Protocol<'a> {
             if outcome.is_some() && kind != "error" {
                 if value.pointer("/response/status").and_then(Value::as_str) != outcome {
                     return Err(Failure::upstream("Responses terminal status is invalid"));
+                }
+                if self.expected_model.is_some_and(|required| {
+                    !value
+                        .pointer("/response/model")
+                        .and_then(Value::as_str)
+                        .is_some_and(|model| crate::broker::provider_model_matches(required, model))
+                }) {
+                    return Err(Failure::upstream("response model differs from grant"));
                 }
                 self.usage = sanitize_usage(value.pointer("/response/usage"));
             }

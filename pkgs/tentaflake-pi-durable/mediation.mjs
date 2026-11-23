@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { spawn } from 'node:child_process';
 import { openSync, readFileSync, closeSync, writeSync, fsyncSync, linkSync, unlinkSync, constants, fstatSync } from 'node:fs';
@@ -21,10 +22,40 @@ export function secret(path, { sharedApi = false } = {}) {
   } finally { closeSync(fd); }
 }
 
+async function reserveRunBudget(operation, request, maxBytes) {
+  const { run, grant } = operation;
+  let size = 0;
+  const chunks = [];
+  if (!request.body) throw new Refusal('Missing provider request body');
+  for await (const chunk of request.body) {
+    size += chunk.byteLength;
+    if (size > maxBytes) throw new Refusal('Provider request exceeds the broker body limit');
+    chunks.push(chunk);
+  }
+  const encoded = Buffer.concat(chunks, size);
+  const payload = JSON.parse(encoded);
+  const completion = grant.protocol === 'openai-responses' ? payload.max_output_tokens :
+    payload.max_completion_tokens ?? payload.max_tokens;
+  if (!Number.isSafeInteger(completion) || completion < 1 || completion > grant.budget.max_output_tokens)
+    throw new Refusal('Provider request has no approved completion limit');
+  const tokens = BigInt(encoded.length) + BigInt(completion);
+  const cost = (BigInt(encoded.length) * BigInt(grant.pricing.input_microusd_per_million) +
+    BigInt(completion) * BigInt(grant.pricing.output_microusd_per_million) + 999999n) / 1000000n;
+  const used = run.reserved ?? { tokens: 0n, cost: 0n };
+  const limit = run.grant.run_budget;
+  if (run.locallyRefused || used.tokens + tokens > BigInt(limit.max_tokens) || used.cost + cost > BigInt(limit.max_cost_microusd)) {
+    throw new Refusal('Run budget cannot fund another provider request');
+  }
+  run.reserved = { tokens: used.tokens + tokens, cost: used.cost + cost };
+  return encoded;
+}
+
 // All methods except fixed model lookup and one supported stream are absent as
 // authority, rather than inherited from the provider registry. The SDK remains
 // the only model loop. No CodingTools, execution environment or extension load.
-export function modelBoundary({ ledger, models, model, brokerBaseUrl, brokerTokenFile, active, allowLoopback = false }) {
+export function modelBoundary({ ledger, models, model, grantedModels, brokerBaseUrl, brokerTokenFile, active, allowLoopback = false, brokerMaxRequestBytes = 1024 * 1024 }) {
+  if (!Number.isSafeInteger(brokerMaxRequestBytes) || brokerMaxRequestBytes < 1)
+    throw new Refusal('Invalid broker request body limit');
   const parsed = /^http:\/\/((?:[0-9]{1,3}\.){3}[0-9]{1,3})(?::([1-9][0-9]{0,4}))?\/v1\/?$/.exec(brokerBaseUrl);
   const octets = parsed?.[1].split('.').map(Number);
   if (!octets || octets.some((value, index) => value > 255 || String(value) !== parsed[1].split('.')[index]) ||
@@ -33,41 +64,137 @@ export function modelBoundary({ ledger, models, model, brokerBaseUrl, brokerToke
         (octets[0] === 192 && octets[1] === 168) || (allowLoopback && octets[0] === 127)))
     throw new Refusal('Expected fixed private IPv4 broker /v1 endpoint');
   const base = new URL(brokerBaseUrl);
-  const target = `${base.origin}/v1/responses`;
+  if (!grantedModels && model) grantedModels = new Map([[`${model.provider}\0${model.id}`, { model, grant: {
+    revision: 'legacy-single-model', provider: model.provider, model: model.id, protocol: 'openai-responses',
+    endpoint: `${base.origin}/v1/responses`, budget: { max_output_tokens: 4096 }, tools: [],
+  } }]]);
+  const grants = [...grantedModels.values()].flatMap(selected =>
+    selected.revisions ? [...selected.revisions.values()] : [selected.grant]);
+  const targets = new Set(grants.map(grant => grant.endpoint));
+  const routeFor = protocol => protocol === 'openai-responses' ? '/v1/responses' :
+    protocol === 'anthropic-messages' ? '/v1/messages' : '/v1/chat/completions';
+  if (grants.some(grant => { try { const url = new URL(grant.endpoint);
+    return url.href !== base.origin + routeFor(grant.protocol);
+  } catch { return true; } }))
+    throw new Refusal('Grant endpoint is outside the fixed broker');
   const context = new AsyncLocalStorage();
   const originalFetch = globalThis.fetch;
   globalThis.fetch = async (input, options = {}) => {
     const operation = context.getStore();
     const url = typeof input === 'string' || input instanceof URL ? String(input) : input.url;
-    if (!operation || operation.sent || url !== target || (options.method ?? input.method ?? 'GET').toUpperCase() !== 'POST')
+    // The pinned Anthropic client uses its beta messages resource with one fixed
+    // query flag. Only that SDK spelling maps to the canonical broker route.
+    const endpoint = operation?.grant.endpoint;
+    const beta = operation?.grant.protocol === 'anthropic-messages' && url === endpoint + '?beta=true';
+    if (!operation || operation.attempted || (!beta && url !== endpoint) || !targets.has(endpoint) || (options.method ?? input.method ?? 'GET').toUpperCase() !== 'POST')
       throw new Refusal('Unmediated or repeated model transport denied');
+    operation.attempted = true;
+    if (operation.run.grant?.run_budget) {
+      try {
+        const request = new Request(input, options);
+        const body = await reserveRunBudget(operation, request, brokerMaxRequestBytes);
+        options = { ...options, method: request.method, signal: request.signal, headers: request.headers, body };
+        input = url;
+      } catch (error) {
+        operation.locallyRefused = true;
+        operation.run.locallyRefused = true;
+        throw error;
+      }
+    }
     operation.sent = true;
     // SQLite FULL commit happens before the first byte may reach the broker.
     ledger.operation(operation.runId, operation.taskId, 'model');
-    try { return await originalFetch(input, { ...options, redirect: 'error' }); }
+    const headers = new Headers(input instanceof Request ? input.headers : undefined);
+    new Headers(options.headers).forEach((value, name) => headers.set(name, value));
+    // Provider SDKs express virtual credentials in provider-native headers.
+    // Replace all of them with the one broker-scoped bearer credential; none
+    // of the capsule's header choices can select an upstream credential.
+    headers.delete('x-api-key');
+    headers.set('authorization', `Bearer ${operation.brokerToken}`);
+    for (const name of ['x-tentaflake-grant','x-tentaflake-operation','x-opencode-session']) headers.delete(name);
+    if (operation.grant.brokerBinding === true) {
+      headers.set('x-tentaflake-grant', operation.grant.revision);
+      headers.set('x-tentaflake-operation', createHash('sha256').update(JSON.stringify([operation.runId,operation.taskId])).digest('hex'));
+      if (operation.grant.protocol === 'opencode-go-chat-completions')
+        headers.set('x-opencode-session', createHash('sha256').update(operation.sessionId).digest('hex'));
+    }
+    const target = beta && input instanceof Request ? new Request(endpoint,input) : beta ? endpoint : input;
+    try {
+      const response = await originalFetch(target, { ...options, headers, redirect: 'error' });
+      operation.sse = response.ok && response.headers.get('content-type')?.split(';')[0].trim() === 'text/event-stream';
+      return response;
+    }
     catch (error) { ledger.uncertain(operation.runId); throw error; }
   };
-  const lookup = (provider, id) => provider === model.provider && id === model.id ? model : undefined;
+  const lookup = (provider, id) => grantedModels.get(`${provider}\0${id}`)?.model;
   const facade = new Proxy({}, {
     get(_target, property) {
       if (property === 'getModel') return lookup;
       if (property === 'streamSimple') return (requested, messages, options) => {
         const run = active();
-        if (!run || !run.taskId || run.cancelled || ledger.quarantined || requested.id !== model.id || requested.provider !== model.provider)
+        const selected = grantedModels.get(`${requested.provider}\0${requested.id}`);
+        const runGrant = run?.grant ?? selected?.grant;
+        if (!run || !run.taskId || run.cancelled || ledger.quarantined || !selected ||
+            requested.id !== runGrant?.model || requested.provider !== runGrant?.provider ||
+            !(selected.revisions ? selected.revisions.has(runGrant.revision) : selected.grant.revision === runGrant.revision))
           throw new Refusal('Missing stable model operation correlation');
-        const operation = { runId: run.id, taskId: run.taskId, sent: false };
+        const { model } = selected;
+        const grant = selected.revisions?.get(runGrant.revision) ?? selected.grant;
+        const brokerToken = secret(brokerTokenFile);
+        const operation = { run, runId: run.id, taskId: run.taskId, sessionId: run.sessionId, sent: false, grant, brokerToken };
         run.taskId = undefined;
+        // Anthropic appends /v1/messages itself. Disable its automatic provider
+        // fallback and deferred placeholder tool to keep the declared grant exact.
+        const brokerModel = { ...model, baseUrl: base.href.replace(/\/$/,'') };
+        if (grant.protocol === 'anthropic-messages') {
+          brokerModel.baseUrl = base.origin;
+          brokerModel.compat = { ...model.compat, allowedFallbackModels: [], supportsMidConvoToolChanges: false };
+        }
+        const signal = run.controller?.signal && options?.signal
+          ? AbortSignal.any([run.controller.signal, options.signal]) : run.controller?.signal ?? options?.signal;
         const stream = context.run(operation, () => models.streamSimple(
-          { ...model, baseUrl: base.href.replace(/\/$/, '') }, messages,
-          { ...options, apiKey: secret(brokerTokenFile), deferred: false, maxRetries: 0,
-            transport: 'sse', fetch: globalThis.fetch },
+          brokerModel,
+          { ...messages, ...(messages?.tools ? { tools: messages.tools.filter(tool => grant.tools.includes(tool.name)) } : {}) },
+          { ...options, apiKey: brokerToken, deferred: false, maxRetries: 0,
+            maxTokens: Math.min(options?.maxTokens ?? grant.budget.max_output_tokens, grant.budget.max_output_tokens),
+            ...(grant.brokerBinding ? {cacheRetention:'none'} : {}),
+            transport: 'sse', fetch: globalThis.fetch, signal },
         ));
         // A transport response is NOT a durable SDK checkpoint. Keep every
         // operation receipt until the submission + idle barrier is committed.
-        stream.result().then(message => {
-          if (['error', 'aborted'].includes(message.stopReason)) ledger.uncertain(operation.runId);
-        }, () => ledger.uncertain(operation.runId));
-        return stream;
+        const noSend = { input: 0, output: 0, streamed: false, sent: false };
+        const generation = stream.result().then(message => {
+          if (operation.locallyRefused) return noSend;
+          run.usage = message.usage ?? null;
+          if (['error', 'aborted'].includes(message.stopReason)) { ledger.uncertain(operation.runId); return null; }
+          const usage = message.usage;
+          if (!operation.sent || !usage) return null;
+          const counts = [usage.input,usage.cacheRead ?? 0,usage.cacheWrite ?? 0,usage.output];
+          if (counts.some(value => !Number.isSafeInteger(value) || value < 0)) return null;
+          return { input: counts[0]+counts[1]+counts[2], output: usage.output, streamed: operation.sse === true, sent: true };
+        }, () => {
+          if (operation.locallyRefused) return noSend;
+          ledger.uncertain(operation.runId);
+          return null;
+        });
+        run.generations?.push(generation);
+        return {
+          result: () => stream.result(),
+          async *[Symbol.asyncIterator]() {
+            for await (const event of stream) {
+              if (event.type === 'text_delta' && event.delta && !ledger.quarantined) {
+                const characters = Array.from(event.delta);
+                for (let offset = 0; offset < characters.length; offset += 512) {
+                  ledger.event(run.id, 'run.text_delta', {
+                    generation: Number(operation.taskId),
+                    text: characters.slice(offset, offset + 512).join(''),
+                  });
+                }
+              }
+              yield event;
+            }
+          },
+        };
       };
       return () => { throw new Refusal(`Model capability ${String(property)} is unavailable`); };
     },
@@ -75,9 +202,17 @@ export function modelBoundary({ ledger, models, model, brokerBaseUrl, brokerToke
   return { models: facade, close() { globalThis.fetch = originalFetch; } };
 }
 
+const researchCapabilities = Object.freeze([
+  'research_browser', 'research_fetch', 'research_job', 'research_read', 'research_search',
+]);
+
 export class Research {
-  constructor(command) {
+  constructor(command, granted = researchCapabilities) {
     if (!/^\/nix\/store\/[^/]+\/bin\/research-client$/.test(command)) throw new Refusal('Research command is not a pinned closure');
+    if (!Array.isArray(granted) || new Set(granted).size !== granted.length ||
+        granted.some(name => !researchCapabilities.includes(name)))
+      throw new Refusal('Invalid Research capability grant');
+    this.granted = new Set(granted);
     this.child = spawn(command, ['--socket', '/run/tentaflake-research/socket'], {
       stdio: ['pipe', 'pipe', 'ignore'], env: { PATH: '', LANG: 'C.UTF-8' },
     });
@@ -108,6 +243,9 @@ export class Research {
   }
   async request(method, params, signal) {
     if (this.closed || signal?.aborted || this.pending.size >= 4) throw new Refusal('Research unavailable');
+    if (method === 'tools/call' && (!params || typeof params !== 'object' ||
+        typeof params.name !== 'string' || !this.granted.has(params.name)))
+      throw new Refusal('Research capability is not granted');
     const id = ++this.sequence;
     let timer, abort;
     try {
@@ -127,8 +265,8 @@ export class Research {
     if (result?.protocolVersion !== '2025-11-25') throw new Refusal('Research protocol mismatch');
     this.child.stdin.write(JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' }) + '\n');
     const resultTools = await this.request('tools/list', {});
-    const expected = ['research_browser','research_fetch','research_job','research_read','research_search'];
-    if (JSON.stringify(resultTools.tools?.map(t => t.name).sort()) !== JSON.stringify(expected))
+    if (!Array.isArray(resultTools?.tools) || resultTools.tools.length !== researchCapabilities.length ||
+        !researchCapabilities.every(name => resultTools.tools.some(tool => tool?.name === name)))
       throw new Refusal('Research capability mismatch');
   }
   close() {

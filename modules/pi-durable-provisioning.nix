@@ -7,6 +7,8 @@
 }:
 let
   cfg = config.tentaflake.piDurableProvisioning;
+  grants = import ../lib/piProviderGrants.nix { inherit lib; };
+  piTools = import ../lib/piDurableTools.nix { inherit lib; };
   runtime = config.tentaflake.piDurableRuntime;
   plan = (import ../lib/piDurableProvisioning.nix { inherit lib; }) {
     instances = config.tentaflake.agentInstances;
@@ -75,6 +77,11 @@ in
       type = lib.types.bool;
       default = false;
       description = "Explicit acceptance that this Responses/SSE runtime cannot provide the broker's chat-only strict cost envelope. Ordinary finite request/token/cost budgets remain enforced; this never weakens an existing strict policy.";
+    };
+    providerGrants = lib.mkOption {
+      type = lib.types.listOf grants.providerGrantType;
+      default = [ ];
+      description = "Host-approved provider policies. Each capsule receives their intersection with its declared tools.";
     };
     provider =
       nullable
@@ -162,7 +169,13 @@ in
       assertions = [
         {
           assertion = plan.complete;
-          message = "tentaflake Pi provisioning requires explicit provider, priced model, Research approval, resources, broker budgets, worker limits, quotas, network pool and finite maxActiveAgents host policy.";
+          message = "tentaflake Pi provisioning requires an exclusive provider grant table or legacy priced model, Research approval, resources, broker budgets, worker limits, quotas, network pool and finite maxActiveAgents host policy.";
+        }
+        {
+          assertion = lib.all (
+            g: lib.all (tool: lib.elem tool piTools.supported) g.tools && unique g.tools
+          ) cfg.providerGrants;
+          message = "tentaflake Pi provisioning grant tools must be a unique subset of the supported Pi tools.";
         }
         {
           assertion = runtime.enable && transport.configurationSupported config;

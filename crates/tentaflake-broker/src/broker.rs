@@ -1,4 +1,4 @@
-use crate::config::{Config, ModelPolicy};
+use crate::config::{Config, ModelPolicy, ProviderGrant, ProviderProtocol, binding_id};
 use crate::http::{Request, Response};
 use crate::policy::{ResolvedTarget, resolve_public_target};
 use crate::state::{Audit, Limits, Quarantine, UsageGuard, read_secret, unix_seconds};
@@ -94,8 +94,21 @@ impl Broker {
         read_secret(&self.config.token_file)
             .map_err(|_| Failure::new(503, "health", "broker credential is unavailable"))?;
         if let Some(policy) = &self.config.llm {
-            read_secret(&policy.provider_credential_file)
-                .map_err(|_| Failure::new(503, "health", "provider credential is unavailable"))?;
+            let credentials = policy
+                .grants
+                .iter()
+                .map(|grant| &grant.provider_credential_file)
+                .chain(
+                    policy
+                        .grants
+                        .is_empty()
+                        .then_some(&policy.provider_credential_file),
+                );
+            for path in credentials {
+                read_secret(path).map_err(|_| {
+                    Failure::new(503, "health", "provider credential is unavailable")
+                })?;
+            }
         }
         self.audit
             .check_ready()
@@ -110,11 +123,34 @@ impl Broker {
         });
         self.require_post_and_auth(&request)?;
         let route = route_without_query(&request.path);
-        if !matches!(route, "/v1/chat/completions" | "/v1/responses") {
-            return Err(Failure::new(404, "llm", "route is not allowed"));
-        }
-        let session_id = provider_session(&request)?;
         let policy = self.config.llm.as_ref().expect("mode checked");
+        let grant = match (
+            policy.grants.is_empty(),
+            request.headers.get("x-tentaflake-grant"),
+        ) {
+            (true, None) if matches!(route, "/v1/chat/completions" | "/v1/responses") => None,
+            (true, _) => return Err(Failure::new(404, "llm", "route is not allowed")),
+            (false, Some(revision)) => Some(
+                policy
+                    .grants
+                    .iter()
+                    .find(|grant| {
+                        &grant.revision == revision && grant.protocol.route() == request.path
+                    })
+                    .ok_or_else(|| Failure::new(403, "llm", "provider binding is not granted"))?,
+            ),
+            (false, None) => return Err(Failure::new(403, "llm", "provider binding is required")),
+        };
+        let session_id = provider_session(&request)?;
+        if grant.is_some_and(|g| {
+            (g.protocol == ProviderProtocol::OpencodeGoChatCompletions) != session_id.is_some()
+        }) {
+            return Err(Failure::new(
+                400,
+                "llm",
+                "provider session binding is invalid",
+            ));
+        }
         if policy.strict_cost_envelope && route != "/v1/chat/completions" {
             return Err(Failure::new(
                 404,
@@ -137,7 +173,12 @@ impl Broker {
         if policy.strict_cost_envelope {
             require_strict_envelope(object)?;
         }
-        require_local_tools(object)?;
+        if let Some(g) = grant {
+            require_granted_tools(object, g)?;
+        }
+        if route != "/v1/messages" {
+            require_local_tools(object)?;
+        }
         let streaming = match object.get("stream") {
             None => false,
             Some(Value::Bool(value)) => *value,
@@ -173,9 +214,10 @@ impl Broker {
             .and_then(Value::as_str)
             .ok_or_else(|| Failure::new(400, "llm", "model is required"))?
             .to_string();
-        let model = policy
-            .allowed_models
-            .iter()
+        let model = grant
+            .map(|g| &g.model)
+            .into_iter()
+            .chain(policy.allowed_models.iter())
             .find(|candidate| candidate.name == model_name)
             .ok_or_else(|| Failure::new(403, "llm", "model is not allowed"))?;
         let token_field = if route == "/v1/responses" {
@@ -192,14 +234,27 @@ impl Broker {
         } else {
             "max_tokens"
         };
+        let maximum = grant.map_or(policy.max_completion_tokens, |g| g.max_output_tokens);
+        if grant.is_some()
+            && object
+                .get(token_field)
+                .and_then(Value::as_u64)
+                .is_some_and(|tokens| tokens > maximum)
+        {
+            return Err(Failure::new(
+                403,
+                "llm",
+                "completion limit exceeds the provider grant",
+            ));
+        }
         let completion_tokens = match object.get(token_field) {
             Some(value) => value
                 .as_u64()
                 .ok_or_else(|| {
                     Failure::new(400, "llm", "completion-token limit must be an integer")
                 })?
-                .min(policy.max_completion_tokens),
-            None => policy.max_completion_tokens,
+                .min(maximum),
+            None => maximum,
         };
         if completion_tokens == 0 {
             return Err(Failure::new(
@@ -215,6 +270,24 @@ impl Broker {
             .ok_or_else(|| Failure::new(400, "llm", "token reservation is too large"))?;
         let estimated_cost = estimate_cost(model, input_tokens, completion_tokens)
             .ok_or_else(|| Failure::new(400, "llm", "cost reservation is too large"))?;
+        if grant.is_some() {
+            let operation = request
+                .headers
+                .get("x-tentaflake-operation")
+                .filter(|v| binding_id(v))
+                .ok_or_else(|| {
+                    Failure::new(400, "llm", "a stable provider operation is required")
+                })?;
+            if !crate::state::claim_provider_operation(&self.config.budget_state_file, operation)
+                .map_err(|_| Failure::new(503, "llm", "provider operation ledger is unavailable"))?
+            {
+                return Err(Failure::new(
+                    409,
+                    "llm",
+                    "provider operation has already been admitted",
+                ));
+            }
+        }
         let (reservation, usage_guard) = self
             .limits
             .reserve_llm(estimated_tokens, estimated_cost)
@@ -222,12 +295,13 @@ impl Broker {
 
         let body = serde_json::to_vec(&payload)
             .map_err(|_| Failure::new(400, "llm", "request body cannot be encoded"))?;
-        let base = reqwest::Url::parse(&policy.upstream_base_url)
-            .map_err(|_| Failure::new(502, "llm", "configured upstream is invalid"))?;
-        let relative = route.strip_prefix("/v1/").expect("allowed route");
-        let upstream_url = base
-            .join(relative)
-            .map_err(|_| Failure::new(502, "llm", "configured upstream route is invalid"))?;
+        let upstream_url = if let Some(g) = grant {
+            reqwest::Url::parse(&g.upstream_endpoint)
+        } else {
+            reqwest::Url::parse(&policy.upstream_base_url)
+                .and_then(|base| base.join(route.strip_prefix("/v1/").expect("allowed route")))
+        }
+        .map_err(|_| Failure::new(502, "llm", "configured upstream route is invalid"))?;
         let host = upstream_url
             .host_str()
             .ok_or_else(|| Failure::new(502, "llm", "configured upstream has no host"))?
@@ -239,8 +313,10 @@ impl Broker {
             policy.allow_plain_http_for_tests,
         )
         .map_err(|_| Failure::new(502, "llm", "upstream address policy rejected the provider"))?;
-        let credential = read_secret(&policy.provider_credential_file)
-            .map_err(|_| Failure::new(503, "llm", "provider credential is unavailable"))?;
+        let credential = read_secret(grant.map_or(&policy.provider_credential_file, |g| {
+            &g.provider_credential_file
+        }))
+        .map_err(|_| Failure::new(503, "llm", "provider credential is unavailable"))?;
         self.audit
             .record(
                 &self.config.agent,
@@ -251,6 +327,8 @@ impl Broker {
                     "provider": resolved.host,
                     "route": route,
                     "model": model_name,
+                    "grant_revision": grant.map(|g| &g.revision),
+                    "operation": request.headers.get("x-tentaflake-operation"),
                     "reserved_tokens": estimated_tokens,
                     "reserved_cost_microusd": estimated_cost,
                 }),
@@ -281,6 +359,8 @@ impl Broker {
                         output_microusd_per_million: model.output_microusd_per_million,
                     },
                     agent: self.config.agent.clone(),
+                    grant_revision: grant.map(|g| g.revision.clone()),
+                    operation: request.headers.get("x-tentaflake-operation").cloned(),
                     route: route.to_string(),
                 })),
             });
@@ -289,7 +369,10 @@ impl Broker {
         let started = Instant::now();
         let mut upstream = client
             .post(resolved.url.clone())
-            .bearer_auth(credential)
+            .headers(
+                crate::streaming::provider_headers(route, &credential)
+                    .map_err(|_| Failure::new(503, "llm", "provider credential is unavailable"))?,
+            )
             .header(CONTENT_TYPE, "application/json")
             .body(body);
         if let Some(session) = session_id {
@@ -344,11 +427,57 @@ impl Broker {
                 })
             })
             .unwrap_or(Value::Null);
+        let actual_usage = if grant.is_some() && status == 200 {
+            let value = response_json
+                .as_ref()
+                .ok_or_else(|| Failure::new(502, "llm", "invalid provider response"))?;
+            let returned = value["model"]
+                .as_str()
+                .filter(|m| provider_model_matches(&model_name, m))
+                .ok_or_else(|| Failure::new(502, "llm", "unexpected provider model"))?;
+            let complete = matches!(
+                nonstream_activity_outcome(route, status, Some(value), returned),
+                tentaflake_activity::Outcome::Succeeded
+            );
+            if route == "/v1/messages"
+                && ["cache_creation_input_tokens", "cache_read_input_tokens"]
+                    .iter()
+                    .any(|k| value["usage"].get(k).is_some_and(|v| v.as_u64() != Some(0)))
+            {
+                return Err(Failure::new(
+                    502,
+                    "llm",
+                    "cache usage has no configured price",
+                ));
+            }
+            if !complete {
+                return Err(Failure::new(502, "llm", "incomplete provider response"));
+            }
+            let input = usage["input_tokens"]
+                .as_u64()
+                .ok_or_else(|| Failure::new(502, "llm", "provider usage missing"))?;
+            let output = usage["output_tokens"]
+                .as_u64()
+                .ok_or_else(|| Failure::new(502, "llm", "provider usage missing"))?;
+            let total = input
+                .checked_add(output)
+                .ok_or_else(|| Failure::new(502, "llm", "invalid provider usage"))?;
+            if route != "/v1/messages" && usage["total_tokens"].as_u64() != Some(total) {
+                return Err(Failure::new(502, "llm", "invalid provider usage"));
+            }
+            let cost = estimate_cost(model, input, output)
+                .ok_or_else(|| Failure::new(502, "llm", "invalid provider cost"))?;
+            Some(cost)
+        } else {
+            None
+        };
         self.audit
             .record(
                 &self.config.agent,
                 "llm",
-                if policy.strict_cost_envelope && !confirmed {
+                if grant.is_some() && status >= 300 {
+                    "failed"
+                } else if policy.strict_cost_envelope && !confirmed {
                     "unconfirmed"
                 } else {
                     "completed"
@@ -359,6 +488,9 @@ impl Broker {
                     "model": model_name,
                     "status": status,
                     "latency_ms": started.elapsed().as_millis(),
+                    "grant_revision": grant.map(|g|&g.revision),
+                    "operation": request.headers.get("x-tentaflake-operation"),
+                    "measured_cost_microusd": actual_usage,
                     "usage": usage,
                 }),
             )
@@ -368,6 +500,14 @@ impl Broker {
                 nonstream_activity_outcome(route, status, response_json.as_ref(), &model_name);
             (activity, outcome)
         });
+        let (content_type, response_body) = if grant.is_some() && status >= 300 {
+            (
+                "application/json".into(),
+                b"{\"error\":\"provider rejected the request\"}".to_vec(),
+            )
+        } else {
+            (content_type, response_body)
+        };
         Ok(Response {
             status,
             content_type,
@@ -548,7 +688,11 @@ fn route_without_query(path: &str) -> &str {
     path.split('?').next().unwrap_or(path)
 }
 
-fn estimate_cost(model: &ModelPolicy, input_tokens: u64, output_tokens: u64) -> Option<u64> {
+pub(crate) fn estimate_cost(
+    model: &ModelPolicy,
+    input_tokens: u64,
+    output_tokens: u64,
+) -> Option<u64> {
     let input = u128::from(input_tokens) * u128::from(model.input_microusd_per_million);
     let output = u128::from(output_tokens) * u128::from(model.output_microusd_per_million);
     let total = input.checked_add(output)?;
@@ -631,6 +775,23 @@ fn nonstream_activity_outcome(
     let Some(value) = value.filter(|_| status == 200) else {
         return Outcome::Uncertain;
     };
+    if route == "/v1/messages" {
+        return if value["type"] == "message"
+            && value["role"] == "assistant"
+            && value["content"].is_array()
+            && value["id"].as_str().is_some_and(|id| !id.is_empty())
+            && value["model"]
+                .as_str()
+                .is_some_and(|m| provider_model_matches(requested_model, m))
+            && matches!(
+                value["stop_reason"].as_str(),
+                Some("end_turn" | "stop_sequence" | "max_tokens" | "tool_use" | "refusal")
+            ) {
+            Outcome::Succeeded
+        } else {
+            Outcome::Uncertain
+        };
+    }
     if route == "/v1/chat/completions" {
         return if complete_chat_response(value, requested_model) {
             Outcome::Succeeded
@@ -896,6 +1057,113 @@ fn strict_tool(value: &Value) -> bool {
                         && function.get("strict").is_none_or(Value::is_boolean)
                 })
     })
+}
+
+fn require_granted_tools(
+    payload: &serde_json::Map<String, Value>,
+    grant: &ProviderGrant,
+) -> Result<(), Failure> {
+    let denied = || Failure::new(403, "llm", "tool is not granted");
+    if [
+        "mcp_servers",
+        "fallbacks",
+        "container",
+        "web_search_options",
+        "plugins",
+        "extensions",
+        "data_sources",
+    ]
+    .iter()
+    .any(|key| payload.contains_key(*key))
+    {
+        return Err(denied());
+    }
+    if payload
+        .get("service_tier")
+        .is_some_and(|v| !matches!(v.as_str(), Some("default" | "standard_only")))
+    {
+        return Err(Failure::new(
+            403,
+            "llm",
+            "service tier is not priced by the grant",
+        ));
+    }
+    if grant.protocol == ProviderProtocol::AnthropicMessages {
+        let cache_hints = |v: &Value| {
+            v.as_array()
+                .is_some_and(|items| items.iter().any(|item| item.get("cache_control").is_some()))
+        };
+        if payload.contains_key("cache_control")
+            || ["system", "tools"]
+                .iter()
+                .any(|key| payload.get(*key).is_some_and(cache_hints))
+            || payload
+                .get("messages")
+                .and_then(Value::as_array)
+                .is_some_and(|items| {
+                    items
+                        .iter()
+                        .any(|item| item.get("content").is_some_and(cache_hints))
+                })
+        {
+            return Err(Failure::new(
+                403,
+                "llm",
+                "cache tier is not priced by the grant",
+            ));
+        }
+    }
+    let allowed_name = |value: &Value| {
+        value
+            .as_str()
+            .is_some_and(|name| grant.tools.iter().any(|t| t == name))
+    };
+    let tool_name = |tool: &Value| match grant.protocol {
+        ProviderProtocol::AnthropicMessages => {
+            tool.get("type").is_none_or(|t| t == "custom")
+                && tool.get("input_schema").is_some_and(Value::is_object)
+                && tool.get("name").is_some_and(allowed_name)
+        }
+        ProviderProtocol::OpenaiResponses => {
+            tool.get("type") == Some(&Value::String("function".into()))
+                && tool.get("name").is_some_and(allowed_name)
+        }
+        ProviderProtocol::OpencodeGoChatCompletions => {
+            tool.get("type") == Some(&Value::String("function".into()))
+                && tool.pointer("/function/name").is_some_and(allowed_name)
+        }
+    };
+    if payload.get("tools").is_some_and(|tools| {
+        !tools
+            .as_array()
+            .is_some_and(|items| items.iter().all(tool_name))
+    }) {
+        return Err(denied());
+    }
+    if let Some(choice) = payload.get("tool_choice") {
+        let valid = match choice {
+            Value::Null => true,
+            Value::String(name) => matches!(name.as_str(), "auto" | "none" | "required"),
+            Value::Object(_) => {
+                match (grant.protocol, choice.get("type").and_then(Value::as_str)) {
+                    (ProviderProtocol::AnthropicMessages, Some("auto" | "any" | "none")) => true,
+                    (ProviderProtocol::AnthropicMessages, Some("tool"))
+                    | (ProviderProtocol::OpenaiResponses, Some("function")) => {
+                        choice.get("name").is_some_and(allowed_name)
+                    }
+                    (ProviderProtocol::OpencodeGoChatCompletions, Some("function")) => {
+                        choice.pointer("/function/name").is_some_and(allowed_name)
+                    }
+                    _ => false,
+                }
+            }
+            _ => false,
+        };
+        if !valid {
+            return Err(denied());
+        }
+    }
+    Ok(())
 }
 
 fn require_local_tools(payload: &serde_json::Map<String, Value>) -> Result<(), Failure> {
@@ -1286,6 +1554,7 @@ mod tests {
             daily_cost_microusd: 100_000,
             max_audit_bytes: 1024 * 1024,
             llm: Some(LlmPolicy {
+                grants: vec![],
                 upstream_base_url: format!("http://{address}/v1/"),
                 provider_credential_file: provider_file,
                 allowed_models: vec![ModelPolicy {

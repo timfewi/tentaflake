@@ -15,24 +15,7 @@ let
   containerNames = lib.attrNames config.virtualisation.oci-containers.containers;
   bridgeName = name: "tfb-${builtins.substring 0 8 (builtins.hashString "sha256" name)}";
 
-  modelType = lib.types.submodule {
-    options = {
-      name = lib.mkOption {
-        type = lib.types.str;
-        description = "Exact upstream model identifier allowed for this agent.";
-      };
-      inputMicrousdPerMillion = lib.mkOption {
-        type = lib.types.ints.unsigned;
-        default = 0;
-        description = "Input price in micro-USD per million tokens.";
-      };
-      outputMicrousdPerMillion = lib.mkOption {
-        type = lib.types.ints.unsigned;
-        default = 0;
-        description = "Output price in micro-USD per million tokens.";
-      };
-    };
-  };
+  grants = import ../lib/piProviderGrants.nix { inherit lib; };
 
   agentType = lib.types.submodule (
     { name, ... }:
@@ -125,8 +108,13 @@ let
             example = "/run/agenix/openai-api-key";
             description = "Runtime-only host credential loaded by systemd; never mounted into the agent.";
           };
+          providerGrants = lib.mkOption {
+            type = lib.types.listOf grants.providerGrantType;
+            default = [ ];
+            description = "Exact provider, model, price, tool and credential bindings for this agent.";
+          };
           allowedModels = lib.mkOption {
-            type = lib.types.listOf modelType;
+            type = lib.types.listOf grants.modelType;
             default = [ ];
           };
           maxCompletionTokens = lib.mkOption {
@@ -222,8 +210,6 @@ let
       commonConfig name agent "llm"
       // {
         llm = {
-          upstream_base_url = agent.llm.upstreamBaseUrl;
-          provider_credential_file = "$CREDENTIALS_DIRECTORY/provider";
           max_completion_tokens = agent.llm.maxCompletionTokens;
           strict_cost_envelope = agent.llm.strictCostEnvelope;
           streaming = {
@@ -233,12 +219,19 @@ let
             idle_timeout_seconds = agent.llm.streaming.idleTimeoutSeconds;
             total_timeout_seconds = agent.llm.streaming.totalTimeoutSeconds;
           };
-          allowed_models = map (model: {
-            inherit (model) name;
-            input_microusd_per_million = model.inputMicrousdPerMillion;
-            output_microusd_per_million = model.outputMicrousdPerMillion;
-          }) agent.llm.allowedModels;
-        };
+        }
+        // (
+          if agent.llm.providerGrants == [ ] then
+            {
+              upstream_base_url = agent.llm.upstreamBaseUrl;
+              provider_credential_file = "$CREDENTIALS_DIRECTORY/provider";
+              allowed_models = map grants.modelPolicy agent.llm.allowedModels;
+            }
+          else
+            {
+              grants = map grants.broker agent.llm.providerGrants;
+            }
+        );
       }
     );
 
@@ -474,10 +467,15 @@ let
     credentialsService name agent
     // networkService name agent
     // lib.optionalAttrs agent.llm.enable {
-      "tentaflake-broker-llm-${name}" = hardenedService name "llm" (llmConfig name agent) [
-        "agent-token:/run/tentaflake-broker/${name}/agent-token"
-        "provider:${agent.llm.providerCredentialFile}"
-      ] agent.llm.strictCostEnvelope;
+      "tentaflake-broker-llm-${name}" = hardenedService name "llm" (llmConfig name agent) (
+        [ "agent-token:/run/tentaflake-broker/${name}/agent-token" ]
+        ++ (
+          if agent.llm.providerGrants == [ ] then
+            [ "provider:${agent.llm.providerCredentialFile}" ]
+          else
+            map grants.loadCredential agent.llm.providerGrants
+        )
+      ) agent.llm.strictCostEnvelope;
     }
     // lib.optionalAttrs (agent.llm.enable && agent.llm.strictCostEnvelope) {
       "tentaflake-broker-llm-initialize-${name}" =
@@ -714,16 +712,13 @@ in
           assertion =
             !agent.llm.enable
             || (
-              lib.hasPrefix "https://" agent.llm.upstreamBaseUrl
+              agent.llm.providerGrants == [ ]
+              && lib.hasPrefix "https://" agent.llm.upstreamBaseUrl
               && lib.hasSuffix "/" agent.llm.upstreamBaseUrl
               && !(lib.hasInfix "@" agent.llm.upstreamBaseUrl)
               && !(lib.hasInfix "?" agent.llm.upstreamBaseUrl)
               && !(lib.hasInfix "#" agent.llm.upstreamBaseUrl)
-              && agent.llm.providerCredentialFile != ""
-              && lib.match "^/run/[A-Za-z0-9._+/-]+$" agent.llm.providerCredentialFile != null
-              && !(lib.elem ".." (lib.splitString "/" agent.llm.providerCredentialFile))
-              && !(lib.elem "." (lib.splitString "/" agent.llm.providerCredentialFile))
-              && !(lib.hasInfix "//" agent.llm.providerCredentialFile)
+              && grants.validCredential agent.llm.providerCredentialFile
               && agent.llm.allowedModels != [ ]
               && unique (map (model: model.name) agent.llm.allowedModels)
               && lib.all (
@@ -732,8 +727,35 @@ in
                 && model.inputMicrousdPerMillion > 0
                 && model.outputMicrousdPerMillion > 0
               ) agent.llm.allowedModels
+            )
+            || (
+              agent.llm.providerGrants != [ ]
+              && lib.length agent.llm.providerGrants <= 64
+              && agent.llm.upstreamBaseUrl == ""
+              && agent.llm.providerCredentialFile == ""
+              && agent.llm.allowedModels == [ ]
+              && !agent.llm.strictCostEnvelope
+              && unique (map grants.revision agent.llm.providerGrants)
+              && lib.all (
+                grant:
+                grant.provider == grants.protocols.${grant.protocol}.provider
+                && lib.match "^https://[a-zA-Z0-9.:-]+/[a-zA-Z0-9._/+-]+$" grant.upstreamEndpoint != null
+                && lib.hasSuffix (
+                  if grant.provider == "opencode-go" then
+                    "/openai/v1/chat/completions"
+                  else
+                    grants.protocols.${grant.protocol}.route
+                ) grant.upstreamEndpoint
+                && grants.validCredential grant.providerCredentialFile
+                && lib.match "^[A-Za-z0-9][A-Za-z0-9._:/+-]{0,199}$" grant.model.name != null
+                && grant.model.inputMicrousdPerMillion > 0
+                && grant.model.outputMicrousdPerMillion > 0
+                && grant.maxOutputTokens <= agent.llm.maxCompletionTokens
+                && unique grant.tools
+                && lib.length grant.tools <= 64
+              ) agent.llm.providerGrants
             );
-          message = "tentaflake LLM broker ${name} requires HTTPS with trailing slash, a runtime credential below /run, and exact priced models.";
+          message = "tentaflake LLM broker ${name} requires a valid exclusive provider-grant table or an HTTPS upstream with runtime credentials and priced models.";
         }
         {
           assertion =

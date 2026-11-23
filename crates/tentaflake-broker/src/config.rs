@@ -48,8 +48,13 @@ pub struct Config {
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct LlmPolicy {
+    #[serde(default)]
+    pub grants: Vec<ProviderGrant>,
+    #[serde(default)]
     pub upstream_base_url: String,
+    #[serde(default)]
     pub provider_credential_file: PathBuf,
+    #[serde(default)]
     pub allowed_models: Vec<ModelPolicy>,
     #[serde(default = "default_max_completion_tokens")]
     pub max_completion_tokens: u64,
@@ -59,6 +64,54 @@ pub struct LlmPolicy {
     pub streaming: StreamingPolicy,
     #[serde(default)]
     pub allow_plain_http_for_tests: bool,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProviderGrant {
+    pub version: u32,
+    pub revision: String,
+    pub provider: String,
+    pub protocol: ProviderProtocol,
+    pub upstream_endpoint: String,
+    pub provider_credential_file: PathBuf,
+    pub model: ModelPolicy,
+    pub pricing_revision: String,
+    pub currency: String,
+    pub tools: Vec<String>,
+    pub max_output_tokens: u64,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum ProviderProtocol {
+    OpenaiResponses,
+    AnthropicMessages,
+    OpencodeGoChatCompletions,
+}
+impl ProviderProtocol {
+    pub fn route(self) -> &'static str {
+        match self {
+            Self::OpenaiResponses => "/v1/responses",
+            Self::AnthropicMessages => "/v1/messages",
+            Self::OpencodeGoChatCompletions => "/v1/chat/completions",
+        }
+    }
+    fn provider(self) -> &'static str {
+        match self {
+            Self::OpenaiResponses => "openai",
+            Self::AnthropicMessages => "anthropic",
+            Self::OpencodeGoChatCompletions => "opencode-go",
+        }
+    }
+}
+
+pub fn binding_id(id: &str) -> bool {
+    !id.is_empty()
+        && id.len() <= 128
+        && id
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.' | b':'))
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -133,7 +186,12 @@ impl Config {
     fn expand_credential_paths(&mut self) -> Result<(), String> {
         expand_credential_path(&mut self.token_file)?;
         if let Some(policy) = &mut self.llm {
-            expand_credential_path(&mut policy.provider_credential_file)?;
+            if !policy.provider_credential_file.as_os_str().is_empty() {
+                expand_credential_path(&mut policy.provider_credential_file)?;
+            }
+            for grant in &mut policy.grants {
+                expand_credential_path(&mut grant.provider_credential_file)?;
+            }
         }
         Ok(())
     }
@@ -231,6 +289,56 @@ fn is_private_listener(ip: IpAddr) -> bool {
 
 impl LlmPolicy {
     fn validate(&self) -> Result<(), String> {
+        if !self.grants.is_empty() {
+            if self.strict_cost_envelope
+                || self.grants.len() > 64
+                || !self.upstream_base_url.is_empty()
+                || !self.allowed_models.is_empty()
+                || !self.provider_credential_file.as_os_str().is_empty()
+            {
+                return Err("provider grants require a separate, bounded policy table".into());
+            }
+            let mut revisions = HashSet::new();
+            for grant in &self.grants {
+                let url = reqwest::Url::parse(&grant.upstream_endpoint)
+                    .map_err(|_| "invalid provider grant endpoint")?;
+                let expected_path = if grant.protocol == ProviderProtocol::OpencodeGoChatCompletions
+                {
+                    "/openai/v1/chat/completions"
+                } else {
+                    grant.protocol.route()
+                };
+                if grant.version != 1
+                    || !binding_id(&grant.revision)
+                    || !revisions.insert(&grant.revision)
+                    || grant.provider != grant.protocol.provider()
+                    || grant.currency != "USD"
+                    || !binding_id(&grant.pricing_revision)
+                    || grant.max_output_tokens == 0
+                    || grant.max_output_tokens > self.max_completion_tokens
+                    || grant.model.name.is_empty()
+                    || grant.model.name.len() > 200
+                    || grant.model.name.chars().any(char::is_control)
+                    || grant.model.input_microusd_per_million == 0
+                    || grant.model.output_microusd_per_million == 0
+                    || !grant.tools.iter().all(|name| binding_id(name))
+                    || grant.tools.iter().collect::<HashSet<_>>().len() != grant.tools.len()
+                    || grant.tools.len() > 64
+                    || url.host_str().is_none()
+                    || !url.username().is_empty()
+                    || url.password().is_some()
+                    || url.query().is_some()
+                    || url.fragment().is_some()
+                    || !(url.scheme() == "https"
+                        || (self.allow_plain_http_for_tests && url.scheme() == "http"))
+                    || !url.path().ends_with(expected_path)
+                {
+                    return Err("invalid immutable provider grant".into());
+                }
+                require_absolute_runtime_path(&grant.provider_credential_file)?;
+            }
+            return Ok(());
+        }
         require_absolute_runtime_path(&self.provider_credential_file)?;
         let url = reqwest::Url::parse(&self.upstream_base_url)
             .map_err(|_| "llm upstream_base_url is not a valid URL")?;
@@ -421,6 +529,7 @@ mod tests {
             daily_cost_microusd: 100_000,
             max_audit_bytes: 4096,
             llm: Some(LlmPolicy {
+                grants: vec![],
                 upstream_base_url: "https://api.example.com/v1/".into(),
                 provider_credential_file: "/run/credentials/provider".into(),
                 allowed_models: vec![ModelPolicy {

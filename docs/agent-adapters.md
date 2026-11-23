@@ -248,20 +248,46 @@ or automatic reconciliation API. Restoring historical snapshots is not an admitt
 resumption procedure; an internally consistent rollback cannot be detected by a
 local receipt database alone.
 
-The only model path is the pinned OpenAI Responses `streamSimple` implementation,
-with one fixed broker model, a virtual key, SSE, zero retries, no redirects and
-an injected guarded fetch. The source forwards that fetch through
-`ai/src/api/simple-options.ts` to `openai-responses.ts`; the latter also sets the
-OpenAI SDK's own `maxRetries` to zero. Each physical send requires a one-use task
-correlation and the persisted barrier. All other Models facade methods, including
+The only model method is the pinned SDK's `streamSimple` implementation. Its
+immutable per-run grant binds one catalog provider/model, one of OpenAI Responses,
+Anthropic Messages, or OpenCode Go chat completions, an exact broker
+route, pricing revision, output ceiling and tool subset. Provider-native virtual
+credential headers are replaced by the one broker-scoped bearer credential.
+Each physical send requires a one-use task correlation and the persisted barrier;
+the guarded fetch allows no redirect or resend and propagates cancellation. All
+other Models facade methods, including
 deferred responses, images, classification, login, refresh and ordinary completion,
 are denied. Compaction is disabled and its completion path is unavailable.
 Public/invalid broker addresses are rejected; production configuration comes only
 from the exact broker instance, not agent settings.
 
+Host policy can declare `tentaflake.piDurableProvisioning.providerGrants` or set
+`tentaflake.broker.agents.<agent>.llm.providerGrants` on a manually managed
+agent. Each entry specifies a provider, protocol, exact HTTPS generation URL,
+runtime credential file, priced model, pricing revision, tool list and output
+limit. The broker sends only the selected credential and protocol headers.
+OpenCode Go uses the [Go harness endpoint](https://opencode.ai/docs/console/harnesses)
+and one stable session identifier. The capsule sees its local broker endpoint
+and the revision hash of each effective policy. Changing the upstream, key
+path, price, tools or budget changes that revision. Pi provisioning intersects
+each grant's tools with the agent's public tool declaration.
+
+Each bound generation claims a one-use operation ID in broker state before
+dispatch. The broker retains its SHA-256 digest across restarts. Its bounded
+ledger holds 100,000 operations per capsule and refuses further generations at
+capacity. Preserve this file with the broker's budget and runner state.
+Terminal audit records include measured token quantities and micro-USD from the
+declared input/output rates. These rates cover ordinary uncached Anthropic
+input and output. A provider response reporting a separate, unpriced Anthropic
+cache tier leaves the result unconfirmed. Production pricing and provider
+account access require installation-owned commissioning.
+
 Research runs only the pinned `${researchClient}/bin/research-client --socket
-/run/tentaflake-research/socket` stdio client, with the five-tool manifest and
-bounded MCP initialization. That client, not this runner, implements the framed
+/run/tentaflake-research/socket` stdio client, with bounded MCP initialization.
+The relay may advertise additional legitimate server capabilities, but every
+five reviewed Research capabilities must be present exactly once and only the
+immutable configured subset is callable. Missing, duplicated or malformed
+reviewed capabilities refuse initialization. That client, not this runner, implements the framed
 relay protocol and Hello/version/tool validation. The pinned relay authenticates
 the client UID; the client does **not** perform reciprocal server `SO_PEERCRED`
 authentication. Exact root-owned socket provenance and read-only closure/mounts
@@ -317,7 +343,10 @@ The bearer-authenticated native socket supports `POST /api/sessions`,
 `GET /v1/runs/{id}`, lookup by `request_id`, `/result`, `/events`, and
 `POST /v1/runs/{id}/stop`. Responses carry a client-compatible `run_id` and native
 run projection; uncertain work is `state: "interrupted", uncertain: true`.
-SSE carries terminal results only, not fabricated token deltas. Capabilities
+The SSE stream includes SDK text deltas, tool milestones and terminal results.
+Use `/events?format=page&cursor=…` for bounded JSON polling. Broker-bound runs
+also accept aggregate token and cost limits in the [run budget](19-web-ui.md).
+Capabilities
 explicitly deny live inputs and session import. Isolated context is unsupported.
 Task ownership stays with the client's own task system; the runner API does
 not grant enterprise approvals, connector permissions, or standalone UI admission.
@@ -339,10 +368,11 @@ The one-time owner review must supply all of the following:
    bundle/selector, `piDurableRuntime.enable`, balanced containment, and the
    exact rootful `runsc-pi-durable-v1` transport. No package pin is advanced by
    provisioning, and all existing adapter/image/mount assertions still apply.
-2. One named OpenAI Responses model present in the pinned SDK catalog, its
-   reviewed provider HTTPS base URL and positive input/output prices in
-   micro-USD per million tokens. `provider.credentialFile` is an existing
-   dedicated runtime file below `/run`, loaded only by the host broker.
+2. A host-defined `providerGrants` table, or the existing singleton
+   `provider` and `model` pair for an OpenAI Responses catalog model.
+   Each context supplies an HTTPS upstream, positive input/output prices in
+   micro-USD per million tokens and a runtime credential below `/run`.
+   Only the host broker loads the provider credentials.
    Provisioning neither creates nor reads that file during evaluation, and
    accepts no credential contents. The owner must explicitly set
    `allowNonStrictCostEnvelope = true`: this runtime cannot meet a chat-only
@@ -419,12 +449,27 @@ service still requires its own real nonempty authorized client list and
 distinct service/egress/client identities; those prerequisites are unchanged.
 
 `systemFile` must be the tracked installation-owned `tentaflake.toml`.
-`reviewedProvisioningPolicy` must contain every policy above, including
-`provider = { upstreamBaseUrl = ...; credentialFile = ...; }` and
-`model = { name = ...; inputMicrousdPerMillion = ...;
-outputMicrousdPerMillion = ...; }`. These are required arguments and reviewed
-decisions, not a ready-to-activate default. Do not copy synthetic fixture
-pricing or credential paths into a live deployment.
+`reviewedProvisioningPolicy` must contain the resource and access settings above.
+An explicitly bound provider entry has this shape. Supply prices and model names
+from the reviewed installation policy.
+
+```nix
+providerGrants = [
+  {
+    provider = "anthropic";
+    protocol = "anthropic-messages";
+    upstreamEndpoint = "https://api.anthropic.com/v1/messages";
+    providerCredentialFile = "/run/credentials/anthropic";
+    model = { inherit name inputMicrousdPerMillion outputMicrousdPerMillion; };
+    inherit pricingRevision maxOutputTokens;
+    tools = [ "research_search" "research_read" ];
+  }
+];
+```
+
+The singleton form uses `provider.upstreamBaseUrl`, `provider.credentialFile`
+and `model` with the same two per-million-token prices. The host accepts one
+of these policy forms at a time.
 
 Subsequently, the UI/bridge creates a stopped public declaration with a fresh
 canonical `name`, binds its private profile to `agent-<name>`, and submits a
