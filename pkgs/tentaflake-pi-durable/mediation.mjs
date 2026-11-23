@@ -196,7 +196,7 @@ export function modelBoundary({ ledger, models, model, grantedModels, brokerBase
           },
         };
       };
-      return () => { throw new Refusal(`Model capability ${String(property)} is unavailable`); };
+      return () => { throw new Refusal('Model capability is unavailable'); };
     },
   });
   return { models: facade, close() { globalThis.fetch = originalFetch; } };
@@ -267,7 +267,7 @@ export class Research {
     const resultTools = await this.request('tools/list', {});
     if (!Array.isArray(resultTools?.tools) || resultTools.tools.length !== researchCapabilities.length ||
         !researchCapabilities.every(name => resultTools.tools.some(tool => tool?.name === name)))
-      throw new Refusal('Research capability mismatch');
+      throw new Refusal('Research capability mismatch (expected exactly the five reviewed tools)');
   }
   close() {
     if (this.closed) return;

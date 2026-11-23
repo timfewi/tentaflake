@@ -204,7 +204,7 @@
       "identity": {
         "id": "pi-durable",
         "status": "scaffold",
-        "version": "1.4.0"
+        "version": "1.5.2"
       },
       "layout": {
         "directories": [],

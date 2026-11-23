@@ -12,7 +12,7 @@ let
   desired = validate (builtins.fromTOML (builtins.readFile fixture));
   package = pkgs.hello.overrideAttrs (old: {
     passthru = (old.passthru or { }) // {
-      upstreamRevision = "35dfa757378bd7a8570670e99c2687bdd1039a06";
+      upstreamRevision = "b4afdddf44e059c67ccf5097e5317d913521b470";
     };
   });
   image = "tentaflake-pi-durable:${lib.concatStrings (lib.replicate 64 "a")}";

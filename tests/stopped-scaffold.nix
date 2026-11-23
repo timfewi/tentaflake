@@ -208,7 +208,7 @@ assert lib.length (lib.unique reserved) == lib.length reserved;
 assert scaffold {
   id = "pi-durable";
   name = "pilot";
-  version = "1.4.0";
+  version = "1.5.2";
   uid = presets.pi-durable.ownership.uid;
   command = [ ];
   capabilities = [ ];

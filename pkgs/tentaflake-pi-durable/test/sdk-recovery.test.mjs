@@ -1,16 +1,29 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
-import { fork } from 'node:child_process';
+import { fork, spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { once } from 'node:events';
 import { mkdtempSync, chmodSync, writeFileSync, rmSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { Ledger } from '../ledger.mjs';
+import { Ledger, startupStep } from '../ledger.mjs';
 import { Engine } from '../engine.mjs';
 import { DatabaseSync } from 'node:sqlite';
 import { createModels } from '@earendil-works/pi-ai/models';
 import { openaiProvider } from '@earendil-works/pi-ai/providers/openai';
+
+test('startup diagnostics print local refusal reasons and omit external error text and paths', async () => {
+  const marker = 'synthetic-secret-canary';
+  const runner = fileURLToPath(new URL('../runner.mjs', import.meta.url));
+  const result = spawnSync(process.execPath, [runner, join(tmpdir(), marker, 'missing-config')], { encoding: 'utf8' });
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /Pi Durable runtime refused startup: Runtime configuration failed \(ENOENT\)/);
+  assert.ok(!result.stderr.includes(marker));
+  const sdkError = Object.assign(new Error(marker), { code: 'ERR_SQLITE_ERROR', errcode: 10 });
+  await assert.rejects(startupStep('SDK SQLite open', () => { throw sdkError; }),
+    { message: 'SDK SQLite open failed (ERR_SQLITE_ERROR 10)' });
+});
 
 test('tool selection rejects unsupported and duplicate IDs before SDK open', () => {
   for (const tools of [['read'], ['mcp:research/search'], ['research_search', 'research_search'], null, 'research_search', [true]]) {

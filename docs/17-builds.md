@@ -68,7 +68,11 @@ refusal. `checks.*.worker-drain-wakeup` boots a NixOS VM with a synthetic host
 and the real API sandbox to cover queue-unlock/oneshot-completion races without
 executing containers. It is a VM gate, not part of `just fast`.
 `checks.*.pi-durable-runtime-vm` boots two admitted Pi Durable capsules on the reviewed
-`runsc-pi-durable` transport without provider calls. `checks.*.workload-mapping-vm`
+`runsc-pi-durable` transport with grants for `gpt-6-luna` and `gpt-6.1-terra`.
+It checks the five-tool Research handshake through each capsule's relay and
+verifies the caller UID reported by the service. A startup failure prints the
+runner's refusal from the unit journal. The test makes no provider calls.
+`checks.*.workload-mapping-vm`
 and `checks.*.workload-mapping-scale-vm` run the workload observer against real
 rootful Docker/systemd; the scale test keeps 65 bindings, above the former count
 ceiling, live and inside the 10-second lease. Its fixed size is a regression

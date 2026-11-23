@@ -195,7 +195,7 @@ in
       message = "tentaflake: Pi Durable requires the shared balanced containment profile.";
     }
     {
-      assertion = cfg.package.upstreamRevision == "35dfa757378bd7a8570670e99c2687bdd1039a06";
+      assertion = cfg.package.upstreamRevision == "b4afdddf44e059c67ccf5097e5317d913521b470";
       message = "tentaflake: Pi Durable package must use the reviewed immutable SDK revision.";
     }
     {

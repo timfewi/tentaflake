@@ -6,7 +6,7 @@
   piDurableRuntime,
 }:
 assert lib.versionAtLeast nodejs_24.version "24";
-assert piDurableRuntime.sourceRevision == "35dfa757378bd7a8570670e99c2687bdd1039a06";
+assert piDurableRuntime.sourceRevision == "b4afdddf44e059c67ccf5097e5317d913521b470";
 stdenvNoCC.mkDerivation {
   pname = "tentaflake-pi-durable";
   inherit ((builtins.fromTOML (builtins.readFile ../../Cargo.toml)).workspace.package) version;

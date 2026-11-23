@@ -5,7 +5,7 @@
     tentaflake-research.url = "github:timfewi/tentaflake-research/3503d8da7307b4795fc80baa1f142b3ef1baec7f";
     # Real Pi Durable SDK source; runtime admission still requires the mediated runner.
     pi-durable-upstream = {
-      url = "github:earendil-works/pi/35dfa757378bd7a8570670e99c2687bdd1039a06";
+      url = "github:earendil-works/pi/b4afdddf44e059c67ccf5097e5317d913521b470";
       flake = false;
     };
     # Tracks nixos-unstable, pinned to an exact revision by the committed flake.lock
