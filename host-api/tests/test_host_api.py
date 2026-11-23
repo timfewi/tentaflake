@@ -267,6 +267,8 @@ else:
         self.start()
         status, info = self.request("GET", "/v1/info")
         self.assertEqual(status, 200)
+        self.assertEqual(info["tentaflake_version"], api.TENTAFLAKE_VERSION)
+        self.assertRegex(api.TENTAFLAKE_VERSION, r"\A(development|[0-9]+\.[0-9]+\.[0-9]+)\Z")
         self.assertEqual(
             info["capabilities"],
             {

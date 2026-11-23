@@ -443,11 +443,14 @@
     with subtest("status banner renders and names the host"):
         banner = machine.succeed("tentaflake-status")
         assert "agent-host" in banner, f"hostname missing from banner:\n{banner}"
+        version = machine.succeed("tentaflake --version").strip()
+        assert version.startswith("tentaflake "), version
+        assert f"tentaflake v{version.split()[1]} · agent-host" in banner, banner
         assert "test" in banner, f"Hermes agent missing from banner:\n{banner}"
         assert " assistant " in banner, f"ZeroClaw agent missing from banner:\n{banner}"
         machine.succeed(
             "tentaflake status --json | "
-            "jq -e '.host == \"agent-host\" and "
+            "jq -e '.host == \"agent-host\" and (.version | test(\"^[0-9]+[.][0-9]+[.][0-9]+$\")) and "
             ".security_profile == \"balanced\" and "
             "([.agents[].name] | index(\"assistant\")) != null'"
         )

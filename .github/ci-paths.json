@@ -286,6 +286,15 @@
       "static"
     ]
   },
+  "versioning": {
+    "paths": [
+      ".github/workflows/versioning.yml",
+      "scripts/check-versioning.sh"
+    ],
+    "checks": [
+      "static"
+    ]
+  },
   "devcontainer": {
     "paths": [
       ".devcontainer/**",

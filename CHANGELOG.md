@@ -6,6 +6,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+### Added
+- `tentaflake version` (also `--version`, `-V`, `--json`) prints the installed
+  release without reading host configuration. The status header, login banner,
+  `status --json`, `help`, the contributor dev shell and the host API's
+  `GET /v1/info` (`tentaflake_version`) now name the Tentaflake version.
+### Changed
+- Versioned branches are mandatory: every branch is named
+  `<type>/vX.Y.Z-<topic>` for the next release and adds CHANGELOG notes; only
+  `release/vX.Y.Z` changes the declared version. A `Versioning` pull-request
+  check enforces the rule, and `just tag` refuses a tag that differs from the
+  Cargo workspace version.
+- The Pi Durable runner package takes its version from the Cargo workspace
+  instead of a separate `0.1.0`.
 
 - Page through Pi Durable text and tool events by cursor. Bound the aggregate
   tokens and cost of a run across all of its provider requests.

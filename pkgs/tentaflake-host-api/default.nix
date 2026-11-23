@@ -4,14 +4,21 @@
   makeWrapper,
   stdenvNoCC,
 }:
+let
+  version = (builtins.fromTOML (builtins.readFile ../../Cargo.toml)).workspace.package.version;
+in
 stdenvNoCC.mkDerivation {
   pname = "tentaflake-host-api";
-  version = (builtins.fromTOML (builtins.readFile ../../Cargo.toml)).workspace.package.version;
+  inherit version;
   src = ../../host-api;
   nativeBuildInputs = [
     makeWrapper
     python3
   ];
+  postPatch = ''
+    substituteInPlace tentaflake_host_api.py \
+      --replace-fail 'TENTAFLAKE_VERSION = "development"' 'TENTAFLAKE_VERSION = "${version}"'
+  '';
   dontBuild = true;
   doCheck = true;
   checkPhase = ''
