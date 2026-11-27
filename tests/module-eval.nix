@@ -481,6 +481,9 @@ let
     }
   ];
   brokerContainer = brokerCapsule.config.virtualisation.oci-containers.containers."agent-brokered";
+  hermesRuntime = lib.removeSuffix ":/opt/data:ro" (
+    lib.findSingle (lib.hasSuffix ":/opt/data:ro") null null brokerContainer.volumes
+  );
   brokerBridge = "tfb-${builtins.substring 0 8 (builtins.hashString "sha256" "agent-brokered")}";
   brokerManifest = brokerCapsule.config.environment.etc."tentaflake/security.tsv".text;
   brokerAttempt = builtins.tryEval brokerCapsule.config.system.build.toplevel.drvPath;
@@ -654,6 +657,7 @@ let
           gateway = "10.203.22.1";
           llm = {
             enable = true;
+            streaming.enable = true;
             upstreamBaseUrl = "https://api.example.org/v1/";
             providerCredentialFile = "/run/fixture-model-key";
             allowedModels = [
@@ -691,6 +695,9 @@ let
   workerPath = workerCapsule.config.systemd.paths.tentaflake-worker-agent-worker;
   workerOwnerService = workerCapsule.config.systemd.services.tentaflake-workspace-quota-agent-worker;
   workerAttempt = builtins.tryEval workerCapsule.config.system.build.toplevel.drvPath;
+  workerWithoutStreaming = workerCapsule.extendModules {
+    modules = [ { tentaflake.broker.agents.agent-worker.llm.streaming.enable = lib.mkForce false; } ];
+  };
   tooSmallQuota = workerCapsule.extendModules {
     modules = [ { tentaflake.workspaceQuota.agents.agent-worker.sizeMiB = lib.mkForce 32; } ];
   };
@@ -1178,6 +1185,16 @@ assert
 assert lib.hasInfix "$STATE_DIRECTORY/last-success"
   backup.config.systemd.services.tentaflake-backup-success.script;
 assert brokerContainer.networks == [ "tf-agent-brokered" ];
+assert lib.any (
+  item: !item.assertion && lib.hasInfix "llm.streaming.enable for chat" item.message
+) workerWithoutStreaming.config.assertions;
+assert brokerContainer.entrypoint == "/opt/data/entrypoint";
+assert brokerContainer.workdir == "/state/workspace";
+assert brokerContainer.environment.HERMES_GATEWAY_NO_SUPERVISE == "1";
+assert brokerContainer.environment.HERMES_MANAGED_DIR == "/opt/data";
+assert brokerContainer.user == "10000:10000";
+assert lib.any (lib.hasPrefix "--tmpfs=/run:rw,nosuid,nodev,noexec,") brokerContainer.extraOptions;
+assert devContainer.entrypoint == null;
 assert
   brokerContainer.environmentFiles == [
     "/run/tentaflake-broker/agent-brokered/agent.env"
@@ -1332,6 +1349,14 @@ assert (builtins.head tailscalePolicy.ssh).action == "check";
 # Parse the configured flags with the pinned CLI. --help avoids contacting a
 # daemon, while an unsupported flag before it still fails during parsing.
 pkgs.runCommand "tentaflake-module-evaluation" { } ''
+  test -x "${hermesRuntime}/entrypoint"
+  ${pkgs.yq-go}/bin/yq -e '
+    .model.default == "example/model" and
+    .model.provider == "custom:tentaflake" and
+    .providers.tentaflake.api == "http://10.203.20.1:7810/v1" and
+    .providers.tentaflake.key_env == "TENTAFLAKE_BROKER_TOKEN" and
+    .providers.tentaflake.api_mode == "chat_completions"
+  ' "${hermesRuntime}/config.yaml" >/dev/null
   ${pkgs.python3}/bin/python3 ${./git-autopush-boundary.py} ${pkgs.git}/bin/git ${pkgs.runtimeShell}
   ${lib.getExe capsule.config.services.tailscale.package} set ${lib.escapeShellArgs capsule.config.services.tailscale.extraSetFlags} --help >/dev/null
   ${lib.getExe capsule.config.services.tailscale.package} up ${lib.escapeShellArgs capsule.config.services.tailscale.extraUpFlags} --help >/dev/null

@@ -109,13 +109,26 @@ environment, mounts and `seedDir` are refused.
 Preserve existing unsupported native configuration during migration by stopping
 and resolving the unsupported input, never by dropping it from the candidate.
 
-Hermes generates its YAML only when internal settings or an enabled Research
-hook produce nonempty configuration; an ordinary public stopped declaration
-without Research creates no such read-only config mount. ZeroClaw always
+Hermes mounts a generated `/state/config.yaml` when internal settings or an
+enabled Research hook produce configuration. Otherwise the instance keeps its
+own configuration file in persistent state. ZeroClaw always
 generates its TOML. Internal seeds are no-clobber copies run as the capsule's
 numeric owner: Hermes copies into its state root; ZeroClaw copies into
 `.zeroclaw/data`, **not** the separate `data` workspace used by worker/quota
 metadata. Seeding that native directory does not populate the managed workspace.
+
+In `balanced`, the pinned Hermes image runs its gateway in the foreground
+under the host unit, with the configured numeric owner and `/state/workspace`
+as its working directory. The adapter covers the image's `/opt/data` volume
+with a read-only directory containing the entrypoint. With an enabled LLM
+broker it also supplies a Hermes managed provider configuration there.
+Hermes reads the virtual broker token at runtime and uses the per-agent
+Chat Completions endpoint. Enable `llm.streaming.enable = true` on that
+agent's broker for both interactive and single-question chat. Automatic
+startup checks this grant. The first entry of `llm.allowedModels` is the
+default unless an internal configuration selects another listed model.
+Revision-bound `providerGrants` require a runtime implementing that protocol.
+For a terminal session, run `tentaflake shell <name>`, then `hermes chat`.
 
 Research hooks disable native web paths and project only the pinned stdio
 client closure and exact read-only relay socket. Hermes permits local stdio

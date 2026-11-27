@@ -47,6 +47,12 @@ tentaflake rebuild
 tentaflake update
 ```
 
+For interactive Hermes chat, open `tentaflake shell <name>` on a running
+Hermes instance, then run `hermes chat`. For a single question, use
+`tentaflake exec <name> -- hermes chat -q "Your question"`.
+The [Hermes adapter](agent-adapters.md#native-configuration-and-state) documents
+the model connection.
+
 The offline `config` commands read explicit local files, not generated host
 inputs, and never evaluate Nix or activate services. `validate` reports validity;
 `normalize` writes TOML to stdout, or the validated data object with `--json`;
