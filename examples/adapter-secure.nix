@@ -7,7 +7,6 @@
   systemFromData,
   systemFile,
   agentName ? "coding",
-  # Must match the selected TOML instance's native model configuration.
   model,
   inputMicrousdPerMillion,
   outputMicrousdPerMillion,
@@ -40,6 +39,7 @@ let
           gateway = "10.203.20.1";
           llm = {
             enable = true;
+            streaming.enable = instance.adapter == "hermes";
             inherit providerCredentialFile upstreamBaseUrl;
             port = 7810;
             maxCompletionTokens = 4096;

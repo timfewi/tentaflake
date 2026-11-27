@@ -108,7 +108,7 @@
         "protocols": [
           "openai-chat-completions"
         ],
-        "streaming": "unknown"
+        "streaming": "required"
       },
       "ownership": {
         "gid": 10000,

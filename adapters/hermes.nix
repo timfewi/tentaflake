@@ -1,7 +1,7 @@
 { pkgs, lib }:
 
 # ────────────────────────────────────────────────────────────
-# Internal Hermes implementation, selected by adapter = "hermes" in agents.toml.
+# Internal Hermes implementation, selected by adapter = "hermes" in tentaflake.toml.
 #
 # Each agent gets:
 #   - System user  agent-<name>
@@ -59,7 +59,7 @@ let
     lifecycle = "service";
     model = {
       protocols = [ "openai-chat-completions" ];
-      streaming = "unknown";
+      streaming = "required";
     };
     research = {
       supported = true;
@@ -128,10 +128,7 @@ let
       # Extra environment variables to set in the container
       extraEnvironment ? { },
 
-      # Container command. Default: `gateway run --replace` (the image's entrypoint
-      # is `hermes`, so these are appended to it). Leave null to use the default,
-      # which becomes a dashboard+gateway bootstrap automatically when `dashboard`
-      # is set.
+      # Hermes subcommand or executable, using the image's argument convention.
       cmd ? null,
 
       # Compatibility override for the dev profile. Secure profiles select
@@ -219,6 +216,29 @@ let
       containerName = hostIdentity.container name;
       brokerCfg = lib.attrByPath [ containerName ] null config.tentaflake.broker.agents;
       brokerEnabled = brokerCfg != null && brokerCfg.enable;
+      foreground = secure && image == preset.artifact.reference;
+      brokeredChat = foreground && brokerEnabled && brokerCfg.llm.enable;
+      models = map (model: model.name) brokerCfg.llm.allowedModels;
+      preferredModel = (if settings == null then { } else settings).model.default or null;
+      brokerSettings = {
+        model = {
+          provider = "custom:tentaflake";
+          default = if lib.elem preferredModel models then preferredModel else lib.head models;
+        };
+        providers.tentaflake = {
+          api = "http://${brokerCfg.gateway}:${toString brokerCfg.llm.port}/v1";
+          api_mode = "chat_completions";
+          key_env = "TENTAFLAKE_BROKER_TOKEN";
+        };
+      };
+      # Cover the image's VOLUME with immutable files. User configuration stays in /state.
+      runtimeDir = pkgs.runCommand "${containerName}-hermes-runtime" { } ''
+        mkdir -p "$out"
+        install -m 0555 ${./hermes-entrypoint.sh} "$out/entrypoint"
+        ${lib.optionalString (brokeredChat && models != [ ]) ''
+          cp ${generateConfiguration "${containerName}-broker" brokerSettings} "$out/config.yaml"
+        ''}
+      '';
       workerCfg = lib.attrByPath [ containerName ] null config.tentaflake.worker.agents;
       workerEnabled = workerCfg != null && workerCfg.enable;
       workerResultsDir = "/var/lib/tentaflake-worker-${containerName}/results";
@@ -465,6 +485,7 @@ let
         volumes = [
           "${stateDir}:${nativeStateDir}:rw"
         ]
+        ++ lib.optional foreground "${runtimeDir}:/opt/data:ro"
         ++ lib.optional workerEnabled "${workerResultsDir}:${workerResultsMount}:ro"
         ++ lib.optional (configYaml != null) "${configYaml}:${nativeStateDir}/config.yaml:ro"
         ++ research.volumes
@@ -472,6 +493,13 @@ let
         environment = {
           HERMES_HOME = nativeStateDir;
           HERMES_AGENT_NAME = name;
+        }
+        // lib.optionalAttrs foreground {
+          HOME = nativeStateDir;
+          HERMES_WRITE_SAFE_ROOT = nativeStateDir;
+          HERMES_LAZY_INSTALL_TARGET = "${nativeStateDir}/lazy-packages";
+          HERMES_GATEWAY_NO_SUPERVISE = "1";
+          HERMES_MANAGED_DIR = "/opt/data";
         }
         // extraEnvironment;
         environmentFiles = lib.optional brokerEnabled brokerEnvironmentFile;
@@ -481,6 +509,10 @@ let
           ++ lib.optional (!secure && agenixFile != null) "--env-file=${agenixFile}"
           ++ lib.optional (!secure) "--security-opt=no-new-privileges:true"
           ++ lib.optional (!secure && pidsLimit != null) "--pids-limit=${toString pidsLimit}";
+      }
+      // lib.optionalAttrs foreground {
+        entrypoint = "/opt/data/entrypoint";
+        workdir = "${nativeStateDir}/workspace";
       };
 
       securityResult = containerSecurity.apply {
@@ -511,6 +543,17 @@ let
         securityResult.assertions
         ++ research.assertions
         ++ lib.optionals secure [
+          {
+            assertion = !brokeredChat || brokerCfg.llm.providerGrants == [ ];
+            message = "tentaflake: Hermes chat for ${containerName} requires an LLM broker with allowedModels; revision-bound providerGrants require a compatible runtime.";
+          }
+          {
+            assertion =
+              !foreground
+              || !(autoStart || config.virtualisation.oci-containers.containers.${containerName}.autoStart)
+              || (brokeredChat && brokerCfg.llm.streaming.enable);
+            message = "tentaflake: automatic Hermes startup requires tentaflake.broker.agents.${containerName}.llm.enable and llm.streaming.enable for chat.";
+          }
           {
             assertion = !allowMutableImage;
             message = "tentaflake: secure Hermes agent ${name} requires a digest-pinned image; allowMutableImage is dev-only.";
